@@ -8,6 +8,8 @@ For each convention: the gap it fills, the seam shape, and a copy-pasteable temp
 
 > **No DI container.** Vitest's module mocking (`vi.mock('~~/server/utils/db')`) covers what a Laravel-style service container provides. Design services as plain exported functions in `server/utils/`, not as classes registered in a container — the test seam already exists at the module level.
 
+> **Thread `event` through server code.** The `H3Event` is the request-scoped state object: `event.context` carries the authenticated user, runtime config, request id, `waitUntil`, platform bindings, and per-request caches. Server utils, validators, policies, services, and presenters should accept `event` as their first argument and read state from it — not from module-level singletons, ambient `useRuntimeConfig()` calls without `event`, or implicit `getRequestEvent()` lookups. This keeps handlers pure-ish (one request = one event), makes tests trivial (pass a mock event), and prevents cross-request bleed under concurrency. If a function genuinely doesn't need request state, it doesn't take `event`; if it might need it later, take it now. Reject server-side abstractions that hide `event` behind a global accessor.
+
 ## 1. Request validation (`server/validators/`)
 
 **Gap.** Zod (or valibot, etc.) schemas inline in each handler, mixed with parsing of body/query/params and ad-hoc 422 responses.
@@ -235,6 +237,8 @@ export default defineNitroPlugin((nitroApp) => {
 ```
 
 The interface here is the **set of `DomainError` subclasses**. Adding a new error type is one file in `shared/errors.ts`; no handler edits.
+
+**Floor.** `defineApiHandler` only earns its keep when the codebase has at least one `DomainError` subclass *and* most handlers throw them. If the only thing the wrapper does is call `defineEventHandler` and re-throw, delete it — that's a passthrough (see Forbidden patterns F3). Do not retrofit the wrapper to handlers that have no input, no auth check beyond defaults, and no transform; keep them as `defineEventHandler`.
 
 ## 5. Service providers via Nuxt modules
 
@@ -551,6 +555,20 @@ export default defineTask({
 - **`drizzle-kit push` against a layer schema in production.** Push skips the migration timeline; only safe in dev. Production runs through the migration runner only.
 - **Cross-layer SQL FKs without the finishing-migration pattern.** Will fail with "table doesn't exist" if migrations interleave wrong.
 - **Layer-owned `_migrations` tracking.** The tracking table is per-DB, not per-layer. One `_migrations` table for the whole app; the `layer` column distinguishes sources.
+
+## Forbidden patterns
+
+Always wrong on the nitro side. Surface as fixes, never as candidates.
+
+- **F1. `defineCachedEventHandler` wrapping an authenticated route.** Nitro's cache wrapper proxies the inner request and only forwards headers listed in `opts.varies` — without it the inner handler sees no cookie/authorization/x-api-key, so `requireUserSession` (and friends) throw 401 on every cached path. Fix: outer `defineEventHandler` does auth, then calls a `defineCachedFunction` keyed on the resource id. `varies: ['cookie', ...]` "works" but splits the cache per principal; only right when the body genuinely varies per user. Detect: `defineCachedEventHandler` whose body calls `require*Session`, `getUserSession`, reads `event.context.user`, or runs a policy.
+- **F2. Cache key omits a varying input.** `defineCachedFunction`/`defineCachedEventHandler` whose `getKey` ignores args the body uses (pagination, filters, locale). First response wins for the whole TTL. If the handler reads `getQuery` or >1 router param, every one of them must be in `getKey` (or in `varies`).
+- **F3. Meta-handler that does no work.** `defineApiHandler` (or similar wrapper) that catches no domain errors, mounts no validation, runs no policy — pure passthrough. Use `defineEventHandler`. See SKILL.md "Meta-handler with no work to do".
+- **F4. Convention file per single-use call.** `server/{schemas,policies,presenters}/foo.ts` with one caller and <10 lines of inline logic. Inline. See SKILL.md "Convention extraction below the floor".
+- **F5. Top-level side effect in a server util.** Module-scope `console.log`, connection open, hook register, env read — fires on every import including tests. Move behind an exported function or into a `server/plugins/` nitro plugin.
+- **F6. `useRuntimeConfig()` at module top level.** Outside a request scope it reads build-time defaults only and silently ignores runtime env overrides. Call inside a handler/plugin lifecycle.
+- **F7. Augmented `event.context` field typed non-optional but set conditionally.** If a request middleware/plugin sets `event.context.foo` only on some platforms (e.g. Cloudflare env present), the augmentation type must be `T | undefined` — otherwise downstream `event.context.foo.x` reads NPE silently in dev.
+- **F8. `process.env` in code that runs on edge/Workers.** `undefined` at runtime; degrades silently (e.g. unauthenticated GitHub at 60 req/hr). Use `useRuntimeConfig(event)` and let nitro env-map.
+- **F9. `shouldBypassCache` (or any cache opt) tied to auth/session state without keying on it.** Cache decision varies per principal but the key doesn't — leaks one user's payload to the next.
 
 ## How these conventions interact
 

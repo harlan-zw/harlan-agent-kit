@@ -101,11 +101,18 @@ The error-rendering seam. `error.vue` at the project root is the adapter; `showE
 
 ### `shared/` directory
 
-The **cross-scope shared-code seam**. The canonical answer to *"I need this type/util in both nitro and the nuxt app"* — code in `shared/` is the only place where a single module is allowed to be imported by both runtime graphs. Use it for: types, pure validators, schema definitions, branded-ID utilities, constants. Do not put runtime IO or framework calls here.
+The **cross-scope shared-code seam** — the only place a single module may be imported by both runtime graphs. For types, pure validators, schemas, branded-ID utils, constants. Nuxt forbids importing Vue or Nitro code here.
 
-For logic that's reused across multiple consumers in the monorepo or needs its own test infrastructure, **promote to a `packages/*` workspace package** instead — see [DEEPENING.md](DEEPENING.md) "The seam ladder for non-framework code."
+**Auto-import is narrow** (Nuxt ≥3.14): only flat `shared/utils/*` and `shared/types/*` auto-import into both graphs. Nested subdirs don't auto-import unless added to `imports.dirs` *and* `nitro.imports.dirs`. Everything else uses the `#shared/*` alias (e.g. `import { x } from '#shared/schemas/order'`).
 
-- **Anti-pattern**: a `types/` folder imported from both `server/` and `composables/` — that smuggles past the scope boundary; move to `shared/`.
+**No import-time side effects.** Pure declarations only — no top-level `console.*`, listener registration, env reads, `$fetch`, or singleton construction. Side effects fire in every consumer graph and break treeshaking. Mark `"sideEffects": false`.
+
+For logic reused across multiple consumers or needing its own tests, promote to a `packages/*` workspace package instead — see [DEEPENING.md](DEEPENING.md) "The seam ladder for non-framework code."
+
+- **Anti-pattern**: `types/` imported from both `server/` and `composables/` — move to `shared/types/`.
+- **Anti-pattern**: a `shared/` module running work at import — move into an exported function or a plugin/hook.
+- **Anti-pattern**: dropping a util into `shared/lib/` or `shared/utils/foo/bar.ts` expecting auto-import. Either flatten into `shared/utils/*`, import via `#shared/...`, or extend `imports.dirs` + `nitro.imports.dirs`.
+- **Anti-pattern**: importing Vue or Nitro APIs from `shared/` — belongs in `composables/` or `server/utils/`.
 
 ### Nitro storage (`useStorage()`, `useStorage('redis')`, `:my-mount`)
 
@@ -127,9 +134,11 @@ The server-rendered island seam. Component renders on the server only; client re
 
 The vue-router customisation seam: history mode, scroll behaviour, custom routes. Build-time. Interface: the `RouterConfig` shape. Pair with the `pages:extend` hook for programmatic route mutation.
 
-### Auto-import scoping (`utils/`, `server/utils/`, `composables/`, `imports.dirs`)
+### Auto-import scoping (`utils/`, `server/utils/`, `composables/`, `shared/utils/`, `shared/types/`, `imports.dirs`)
 
-The **naming seam** for auto-discovered exports, and a *scope-enforcer*: `utils/` and `composables/` exports auto-import into the Nuxt app graph; `server/utils/` exports auto-import into nitro only. They are not cross-visible. This is the routine answer to *"where does this helper live?"* — its directory determines its scope.
+The **naming seam** for auto-discovered exports, and a *scope-enforcer*: `utils/` and `composables/` auto-import into the app graph; `server/utils/` into nitro only; `shared/utils/` and `shared/types/` into *both* (Nuxt ≥3.14). Nested subdirs aren't scanned — extend `imports.dirs` / `nitro.imports.dirs` to opt in. Directory choice is the scope decision.
+
+**Don't rely on auto-import across scopes or layers.** When an import crosses `shared/` ↔ `server/` ↔ `app/` or a layer boundary, write it explicitly (`#shared/...`, `#layers/...`, or a relative path). Auto-import is invisible (reader can't tell which layer/scope `parseOrder()` came from), order-sensitive across layer overrides, and the scopes have separate module graphs (same name may resolve to different implementations server vs client). Auto-import is fine *within* a single scope for obvious cases.
 
 ### Type-level seam (TypeScript module augmentation)
 

@@ -37,6 +37,7 @@ What maintainers get from depth. Change, bugs, knowledge, and verification conce
 - **The deletion test.** Imagine deleting the module. If complexity vanishes, the module wasn't hiding anything (it was a pass-through). If complexity reappears across N callers, the module was earning its keep.
 - **The interface is the test surface.** Callers and tests cross the same seam. If you want to test *past* the interface, the module is probably the wrong shape.
 - **One adapter means a hypothetical seam. Two adapters means a real one.** Don't introduce a seam unless something actually varies across it.
+- **No import-time side effects.** A module's top level should declare and export, not *do*. Importing it must not register listeners, mutate globals, kick off network or filesystem work, or schedule timers. Side effects belong inside exported functions the caller invokes deliberately. This makes modules tree-shakable, testable in isolation, and safe to import from any runtime graph (SSR, client, worker, test). A deepening that looks elegant but smuggles side effects past the import boundary isn't deep — it's hidden coupling.
 
 ## Relationships
 

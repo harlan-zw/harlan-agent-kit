@@ -47,19 +47,21 @@ export function provideOrderForm(initial?: Partial<OrderInput>) {
 // shared/policies/post.ts
 import type { Post, User } from '~~/shared/types'
 
-export const canUpdatePost = (user: User | null, post: Post): boolean => {
-  if (!user) return false
+export function canUpdatePost(user: User | null, post: Post): boolean {
+  if (!user)
+    return false
   return user.id === post.authorId || user.role === 'admin'
 }
 
-export const canDeletePost = (user: User | null, _post: Post): boolean =>
-  user?.role === 'admin'
+export function canDeletePost(user: User | null, _post: Post): boolean {
+  return user?.role === 'admin'
+}
 ```
 
 ```ts
+import type { Post } from '~~/shared/types'
 // composables/policies/post.ts
 import { canDeletePost, canUpdatePost } from '~~/shared/policies/post'
-import type { Post } from '~~/shared/types'
 
 export function useCanUpdatePost(post: MaybeRef<Post>) {
   const { user } = useCurrentUser()
@@ -147,6 +149,17 @@ Tests pass `{ state: ref<User | null>(null), fetchMe: vi.fn() }` and unit-test w
 - `useState` keys colliding across features (untyped global namespace). Treat keys as private to the owning service composable — one key per service, prefixed by the feature.
 - A service composable's state stuffed into `useState` when it's actually subtree-scoped (form state, wizard state). That state then leaks across pages and SSR requests.
 - `useState` called *outside* a component setup or composable (e.g. in module top-level): breaks SSR; throws on the server.
+
+## Forbidden patterns
+
+Always wrong on the Nuxt app side. Surface as fixes, never as candidates.
+
+- **F1. `useFetch`/`useAsyncData` against per-principal data, keyed only by URL.** Default key = URL; one user's response hydrates another's render (shared payload, HTTP cache, SSR payload reuse). Include the principal in `key`, or fetch through a service composable that invalidates on auth change.
+- **F2. Top-level reactive state in a composable file.** `const x = ref(...)` at module scope is shared across SSR requests — every visitor sees the last visitor's value. Use `useState(key, init)`, or scope inside a factory + `provide` (VUE-CONVENTIONS.md §1).
+- **F3. `useState` outside a setup/composable.** Module top-level, plain util, or middleware return — throws on server. Legal only in `setup`, composables, Nuxt plugin `setup`, `defineNuxtRouteMiddleware`.
+- **F4. `$fetch` to an internal route from `server/`.** Doubles the request, loses `event.context`. Call the underlying server util directly.
+- **F5. Client policy drift from server policy.** `useCanX()` re-implementing the predicate instead of importing from `shared/policies/` (§2). UI shows actions the server refuses.
+- **F6. Async resource composable with no transform, no shared key, single caller.** `() => useAsyncData('foo', () => $fetch('/api/foo'))` used once. Inline; the composable is import indirection without locality.
 
 ## How these compose
 
