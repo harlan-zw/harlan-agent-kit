@@ -10,7 +10,7 @@
     {
       "name": "harlan-claude-code",
       "description": "Nuxt/Vue/TS workflow hooks and tools: auto-lint, typecheck, test on save, pnpm enforcement, pre-commit checks",
-      "version": "3.4.1",
+      "version": "3.5.0",
       "author": {
         "name": "Harlan Wilton",
         "email": "harlan@harlanzw.com"
