@@ -1,0 +1,34 @@
+{
+  "name": "harlan-claude-code",
+  "version": "3.5.3",
+  "description": "Harlan's personal Codex plugin - Nuxt/Vue/TS workflow tools",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com"
+  },
+  "keywords": [
+    "nuxt",
+    "vue",
+    "typescript",
+    "workflow"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Harlan Claude Code",
+    "shortDescription": "Nuxt, Vue, TypeScript, release, PR, and writing workflow skills.",
+    "longDescription": "Personal workflow skills for Nuxt, Vue, TypeScript, package architecture, PRs, releases, triage, and social writing.",
+    "developerName": "Harlan Wilton",
+    "category": "Productivity",
+    "capabilities": [
+      "Write",
+      "Review",
+      "Workflow"
+    ],
+    "defaultPrompt": [
+      "Review this Nuxt frontend implementation.",
+      "Draft release notes for this repo.",
+      "Improve this TypeScript package architecture."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

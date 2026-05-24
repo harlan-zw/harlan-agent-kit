@@ -1,4 +1,5 @@
 ---
+name: social-presence
 description: Social media content strategy and tweet crafting. Trigger on "what should I tweet", "help me post about", "tweet this release", "social presence", "what to post", "promote this", "launch tweet", "content ideas".
 user_invocable: true
 argument-hint: "[topic, release notes, or 'ideas']"

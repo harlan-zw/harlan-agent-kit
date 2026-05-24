@@ -1,4 +1,5 @@
 ---
+name: nuxt-frontend-design
 description: 'Build frontend with Nuxt UI v4+. Trigger on "build page", "landing page", "dashboard", "setup design tokens", "polish", "refine", "add motion", "fix UX", "looks generic". Full lifecycle: design system setup, page building, polish.'
 user_invocable: true
 argument-hint: "[component/page/area]"

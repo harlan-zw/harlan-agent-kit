@@ -6,62 +6,116 @@
 
 # harlan-claude-code
 
-Personal [Claude Code](https://claude.com/code) plugin for Nuxt/Vue/TypeScript workflows.
+Personal agent plugin for Nuxt/Vue/TypeScript workflows. It ships as a
+[Claude Code](https://claude.com/code) plugin and can also be installed locally
+as a Codex plugin for its skills.
 
 > [!IMPORTANT]
 > This is a personal plugin with opinionated defaults. Use as inspiration or fork for your own setup.
 
 ## Features
 
-- **Auto-linting** - ESLint runs on file changes with auto-fix
-- **Type checking** - vue-tsc/tsc validation on TypeScript/Vue changes
-- **Test runner** - Vitest runs related tests automatically
-- **pnpm enforcer** - Blocks npm/yarn commands
-- **Pre-commit checks** - Validates lint/types/tests before commits
-- **Session context** - Shows project info and git status on start
-- **Grind mode** - Auto-continues incomplete scratchpad work
+- **Nuxt/Vue workflows** - Design, review, and improve frontend implementation
+- **Architecture review** - Find deeper seams in Nuxt apps and TypeScript packages
+- **Package conformance** - Sync package, module, test, and release conventions
+- **PR and release writing** - Draft PRs, release notes, tweets, and launch copy
+- **Issue and email triage** - Rank GitHub issues and process inboxes
+- **Claude hooks** - Enforce pnpm, lint changed files, block risky git actions, and show session context
 
 ## Quick Start
+
+### Claude Code
 
 ```bash
 /plugin marketplace add harlan-zw/harlan-claude-code
 /plugin install harlan-claude-code
 ```
 
+### Codex
+
+Codex support uses the nested plugin directory at `harlan-claude-code/`.
+
+For local development, expose that directory under `~/plugins` and install from
+the personal marketplace:
+
+```bash
+mkdir -p ~/.agents/plugins ~/plugins
+ln -sfnT /home/harlan/pkg/harlan-claude-code/harlan-claude-code ~/plugins/harlan-claude-code
+```
+
+Create `~/.agents/plugins/marketplace.json` if it does not already exist:
+
+```json
+{
+  "name": "personal",
+  "interface": {
+    "displayName": "Personal"
+  },
+  "plugins": [
+    {
+      "name": "harlan-claude-code",
+      "source": {
+        "source": "local",
+        "path": "./plugins/harlan-claude-code"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+Then install:
+
+```bash
+codex plugin add harlan-claude-code@personal
+```
+
+Validate before reinstalling:
+
+```bash
+python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ~/plugins/harlan-claude-code
+codex plugin add harlan-claude-code@personal
+```
+
+Start a new Codex thread after reinstalling so newly installed skills are loaded.
+
 ## Hooks
+
+Claude Code loads hooks from `.claude-plugin/plugin.json`. Codex currently uses
+the skills only; the Claude hook config is not portable to Codex as-is.
 
 | Event | Hook | Description |
 |-------|------|-------------|
 | SessionStart | `session-start.sh` | Detect project type, show git status |
-| PreCompact | `pre-compact.sh` | Save context before conversation compaction |
-| PostToolUse | `eslint.sh` | Auto-lint + fix on file changes |
-| PostToolUse | `typecheck.sh` | Run vue-tsc/tsc on TS/Vue changes |
-| PostToolUse | `vitest.sh` | Run related tests on file changes |
+| PreToolUse | `merged-branch-guard.sh` | Block commits on merged branches |
 | PreToolUse | `pnpm-only.sh` | Block npm/yarn commands |
 | PreToolUse | `pre-commit-push.sh` | Run lint/typecheck/test before commit/push |
-| Stop | `grind.sh` | Continue incomplete scratchpad work |
+| PostToolUse | `eslint.sh` | Auto-lint + fix after file changes |
+| PostToolUse | `command-not-found.sh` | Help recover from missing shell commands |
+| Manual | `check.sh` | Run configured project checks |
+| Manual | `check-config.sh` | Inspect hook/check configuration |
 
 ## Skills
 
-| Command | Description |
-|---------|-------------|
-| `/pkg-conform` | Conform or scaffold npm package architecture |
-| `/nuxt-module-init` | Initialize or sync Nuxt module architecture |
-| `/claude-plugin-init` | Initialize or sync Claude Code plugin structure |
-| `/tdd` | Test-driven development workflow |
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/pr` | Create GitHub PR with conventional commit template |
-| `/save-plan` | Save current plan to `.claude/plans/` |
-| `/resume` | Resume interrupted work from scratchpad |
-| `/review` | Review recent changes for issues |
-| `/debug` | Hypothesis-driven debugging |
-| `/diagram` | Generate architecture diagrams |
-| `/fix-issue` | Fetch GitHub issue, implement fix, create PR |
-| `/issue-triage` | Triage open issues by difficulty |
+| Skill | Description |
+|-------|-------------|
+| `email-triage` | Triage inbox email with himalaya |
+| `improve-ts-pkg-architecture` | Find architecture improvements in TS packages and monorepos |
+| `issue-triage` | Rank open issues by difficulty and impact |
+| `nuxt-frontend-design` | Build and polish Nuxt UI v4+ frontend work |
+| `nuxt-frontend-review` | Adversarially review frontend work against a build contract |
+| `nuxt-improve-codebase-architecture` | Find Nuxt-native architecture improvements |
+| `pkg-conform` | Conform or scaffold npm package and Nuxt module architecture |
+| `plan-ceo` | Produce CEO-level planning artifacts |
+| `pr` | Create, update, or sync pull requests |
+| `release-notes` | Draft changelogs, release notes, and upgrade guidance |
+| `ripast` | Perform AST-aware TS/JS/Vue refactors |
+| `social-presence` | Plan social content and launch posts |
+| `tweet` | Draft and polish tweets with visual direction |
 
 ## Configuration
 
@@ -69,7 +123,7 @@ Disable specific hooks per-project by creating `.claude/hooks.json`:
 
 ```json
 {
-  "disabled": ["typecheck", "vitest"]
+  "disabled": ["eslint", "pre-commit-push"]
 }
 ```
 

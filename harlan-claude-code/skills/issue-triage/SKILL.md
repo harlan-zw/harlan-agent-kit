@@ -1,4 +1,5 @@
 ---
+name: issue-triage
 description: Triage open issues by difficulty and impact. Use when user says "review issues", "triage issues", "what should I work on", "prioritize backlog", "rank issues", "find quick wins", or "what's high priority".
 user_invocable: true
 context: fork
@@ -76,4 +77,3 @@ On subsequent runs, read the log and highlight what changed since last triage.
    Where `<slug>` is a kebab-case short title (first 4-5 words). `wt switch --create` creates a new branch + worktree from current HEAD.
 
    After creation, list worktrees with `wt list` so user can open them in separate sessions.
-
