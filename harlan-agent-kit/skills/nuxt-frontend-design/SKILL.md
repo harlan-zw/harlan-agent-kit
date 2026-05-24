@@ -372,7 +372,7 @@ Polish modifies an existing voice. Before touching anything, read 2-3 key `.vue`
 
 ### Audit Consistency
 
-Scan `.vue` files for violations using review's mechanical checks as the authoritative list (hardcoded hex/rgb, `slate-`/`gray-`/`zinc-`/`stone-` except the configured neutral, `bg-white`/`text-black`, banned font families, custom `@theme` tokens that duplicate `--ui-*`). See `harlan-claude-code:nuxt-frontend-review` Step 3 "Evaluation rubric: mechanical checks". Any violation found here must be fixed before handoff — review will re-grade the same patterns and reject on hits.
+Scan `.vue` files for violations using review's mechanical checks as the authoritative list (hardcoded hex/rgb, `slate-`/`gray-`/`zinc-`/`stone-` except the configured neutral, `bg-white`/`text-black`, banned font families, custom `@theme` tokens that duplicate `--ui-*`). See `harlan-agent-kit:nuxt-frontend-review` Step 3 "Evaluation rubric: mechanical checks". Any violation found here must be fixed before handoff — review will re-grade the same patterns and reject on hits.
 
 **Lead with the class-token inventory** — it's the most leveraged audit signal and the same command review runs:
 

@@ -20,7 +20,7 @@ function bumpVersion(version: string, type: 'patch' | 'minor' | 'major'): string
 }
 
 // Get current version from plugin.json
-const pluginPath = 'harlan-claude-code/.claude-plugin/plugin.json'
+const pluginPath = 'harlan-agent-kit/.claude-plugin/plugin.json'
 const marketplacePath = '.claude-plugin/marketplace.json'
 const plugin = JSON.parse(readFileSync(pluginPath, 'utf-8'))
 const marketplace = JSON.parse(readFileSync(marketplacePath, 'utf-8'))

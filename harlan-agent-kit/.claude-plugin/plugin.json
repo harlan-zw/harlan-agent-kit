@@ -1,10 +1,10 @@
 {
-  "name": "harlan-claude-code",
+  "name": "harlan-agent-kit",
   "version": "3.5.3",
   "author": {
     "name": "Harlan Wilton"
   },
-  "description": "Harlan's personal Claude Code plugin - Nuxt/Vue/TS workflow tools",
+  "description": "Harlan's personal agent kit - Nuxt/Vue/TS workflow tools",
   "skills": "./skills/",
   "hooks": {
     "SessionStart": [

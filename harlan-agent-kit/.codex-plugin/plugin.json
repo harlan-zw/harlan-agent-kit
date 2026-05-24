@@ -1,7 +1,7 @@
 {
-  "name": "harlan-claude-code",
+  "name": "harlan-agent-kit",
   "version": "3.5.3",
-  "description": "Harlan's personal Codex plugin - Nuxt/Vue/TS workflow tools",
+  "description": "Harlan's personal agent kit - Nuxt/Vue/TS workflow tools",
   "author": {
     "name": "Harlan Wilton",
     "email": "harlan@harlanzw.com"
@@ -14,7 +14,7 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Harlan Claude Code",
+    "displayName": "Harlan Agent Kit",
     "shortDescription": "Nuxt, Vue, TypeScript, release, PR, and writing workflow skills.",
     "longDescription": "Personal workflow skills for Nuxt, Vue, TypeScript, package architecture, PRs, releases, triage, and social writing.",
     "developerName": "Harlan Wilton",

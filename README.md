@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://github.com/harlan-zw/harlan-claude-code">
-    <img src=".github/banner.png" alt="harlan-claude-code banner" width="100%">
+  <a href="https://github.com/harlan-zw/harlan-agent-kit">
+    <img src=".github/banner.png" alt="harlan-agent-kit banner" width="100%">
   </a>
 </p>
 
-# harlan-claude-code
+# harlan-agent-kit
 
 Personal agent plugin for Nuxt/Vue/TypeScript workflows. It ships as a
 [Claude Code](https://claude.com/code) plugin and can also be installed locally
@@ -27,20 +27,20 @@ as a Codex plugin for its skills.
 ### Claude Code
 
 ```bash
-/plugin marketplace add harlan-zw/harlan-claude-code
-/plugin install harlan-claude-code
+/plugin marketplace add harlan-zw/harlan-agent-kit
+/plugin install harlan-agent-kit
 ```
 
 ### Codex
 
-Codex support uses the nested plugin directory at `harlan-claude-code/`.
+Codex support uses the nested plugin directory at `harlan-agent-kit/`.
 
 For local development, expose that directory under `~/plugins` and install from
 the personal marketplace:
 
 ```bash
 mkdir -p ~/.agents/plugins ~/plugins
-ln -sfnT /home/harlan/pkg/harlan-claude-code/harlan-claude-code ~/plugins/harlan-claude-code
+ln -sfnT /home/harlan/pkg/harlan-agent-kit/harlan-agent-kit ~/plugins/harlan-agent-kit
 ```
 
 Create `~/.agents/plugins/marketplace.json` if it does not already exist:
@@ -53,10 +53,10 @@ Create `~/.agents/plugins/marketplace.json` if it does not already exist:
   },
   "plugins": [
     {
-      "name": "harlan-claude-code",
+      "name": "harlan-agent-kit",
       "source": {
         "source": "local",
-        "path": "./plugins/harlan-claude-code"
+        "path": "./plugins/harlan-agent-kit"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -71,14 +71,14 @@ Create `~/.agents/plugins/marketplace.json` if it does not already exist:
 Then install:
 
 ```bash
-codex plugin add harlan-claude-code@personal
+codex plugin add harlan-agent-kit@personal
 ```
 
 Validate before reinstalling:
 
 ```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ~/plugins/harlan-claude-code
-codex plugin add harlan-claude-code@personal
+python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ~/plugins/harlan-agent-kit
+codex plugin add harlan-agent-kit@personal
 ```
 
 Start a new Codex thread after reinstalling so newly installed skills are loaded.
@@ -129,4 +129,4 @@ Disable specific hooks per-project by creating `.claude/hooks.json`:
 
 ## License
 
-Licensed under the [MIT license](https://github.com/harlan-zw/harlan-claude-code/blob/main/LICENSE).
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-agent-kit/blob/main/LICENSE).

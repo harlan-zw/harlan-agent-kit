@@ -1,21 +1,21 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "harlan-claude-code",
-  "description": "Personal Claude Code plugin for Nuxt/Vue/TypeScript development workflows",
+  "name": "harlan-agent-kit",
+  "description": "Personal agent kit for Nuxt/Vue/TypeScript development workflows",
   "owner": {
     "name": "Harlan Wilton",
     "email": "harlan@harlanzw.com"
   },
   "plugins": [
     {
-      "name": "harlan-claude-code",
+      "name": "harlan-agent-kit",
       "description": "Nuxt/Vue/TS workflow hooks and tools: auto-lint, typecheck, test on save, pnpm enforcement, pre-commit checks",
       "version": "3.5.3",
       "author": {
         "name": "Harlan Wilton",
         "email": "harlan@harlanzw.com"
       },
-      "source": "./harlan-claude-code",
+      "source": "./harlan-agent-kit",
       "category": "workflow"
     }
   ]
