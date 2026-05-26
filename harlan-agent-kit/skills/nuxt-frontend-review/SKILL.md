@@ -277,6 +277,39 @@ Then evaluate these qualitatively (but each is still pass/fail):
 
 Rubric violations are defects, not suggestions.
 
+### Data visualization checks (conditional)
+
+Run this block ONLY if the diff touches charts, dashboards, sparklines, stat cards, or quantitative tables. Detect with:
+
+```bash
+git diff --name-only "$HASH" | grep -iE '(chart|sparkline|stat|dashboard|graph|metric|trend)' \
+  || grep -lEr 'echarts|chart\.js|recharts|d3|UiSparkline|UiStat|UiTrend' {changed_files}
+```
+
+If neither matches, skip this block.
+
+Apply the principles in `${CLAUDE_SKILL_DIR}/references/polish/data-viz.md` (design-side reference). The principles are **authoritative** — when a theme's aesthetic conflicts with graphical integrity on a data mark, integrity wins. Scope: these rules apply to the **plot interior** (data marks, axes, gridlines, in-plot labels). The card/panel chrome surrounding the chart is governed by the project theme and is NOT in scope here.
+
+Flag the following:
+
+**[HARD REJECT]**
+- **Lie Factor distortion**: bar chart with non-zero baseline; 3D effect on 2D data; bubble area scaled by radius; dual-axis used to imply correlation; visual size of a bar/segment disproportionate to its value.
+- **Misleading truncation**: y-axis truncated without an explicit break marker AND the chart is framed as magnitude (not rate-of-change).
+- **Pie/donut with >5 slices or unsorted segments**: replace with a sorted bar or labelled table.
+
+**[RUBRIC]**
+- **Chartjunk inside the plot**: heavy gridlines, chart borders, plot-background fills, drop shadows / glow / theme texture on data marks (line, bar, point, area), moiré patterns, decorative icons inside the plot area. Theme effects on the surrounding card are fine; on the data mark itself they distort perceived magnitude.
+- **Default legend left on**: an Echarts/Chart.js/Recharts legend rendering when the chart has ≤3 series and Must be direct-labelled. Inspect the chart config; the legend should be explicitly disabled.
+- **Eraser-test failures**: legend duplicating direct labels; numeric labels and tick marks both present for the same values; per-panel scale annotations duplicating a shared-scale caption.
+- **Collision failures**: in-plot annotations crossing data marks or other text; band/epoch labels stacked at axis zero; baseline labels overlapping the leftmost data points.
+- **Sparkline malpractice**: axes, gridlines, or legend on a sparkline; sparkline height not matching surrounding line-height; sparkline used as a standalone chart rather than inline with a number.
+- **Missing comparison**: a single number with no delta, baseline, peer value, or sparkline answering "compared to what?".
+- **Color-only encoding**: trend direction or category conveyed solely by color (fails a11y); positive/negative deltas without an arrow or sign.
+- **Table numerics**: number columns not right-aligned, or not using `tabular-nums` / `font-variant-numeric: tabular-nums`.
+- **Custom hand-rolled `UiSparkline` / `UiStat` equivalent**: the project ships these; a parallel implementation is a RUBRIC unless materially different.
+
+For each finding, cite the file:line and the principle violated (lie factor, data-ink, chartjunk, eraser test, collision test, small-multiples, sparkline).
+
 ### Suspicion check
 
 If after completing all mechanical greps and qualitative checks you have found zero issues: re-examine the three highest-complexity components with fresh skepticism. A clean review on a non-trivial build is statistically unlikely. Look for: subtle state handling gaps, missing edge cases in forms, interactions that appear to work but produce no visible feedback. If still clean after re-examination, PASS is legitimate.

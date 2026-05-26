@@ -141,3 +141,17 @@ Grid of cards with ambient sparklines — richer, landing-style:
 - **Neutralize color** when direction is meaningless (population count, token supply): `trendNeutral: true` → trend shows muted color
 - **Format callback** takes a raw number; use it consistently across sibling stats so axes visually align
 - **Tabular numerals** are built in via `font-mono tabular-nums` — don't override
+
+### Chart hygiene
+
+Dashboards live or die on graphical integrity. Read [polish/data-viz.md](../polish/data-viz.md) before adding any chart beyond a `UiSparkline`. Non-negotiable rules:
+
+- **Bars start at zero.** Always. Truncating a bar's baseline is a lie.
+- **No 3D, no perspective, no tilt** on any 2D chart.
+- **Kill the default legend.** Echarts/Chart.js/Recharts ship a legend on by default — turn it off (`legend: { show: false }` / `plugins.legend.display: false`) and direct-label the line at its end. Legends force the eye to ping-pong between key and data.
+- **No pies or donuts for >5 segments**, ever. For ≤5, a sorted horizontal bar still reads faster. Default to bars; reach for pie only when the user explicitly requests it.
+- **Small multiples beat multi-series spaghetti.** If you have >3 series on one chart, split into a grid of panels on a shared scale.
+- **No glow, drop shadow, or theme texture on data marks.** Theme voice belongs on the card chrome around the chart, not on the line/bar itself. A glowing bar overstates its magnitude.
+- **Direct-label series**, drop the chart-library default tooltip-only labels for headline series.
+
+For sparklines specifically: keep using `UiSparkline` — it already enforces no-axis/no-legend/no-gridline.

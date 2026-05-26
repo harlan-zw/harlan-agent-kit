@@ -105,6 +105,10 @@ For row-level skeleton placeholders (e.g. inside a custom cell renderer or a non
 
 Use `font-variant-numeric: tabular-nums` (Tailwind: `tabular-nums`) on any column with numbers — digits align in columns. Apply to price, count, date, and ID columns.
 
+**Right-align numeric columns** (`text-right` on the header and cell). Numbers scan vertically by their magnitude, which only works when the decimal/ones place is in the same x-position down the column. Left-aligned numbers force the eye to re-anchor on every row. Apply to: prices, counts, percentages, quantities, durations, IDs that read as numbers. Keep left-aligned: dates (read as words), formatted strings, status labels.
+
+Tighten table gridlines until they recede: prefer a single thin row separator (`border-default`) over full row+column grids. Heavy borders compete with the data.
+
 ---
 
 ## Dashboard Table Principles

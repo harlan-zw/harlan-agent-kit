@@ -308,6 +308,7 @@ Load ONLY the reference matching what you're building. Do not load more than one
 | Navigation | [components/navigation.md](references/components/navigation.md) |
 | Feedback / overlays | [components/feedback.md](references/components/feedback.md) |
 | Stat cards, sparklines, empty states, typed toasts | [library.md](references/library.md) |
+| Charts, dashboards, sparklines, stat cards, data tables | [polish/data-viz.md](references/polish/data-viz.md) |
 
 **Before building stat cards, sparklines, or empty states from scratch**, check [references/library.md](references/library.md) — it ships copy-paste primitives (`UiStat`, `UiStats`, `UiSparkline`, `UiTrend`, `UiNoData`, `UiSkeleton`, `useAppToast`) already sanitized for drop-in use in any Nuxt UI v4 project.
 
@@ -441,6 +442,7 @@ Only after foundation and consistency are solid AND audit confirmation is comple
 | Not responsive enough | [polish/responsive.md](references/polish/responsive.md) |
 | Copy unclear or generic | [polish/ux-writing.md](references/polish/ux-writing.md) |
 | Reaching for JS/custom tokens for native CSS work | [polish/css-toolkit.md](references/polish/css-toolkit.md) |
+| Chart/dashboard noisy, dishonest, or low data-ink | [polish/data-viz.md](references/polish/data-viz.md) |
 
 When asked to "make it better" or "polish everything":
 1. Read `interactions.md` + `motion.md` + `color.md` (highest impact areas)
