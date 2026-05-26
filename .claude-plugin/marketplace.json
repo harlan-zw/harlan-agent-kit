@@ -10,7 +10,7 @@
     {
       "name": "harlan-agent-kit",
       "description": "Nuxt/Vue/TS workflow hooks and tools: auto-lint, typecheck, test on save, pnpm enforcement, pre-commit checks",
-      "version": "4.0.0",
+      "version": "4.0.1",
       "author": {
         "name": "Harlan Wilton",
         "email": "harlan@harlanzw.com"
