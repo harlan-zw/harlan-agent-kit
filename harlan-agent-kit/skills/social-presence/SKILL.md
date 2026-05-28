@@ -188,6 +188,10 @@ Once the user picks a direction, offer to:
 
 ## Cross-Cutting Rules
 
+### Strip AI Tells
+
+Before finalizing any copy, run it through `/humanize-writing`. For social specifically: kill the em-dashes and "it's not X, it's Y" pattern, name specific tools/numbers instead of vague claims, and address the reader directly. Tweets that sound AI-written get ignored.
+
 ### The "So What?" Test
 
 Every tweet must pass: "If I saw this in my timeline and didn't follow this person, would I care?" If not, reframe around the reader's benefit.

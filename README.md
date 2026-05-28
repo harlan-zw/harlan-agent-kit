@@ -15,12 +15,12 @@ as a Codex plugin for its skills.
 
 ## Features
 
-- **Nuxt/Vue workflows** - Design, review, and improve frontend implementation
-- **Architecture review** - Find deeper seams in Nuxt apps and TypeScript packages
-- **Package conformance** - Sync package, module, test, and release conventions
-- **PR and release writing** - Draft PRs, release notes, tweets, and launch copy
-- **Issue and email triage** - Rank GitHub issues and process inboxes
-- **Claude hooks** - Enforce pnpm, lint changed files, block risky git actions, and show session context
+- **Nuxt/Vue workflows**: Design, review, and improve frontend implementation
+- **Architecture review**: Find deeper seams in Nuxt apps and TypeScript packages
+- **Package conformance**: Sync package, module, test, and release conventions
+- **PR and release writing**: Draft PRs, release notes, tweets, and launch copy
+- **Issue and email triage**: Rank GitHub issues and process inboxes
+- **Claude hooks**: Enforce pnpm, lint changed files, block risky git actions, and show session context
 
 ## Quick Start
 
@@ -104,6 +104,7 @@ the skills only; the Claude hook config is not portable to Codex as-is.
 | Skill | Description |
 |-------|-------------|
 | `email-triage` | Triage inbox email with himalaya |
+| `humanize-writing` | Strip AI tells from prose before publishing |
 | `improve-ts-pkg-architecture` | Find architecture improvements in TS packages and monorepos |
 | `issue-triage` | Rank open issues by difficulty and impact |
 | `nuxt-frontend-design` | Build and polish Nuxt UI v4+ frontend work |

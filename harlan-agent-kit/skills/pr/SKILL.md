@@ -111,9 +111,11 @@ Resolves #NUMBER
 <!-- 2-3 sentences: what problem existed → what we did -->
 ```
 
-Tick the relevant type checkbox. Fill in the description — be concise, write like a human.
+Tick the relevant type checkbox. Fill in the description, be concise, write like a human.
 
 Only add `### ⚠️ Breaking Changes` and `### 📝 Migration` sections if actually breaking.
+
+**Strip AI tells from the title and description** before pushing, run them through `/humanize-writing`. For PRs specifically: no em-dashes, drop the over-explained "this means that..." takeaway, and use specifics (file/function names, issue numbers, real before/after behavior) instead of vague claims like "improves performance". A PR body that reads as AI-generated erodes reviewer trust.
 
 ## Step 4: Verify
 

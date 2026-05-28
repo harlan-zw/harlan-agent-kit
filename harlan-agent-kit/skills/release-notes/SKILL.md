@@ -191,6 +191,7 @@ Structure:
 - Changelog items are **one-line bullets** with PR links.
 - Skip empty categories (if no perf changes, omit 🔥 Performance).
 - Contributors: deduplicate, use GitHub usernames with profile links.
+- **Strip AI tells before publishing** -- run the Highlights prose through `/humanize-writing`. The biggest wins for release notes: cut the over-explained takeaway ("this means users can now...") and use specific version numbers, PR links, and real benchmark figures instead of vague claims.
 
 ## Step 4: LLM Upgrade Prompt (Breaking Changes Only)
 

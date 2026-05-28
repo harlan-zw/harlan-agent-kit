@@ -23,7 +23,14 @@ warn() { echo -e "\033[33m$1\033[0m"; }
 if [ -f "package.json" ]; then
   name=$(jq -r '.name // "unnamed"' package.json 2>/dev/null)
 
-  # Detect project type
+  # Detect monorepo (pnpm workspace or package.json workspaces field)
+  workspace=""
+  if [ -f "pnpm-workspace.yaml" ] || jq -e '.workspaces' package.json >/dev/null 2>&1; then
+    workspace=1
+  fi
+
+  # Detect project type. In a monorepo the indicators live in sub-packages,
+  # so fall back to a shallow scan before giving up on "Node Project".
   if [ -f "src/module.ts" ] || grep -q "nuxt-module-build" package.json 2>/dev/null; then
     show "Nuxt Module: $name"
   elif [ -f "nuxt.config.ts" ]; then
@@ -32,6 +39,10 @@ if [ -f "package.json" ]; then
     show "UnJS Package: $name"
   elif grep -q '"vue"' package.json 2>/dev/null; then
     show "Vue Project: $name"
+  elif [ -n "$workspace" ] && find . -maxdepth 3 -name nuxt.config.ts -not -path '*/node_modules/*' 2>/dev/null | grep -q .; then
+    show "Nuxt Monorepo: $name"
+  elif [ -n "$workspace" ]; then
+    show "Monorepo: $name"
   else
     show "Node Project: $name"
   fi

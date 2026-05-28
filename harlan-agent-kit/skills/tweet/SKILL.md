@@ -17,6 +17,7 @@ Help the user draft, refine, and finalize tweets with compelling visuals. Automa
 - **Screenshot dependencies** -- `sharp` and `@resvg/resvg-js` need to be installed. If they're not global, install to a temp dir, don't pollute the project.
 - **Hot takes can backfire** -- always flag the hot take variation as risky. The user should consciously opt in, not accidentally post something inflammatory.
 - **Always suggest a visual** -- text-only dev tweets get buried by the algorithm. Every finalized tweet should have a visual recommendation, even if the user didn't ask for one.
+- **Strip AI tells** -- before finalizing, run copy through `/humanize-writing`. No em-dashes, no "it's not X, it's Y", name specific tools/numbers over vague claims. AI-sounding tweets read as marketing and get ignored.
 
 ## Data Storage
 
