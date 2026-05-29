@@ -79,18 +79,12 @@ Query examples:
 
 ### Step 2: Parallel batch classification
 
-Split envelopes into batches of 10. Spawn parallel **haiku** agents.
+Split envelopes into batches of 10. Spawn parallel `haiku` classification agents (one per batch) — classification is cheap, mechanical extraction, so `haiku` is the right tier.
 
-Each agent receives a batch of envelopes (id, subject, from, date, flags) and classifies using [references/heuristics.md](references/heuristics.md).
+Each agent receives a batch of envelopes (id, subject, from, date, flags) and classifies using [references/heuristics.md](references/heuristics.md), returning a JSON array conforming exactly to this schema (reject and re-run any batch with malformed entries):
 
-```
-Task(model: haiku, prompt: "Classify these emails. Return JSON array:
-  { id, urgency (1-5), category, suggestedAction, suggestedFolder, reason }
-
-  Categories: client, finance, notification, newsletter, spam, personal, project, automated
-  Actions: reply, move, delete, skip
-
-  Emails: [JSON batch]")
+```json
+{ "id": string, "urgency": 1-5, "category": "client|finance|notification|newsletter|spam|personal|project|automated", "suggestedAction": "reply|move|delete|skip", "suggestedFolder": string, "reason": string }
 ```
 
 ### Step 3: Read high-urgency emails
@@ -187,7 +181,7 @@ Detect sent emails that never got a reply. Useful for chasing up clients, suppor
    ```
    Also check Trash and relevant subfolders in case the reply was already triaged.
 
-   Spawn parallel **haiku** agents in batches of 10 to do this matching.
+   Spawn parallel `haiku` agents in batches of 10 to do this matching.
 
 3. **Filter to unanswered only** -- emails where no matching reply envelope was found.
 

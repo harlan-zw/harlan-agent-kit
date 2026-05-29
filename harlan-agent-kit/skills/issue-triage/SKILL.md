@@ -42,30 +42,33 @@ On subsequent runs, read the log and highlight what changed since last triage.
    ```
 
 3. **Parallel batch analysis** (8-10x faster than sequential)
-   Split issues into batches of 10 and spawn parallel haiku agents.
-   If <=10 issues, use a single agent.
+   Split issues into batches of 10 and spawn parallel `haiku` classification agents (one per batch). Classification is cheap, mechanical extraction — `haiku` is the right tier. If <=10 issues, use a single agent.
+
+   For a large backlog (50+ issues), drive this with the **Workflow tool**: `pipeline` the batches through a classify stage (schema below) then a verify stage, so the schema is enforced and the verify pass runs per batch as it completes. This skill's instructions are the opt-in.
 
    See [references/heuristics.md](references/heuristics.md) for the full difficulty/impact scales and signal weighting.
 
-   ```
-   # Spawn Task agents IN PARALLEL (single message, multiple tool calls)
-   Task(model: haiku, prompt: "Analyze these issues: [JSON]. Return JSON array with: number, difficulty (1-5), impact (1-5), hasRepro (bool), needsCodebaseReview (bool), notes")
+   Each agent returns a JSON array conforming exactly to this schema (reject and re-run any batch that returns malformed entries):
+   ```json
+   { "number": int, "difficulty": 1-5, "impact": 1-5, "hasRepro": bool, "needsCodebaseReview": bool, "notes": string }
    ```
 
-4. **Merge results** from all agents into unified list
+4. **Merge results** from all agents into unified list.
 
-5. **Display table** sorted by: has repro (yes first), then impact/difficulty ratio (descending)
+5. **Adversarially verify the candidate quick wins.** A wrong "difficulty 1, impact 4" recommendation costs the user a wasted worktree, so before presenting, spawn a `haiku` verifier per issue scored difficulty 1-2 AND impact 3+. Prompt it to *refute* the score: "Read issue #N. Is this genuinely a <=2-difficulty change with 3+ impact, or is there hidden scope (migration, API surface, cross-cutting state)? Default to downgrading if uncertain." Demote any issue the verifier refutes. Skip this pass for backlogs where no issue clears the quick-win bar.
+
+6. **Display table** sorted by: has repro (yes first), then impact/difficulty ratio (descending)
 
    | # | Title | Labels | Repro | Diff | Impact | Assigned | Notes |
    |---|-------|--------|-------|------|--------|----------|-------|
    | 42 | Fix CSS regression | bug | yes | 1 | 3 | | 1-line fix |
    | 17 | Add dark mode | enhancement | n/a | 2 | 4 | @dev | PR in progress |
 
-6. **Highlight quick wins** -- low difficulty (1-2), decent impact (2+)
+7. **Highlight quick wins** -- low difficulty (1-2), decent impact (2+), survived verification
 
-7. **Highlight high priorities** -- impact 4-5 regardless of difficulty
+8. **Highlight high priorities** -- impact 4-5 regardless of difficulty
 
-8. **Offer worktree setup** -- prompt user with options:
+9. **Offer worktree setup** -- prompt user with options:
    - "Create worktrees for quick wins (difficulty 1-2, impact 2+)?"
    - "Create worktrees for high priorities (impact 4-5)?"
    - "Pick specific issues by number?"

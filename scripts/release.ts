@@ -21,8 +21,10 @@ function bumpVersion(version: string, type: 'patch' | 'minor' | 'major'): string
 
 // Get current version from plugin.json
 const pluginPath = 'harlan-agent-kit/.claude-plugin/plugin.json'
+const codexPluginPath = 'harlan-agent-kit/.codex-plugin/plugin.json'
 const marketplacePath = '.claude-plugin/marketplace.json'
 const plugin = JSON.parse(readFileSync(pluginPath, 'utf-8'))
+const codexPlugin = JSON.parse(readFileSync(codexPluginPath, 'utf-8'))
 const marketplace = JSON.parse(readFileSync(marketplacePath, 'utf-8'))
 const oldVersion = plugin.version
 const newVersion = bumpVersion(oldVersion, bumpType)
@@ -33,6 +35,11 @@ console.log(`Bumping ${oldVersion} → ${newVersion}`)
 plugin.version = newVersion
 writeFileSync(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`)
 console.log(`  ✓ ${pluginPath}`)
+
+// Update .codex-plugin/plugin.json
+codexPlugin.version = newVersion
+writeFileSync(codexPluginPath, `${JSON.stringify(codexPlugin, null, 2)}\n`)
+console.log(`  ✓ ${codexPluginPath}`)
 
 // Update marketplace.json (sync version in plugins array)
 marketplace.plugins[0].version = newVersion

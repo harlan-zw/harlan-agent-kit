@@ -105,6 +105,18 @@ git diff PREV_TAG..HEAD -- package.json | grep -E '^\+.*"(dependencies|peerDepen
 
 If any dependency had a **major version bump**, note it as a potential source of breaking changes and check that dep's own changelog for migration notes.
 
+### 1e. Adversarially Verify Breaking Changes
+
+A mislabeled breaking change is the costliest error in a release note: a missed one strands users on broken upgrades, a false one scares them off a safe bump. After steps 1a-1d produce a candidate breaking-change list, verify each one against the actual diff before it reaches the notes.
+
+For a handful of candidates, verify inline. For 10+ (large release, 10+ changed exports), spawn a verifier per candidate — drive it with the **Workflow tool** as a `parallel` verify stage; this skill's instructions are the opt-in. Each verifier gets the candidate plus the relevant diff hunk and answers:
+
+- Does this actually break **consumer** code, or only internal/private surface (not in the `exports` map)?
+- Is the migration path described accurate, and does the before/after compile?
+- Default to "real and needs migration notes" only if the break is observable from the public API; downgrade type-only or internal changes.
+
+Drop candidates the verifier clears as non-breaking; keep a one-line note of why, in case the user disagrees.
+
 ## Step 1.5: Semver Sanity Check
 
 Compare the target version against findings:

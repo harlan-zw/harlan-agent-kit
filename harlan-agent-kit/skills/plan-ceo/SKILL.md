@@ -7,6 +7,7 @@ description: >
 user_invocable: true
 context: fork
 agent: Plan
+effort: high
 argument-hint: "[feature-name]"
 ---
 

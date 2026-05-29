@@ -1,6 +1,7 @@
 ---
 name: improve-ts-pkg-architecture
 description: Find deepening opportunities in a TypeScript package, leaning on TS-package-native seams (package.json `exports`, subpath/conditional exports, workspace `packages/*`, factories + hooks, plugin shapes, citty/hookable/unbuild conventions). Use when the user wants to improve architecture, find refactoring opportunities, consolidate tightly-coupled modules, or make a TS library/CLI/monorepo more testable and AI-navigable. Works on single-repo packages and pnpm monorepos.
+effort: high
 ---
 
 # Improve TS Package Architecture

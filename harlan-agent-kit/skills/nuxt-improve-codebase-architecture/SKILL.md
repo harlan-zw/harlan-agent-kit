@@ -1,6 +1,7 @@
 ---
 name: nuxt-improve-codebase-architecture
 description: Find deepening opportunities in a Nuxt codebase, leaning on Nuxt-native seams (hooks, modules, layers, plugins, composables, server routes, nitro, runtime config). Use when the user wants to improve architecture, find refactoring opportunities, consolidate tightly-coupled modules, or make a Nuxt app/module more testable and AI-navigable.
+effort: high
 ---
 
 # Improve Nuxt Codebase Architecture

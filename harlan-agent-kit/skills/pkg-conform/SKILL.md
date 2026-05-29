@@ -204,41 +204,29 @@ When `@nuxt/module-builder` detected, also check (extends Package checklist):
 30. [ ] `prepare:fixtures` - prepares test fixtures
 31. [ ] `.github/workflows/test.yml` - includes prepare step
 
-## Sync Process (Parallelized)
+## Sync Process
 
 ### Phase 0: Detect Project Type
 Determine from cwd path whether this is a **Package** (`*/pkg/*`) or **Site** (`*/sites/*`, `*/site/*`).
 
-### Phase 1: Parallel Config Review
-Spawn these IN PARALLEL (single message, multiple tool calls):
+### Phase 1: Config Review
+Read the config files directly (one batch of parallel Read calls) and compare against the checklist. These are small files and the comparison is cross-cutting (catalog ↔ lockfile ↔ exports ↔ tsconfig interact), so read them inline rather than fanning out to sub-agents — you keep the whole picture in context and avoid losing nuance across separate reports.
 
-```
-Task(Explore): "Read and compare: pnpm-workspace.yaml, package.json deps. Report differences from standards."
-Task(Explore): "Read and compare: .github/workflows/*.yml. Check action versions against v6 standards."
-Task(Explore): "Read and compare: eslint.config.js, vitest.config.ts, tsconfig.json. Report missing options."
-Task(Explore): "Read and compare: .editorconfig, .gitignore. Report missing settings."
-```
+Read for **all project types**:
+- `pnpm-workspace.yaml`, `package.json` — deps, catalogs, `packageManager`, `type`
+- `.github/workflows/*.yml` — action versions against v6 standards
+- `eslint.config.{js,mjs}`, `tsconfig.json`, `.editorconfig`, `.gitignore`
 
-**If Package**, add in parallel:
-```
-Task(Explore): "Read and compare: build.config.ts, package exports, release scripts. Report missing settings."
-```
+**If Package**, also read: `build.config.ts`, `vitest.config.ts`, package `exports`, release scripts.
 
-**If Site**, add in parallel:
-```
-Task(Explore): "Read and compare: nuxt.config.ts, app structure (pages/, layouts/, components/). Report missing settings."
-```
+**If Site**, also read: `nuxt.config.ts`, `app/` structure (`pages/`, `layouts/`, `components/`), `.npmrc`.
 
-**If Nuxt module** (Package + `@nuxt/module-builder`), add in parallel:
-```
-Task(Explore): "Review src/module.ts: check registration methods, resolver usage, module options. Report issues."
-Task(Explore): "Review src/runtime/app/: check composables export, plugins mode, imports registration."
-Task(Explore): "Review src/runtime/server/: check server handlers, Nitro plugins, middleware. Verify no Vue deps."
-Task(Explore): "Review playground/ and test/fixtures/: check nuxt.config, prepare scripts, test patterns."
-```
+**If Nuxt module** (Package + `@nuxt/module-builder`), also read: `src/module.ts` (registration methods, resolver, options), `src/runtime/app/` (composables/plugins/imports), `src/runtime/server/` (handlers/plugins/middleware — verify no Vue deps), `playground/` + `test/fixtures/` (nuxt.config, prepare scripts, test patterns).
+
+For a large monorepo where a single read pass would be unwieldy, delegate per-package walks to `subagent_type=Explore`. For a single package or site, read inline.
 
 ### Phase 2: Apply Changes
-Based on parallel review results, apply necessary updates using the appropriate checklist (Package or Site).
+Based on the review, apply necessary updates using the appropriate checklist (Package or Site).
 
 ### Phase 3: Parallel Verification
 
