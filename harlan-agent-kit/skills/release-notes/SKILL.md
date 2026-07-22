@@ -21,10 +21,9 @@ Generate Nuxt-style release notes with highlights, categorized changelog, and LL
 - **Only for significant releases** -- this skill is overkill for patch bumps. Use for minor/major releases where a narrative is warranted.
 - **Tag detection can miss pre-releases** -- `git tag --sort=-v:refname` may interleave `v1.2.0-beta.1` with stable tags. Filter with `grep -v '\-'` when needed.
 - **Conventional commits required** -- changelog categorization depends on `feat:`, `fix:`, `perf:`, etc. prefixes. If commits are freeform, infer category from the diff: new files/exports = Enhancement, changed test assertions = Fix, `package.json` dep changes = Chore, etc.
-- **Breaking changes hide in feat commits** -- look for `!` suffix (`feat!:`, `fix!:`) AND `BREAKING CHANGE:` in commit bodies, not just type prefixes.
+- **Breaking changes hide in feat commits** -- look for `!` suffix (`feat!:`, `fix!:`) AND `BREAKING CHANGE:` in commit bodies, not just type prefixes; devs forget the `!` constantly, so cross-reference with the export diff (Step 1b) to catch unlabeled ones.
 - **PR bodies have context commit messages lack** -- always fetch PR descriptions for highlight-worthy features. The one-line commit message is rarely enough.
 - **Contributors from squash merges** -- `git log` only shows the merge author. Use `gh pr list --search` to find actual PR authors.
-- **Commit messages lie about breaking changes** -- devs forget `!` suffix constantly. Always cross-reference with the export diff (Step 1b) to catch unlabeled breaking changes.
 - **Prior releases set expectations** -- if the repo already has GitHub releases, match the existing tone and structure. The Nuxt format is the default, not a mandate.
 
 ## Data Storage
@@ -64,7 +63,7 @@ git log PREV_TAG..HEAD --format='%H %s' --no-merges | grep -E '!:|BREAKING CHANG
 
 ### 1b. Public API Surface Diff
 
-Commit messages in most cases miss breaking changes. Diff the actual exports to catch unlabeled ones:
+Commit messages routinely miss breaking changes. Diff the actual exports to catch unlabeled ones:
 
 ```bash
 # Compare exports between tags (adapt paths to project structure)
@@ -92,11 +91,11 @@ git diff PREV_TAG..HEAD --stat -- docs/ README.md MIGRATION.md UPGRADING.md '*.m
 git diff PREV_TAG..HEAD --name-only -- docs/ '*.md' | grep -iE 'migrat|upgrad|breaking|changelog'
 ```
 
-Read any modified migration docs in full. These in most cases contain context that commit messages lack and should inform both the Highlights narrative and the upgrade prompt.
+Read any modified migration docs in full. These carry context that commit messages lack and should inform both the Highlights narrative and the upgrade prompt.
 
 ### 1d. Dependency Bumps
 
-Major dependency upgrades in most cases introduce transitive breaking changes:
+Major dependency upgrades routinely introduce transitive breaking changes:
 
 ```bash
 # Diff package.json dependencies
@@ -121,7 +120,7 @@ Drop candidates the verifier clears as non-breaking; keep a one-line note of why
 
 Compare the target version against findings:
 - **Breaking changes found + minor version bump**: warn the user that this should likely be a major bump (or document why semver is intentionally violated, e.g., pre-1.0)
-- **No new features + minor version bump**: suggest this Will be a patch instead
+- **No new features + minor version bump**: suggest a patch bump instead
 - **Pre-1.0 packages** (`0.x.y`): minor bumps can contain breaking changes per semver spec, but still note them clearly
 
 ## Step 2: Categorize & Prioritize
@@ -132,7 +131,7 @@ Parse conventional commit prefixes into changelog sections. See [references/chan
 
 ### Identify Highlights
 
-Select 3-7 changes that deserve narrative treatment in the Highlights section. Criteria:
+Select 3-7 changes that deserve narrative treatment in the Highlights section (fewer if the release genuinely has fewer; do not pad). Criteria:
 - New user-facing features (`feat:`)
 - Performance improvements with measurable impact (`perf:`)
 - Breaking changes that affect upgrade path

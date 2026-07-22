@@ -79,7 +79,7 @@ Query examples:
 
 ### Step 2: Parallel batch classification
 
-Split envelopes into batches of 10. Spawn parallel `haiku` classification agents (one per batch) — classification is cheap, mechanical extraction, so `haiku` is the right tier.
+Split envelopes into batches of 10, one parallel `haiku` classification agent per batch; classification is cheap mechanical extraction, so `haiku` is the right tier. For 10 or fewer envelopes, use a single agent.
 
 Each agent receives a batch of envelopes (id, subject, from, date, flags) and classifies using [references/heuristics.md](references/heuristics.md), returning a JSON array conforming exactly to this schema (reject and re-run any batch with malformed entries):
 
@@ -181,7 +181,7 @@ Detect sent emails that never got a reply. Useful for chasing up clients, suppor
    ```
    Also check Trash and relevant subfolders in case the reply was already triaged.
 
-   Spawn parallel `haiku` agents in batches of 10 to do this matching.
+   Spawn parallel `haiku` agents in batches of 10 to do this matching; use a single agent for 10 or fewer sent emails.
 
 3. **Filter to unanswered only** -- emails where no matching reply envelope was found.
 

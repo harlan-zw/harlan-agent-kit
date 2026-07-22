@@ -111,7 +111,7 @@ Resolves #NUMBER
 <!-- 2-3 sentences: what problem existed → what we did -->
 ```
 
-Tick the relevant type checkbox. Fill in the description, be concise, write like a human.
+Tick the relevant type checkbox. Fill in the description; be concise.
 
 Only add `### ⚠️ Breaking Changes` and `### 📝 Migration` sections if actually breaking.
 

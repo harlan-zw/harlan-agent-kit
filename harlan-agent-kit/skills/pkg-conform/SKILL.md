@@ -210,7 +210,7 @@ When `@nuxt/module-builder` detected, also check (extends Package checklist):
 Determine from cwd path whether this is a **Package** (`*/pkg/*`) or **Site** (`*/sites/*`, `*/site/*`).
 
 ### Phase 1: Config Review
-Read the config files directly (one batch of parallel Read calls) and compare against the checklist. These are small files and the comparison is cross-cutting (catalog ↔ lockfile ↔ exports ↔ tsconfig interact), so read them inline rather than fanning out to sub-agents — you keep the whole picture in context and avoid losing nuance across separate reports.
+Read the config files directly (one batch of parallel Read calls) and compare against the checklist. The comparison is cross-cutting (catalog ↔ lockfile ↔ exports ↔ tsconfig interact), so read inline to keep the whole picture in context. Exception: for a large monorepo where one read pass is unwieldy, delegate per-package walks to `subagent_type=Explore`.
 
 Read for **all project types**:
 - `pnpm-workspace.yaml`, `package.json` — deps, catalogs, `packageManager`, `type`
@@ -222,8 +222,6 @@ Read for **all project types**:
 **If Site**, also read: `nuxt.config.ts`, `app/` structure (`pages/`, `layouts/`, `components/`), `.npmrc`.
 
 **If Nuxt module** (Package + `@nuxt/module-builder`), also read: `src/module.ts` (registration methods, resolver, options), `src/runtime/app/` (composables/plugins/imports), `src/runtime/server/` (handlers/plugins/middleware — verify no Vue deps), `playground/` + `test/fixtures/` (nuxt.config, prepare scripts, test patterns).
-
-For a large monorepo where a single read pass would be unwieldy, delegate per-package walks to `subagent_type=Explore`. For a single package or site, read inline.
 
 ### Phase 2: Apply Changes
 Based on the review, apply necessary updates using the appropriate checklist (Package or Site).

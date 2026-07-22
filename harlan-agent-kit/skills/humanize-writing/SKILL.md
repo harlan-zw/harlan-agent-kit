@@ -20,6 +20,10 @@ These are the well-known signatures. Fix them, but know they are the easy half.
 - **Em-dashes and hyphens-as-dashes** -- restructure with commas, semicolons, colons, or separate sentences.
 - **"It's not X, it's Y"** contrast pattern -- banned. State Y directly.
 - **Overused vocabulary** -- delve, tapestry, testament, realm, navigate, leverage, robust, seamless, crucial, vibrant, ever-evolving, "in today's fast-paced".
+- **Dead metaphors and stock phrases** -- figures of speech you're used to seeing in print: "game changer", "unlock the power of", "at the end of the day", "low-hanging fruit", "double-edged sword", "the landscape of". Say it plainly or find a fresh, specific image.
+- **Pompous diction** -- long or latinate word where a short one works: utilize (use), facilitate (help), commence (start), prior to (before), in order to (to), "a variety of" (give the number or drop it). Never a long word where a short one will do.
+- **Agentless passive** -- "it was decided", "mistakes can be made", "improvements were introduced". Name the actor when the actor matters.
+- **Padding constructions** -- "the fact that", "there is/are ... that", nominalizations ("perform an installation of" instead of "install"). If a word can be cut, cut it.
 - **Hedging filler** -- "it's worth noting", "it's important to", "that said", "moreover", "furthermore" as paragraph openers.
 - **False-sincerity openers** -- "honestly", "to be honest", "frankly", "in all honesty", "let's be real". They signal nothing and pad the sentence. Just state the point.
 - **Rule-of-three everywhere** -- AI defaults to triples ("fast, reliable, and scalable"). Vary list length; use two or four.
@@ -34,6 +38,8 @@ This is what actually separates human from AI prose. Editing these requires real
 - **Writes as though no one is watching.** Humans address the reader directly and break the fourth wall ("you've probably hit this"). AI narrates into the void. Add direct address where natural.
 - **Tidy, single-track structure.** AI marches clue to reveal in a straight line with no loose ends. Humans digress, backtrack, leave threads open. Allow an aside or a non-linear jump.
 - **Narrow repertoire / over-determination.** AI converges on safe defaults and resolves everything neatly. Let tension stay unresolved; admit what you don't know; allow an opinion that isn't perfectly balanced.
+- **Elegant variation.** AI swaps synonyms for the same thing to sound sophisticated ("the tool... the utility... the solution"). Humans repeat the term. Use the same word for the same thing throughout.
+- **Uniform sentence rhythm.** AI writes evenly weighted, medium-length sentences, one point each. Humans are bursty: a two-word punch, then a long rambling clause. Vary sentence length deliberately.
 
 ## Adapt to content type
 
@@ -49,3 +55,7 @@ Not every tell applies everywhere. Weight by genre:
 1. List the tells you found, grouped by pass, quoting the offending phrase.
 2. Provide the rewritten text.
 3. If rewriting changed meaning anywhere, flag it explicitly rather than assuming the user's intent.
+
+## Guardrail
+
+Break any rule above sooner than write something stilted. The goal is prose that reads human, and humans keep deliberate voice, rhythm, humor, and the occasional ornament. If a "tell" is doing real work (a metaphor that lands, a triple with punch), keep it and say why. Preserve the user's meaning, tone, and explicit constraints; never sand text into flat sameness.

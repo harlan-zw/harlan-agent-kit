@@ -89,7 +89,7 @@ Use `JOB_DIR=.claude/context/jobs/{JOB_ID}` throughout.
 
 ## Pre-Implementation: Define Acceptance Criteria
 
-Before writing any code in Phase 2 or Phase 3, your FIRST response must be the contract. Do not open any `.vue` files or write any component code until the user approves.
+Before writing any code in Phase 2 or Phase 3, your FIRST response must be the contract. Do not open any `.vue` files or write any component code until the user approves — except for unambiguous requests (single page, explicit requirements), where you emit the contract as documentation and proceed immediately.
 
 Run `mkdir -p {JOB_DIR}` then emit to `{JOB_DIR}/build-contract.md`:
 
@@ -97,7 +97,7 @@ Run `mkdir -p {JOB_DIR}` then emit to `{JOB_DIR}/build-contract.md`:
 2. **Testable behaviors**: assign each criterion a stable ID (C1, C2, ...). Use this format:
    `[C1] GIVEN [state/context], WHEN [user action], THEN [observable result]`
    Each criterion must be verifiable by a single browser action or grep. Rewrite any criterion that requires subjective judgment.
-   Minimums per page:
+   Minimums per page (scale down proportionally for pages that genuinely lack a category — a static content page with no forms has no submit assertions to write; never invent filler criteria to hit a count):
    - 5 interaction assertions (clicks, submits, toggles, navigation, hover states)
    - 3 state assertions (loading, empty, error as separate items)
    - 2 responsive assertions (specific behavior at 375px AND 768px)
@@ -107,7 +107,7 @@ Run `mkdir -p {JOB_DIR}` then emit to `{JOB_DIR}/build-contract.md`:
 3. **Design expectations**: which theme tokens apply, expected visual weight, layout structure. Include the design principle from the guidelines and note how the page should express it.
 4. **Out of scope**: what this does NOT include
 
-**Show the contract to the user and get approval before building.** The user may add criteria, adjust scope, or flag missing requirements. For unambiguous requests (single page, explicit requirements), emit the contract as documentation but proceed immediately.
+**Show the contract to the user and get approval before building.** The user may add criteria, adjust scope, or flag missing requirements.
 
 This file becomes the review skill's grading rubric. Skip this step only for single-file cosmetic changes.
 
@@ -273,10 +273,6 @@ If anything matches, fix the underlying issue before continuing the build.
 Compose pages and UI patterns with Nuxt UI v4+ components. **Requires a design system** (run Phase 1 first if none exists).
 
 Run **Dev Server Setup** above before the first smoke test.
-
-### Artifact Cleanup
-
-Stale artifact cleanup is no longer needed. Each job gets its own directory under `.claude/context/jobs/{JOB_ID}/`, so previous jobs' artifacts cannot collide.
 
 ### Build Recovery
 
@@ -479,7 +475,7 @@ That is all the self-verification needed at this stage. Full visual + interactio
 
 ### After Polish: Emit Handoff
 
-After completing Phase 3 changes, follow the same "After Implementation: Emit Handoff" steps below. The review step applies to polish work too, not just new page builds. Skip only for trivially verifiable changes (single file, purely cosmetic token swaps with no new components, routes, or interactions).
+After completing Phase 3 changes, follow the same "After Implementation: Emit Handoff" steps below, including its skip-review conditions. The review step applies to polish work too, not just new page builds.
 
 ---
 

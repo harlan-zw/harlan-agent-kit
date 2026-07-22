@@ -62,7 +62,7 @@ done
 
 Use WebSearch to check:
 - What's trending in the Vue/Nuxt/UnJS ecosystem this week
-- Any recent discourse the user Must add expertise to (SEO, head management, Nuxt modules)
+- Any recent discourse where the user can add expertise (SEO, head management, Nuxt modules)
 
 ### 1c. Score and Rank
 
@@ -75,7 +75,7 @@ For each potential topic, score on:
 | **Timeliness** | 2x | Is there a reason to post NOW vs next week? |
 | **Uniqueness** | 1x | Can only you credibly post this? |
 
-Present the **top 3-5 ideas** as a ranked table:
+Present the **top 3-5 ideas** as a ranked table (fewer if the week was quiet; don't pad with weak moments):
 
 ```
 | # | Topic | Hook | Visual | Why now |

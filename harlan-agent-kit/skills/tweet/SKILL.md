@@ -50,7 +50,7 @@ Determine what the user provided and select the appropriate visual:
 | Release/launch with metrics | `stat-card.mjs` | GitHub stars, downloads, benchmarks, version milestones |
 | General text, no obvious visual | Suggest one | Ask: "What's the most visual part of this?" |
 
-If the input clearly maps to one visual, proceed directly. If multiple Must work, briefly suggest the best fit and why.
+If the input clearly maps to one visual, proceed directly. If more than one fits, briefly suggest the best fit and why.
 
 ### Theme Selection
 

@@ -66,8 +66,6 @@ Then use the Agent tool with `subagent_type=Explore` to walk the codebase. Note 
 - **Treeshake / bundle-size signals** — heavy SDK statically imported at module top when only one path uses it. Move the import inside the function, or behind a conditional export. Run `npx -y publint && npx -y @arethetypeswrong/cli --pack .` plus `du -sh dist/`.
 - **Repeated import-time work** (regex/schema/table compilation) running whether the module is used or not. Move into a memoised getter inside the factory.
 
-Apply the **deletion test** to anything you suspect is shallow. Lean on [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) when classifying friction.
-
 ### 2. Present candidates
 
 Present a numbered list of deepening opportunities. For each candidate:

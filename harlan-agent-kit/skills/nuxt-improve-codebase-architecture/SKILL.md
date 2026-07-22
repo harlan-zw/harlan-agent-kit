@@ -21,7 +21,7 @@ Load-bearing principles (full list in LANGUAGE.md):
 - **Prefer Nuxt-native seams** over hand-rolled equivalents.
 - **Default feature-local, promote on evidence.** New `composables/useFoo.ts` or `components/Foo.vue` is a claim of app-wide ownership; the rename blast radius and naming-collision risk make global auto-import the most expensive seam decision. Colocate + `_`-prefix until ≥2 unrelated features consume it.
 
-This skill is _informed_ by the project's domain model. The domain language gives names to good seams; ADRs record decisions the skill should not re-litigate.
+This skill is _informed_ by the project's domain model (`CONTEXT.md`, `docs/adr/`): the domain language names good seams; ADRs record decisions not to re-litigate.
 
 ## Companion files
 

@@ -23,10 +23,10 @@ Challenge the premise of the plan before looking at code.
 
 ## Step 2: Mode Selection & Ambition Mapping
 Present the user with the four ambition modes and obtain their selection before proceeding.
-*   ** SCOPE EXPANSION (Cathedral Mode):** The "10-star" vision. Propose the ambitious version that delivers 10x value for 2x effort. Present 3-5 "Expansion Proposals" for opt-in. Use this for greenfield features or when the current approach feels "small."
-*   *** SELECTIVE EXPANSION (Cherry-pick Mode):** Core scope + 3 delight items. Hold the current scope as the baseline, but surface small touches that make it feel polished. Use this for feature enhancements.
-*   ** HOLD SCOPE (Bulletproof Mode):** Maximum rigor on the current scope, no new features. Focus 100% on catching every edge case and failure mode. Use this for bug fixes or refactors.
-*   ** SCOPE REDUCTION (Surgeon Mode):** The absolute minimum viable version. Ruthlessly cut everything that isn't load-bearing to ship value faster. Use this when facing tight deadlines or complex over-engineering.
+*   **SCOPE EXPANSION (Cathedral Mode):** The "10-star" vision. Propose the ambitious version that delivers 10x value for 2x effort. Present 3-5 "Expansion Proposals" for opt-in. Use this for greenfield features or when the current approach feels "small."
+*   **SELECTIVE EXPANSION (Cherry-pick Mode):** Core scope + 3 delight items. Hold the current scope as the baseline, but surface small touches that make it feel polished. Use this for feature enhancements.
+*   **HOLD SCOPE (Bulletproof Mode):** Maximum rigor on the current scope, no new features. Focus 100% on catching every edge case and failure mode. Use this for bug fixes or refactors.
+*   **SCOPE REDUCTION (Surgeon Mode):** The absolute minimum viable version. Ruthlessly cut everything that isn't load-bearing to ship value faster. Use this when facing tight deadlines or complex over-engineering.
 
 ## Step 3: Failure Mode Audit
 Audit the plan for trust and reliability.

@@ -41,7 +41,7 @@ On subsequent runs, read the log and highlight what changed since last triage.
    gh issue list --repo <repo> --state open --limit <limit> --json number,title,labels,body,createdAt,author,comments,assignees
    ```
 
-3. **Parallel batch analysis** (8-10x faster than sequential)
+3. **Parallel batch analysis**
    Split issues into batches of 10 and spawn parallel `haiku` classification agents (one per batch). Classification is cheap, mechanical extraction — `haiku` is the right tier. If <=10 issues, use a single agent.
 
    For a large backlog (50+ issues), drive this with the **Workflow tool**: `pipeline` the batches through a classify stage (schema below) then a verify stage, so the schema is enforced and the verify pass runs per batch as it completes. This skill's instructions are the opt-in.
@@ -64,7 +64,7 @@ On subsequent runs, read the log and highlight what changed since last triage.
    | 42 | Fix CSS regression | bug | yes | 1 | 3 | | 1-line fix |
    | 17 | Add dark mode | enhancement | n/a | 2 | 4 | @dev | PR in progress |
 
-7. **Highlight quick wins** -- low difficulty (1-2), decent impact (2+), survived verification
+7. **Highlight quick wins** -- low difficulty (1-2), impact 2+; those scored impact 3+ have survived the refutation pass
 
 8. **Highlight high priorities** -- impact 4-5 regardless of difficulty
 

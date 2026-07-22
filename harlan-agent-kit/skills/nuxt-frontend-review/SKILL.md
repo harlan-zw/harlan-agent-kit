@@ -35,10 +35,6 @@ Set `JOB_DIR` = `.claude/context/jobs/{resolved-job-id}` and use it for all arti
 
 **Inline mode**: this skill runs in the current conversation context by default. **Tradeoff**: inline review shares the generator's context, which can introduce self-evaluation bias (the reviewer "remembers" the generator's reasoning and may be more lenient). For high-stakes reviews or when you suspect leniency, start a new conversation for independent evaluation with fresh context.
 
-## Scope Check
-
-If only 1-2 files changed and the diff is purely cosmetic (token swaps, spacing adjustments, copy changes), skip to Step 3 mechanical greps and Step 5. No need to start a dev server or do visual verification for changes that cannot break layout or behavior.
-
 ## Step 0: Calibration
 
 The calibration data was injected above. If it exists, weight your evaluation toward historically missed categories. If the calibration notes say you're too lenient on a category, treat it as a hard rejection criterion for this review.
@@ -299,7 +295,7 @@ Flag the following:
 
 **[RUBRIC]**
 - **Chartjunk inside the plot**: heavy gridlines, chart borders, plot-background fills, drop shadows / glow / theme texture on data marks (line, bar, point, area), moiré patterns, decorative icons inside the plot area. Theme effects on the surrounding card are fine; on the data mark itself they distort perceived magnitude.
-- **Default legend left on**: an Echarts/Chart.js/Recharts legend rendering when the chart has ≤3 series and Must be direct-labelled. Inspect the chart config; the legend should be explicitly disabled.
+- **Default legend left on**: an Echarts/Chart.js/Recharts legend rendering on a chart with ≤3 series that should be direct-labelled instead. Inspect the chart config; the legend should be explicitly disabled.
 - **Eraser-test failures**: legend duplicating direct labels; numeric labels and tick marks both present for the same values; per-panel scale annotations duplicating a shared-scale caption.
 - **Collision failures**: in-plot annotations crossing data marks or other text; band/epoch labels stacked at axis zero; baseline labels overlapping the leftmost data points.
 - **Sparkline malpractice**: axes, gridlines, or legend on a sparkline; sparkline height not matching surrounding line-height; sparkline used as a standalone chart rather than inline with a number.
