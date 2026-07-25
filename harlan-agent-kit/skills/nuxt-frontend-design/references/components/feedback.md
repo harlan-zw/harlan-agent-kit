@@ -6,7 +6,7 @@ Toasts, modals, confirmations, and state communication.
 
 ## Toast Notifications
 
-Use `useAppToast()` — a typed wrapper over `useToast()` with preset icons and colors per status. Copy [useAppToast.ts](../../templates/composables/useAppToast.ts) into `app/composables/` first. See [library.md](../library.md).
+Wrap `useToast()` in a typed `useAppToast()` composable in `app/composables/`, with preset icons and colors per status, so call sites never repeat icon/color choices.
 
 ```ts
 const toast = useAppToast()
@@ -154,7 +154,7 @@ Use `UEmpty` (v4+) for simple cases:
 />
 ```
 
-For richer empty states with action presets (refresh / reset / clear / back) and custom footer, copy [UiNoData.vue](../../templates/components/UiNoData.vue) into `app/components/`. See [library.md](../library.md).
+Richer empty states want an action preset (refresh / reset / clear / back) and an optional footer slot. Build it once as a component in `app/components/` and reuse it.
 
 ```vue
 <UiNoData

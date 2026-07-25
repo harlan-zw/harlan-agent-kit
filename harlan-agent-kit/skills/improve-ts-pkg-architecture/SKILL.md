@@ -1,6 +1,6 @@
 ---
 name: improve-ts-pkg-architecture
-description: Find deepening opportunities in a TypeScript package, leaning on TS-package-native seams (package.json `exports`, subpath/conditional exports, workspace `packages/*`, factories + hooks, plugin shapes, citty/hookable/unbuild conventions). Use when the user wants to improve architecture, find refactoring opportunities, consolidate tightly-coupled modules, or make a TS library/CLI/monorepo more testable and AI-navigable. Works on single-repo packages and pnpm monorepos.
+description: Architecture review for a published TypeScript package with no `nuxt.config.ts` — libraries, CLIs, and pnpm monorepos. Finds deepening opportunities on package-native seams (`exports`, subpath/conditional exports, workspace `packages/*`, factories + hooks, plugin shapes, citty/hookable/unbuild conventions). Use for improving architecture, finding refactors, consolidating coupled modules, or making a library more testable. For a Nuxt app or module, use `nuxt-improve-codebase-architecture` instead.
 effort: high
 ---
 
@@ -99,9 +99,9 @@ Once the user picks a candidate, drop into a grilling conversation. Walk the des
 
 Side effects happen inline as decisions crystallize:
 
-- **Naming a deepened module after a concept not in `CONTEXT.md`?** Add the term to `CONTEXT.md` — same discipline as `/grill-with-docs` (see [CONTEXT-FORMAT.md](../grill-with-docs/CONTEXT-FORMAT.md)). Create the file lazily if it doesn't exist.
+- **Naming a deepened module after a concept not in `CONTEXT.md`?** Add the term to `CONTEXT.md` as a short glossary entry: the term, one sentence of meaning in this codebase, and where it lives. Create the file lazily if it doesn't exist.
 - **Sharpening a fuzzy term during the conversation?** Update `CONTEXT.md` right there.
-- **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing — skip ephemeral reasons ("not worth it right now") and self-evident ones. See [ADR-FORMAT.md](../grill-with-docs/ADR-FORMAT.md).
+- **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing — skip ephemeral reasons ("not worth it right now") and self-evident ones. Write it to `docs/adr/NNNN-slug.md` with context, decision, and consequences.
 - **Want to explore alternative interfaces for the deepened module?** See [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md). Sub-agents are pre-seeded with TS-pkg-native shapes (single factory, factory + hook bus, subpath-exposed surface, ports & adapters) so the design space is grounded in what the ecosystem already offers.
 - **Need to know the true blast radius of a rename/move before committing?** `npx -y @ripast/cli scan <symbol>` (counts) or `npx -y @ripast/cli scan <symbol> --graph mermaid` (importer graph). Quote numbers before promising scope.
 - **Decision crystallized into a concrete refactor?** Execute through ripast, not Edit. Pick the primitive:

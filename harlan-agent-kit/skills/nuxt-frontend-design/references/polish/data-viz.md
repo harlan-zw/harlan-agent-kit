@@ -70,7 +70,7 @@ Tiny, word-sized, intense. Used inline with the number they qualify, not as stan
 - Width: enough to show the shape, ~80–160px.
 - Color: the focal series in the brand accent; min/max dots in red/green only when those carry meaning.
 
-The project ships `UiSparkline` in `references/library.md`; prefer it over hand-rolling.
+If the project already has a sparkline primitive in `app/components/`, use it rather than hand-rolling another.
 
 ## Layering & separation
 

@@ -80,7 +80,7 @@ Reference: **Linear**
 
 ## Stat Cards & KPIs
 
-Don't build stat cards from scratch. Copy the primitives in [library.md](../library.md) — `UiStat`, `UiStats`, `UiSparkline`, `UiTrend`, `UiSkeleton`, `UiNoData`. They handle trend direction coloring, invertible metrics (lower-is-better), loading skeletons, status chips, and sparkline backdrops.
+Check `app/components/` for existing stat primitives before building from scratch. Whatever you build or reuse must handle trend direction coloring, invertible metrics (lower-is-better), loading skeletons, status chips, and sparkline backdrops.
 
 ### Single KPI
 

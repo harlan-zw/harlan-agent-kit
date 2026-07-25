@@ -68,7 +68,7 @@ Never show an empty table. Use `UEmpty`:
 </template>
 ```
 
-For filtered / searched tables where "reset filters" is the useful action, prefer [`UiNoData`](../../templates/components/UiNoData.vue) with an action preset — see [library.md](../library.md).
+For filtered or searched tables, the useful empty-state action is "reset filters". Give the empty slot an action button, not just a message.
 
 ---
 
@@ -97,7 +97,7 @@ const columns = [
 <UTable :columns="columns" :rows="projects" :loading="pending" />
 ```
 
-For row-level skeleton placeholders (e.g. inside a custom cell renderer or a non-table list) use [`UiSkeleton`](../../templates/components/UiSkeleton.vue) — deterministic widths via seeded pseudo-random, so SSR + client render identically. See [library.md](../library.md).
+Row-level skeleton placeholders (inside a custom cell renderer or a non-table list) need deterministic widths, seeded rather than random, so SSR and client render identically.
 
 ---
 
