@@ -1,6 +1,6 @@
 {
   "name": "harlan-agent-kit",
-  "version": "4.1.2",
+  "version": "4.1.3",
   "description": "Harlan's personal agent kit - Nuxt/Vue/TS workflow tools",
   "author": {
     "name": "Harlan Wilton",
