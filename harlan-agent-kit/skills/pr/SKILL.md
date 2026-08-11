@@ -89,7 +89,7 @@ See [references/conventional-commits.md](references/conventional-commits.md) for
 **Title:** Conventional commit format -- `feat:`, `fix:`, `docs:`, `chore:`, etc. Under 70 chars. Use scopes where
 appropriate (e.g., `feat(auth):`, `fix(ui):`).
 
-**Body template:**
+**Use the repo's own template if it has one.** Check `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`, and `docs/PULL_REQUEST_TEMPLATE.md`. If one exists, fill it and add nothing to it. Only if none exists, use this:
 
 ```markdown
 ### 🔗 Linked issue
@@ -108,14 +108,55 @@ Resolves #NUMBER
 
 ### 📚 Description
 
-<!-- 2-3 sentences: what problem existed → what we did -->
+<!-- what was wrong or missing, then what changed -->
 ```
 
-Tick the relevant type checkbox. Fill in the description; be concise.
+Reproduce that block character for character, including every emoji. Do not restyle it per repo.
 
-Only add `### ⚠️ Breaking Changes` and `### 📝 Migration` sections if actually breaking.
+Add `### ⚠️ Breaking Changes` and `### 📝 Migration` only when the change actually breaks or needs an operator step. Migration text is for the person running it: the command, the ordering constraint, and what it cannot recover.
+
+### Body rules
+
+These exist because the generated bodies drift the same way every time.
+
+- **No verification, testing, or QA section. Ever.** Not `✅ Verification`, not `🧪 Testing`, not a checklist of what you ran. CI reports test results and reviewers trust it. Evidence that CI cannot produce belongs in a follow-up comment (Step 5), never the description.
+- **No self-ticked checkboxes** beyond the ones the repo's own template asks for. A list of `- [x]` items you wrote and ticked yourself is not evidence, it reads as homework.
+- **Delete empty sections.** Never write "None.", "No linked issue.", or "N/A" under a heading. No linked issue means no Linked issue section.
+- **Length follows risk.** A fix gets 1 to 3 sentences. Spend more only where a reviewer must understand a behaviour change, a data migration, or a non-obvious tradeoff. Never narrate the diff; the diff is right there.
+- **Earn every number.** Include a figure only if a reviewer would act differently for knowing it. `7,438 rows backfilled` earns its place in a migration note. `533 tests passed, 2 skipped` does not.
+- **Vary the shape.** Do not open every paragraph with `This `. Do not follow a past-tense problem sentence with a present-tense `This adds…` in every PR. For a small fix, one sentence is the whole description.
+
+### Voice
+
+Modelled on Harlan's hand-written PRs to `nuxt/nuxt`. These are the moves that read human and that generated bodies never make on their own.
+
+- **Write as the person who hit the problem.** First person is correct when there is a story or a judgement: "I had a valid use case for runtime plugin meta, and got a cryptic warning three times", "I honestly had no idea what it meant and could only debug it by reading the Nuxt source". Do not fabricate an experience you did not have; if the work started from an issue, say that instead.
+- **Paste the evidence, do not describe it.** Real terminal output before and after, the actual generated code that broke, the config snippet a user would write. A pasted `WARN` line beats a sentence about a warning.
+- **Say what you are unsure about.** Real PRs carry loose ends: "I tried making it throw once but hit too many test failures, not sure what went wrong", "Question: should the root element always have a unique id?", "Consider deprecating `teleportId` with these changes". Include the dead end you abandoned, the follow-up you did not take, the design question you want the reviewer to answer. Certainty on every point is the loudest AI tell in a PR.
+- **Bullets and fragments are fine.** "Types aren't documented, copied docs from the site" is a complete thought. Prose paragraphs are not mandatory.
+- **Motivation before mechanism** for a feature: who needs this, what they do today, what is bad about that, then the change.
+- **Do not perform completeness.** Leave the repo template's HTML comments untouched. Tick a checklist box only if it is true. Shipping with boxes unticked is normal and correct.
 
 **Strip AI tells from the title and description** before pushing, run them through `/humanize-writing`. For PRs specifically: no em-dashes, drop the over-explained "this means that..." takeaway, and use specifics (file/function names, issue numbers, real before/after behavior) instead of vague claims like "improves performance". A PR body that reads as AI-generated erodes reviewer trust.
+
+**Reads-human check.** Before pushing, reread the body and cut anything that exists to show effort rather than to help the reviewer. This is the target shape:
+
+```markdown
+### 🔗 Linked issue
+
+Resolves #658
+
+### ❓ Type of change
+
+- [x] 🐞 Bug fix
+
+### 📚 Description
+
+DevTools refresh broadcasts used request and response RPC calls, so disconnected
+clients logged a `birpc` timeout for `refreshRouteData` when pages changed. Send
+these one-way notifications with `asEvent()` and cover route refresh behavior
+with a unit test.
+```
 
 ## Step 4: Verify
 
@@ -152,6 +193,20 @@ EOF
 
 Output the PR URL when done. Log to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
+**Verification evidence goes here, as a comment, not in the description.** Post it directly only on a repo the user owns or maintains, since it is part of submitting their own PR. Anywhere else, show the draft and let them post it. Post one only when you did something CI cannot show: ran a migration against a restored database, exercised the change in a browser, checked an authorization boundary by hand. Skip it entirely when the proof is just lint, typecheck, and the test suite; CI already reports those.
+
+```bash
+gh pr comment NUMBER --body "$(cat <<'EOF'
+Checked by hand, since CI cannot cover it:
+- Backfill on a 5 Aug 2026 live restore produced 7,438 snapshots, rerun added none
+- Signed agreement kept the same SHA256 after editing venue, purchaser, and contract ID
+- Crafted Staff export request returned 403
+EOF
+)"
+```
+
+Keep it to the checks a reviewer would otherwise have to repeat. Prose lines, not ticked boxes.
+
 ## Step 6: Monitor CI & Review Comments
 
 After creating or updating a PR, enter a **fix loop** -- keep watching until CI is green and all review comments are addressed.
@@ -178,7 +233,7 @@ After creating or updating a PR, enter a **fix loop** -- keep watching until CI 
 
 - Fix issues in **new commits** (don't amend) so reviewers can see incremental fixes.
 - After each push, restart from step 1 of the loop.
-- If a review comment is a question or non-actionable, reply to it via `gh api` and move on -- don't block the loop.
+- **Never post a reply to a review comment yourself.** Fixing the code and pushing is your move; talking to a reviewer is not. If a comment is a question or non-actionable, draft the reply, show it to the user, and let them post it. Continue the loop while you wait; do not block on it.
 - If stuck after 3 failed attempts on the same issue, stop the loop and ask the user for guidance.
 
 ## Step 7: Cleanup (after merge or user says "finish")
