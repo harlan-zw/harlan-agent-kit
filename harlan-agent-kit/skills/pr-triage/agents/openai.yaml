@@ -1,0 +1,4 @@
+interface:
+  display_name: PR Triage
+  short_description: Repair and rank owned GitHub pull requests
+  default_prompt: 'Use $pr-triage to repair, review, sign off, and rank my owned open pull requests.'
