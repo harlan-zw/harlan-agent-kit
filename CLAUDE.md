@@ -7,6 +7,7 @@ Agent plugin for Nuxt/Vue/TypeScript workflows. No build step: bash hooks plus m
 ```bash
 check              # Parallel lint + typecheck + test (installed to ~/.local/bin)
 pnpm lint:fix      # ESLint autofix
+pnpm check:context # Verify ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md have not drifted
 pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, marketplace.json, skill frontmatter)
 ```
 

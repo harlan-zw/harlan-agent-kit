@@ -5,6 +5,7 @@
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "check:context": "scripts/check-agent-context.sh",
     "release": "node --experimental-strip-types scripts/release.ts"
   },
   "dependencies": {
