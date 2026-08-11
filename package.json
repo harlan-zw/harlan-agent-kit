@@ -1,19 +1,19 @@
 {
   "name": "harlan-agent-kit",
   "type": "module",
-  "packageManager": "pnpm@11.0.9",
+  "packageManager": "pnpm@11.21.0",
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "release": "node --experimental-strip-types scripts/release.ts"
   },
   "dependencies": {
-    "@antfu/eslint-config": "^8.2.0",
-    "eslint": "^10.3.0",
-    "eslint-plugin-harlanzw": "^0.12.1"
+    "@antfu/eslint-config": "^9.3.0",
+    "eslint": "^10.8.1",
+    "eslint-plugin-harlanzw": "^0.17.1"
   },
   "devDependencies": {
-    "@types/node": "^25.6.2",
-    "typescript": "^6.0.3"
+    "@types/node": "^26.2.0",
+    "typescript": "6.0.3"
   }
 }
