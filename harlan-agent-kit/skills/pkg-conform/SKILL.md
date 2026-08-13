@@ -126,12 +126,13 @@ See `references/` for detailed templates:
 - `references/pkg-package-json.md` - single repo and monorepo package.json templates
 - `references/catalogs.md` - pnpm workspace catalogs
 - `references/configs.md` - package config file templates (eslint, vitest, tsconfig, obuild)
-- `references/github-actions.md` - CI/CD workflows
+- `references/github-actions.md` - CI/CD workflows (Package only)
 
 **Site references** (when project type is Site):
 - `references/site-package-json.md` - package.json template, rules, optional scripts
 - `references/site-structure.md` - Nuxt 4 directory layout and conventions
 - `references/site-configs.md` - nuxt.config.ts, tsconfig, eslint, npmrc, editorconfig, gitignore
+- `references/site-github-actions.md` - the shared CI gate, deploy gating, self-hosted runner rules
 
 **Nuxt module references** (when `@nuxt/module-builder` detected):
 - `references/nuxt-module-structure.md` - directory layout and runtime rules
@@ -176,6 +177,7 @@ See `references/` for detailed templates:
 17. [ ] `.editorconfig` - 2-space indent, LF, UTF-8, trim trailing whitespace (except `.md`)
 18. [ ] `content.config.ts` - Zod schemas for content collections (if using `@nuxt/content`)
 19. [ ] `app/` directory - Nuxt 4 structure (`app.vue`, `pages/`, `layouts/`, `components/`, `composables/`)
+20. [ ] `.github/workflows/ci.yml` - calls the shared gate, NOT a hand-written job matrix. See `references/site-github-actions.md`. Never copy `references/github-actions.md` into a site.
 
 ### Additional Nuxt Module Checklist
 

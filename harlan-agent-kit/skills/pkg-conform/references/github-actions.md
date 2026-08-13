@@ -1,5 +1,10 @@
 # GitHub Actions
 
+**Packages only.** For a Site, use `references/site-github-actions.md` instead.
+Sites call one shared reusable workflow rather than repeating the setup steps
+below; copying this file into a site re-creates the drift that workflow exists to
+remove.
+
 ## .github/workflows/ci.yml (Package)
 
 ```yaml
