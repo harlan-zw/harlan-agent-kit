@@ -1,0 +1,4 @@
+interface:
+  display_name: Adversarial Review
+  short_description: 'Disprove, repair, and report one pull request'
+  default_prompt: Use $adversarial-review to review this pull request and post the automated status.

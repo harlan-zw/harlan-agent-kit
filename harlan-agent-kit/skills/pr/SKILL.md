@@ -89,7 +89,7 @@ See [references/conventional-commits.md](references/conventional-commits.md) for
 **Title:** Conventional commit format -- `feat:`, `fix:`, `docs:`, `chore:`, etc. Under 70 chars. Use scopes where
 appropriate (e.g., `feat(auth):`, `fix(ui):`).
 
-**Use the repo's own template if it has one.** Check `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`, and `docs/PULL_REQUEST_TEMPLATE.md`. If one exists, fill it and add nothing to it. Only if none exists, use this:
+**Use the repo's own template if it has one.** Check `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`, and `docs/PULL_REQUEST_TEMPLATE.md`. If one exists, fill it and add only the required AI disclosure. Only if none exists, use this:
 
 ```markdown
 ### 🔗 Linked issue
@@ -109,6 +109,8 @@ Resolves #NUMBER
 ### 📚 Description
 
 <!-- what was wrong or missing, then what changed -->
+
+> 🤖 AI disclosure: Harlan Agent Kit drafted or edited this description. It is not Harlan's personal wording. [How I use AI in open source](https://harlanzw.com/blog/ai-in-open-source).
 ```
 
 Reproduce that block character for character, including every emoji. Do not restyle it per repo.
@@ -125,6 +127,8 @@ These exist because the generated bodies drift the same way every time.
 - **Length follows risk.** A fix gets 1 to 3 sentences. Spend more only where a reviewer must understand a behaviour change, a data migration, or a non-obvious tradeoff. Never narrate the diff; the diff is right there.
 - **Earn every number.** Include a figure only if a reviewer would act differently for knowing it. `7,438 rows backfilled` earns its place in a migration note. `533 tests passed, 2 skipped` does not.
 - **Vary the shape.** Do not open every paragraph with `This `. Do not follow a past-tense problem sentence with a present-tense `This adds…` in every PR. For a small fix, one sentence is the whole description.
+- **Disclose AI writing visibly.** If Harlan Agent Kit drafts or edits the description, append the exact AI disclosure after the description. Never hide it in an HTML comment or template metadata.
+- **Preserve disclosure.** Keep an existing AI disclosure during every body rewrite. Refuse publication when required disclosure is missing or changed.
 
 ### Voice
 
@@ -156,6 +160,8 @@ DevTools refresh broadcasts used request and response RPC calls, so disconnected
 clients logged a `birpc` timeout for `refreshRouteData` when pages changed. Send
 these one-way notifications with `asEvent()` and cover route refresh behavior
 with a unit test.
+
+> 🤖 AI disclosure: Harlan Agent Kit drafted or edited this description. It is not Harlan's personal wording. [How I use AI in open source](https://harlanzw.com/blog/ai-in-open-source).
 ```
 
 ## Step 4: Verify
@@ -246,3 +252,11 @@ wt delete BRANCH_NAME
 ```
 
 `wt delete` removes the worktree directory and deletes the local branch.
+
+## Related review skill
+
+This skill owns PR creation, metadata, CI monitoring, and review feedback repair.
+
+`../adversarial-review/SKILL.md` exclusively owns the automated adversarial review outcome and marked bot status. Do not create or update that status here.
+
+`../pr-owner/SKILL.md` wraps this workflow when one agent owns a personal site PR through deployment and smoke verification.

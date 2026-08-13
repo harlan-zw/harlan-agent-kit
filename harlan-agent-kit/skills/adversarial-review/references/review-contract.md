@@ -1,8 +1,8 @@
-# PR triage review contract
+# Automated review contract
 
 ## Adversarial review
 
-Review the entire base-to-head diff and its surrounding code. Try to disprove correctness.
+Review the entire base-to-head diff and its surrounding code. Disprove correctness where possible.
 
 Check:
 
@@ -55,7 +55,7 @@ Bands:
 
 Never inflate confidence to fill a band. State the deduction or cap in the final queue.
 
-## Robot status
+## Bot status
 
 Use this marker exactly:
 
@@ -69,7 +69,7 @@ Render at most five compact evidence bullets:
 <!-- harlan-agent-kit:pr-triage -->
 ### 🤖 Harlan Agent Kit automated review
 
-This was generated and posted by a robot, not Harlan's personal review.
+This is a bot comment generated and posted by Harlan Agent Kit. It is not Harlan's personal review or approval. [How I use AI in open source](https://harlanzw.com/blog/ai-in-open-source).
 
 **PASS · 96/100 confidence**
 
@@ -83,6 +83,14 @@ Human merge decision still required.
 ```
 
 For `PENDING` or `BLOCKED`, replace the pass claim with the exact incomplete or failed evidence and the next action. Keep the identity statement unchanged.
+
+## Deployment extension
+
+When `pr-owner` is active, update the same marked comment after merge. Preserve the review outcome and evidence.
+
+Append the merge SHA, deployment outcome, production target, and smoke evidence. Replace `Human merge decision still required.` with the current ownership state.
+
+Use `Deployment: VERIFIED`, `Deployment: PENDING`, or `Deployment: BLOCKED`. Never claim `VERIFIED` from CI alone.
 
 ## Idempotent posting
 

@@ -103,6 +103,7 @@ the skills only; the Claude hook config is not portable to Codex as-is.
 
 | Skill | Description |
 |-------|-------------|
+| `adversarial-review` | Review and repair one PR, then post its bot status |
 | `email-triage` | Triage inbox email with himalaya |
 | `humanize-writing` | Strip AI tells from prose before publishing |
 | `improve-ts-pkg-architecture` | Find architecture improvements in TS packages and monorepos |
@@ -113,6 +114,8 @@ the skills only; the Claude hook config is not portable to Codex as-is.
 | `pkg-conform` | Conform or scaffold npm package and Nuxt module architecture |
 | `plan-ceo` | Produce CEO-level planning artifacts |
 | `pr` | Create, update, or sync pull requests |
+| `pr-owner` | Own one personal site PR through deployment and smoke tests |
+| `pr-triage` | Review and rank the owned PR backlog |
 | `release-notes` | Draft changelogs, release notes, and upgrade guidance |
 | `ripast` | Perform AST-aware TS/JS/Vue refactors |
 | `social-presence` | Plan social content and launch posts |
