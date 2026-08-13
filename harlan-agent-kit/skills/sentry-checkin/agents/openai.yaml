@@ -1,0 +1,4 @@
+interface:
+  display_name: Sentry Check-in
+  short_description: Triage and repair every open site error
+  default_prompt: Use $sentry-checkin to triage and fix every open Sentry issue across my sites.
