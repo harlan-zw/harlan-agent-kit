@@ -110,7 +110,7 @@ Resolves #NUMBER
 
 <!-- what was wrong or missing, then what changed -->
 
-> 🤖 AI disclosure: Harlan Agent Kit drafted or edited this description. It is not Harlan's personal wording. [How I use AI in open source](https://harlanzw.com/blog/ai-in-open-source).
+> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
 ```
 
 Reproduce that block character for character, including every emoji. Do not restyle it per repo.
@@ -161,7 +161,7 @@ clients logged a `birpc` timeout for `refreshRouteData` when pages changed. Send
 these one-way notifications with `asEvent()` and cover route refresh behavior
 with a unit test.
 
-> 🤖 AI disclosure: Harlan Agent Kit drafted or edited this description. It is not Harlan's personal wording. [How I use AI in open source](https://harlanzw.com/blog/ai-in-open-source).
+> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
 ```
 
 ## Step 4: Verify

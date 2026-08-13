@@ -1,6 +1,6 @@
 {
   "name": "harlan-agent-kit",
-  "version": "4.3.0",
+  "version": "4.3.0+codex.20260813063925",
   "description": "Harlan's personal agent kit - Nuxt/Vue/TS workflow tools",
   "author": {
     "name": "Harlan Wilton",
@@ -25,9 +25,9 @@
       "Workflow"
     ],
     "defaultPrompt": [
-      "Review this Nuxt frontend implementation.",
-      "Draft release notes for this repo.",
-      "Improve this TypeScript package architecture."
+      "Own this personal site PR through deployment and smoke tests.",
+      "Adversarially review this PR and post the automated status.",
+      "Review this Nuxt frontend implementation."
     ],
     "brandColor": "#2563EB"
   }

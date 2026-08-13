@@ -69,7 +69,7 @@ Render at most five compact evidence bullets:
 <!-- harlan-agent-kit:pr-triage -->
 ### 🤖 Harlan Agent Kit automated review
 
-This is a bot comment generated and posted by Harlan Agent Kit. It is not Harlan's personal review or approval. [How I use AI in open source](https://harlanzw.com/blog/ai-in-open-source).
+🤖 Bot review: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this comment. It is not Harlan's personal review or approval. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
 
 **PASS · 96/100 confidence**
 

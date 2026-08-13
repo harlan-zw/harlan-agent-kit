@@ -1,5 +1,7 @@
 .idea
 node_modules
+__pycache__/
+*.py[cod]
 
 # Session tracking files
 .claude/.active-plan-*
