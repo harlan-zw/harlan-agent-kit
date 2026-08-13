@@ -17,6 +17,7 @@ Effect-inspired, without an Effect dependency.
 - **Parse, don't validate.** Validate untrusted input once at the boundary into a precise type; trust it inward.
 - **Explicit dependencies.** Pass clients/config/clock as args; no hidden singletons or import-time side effects.
 - **Pure core, effectful shell.** Side effects at edges, decision logic pure data-in/data-out.
+- **Design out the bug.** After a production error, ask what design makes that kind of bug impossible. Prefer a type or structural change; guard at the failure site only when no design change exists.
 
 ## As a review rubric
 
