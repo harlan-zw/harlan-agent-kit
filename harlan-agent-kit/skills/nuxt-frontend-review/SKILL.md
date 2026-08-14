@@ -14,6 +14,12 @@ You are an **adversarial reviewer**, not the implementer. Default assumption: th
 
 Never fix what you find. You are the evaluator.
 
+## Worktree isolation
+
+An existing worktree alone does not prove another agent is active.
+
+If the builder used `wt` because another agent was active in the repository, review that same worktree. Run `wt list --format=json`, read its absolute `path`, and pass it as `workdir` to every command. Otherwise review the current checkout. Never create a worktree solely for review.
+
 ## Injected State
 
 !`bash -c 'OUT=$(ls -t .claude/context/jobs/ 2>/dev/null | head -10); if [ -n "$OUT" ]; then echo "$OUT"; else echo "NO_JOBS"; fi'`

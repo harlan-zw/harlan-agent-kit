@@ -7,6 +7,12 @@ context: fork
 
 Triage all open issues and rank by difficulty/impact.
 
+## Worktree isolation
+
+An existing worktree alone does not prove another agent is active.
+
+Triage stays read only. Use `wt` for follow-on implementation only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+
 ## Gotchas
 
 - **GitHub API rate limits** -- `gh issue list` with `--limit 100`+ can hit rate limits on busy repos. If you get a 403, reduce the batch size or add `--label` filters.
@@ -68,15 +74,15 @@ On subsequent runs, read the log and highlight what changed since last triage.
 
 8. **Highlight high priorities** -- impact 4-5 regardless of difficulty
 
-9. **Offer worktree setup** -- prompt user with options:
+9. **Offer worktree setup only for concurrent implementation** -- use `wt` when another agent is already active in this repository, or when two selected issues will run concurrently. Otherwise do not create a worktree. Prompt user with options:
    - "Create worktrees for quick wins (difficulty 1-2, impact 2+)?"
    - "Create worktrees for high priorities (impact 4-5)?"
    - "Pick specific issues by number?"
 
-   For each selected issue, create an isolated worktree using `wt` (git worktree manager):
+   For each selected issue, create an isolated worktree using `wt`:
    ```bash
-   wt switch --create fix/<number>-<slug>
+   wt switch --create fix/<number>-<slug> --base <base>
    ```
-   Where `<slug>` is a kebab-case short title (first 4-5 words). `wt switch --create` creates a new branch + worktree from current HEAD.
+   Where `<slug>` is a kebab-case short title (first 4-5 words).
 
-   After creation, list worktrees with `wt list` so user can open them in separate sessions.
+   After creation, run `wt list --format=json`. Give each agent the selected worktree's absolute `path`.

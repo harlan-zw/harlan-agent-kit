@@ -9,6 +9,12 @@ effort: high
 
 Generate Nuxt-style release notes with highlights, categorized changelog, and LLM upgrade prompts for breaking changes.
 
+## Worktree isolation
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` before writing a repository file only when another agent is actively modifying the same repository. Otherwise keep the current checkout. For concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+
 ## Current State
 
 - **Repo:** !`gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || echo 'unknown'`

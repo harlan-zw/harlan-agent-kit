@@ -7,6 +7,12 @@ description: Triage all open pull requests in Harlan's owned GitHub repositories
 
 Turn the owned PR backlog into a ranked merge queue. Never merge.
 
+## Worktree isolation
+
+An existing worktree alone does not prove another agent is active.
+
+Discovery stays read only. Use `wt` for a repair worker only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+
 ## Load contracts
 
 Read these completely before discovery:

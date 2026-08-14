@@ -8,6 +8,12 @@ effort: high
 
 Surface architectural friction in a Nuxt codebase and propose **deepening opportunities** — refactors that turn shallow modules into deep ones, using Nuxt's own extension points as seams. The aim is testability and AI-navigability.
 
+## Worktree isolation
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+
 ## Vocabulary and principles
 
 Use the terms in [LANGUAGE.md](LANGUAGE.md) exactly — **module**, **interface**, **implementation**, **depth**, **seam**, **adapter**, **leverage**, **locality**. Don't drift into "component," "service," "API," or "boundary."
