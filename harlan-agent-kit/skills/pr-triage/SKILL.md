@@ -9,7 +9,7 @@ Turn the owned PR backlog into a ranked merge queue. Never merge.
 
 ## Worktree isolation
 
-Before repair edits, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when the task ends. If ownership is ambiguous, do not edit the shared checkout.
+Before repair edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
 
 An existing worktree alone does not prove another agent is active.
 

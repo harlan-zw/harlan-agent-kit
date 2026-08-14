@@ -35,7 +35,7 @@ git status --short
 git branch --show-current
 ```
 
-Before any edit, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when the task ends. If ownership is ambiguous, do not edit the shared checkout.
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
 
 An existing worktree alone does not prove another agent is active.
 
@@ -50,7 +50,7 @@ If another agent is active in the repository:
 5. Run `wt list --format=json` again. Read the branch's absolute `path`.
 6. Pass that path as `workdir` to every later command, including CI repairs.
 
-If this task's changes already exist in a shared checkout, leave that checkout untouched. Copy only verified task-owned changes into the new worktree. Use `git diff --binary` for tracked files and copy owned untracked files individually. Verify the destination diff before continuing. Never reset, clean, stash, or overwrite the source checkout.
+If this task's changes already exist in a shared checkout, leave that checkout untouched. List every verified task-owned path. Export `git diff --cached --binary -- PATHS` and `git diff --binary -- PATHS` separately. Apply the cached patch with `git apply --index`, then apply the unstaged patch. Copy owned untracked files individually. Compare every owned source path with its destination before continuing. Never reset, clean, stash, or overwrite the source checkout.
 
 Never share a mutation worktree between tasks. Never use `wt switch --clobber` to resolve a path collision.
 

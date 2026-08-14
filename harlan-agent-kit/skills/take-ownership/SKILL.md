@@ -15,7 +15,7 @@ A commit, green CI, or merge is intermediate when later delivery stages apply.
 
 ## Worktree isolation
 
-Before any edit, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when ownership closes. If ownership is ambiguous, do not edit the shared checkout.
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
 
 An existing worktree alone does not prove another agent is active.
 
@@ -57,7 +57,9 @@ If `harlan-github-agent` already controls the repository, resume its existing wo
 
 Apply the mutation authority contract before every code, branch, metadata, comment, or merge mutation.
 
-Explicit `$take-ownership`, `/take-ownership`, `get this merged`, or `land this` authorizes an eligible merge.
+Only an explicit, unnegated merge instruction for the resolved pull request authorizes an eligible merge. Examples include `get PR #42 merged` and `land this pull request`.
+
+Skill selection, `$take-ownership`, `/take-ownership`, `finish this`, or `make the PR` does not authorize a merge. Confirm the instruction still applies immediately before merging.
 
 Other ownership requests activate tracking and eligible repair authority. They do not authorize a merge.
 

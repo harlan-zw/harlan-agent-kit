@@ -31,13 +31,13 @@ Adversarial review authority never permits force pushing, amending published com
 
 The `take-ownership` skill may merge only when every condition holds:
 
-1. The current request explicitly says `$take-ownership`, `/take-ownership`, `get this merged`, or `land this`.
+1. The user gave an explicit, unnegated merge instruction for the resolved pull request, and it still applies immediately before merge.
 2. The base repository owner exactly matches the authenticated GitHub login.
 3. `adversarial-review` reports `PASS` for the exact remote head.
 4. Required checks and approvals pass for that same head.
 5. The repository's normal merge method or merge queue accepts the change without administrator bypass.
 
-This authority does not let `adversarial-review` merge. It never permits self-approval, force push, branch-protection bypass, or merging maintained and external repositories.
+Skill selection and generated default prompts never grant merge authority. This authority does not let `adversarial-review` merge. It never permits self-approval, force push, branch-protection bypass, or merging maintained and external repositories.
 
 ## Default branch repair
 

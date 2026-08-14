@@ -22,9 +22,11 @@ Resolve the builder checkout before reading job state. Build candidate roots fro
 
 ## Job Resolution
 
-`$ARGUMENTS` may contain a job ID, for example `/nuxt-frontend-review landing-0331-1423`. Match that exact directory across candidate roots. Without an ID, select the most recently modified job directory across those roots.
+`$ARGUMENTS` may contain a job ID or absolute builder path, for example `/nuxt-frontend-review landing-0331-1423`. Match an exact job ID across candidate roots or use the named absolute path.
 
-If an exact ID exists in several roots, or the builder root remains ambiguous, stop and request its absolute path. Never guess which diff to review.
+If an exact ID exists in more than one root, or the builder root remains ambiguous, stop and request its absolute path. Never guess which diff to review.
+
+Without an ID or path, prefer the newest job in the current checkout. If the current checkout has no job, use another root only when exactly one candidate root contains jobs. If more than one other root contains jobs, require an exact job ID or absolute builder path.
 
 Set `REVIEW_ROOT` to the selected absolute checkout path. Set `JOB_DIR` to the absolute `{REVIEW_ROOT}/.claude/context/jobs/{resolved-job-id}` path. Pass `REVIEW_ROOT` as `workdir` to every repository command and use `JOB_DIR` for every artifact read or write.
 
