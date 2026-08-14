@@ -25,7 +25,19 @@ A PR head branch is writable only when at least one condition holds:
 
 Continue read only when the head is not writable. Record the permission boundary in the bot status.
 
-Never force push, amend published commits, dismiss reviews, approve, merge, or push the base branch.
+Adversarial review authority never permits force pushing, amending published commits, dismissing reviews, approving, merging, or pushing the base branch.
+
+## Ownership merge
+
+The `take-ownership` skill may merge only when every condition holds:
+
+1. The user gave an explicit, unnegated merge instruction for the resolved pull request, and it still applies immediately before merge.
+2. The base repository owner exactly matches the authenticated GitHub login.
+3. `adversarial-review` reports `PASS` for the exact remote head.
+4. Required checks and approvals pass for that same head.
+5. The repository's normal merge method or merge queue accepts the change without administrator bypass.
+
+Skill selection and generated default prompts never grant merge authority. This authority does not let `adversarial-review` merge. It never permits self-approval, force push, branch-protection bypass, or merging maintained and external repositories.
 
 ## Default branch repair
 

@@ -9,6 +9,14 @@ argument-hint: "[file or directory to test or review]"
 
 A unit test exercises an API. Input goes in, output gets asserted. Everything else is a fact check against the source file and should be deleted.
 
+## Worktree isolation
+
+Before writing or deleting tests, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` before writing or deleting tests only when another agent is actively modifying the same repository. Otherwise keep the current checkout. For concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+
 ## The failure mode this exists to stop
 
 Fact-check tests restate what the file already says. They pass by construction, break on harmless refactors, and prove nothing.

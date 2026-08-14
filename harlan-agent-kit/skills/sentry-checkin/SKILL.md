@@ -1,11 +1,19 @@
 ---
 name: sentry-checkin
-description: Triage and repair every open Sentry issue across Harlan's site inventory. Use when asked to check Sentry, run a Sentry check-in, fix production errors, or clear site error backlogs. Discovers every Sentry project, groups projects by site, delegates one site per agent, requires complete issue coverage, keeps each site's fixes in one worktree, and opens one PR through $harlan-agent-kit:pr when fixes exist.
+description: Triage and repair every open Sentry issue across Harlan's site inventory. Use when asked to check Sentry, run a Sentry check-in, fix production errors, or clear site error backlogs. Discovers every Sentry project, groups projects by site, delegates one site per agent, requires complete issue coverage, isolates concurrent same-repository work with wt, and opens one PR through $harlan-agent-kit:pr when fixes exist.
 ---
 
 # Sentry Check-in
 
 Turn the complete open Sentry backlog into one verified PR per affected site. Account for every issue present at discovery time.
+
+## Worktree isolation
+
+Before site edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` for a site only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse a worktree only when it belongs to the same frozen site task. Otherwise create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
 
 ## Load the contracts
 
@@ -78,7 +86,7 @@ Pass each agent:
 - The absolute path to this skill directory.
 - The full contract from `references/site-agent-contract.md`.
 
-Site agents may inspect other repositories for context. They must change only their assigned checkout and its single worktree.
+Site agents may inspect other repositories for context. They must change only their selected task checkout or worktree.
 
 ## Enforce complete coverage
 
@@ -97,9 +105,9 @@ Require the site agent to run `scripts/ledger.py audit` against every project ma
 
 ## PR and Sentry state
 
-Each site with code fixes gets one branch, one worktree, and one PR. The site agent invokes `$harlan-agent-kit:pr` only after focused and repository-required checks pass. The PR skill owns push, metadata, CI, and review follow-up.
+Each site with code fixes gets one branch and one PR. If another agent is active in that repository, it also gets one `wt` worktree. The site agent invokes `$harlan-agent-kit:pr` only after focused and repository-required checks pass. The PR skill owns push, metadata, CI, and review follow-up.
 
-If a complete ledger produces no diff, do not create an empty PR. Confirm the branch is clean, remove its temporary worktree, and return the verified ledger. If the repository has no PR workflow, state that explicitly and use the complete local gate as evidence.
+If a complete ledger produces no diff, do not create an empty PR. Confirm the branch is clean. If this task created a worktree, run `wt remove <branch>`. Return the verified ledger. If the repository has no PR workflow, state that explicitly and use the complete local gate as evidence.
 
 Do not resolve or mute Sentry issues when opening a PR. Code is not live yet. Let a verified release resolve issues, unless the user explicitly asks for a Sentry state change after production verification.
 

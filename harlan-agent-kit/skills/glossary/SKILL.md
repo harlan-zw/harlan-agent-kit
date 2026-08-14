@@ -9,6 +9,14 @@ argument-hint: "[init | audit | add <term>]"
 
 `GLOSSARY.md` at the repo root is the canonical name for every product concept. One concept, one word, everywhere: UI strings, public API names, doc headings, route segments, error messages, commit subjects.
 
+## Worktree isolation
+
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+
 ## The failure mode this exists to stop
 
 An agent given a concept with no established name invents one, then propagates it. A single feature ends up shipping as **Sprint** in the dashboard, `runBatch()` in the SDK, "campaign" in the docs, and `/jobs` in the URL. Nobody decided that. It accretes one plausible-in-isolation naming choice at a time, and by the time a human notices, the term is in a published API and a customer's bookmarks.

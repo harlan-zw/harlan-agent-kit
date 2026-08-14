@@ -11,11 +11,11 @@ Create or update a pull request for the current branch. Idempotent -- safe to ru
 - **Never amend published commits** -- CI and reviewers lose context. Always fix-forward with new commits.
 - **Never `--force` push** during a PR -- rewrites shared history. Use `git push` (regular) after new commits.
 - **Never `--no-verify`** -- if hooks fail, fix the underlying issue.
-- **Patch export on main can fail** -- if there are binary files or complex renames, `git diff` won't capture them. Fall back to `git stash` instead of patch files.
+- **Never move unknown changes** -- shared checkout changes may belong to another task. Copy only changes this task owns.
 - **`gh pr create` fails silently with bad body** -- always use HEREDOC for the body, never inline quotes.
 - **CI flakes vs real failures** -- if the same check fails twice with different errors, it's flaky. If same error, it's real. Don't retry flakes more than once.
 - **CodeRabbit reviews can be noisy** -- address security/correctness findings, but style suggestions are optional. Don't block the loop on nitpicks.
-- **Worktree cleanup** -- if you forget `wt delete`, orphaned worktrees accumulate. Always clean up after merge.
+- **Worktree cleanup** -- if you forget `wt remove`, orphaned worktrees accumulate. Clean up after merge.
 
 ## Data Storage
 
@@ -28,39 +28,31 @@ echo "$(date -I) $(git branch --show-current) PR_URL" >> "${CLAUDE_PLUGIN_DATA}/
 
 Read previous PRs when context is useful (e.g., finding related PRs, avoiding duplicate work).
 
-## Step 0: Branch Check
+## Step 0: Own a Branch
 
 ```bash
+git status --short
 git branch --show-current
 ```
 
-**If on `main`** -> isolate work into a new branch via `wt` (git worktree manager).
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
 
-`wt` creates parallel worktrees so you can work on branches without touching the main checkout. Key commands:
-- `wt switch --create BRANCH` -- create new branch + worktree from current HEAD (changes shell cwd)
-- `wt switch BRANCH` -- switch into an existing worktree (changes shell cwd)
-- `wt switch main` -- switch back to main worktree
+An existing worktree alone does not prove another agent is active.
 
-Steps:
+Use `wt` only when another agent is actively modifying the same repository. If no other agent is active there, keep the current checkout. If it is on the default branch, create a normal task branch with `git switch -c BRANCH`, then continue to Step 1.
 
-1. Derive a branch name from the session's changes (e.g. `feat/add-widget`, `fix/login-bug`). Use `git diff --stat` and `git status` to inform the name.
-2. Save uncommitted changes, create worktree, apply patches:
-   ```bash
-   git diff > /tmp/pr-changes.patch
-   git diff --cached > /tmp/pr-staged.patch
-   wt switch --create BRANCH_NAME
-   git apply /tmp/pr-changes.patch 2>/dev/null
-   git apply /tmp/pr-staged.patch 2>/dev/null
-   ```
-   Note: `wt switch` resets the shell cwd to the worktree directory automatically.
-3. Commit the changes in the worktree, then continue from Step 1 **inside the worktree directory**.
-4. After PR is created, switch back and clean up:
-   ```bash
-   wt switch main
-   git checkout .
-   ```
+If another agent is active in the repository:
 
-**If NOT on `main`** -> continue normally.
+1. Run `wt list --format=json`.
+2. Reuse this task's existing worktree with `wt switch BRANCH` when one exists.
+3. Otherwise derive a branch name such as `feat/add-widget` or `fix/login-bug`.
+4. Create it from the intended base with `wt switch --create BRANCH --base BASE`.
+5. Run `wt list --format=json` again. Read the branch's absolute `path`.
+6. Pass that path as `workdir` to every later command, including CI repairs.
+
+If this task's changes already exist in a shared checkout, leave that checkout untouched. List every verified task-owned path. Export `git diff --cached --binary -- PATHS` and `git diff --binary -- PATHS` separately. Apply the cached patch with `git apply --index`, then apply the unstaged patch. Copy owned untracked files individually. Compare every owned source path with its destination before continuing. Never reset, clean, stash, or overwrite the source checkout.
+
+Never share a mutation worktree between tasks. Never use `wt switch --clobber` to resolve a path collision.
 
 ## Step 1: Detect State
 
@@ -238,6 +230,7 @@ After creating or updating a PR, enter a **fix loop** -- keep watching until CI 
 ### Guidelines
 
 - Fix issues in **new commits** (don't amend) so reviewers can see incremental fixes.
+- If Step 0 selected a worktree, keep every fix and check there.
 - After each push, restart from step 1 of the loop.
 - **Never post a reply to a review comment yourself.** Fixing the code and pushing is your move; talking to a reviewer is not. If a comment is a question or non-actionable, draft the reply, show it to the user, and let them post it. Continue the loop while you wait; do not block on it.
 - If stuck after 3 failed attempts on the same issue, stop the loop and ask the user for guidance.
@@ -247,11 +240,10 @@ After creating or updating a PR, enter a **fix loop** -- keep watching until CI 
 If the PR was created from a worktree (Step 0), clean up:
 
 ```bash
-wt switch main
-wt delete BRANCH_NAME
+wt remove BRANCH_NAME
 ```
 
-`wt delete` removes the worktree directory and deletes the local branch.
+`wt remove` removes the worktree. It deletes the local branch only when the branch is integrated. Never use `--force` or `--force-delete` to bypass this check.
 
 ## Related review skill
 

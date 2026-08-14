@@ -2,7 +2,7 @@
 
 ## Start on a random port
 
-Use the injected `REVIEW_PORT` (random, retried 3× against `ss -tln`). If `NONE_FREE`, re-run the allocation manually.
+Use the runtime `REVIEW_PORT` allocation. Try three random ports against `ss -tln`. If none is free, repeat the allocation.
 
 Detect project type and start the matching command in the background:
 

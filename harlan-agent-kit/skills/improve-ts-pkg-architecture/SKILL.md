@@ -10,6 +10,14 @@ Surface architectural friction in a TypeScript package (library, CLI, or pnpm mo
 
 Vocabulary, principles, and forbidden patterns live in their canonical files; this file references them. Use the terms in [LANGUAGE.md](LANGUAGE.md) exactly. This skill is _informed_ by the project's domain model (`CONTEXT.md`, `docs/adr/`).
 
+## Worktree isolation
+
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+
 ## Companion files
 
 - [LANGUAGE.md](LANGUAGE.md) — full vocabulary and principles.

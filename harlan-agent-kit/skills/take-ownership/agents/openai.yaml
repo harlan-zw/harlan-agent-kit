@@ -1,0 +1,4 @@
+interface:
+  display_name: Take Ownership
+  short_description: Finish current work through delivery verification
+  default_prompt: Use $take-ownership to finish this work through delivery and smoke verification.

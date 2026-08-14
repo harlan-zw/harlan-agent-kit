@@ -9,6 +9,14 @@ Own one PR until its production result is verified or visibly blocked. A merge i
 
 Personal site repositories under `~/sites` enable this convention by default. Other repositories require explicit selection.
 
+## Worktree isolation
+
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+
 ## Load contracts
 
 Read these completely:
@@ -60,11 +68,13 @@ Do not infer deployment success from an unrelated green workflow. Match the comm
 
 When an owned site fails CI or deployment, prove the failure belongs to the owned merge before editing.
 
-Create an isolated worktree from the current remote default branch. Add a failing test when behavior or validation broke. Apply the smallest repair and run focused checks.
+Fetch the remote default branch and record its exact head. Never build a repair from the merged feature checkout.
+
+Create a repair branch from that remote default head. If another agent is active, use `wt switch --create <branch> --base <remote>/<default-branch>`. Otherwise use `git switch -c <branch> <remote>/<default-branch>`. Add a failing test when behavior or validation broke. Apply the smallest repair and run focused checks.
 
 For CI-only repairs, use `chore: fix ci`. For a production behavior repair, use a precise conventional `fix:` subject.
 
-Recheck the remote default branch SHA immediately before a normal push. If it changed, rebuild the repair on the new head. Never force push or bypass branch protection.
+Recheck the remote default branch SHA immediately before a normal push. If it changed, rebuild the repair on the new head. If the default branch repair contract permits a direct push, push the verified repair commit to the unchanged remote default branch. Never force push or bypass branch protection.
 
 If branch protection rejects the push, create a normal repair PR through `pr`. Never weaken protection.
 
@@ -84,7 +94,7 @@ If smoke verification exposes a regression, return to Repair failures.
 
 Update and confirm the existing marked bot comment. Preserve review evidence and append merge SHA, deployment target, deployment outcome, and smoke evidence.
 
-Close ownership only with `Deployment: VERIFIED`, `Deployment: BLOCKED`, or an explicit cancellation. Clean the worktree after closure.
+Close ownership only with `Deployment: VERIFIED`, `Deployment: BLOCKED`, or an explicit cancellation. If this task created a worktree, run `wt remove <branch>` after closure. Do not force removal.
 
 ## Examples
 

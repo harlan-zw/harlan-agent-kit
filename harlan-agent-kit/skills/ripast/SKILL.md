@@ -6,6 +6,14 @@ user_invocable: true
 
 `ripast` is published on npm as `@ripast/cli`. Repo: <https://github.com/harlan-zw/ripast>
 
+## Worktree isolation
+
+Before a mutating `--apply`, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
+
+An existing worktree alone does not prove another agent is active.
+
+Use `wt` before a mutating `--apply` command only when another agent is actively modifying the same repository. Otherwise keep the current checkout. For concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+
 ## Invocation
 
 ```bash

@@ -6,6 +6,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "check:context": "scripts/check-agent-context.sh",
+    "test:worktree-claim": "bash harlan-agent-kit/scripts/worktree-claim.test.sh",
     "release": "node --experimental-strip-types scripts/release.ts"
   },
   "dependencies": {

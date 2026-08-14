@@ -6,11 +6,11 @@ Own one site from frozen Sentry snapshot through one verified PR. Do not delegat
 
 1. Read repository-local `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, and `GLOSSARY.md` before edits.
 2. Inspect the main checkout status without changing it. Preserve all existing changes.
-3. Check for an open `fix/sentry-checkin-*` PR for this site. Reuse its branch and worktree only when it targets the same frozen issues.
-4. Otherwise create one branch and one worktree before the first edit. Use `fix/sentry-checkin-YYYYMMDD-SITE`.
-5. Resolve the new worktree's absolute path with `git worktree list`. Pass that path as `workdir` to every later command.
+3. Follow the [worktree isolation contract](../../../references/worktree-isolation.md). Acquire its atomic claim before checking for another active agent. An existing worktree alone does not prove activity.
+4. If none is active, keep the current checkout. Run `git switch -c fix/sentry-checkin-YYYYMMDD-SITE` before the first edit when no task branch exists.
+5. If another agent is active, run `wt list --format=json`. Reuse an open `fix/sentry-checkin-*` PR worktree only when it targets the same frozen issues. Otherwise run `wt switch --create fix/sentry-checkin-YYYYMMDD-SITE --base BASE`. Read its absolute `path` from the JSON and pass it as `workdir` to every later command.
 
-All fixes, tests, commits, and PR actions for this site happen in that worktree. Never edit the main checkout. Never create a worktree per issue.
+All fixes, tests, commits, and PR actions for this site happen in the selected task checkout or worktree. Never use a checkout owned by another active task. Never create a worktree per issue.
 
 ## Inspect every issue
 
@@ -77,7 +77,7 @@ python3 SKILL_DIR/scripts/ledger.py audit \
 
 Repeat `--manifest` for every project. Invoke `$harlan-agent-kit:pr` from the worktree after the audit and local checks pass. Include the Sentry short IDs in the PR description only when they help reviewers. Let the PR skill create or update the PR and monitor CI and review feedback.
 
-If the audited ledger produces no code diff, do not create an empty PR. Confirm the worktree is clean, delete the temporary worktree and branch, then return the ledger checksum. If GitHub registers no PR checks, report `no PR workflow` after confirming the PR remains mergeable.
+If the audited ledger produces no code diff, do not create an empty PR. Confirm the selected checkout is clean. If this task created a worktree, run `wt remove <branch>`. Then return the ledger checksum. If GitHub registers no PR checks, report `no PR workflow` after confirming the PR remains mergeable.
 
 Do not deploy. Do not resolve or mute Sentry issues.
 
