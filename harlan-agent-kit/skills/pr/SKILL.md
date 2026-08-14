@@ -35,6 +35,8 @@ git status --short
 git branch --show-current
 ```
 
+Before any edit, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when the task ends. If ownership is ambiguous, do not edit the shared checkout.
+
 An existing worktree alone does not prove another agent is active.
 
 Use `wt` only when another agent is actively modifying the same repository. If no other agent is active there, keep the current checkout. If it is on the default branch, create a normal task branch with `git switch -c BRANCH`, then continue to Step 1.

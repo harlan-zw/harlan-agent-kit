@@ -13,6 +13,8 @@ Full lifecycle frontend skill: setup, build, polish. Detects the right phase fro
 
 ## Worktree isolation
 
+Before any edit, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when the task ends. If ownership is ambiguous, do not edit the shared checkout.
+
 An existing worktree alone does not prove another agent is active.
 
 Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.

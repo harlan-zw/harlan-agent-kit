@@ -15,6 +15,8 @@ A commit, green CI, or merge is intermediate when later delivery stages apply.
 
 ## Worktree isolation
 
+Before any edit, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when ownership closes. If ownership is ambiguous, do not edit the shared checkout.
+
 An existing worktree alone does not prove another agent is active.
 
 Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
@@ -63,7 +65,7 @@ For example, `watch this through deploy` permits eligible repairs for the exact 
 
 Merge only repositories owned by the authenticated GitHub user. Never merge maintained or external repositories.
 
-Require `READY` for the exact pull request head. Recheck every gate immediately before merging.
+Require `PASS` for the exact pull request head. Recheck every gate immediately before merging.
 
 Honor branch protection, required approvals, merge queues, and repository merge methods. Never bypass them.
 
@@ -87,13 +89,13 @@ For a feature branch `Revision`, create or resolve its pull request. For a defau
 
 Use `pr` for metadata, publication, CI monitoring, and review feedback repairs.
 
-Run `adversarial-review` against the complete remote head. Resume until the exact head becomes `READY`.
+Run `adversarial-review` against the complete remote head. Resume until the exact head receives `PASS`.
 
 Restart readiness checks after every pushed repair or remote head change.
 
 ### 3. Land the change
 
-If merge authority exists, refetch the pull request and confirm the exact `READY` head.
+If merge authority exists, refetch the pull request and confirm `PASS` for the exact head.
 
 Use the repository's normal merge method. If GitHub queues the merge, track the queue until it lands.
 
@@ -121,7 +123,9 @@ Read the failing logs and classify the cause. Distinguish subject failures, base
 
 Retry one proven transient failure once. Repair deterministic failures.
 
-If another agent is active in the repository, create the repair worktree with `wt switch --create <branch> --base <current-writable-branch>`. Otherwise keep the current checkout. Add a failing test first for behavior or validation regressions.
+After merge, fetch the remote default branch and record its exact head. Never build a repair from the merged feature checkout.
+
+Create a repair branch from that remote default head. If another agent is active, use `wt switch --create <repair-branch> --base <remote>/<default-branch>`. Otherwise use `git switch -c <repair-branch> <remote>/<default-branch>`. Add a failing test first for behavior or validation regressions.
 
 Use `chore: <specific problem>` for every CI or delivery pipeline repair. Never use the generic `chore: fix ci`.
 
@@ -129,9 +133,9 @@ Use a precise `fix:` subject when deployed product behavior is wrong.
 
 Apply the smallest repair and run focused verification. Let required CI provide broad verification.
 
-Recheck the remote target revision before pushing. Rebuild the repair when the target changed.
+Recheck the remote default head before pushing. Rebuild the repair on its new head when it changed.
 
-Use a normal repair pull request when direct repair is ineligible or branch protection rejects the push.
+If the default branch repair contract permits a direct push, push the verified repair commit to the unchanged remote default branch. Otherwise open a normal repair pull request. Use a repair pull request when branch protection rejects the direct push.
 
 Never weaken protection, bypass hooks, force push, or hide a failed repair.
 

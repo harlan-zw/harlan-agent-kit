@@ -18,30 +18,23 @@ Never fix what you find. You are the evaluator.
 
 An existing worktree alone does not prove another agent is active.
 
-If the builder used `wt` because another agent was active in the repository, review that same worktree. Run `wt list --format=json`, read its absolute `path`, and pass it as `workdir` to every command. Otherwise review the current checkout. Never create a worktree solely for review.
-
-## Injected State
-
-!`bash -c 'OUT=$(ls -t .claude/context/jobs/ 2>/dev/null | head -10); if [ -n "$OUT" ]; then echo "$OUT"; else echo "NO_JOBS"; fi'`
-!`bash -c 'JOB=$(ls -t .claude/context/jobs/ 2>/dev/null | head -1); if [ -n "$JOB" ]; then echo "LATEST_JOB=$JOB"; if [ -f ".claude/context/jobs/$JOB/build-handoff.json" ]; then jq "{job_id, schema_version, git_hash, dev_port, pages_changed, routes_to_test, theme_name, components_created, design_system_changes, contract_criteria_status, self_assessment, has_client_animations, dark_mode_relevant, known_limitations}" ".claude/context/jobs/$JOB/build-handoff.json" 2>/dev/null; else echo "NO_HANDOFF"; fi; else echo "NO_HANDOFF"; fi'`
-!`bash -c 'JOB=$(ls -t .claude/context/jobs/ 2>/dev/null | head -1); if [ -n "$JOB" ]; then OUT=$(grep -E "^\[C[0-9]+\]" ".claude/context/jobs/$JOB/build-contract.md" 2>/dev/null | head -40); if [ -n "$OUT" ]; then echo "$OUT"; else echo "NO_CONTRACT"; fi; else echo "NO_CONTRACT"; fi'`
-!`bash -c 'JOB=$(ls -t .claude/context/jobs/ 2>/dev/null | head -1); if [ -n "$JOB" ]; then HASH=$(jq -r ".git_hash // empty" ".claude/context/jobs/$JOB/build-handoff.json" 2>/dev/null); if [ -n "$HASH" ]; then OUT=$(git diff --stat "$HASH" 2>/dev/null); fi; if [ -z "$OUT" ]; then OUT=$(git diff --stat HEAD 2>/dev/null); fi; if [ -n "$OUT" ]; then echo "$OUT"; else echo "NO_GIT"; fi; else echo "NO_GIT"; fi'`
-!`bash -c 'JOB=$(ls -t .claude/context/jobs/ 2>/dev/null | head -1); if [ -n "$JOB" ]; then HASH=$(jq -r ".git_hash // empty" ".claude/context/jobs/$JOB/build-handoff.json" 2>/dev/null); if [ -n "$HASH" ]; then OUT=$(git diff --name-only "$HASH" -- "*.vue" "*.ts" "*.css" 2>/dev/null | head -30); fi; if [ -z "$OUT" ]; then OUT=$(git diff --name-only HEAD -- "*.vue" "*.ts" "*.css" 2>/dev/null | head -30); fi; if [ -n "$OUT" ]; then echo "$OUT"; else echo "NO_CHANGED_FILES"; fi; else echo "NO_CHANGED_FILES"; fi'`
-!`bash -c 'for i in 1 2 3; do P=$(shuf -i 10000-65535 -n 1); ss -tln 2>/dev/null | grep -q ":$P " || { echo "REVIEW_PORT=$P"; exit 0; }; done; echo "REVIEW_PORT=NONE_FREE"'`
-!`if command -v dev-browser >/dev/null 2>&1; then echo "DEV_BROWSER=true"; else echo "DEV_BROWSER=false"; fi`
-!`bash -c 'JOB=$(ls -t .claude/context/jobs/ 2>/dev/null | head -1); if [ -n "$JOB" ] && [ -f ".claude/context/jobs/$JOB/review-calibration.md" ]; then cat ".claude/context/jobs/$JOB/review-calibration.md"; else echo "NO_CALIBRATION"; fi'`
+Resolve the builder checkout before reading job state. Build candidate roots from the current checkout and every absolute `path` returned by `wt list --format=json`. Never create a worktree solely for review.
 
 ## Job Resolution
 
-`$ARGUMENTS` may contain a job ID (e.g. `/nuxt-frontend-review landing-0331-1423`). Match it against the injected job list; otherwise use LATEST_JOB. On NO_JOBS, warn that no job directories exist and fall back to `git diff HEAD` for a lightweight review without contract grading.
+`$ARGUMENTS` may contain a job ID, for example `/nuxt-frontend-review landing-0331-1423`. Match that exact directory across candidate roots. Without an ID, select the most recently modified job directory across those roots.
 
-Set `JOB_DIR` = `.claude/context/jobs/{resolved-job-id}` for all artifact reads/writes.
+If an exact ID exists in several roots, or the builder root remains ambiguous, stop and request its absolute path. Never guess which diff to review.
+
+Set `REVIEW_ROOT` to the selected absolute checkout path. Set `JOB_DIR` to the absolute `{REVIEW_ROOT}/.claude/context/jobs/{resolved-job-id}` path. Pass `REVIEW_ROOT` as `workdir` to every repository command and use `JOB_DIR` for every artifact read or write.
+
+After resolving these paths, discover state at runtime. Read the handoff, contract, changed-file diff, and calibration from `JOB_DIR`. Allocate `REVIEW_PORT` against active listeners. Detect `DEV_BROWSER` from `REVIEW_ROOT`. If no job exists in any candidate root, warn and use `git diff HEAD` from the current checkout for a lightweight review without contract grading.
 
 Inline review shares the generator's context, which biases toward leniency. For high-stakes reviews, start a fresh conversation.
 
 ## Step 0: Calibration
 
-Calibration data was injected above. Weight evaluation toward historically missed categories; a category flagged as a leniency trap becomes a hard rejection criterion for this review.
+Weight evaluation toward historically missed categories from `JOB_DIR/review-calibration.md`; a category flagged as a leniency trap becomes a hard rejection criterion for this review.
 
 Guard against these in yourself, always:
 - "Works on desktop so mobile is probably fine": it is not. Check.
@@ -132,7 +125,7 @@ Zero issues found means re-examine the three highest-complexity components with 
 
 ## Step 4: Visual Verification
 
-`DEV_BROWSER` was injected above. Scripts, per-route pattern, axe-core run, and the curl-only fallback: [references/visual-verification.md](references/visual-verification.md).
+Use the runtime `DEV_BROWSER` result. Scripts, per-route pattern, axe-core run, and the curl-only fallback: [references/visual-verification.md](references/visual-verification.md).
 
 Without browser automation the verdict can never be PASS, only PARTIAL or FAIL.
 

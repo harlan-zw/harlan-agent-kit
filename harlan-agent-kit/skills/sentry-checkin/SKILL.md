@@ -9,6 +9,8 @@ Turn the complete open Sentry backlog into one verified PR per affected site. Ac
 
 ## Worktree isolation
 
+Before site edits, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when the site task ends. If ownership is ambiguous, do not edit the shared checkout.
+
 An existing worktree alone does not prove another agent is active.
 
 Use `wt` for a site only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse a worktree only when it belongs to the same frozen site task. Otherwise create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.

@@ -6,7 +6,7 @@ Own one site from frozen Sentry snapshot through one verified PR. Do not delegat
 
 1. Read repository-local `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, and `GLOSSARY.md` before edits.
 2. Inspect the main checkout status without changing it. Preserve all existing changes.
-3. Check whether another agent is actively modifying this repository. An existing worktree alone does not prove activity.
+3. Acquire the controller's atomic site claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as active. Release the claim when the site task ends. If ownership is ambiguous, do not edit the shared checkout. An existing worktree alone does not prove activity.
 4. If none is active, keep the current checkout. Run `git switch -c fix/sentry-checkin-YYYYMMDD-SITE` before the first edit when no task branch exists.
 5. If another agent is active, run `wt list --format=json`. Reuse an open `fix/sentry-checkin-*` PR worktree only when it targets the same frozen issues. Otherwise run `wt switch --create fix/sentry-checkin-YYYYMMDD-SITE --base BASE`. Read its absolute `path` from the JSON and pass it as `workdir` to every later command.
 

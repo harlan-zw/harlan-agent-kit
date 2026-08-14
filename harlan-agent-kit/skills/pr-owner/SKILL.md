@@ -11,6 +11,8 @@ Personal site repositories under `~/sites` enable this convention by default. Ot
 
 ## Worktree isolation
 
+Before any edit, acquire the controller's atomic task claim for the intended checkout. If no controller exists, acquire an atomic session-owned lock keyed by the repository and absolute checkout path. Treat another live claim in the repository as an active agent. Release the claim when ownership closes. If ownership is ambiguous, do not edit the shared checkout.
+
 An existing worktree alone does not prove another agent is active.
 
 Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
@@ -66,11 +68,13 @@ Do not infer deployment success from an unrelated green workflow. Match the comm
 
 When an owned site fails CI or deployment, prove the failure belongs to the owned merge before editing.
 
-If another agent is active in the repository, create the repair worktree with `wt switch --create <branch> --base <remote-default-branch>`. Otherwise use the current checkout and a normal repair branch. Add a failing test when behavior or validation broke. Apply the smallest repair and run focused checks.
+Fetch the remote default branch and record its exact head. Never build a repair from the merged feature checkout.
+
+Create a repair branch from that remote default head. If another agent is active, use `wt switch --create <branch> --base <remote>/<default-branch>`. Otherwise use `git switch -c <branch> <remote>/<default-branch>`. Add a failing test when behavior or validation broke. Apply the smallest repair and run focused checks.
 
 For CI-only repairs, use `chore: fix ci`. For a production behavior repair, use a precise conventional `fix:` subject.
 
-Recheck the remote default branch SHA immediately before a normal push. If it changed, rebuild the repair on the new head. Never force push or bypass branch protection.
+Recheck the remote default branch SHA immediately before a normal push. If it changed, rebuild the repair on the new head. If the default branch repair contract permits a direct push, push the verified repair commit to the unchanged remote default branch. Never force push or bypass branch protection.
 
 If branch protection rejects the push, create a normal repair PR through `pr`. Never weaken protection.
 
