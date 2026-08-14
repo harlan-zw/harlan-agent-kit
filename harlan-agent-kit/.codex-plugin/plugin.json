@@ -1,6 +1,6 @@
 {
   "name": "harlan-agent-kit",
-  "version": "4.3.0+codex.20260813063925",
+  "version": "4.3.0+codex.20260814055216",
   "description": "Harlan's personal agent kit - Nuxt/Vue/TS workflow tools",
   "author": {
     "name": "Harlan Wilton",
@@ -25,7 +25,7 @@
       "Workflow"
     ],
     "defaultPrompt": [
-      "Own this personal site PR through deployment and smoke tests.",
+      "Take ownership of the current work through delivery and smoke verification.",
       "Adversarially review this PR and post the automated status.",
       "Review this Nuxt frontend implementation."
     ],

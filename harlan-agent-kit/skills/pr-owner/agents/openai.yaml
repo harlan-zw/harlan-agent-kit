@@ -1,4 +1,0 @@
-interface:
-  display_name: PR Owner
-  short_description: Own one PR through deploy and smoke tests
-  default_prompt: Use $pr-owner to own this pull request through deployment and smoke verification.

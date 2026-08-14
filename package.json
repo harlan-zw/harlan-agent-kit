@@ -3,19 +3,23 @@
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "scripts": {
+    "build": "pnpm --filter harlan-github-agent build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "test": "pnpm --filter harlan-github-agent test:run",
+    "typecheck": "pnpm --filter harlan-github-agent typecheck",
     "check:context": "scripts/check-agent-context.sh",
     "test:worktree-claim": "bash harlan-agent-kit/scripts/worktree-claim.test.sh",
+    "test:wt-only": "bash harlan-agent-kit/hooks/wt-only.test.sh",
     "release": "node --experimental-strip-types scripts/release.ts"
   },
   "dependencies": {
-    "@antfu/eslint-config": "^9.3.0",
-    "eslint": "^10.8.1",
-    "eslint-plugin-harlanzw": "^0.17.1"
+    "@antfu/eslint-config": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-harlanzw": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
-    "typescript": "6.0.3"
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
   }
 }

@@ -18,6 +18,8 @@ Never fix what you find. You are the evaluator.
 
 An existing worktree alone does not prove another agent is active.
 
+`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
+
 Resolve the builder checkout before reading job state. Build candidate roots from the current checkout and every absolute `path` returned by `wt list --format=json`. Never create a worktree solely for review.
 
 ## Job Resolution

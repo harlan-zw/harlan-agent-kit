@@ -21,31 +21,35 @@ Treat style-only preferences as non-blocking. Treat correctness, security, data 
 
 ## Outcome gates
 
-Use one outcome:
+Record `passed`, `waiting`, or `failed` for every gate:
 
-- `PASS`: Base current, conflict-free, metadata aligned, local verification passed, required CI passed, no material unresolved review concern, reviewed SHA unchanged.
-- `PENDING`: No known defect, but evidence is incomplete, usually CI still running, mergeability unknown, or required checks unavailable.
-- `BLOCKED`: Conflict, stale reviewed SHA, failing check, unresolved material finding, requested changes, or no permission to push a required repair.
+| Gate | Passed | Waiting | Failed |
+| --- | --- | --- | --- |
+| Head | Base current; reviewed SHA unchanged | Head or base state unavailable | Head changed after review freeze |
+| Merge | GitHub reports conflict-free | Mergeability unknown | Conflicts present |
+| Metadata | Required metadata aligned | Required metadata review incomplete | Required metadata cannot be aligned |
+| Review | Full diff reviewed; zero open material findings or requested changes | Review incomplete or PR is a draft | Material finding or requested change remains |
+| Verification | Focused behavior checks passed when needed, or CI covers the reviewed behavior | A material finding cannot be verified and CI does not cover it | A focused behavior check failed |
+| CI | Every required check passed | Required CI unavailable, running, or blocked by a confirmed base failure with repair active | The PR caused required CI failure, or baseline repair exhausted its attempts |
 
-Do not call `PENDING` or `BLOCKED` a sign-off.
+Derive one outcome without judgment:
+
+1. Any `failed` gate gives `BLOCKED`.
+2. Otherwise, any `waiting` gate gives `WAITING`.
+3. Every gate `passed` gives `READY`.
+
+Gate outcomes are deterministic. Confidence never changes an outcome. Do not give
+`WAITING` or `BLOCKED` a confidence score or call either a sign-off.
 
 ## Confidence
 
-Start at 100 after a complete adversarial review.
+Calculate confidence only for `READY`. Start at 100 after all gates pass.
 
 Deduct:
 
-- 10 for a draft.
 - 5 for a broad or unusually risky diff, even after targeted checks pass.
 - 5 for limited local coverage when required CI is green.
 - 5 for unresolved, non-actionable reviewer uncertainty.
-
-Apply caps after deductions:
-
-- 79 when required CI or mergeability evidence is pending or unavailable.
-- 49 when requested changes or a material review concern remains.
-- 39 when local verification or required CI fails.
-- 29 when the branch is stale, conflicting, or a required repair cannot be pushed.
 
 Bands:
 
@@ -53,9 +57,9 @@ Bands:
 - Medium: 70 to 89.
 - Low: 0 to 69.
 
-Never inflate confidence to fill a band. State the deduction or cap in the final queue.
+Never inflate confidence to fill a band. State each deduction in the final queue.
 
-## Bot status
+## Review status
 
 Use this marker exactly:
 
@@ -63,32 +67,68 @@ Use this marker exactly:
 <!-- harlan-agent-kit:pr-triage -->
 ```
 
-Render at most five compact evidence bullets:
+Create the marked comment when review starts. Edit that same comment after each phase transition. Never create a second progress comment.
+
+Before dispatch, find trusted marked comments for the current head commit. Trust the GitHub App and repository owners, members, or collaborators. Ignore marked comments from outside contributors. A terminal comment means the head commit is already reviewed. A `REVIEWING` comment means another agent has the review. Do not start another agent.
+
+For comments created before the hidden head commit marker, recognize `- Reviewed \`HEAD_SHA\` against`. Write only the current format.
+
+Use this nonterminal shape:
 
 ```markdown
 <!-- harlan-agent-kit:pr-triage -->
-### 🤖 Harlan Agent Kit automated review
+<!-- reviewed-sha: HEAD_SHA -->
+### 🤖 REVIEWING · PHASE
 
-🤖 Bot review: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this comment. It is not Harlan's personal review or approval. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: UTC_TIME.
 
-**PASS · 96/100 confidence**
+`▓▓░░░ 35%`
 
-- Reviewed `HEAD_SHA` against `BASE_BRANCH@BASE_SHA`
-- Base current; GitHub reports no conflicts
-- PR title and body match the project template
-- Adversarial code review found no remaining material issues
-- Passed: `COMMANDS`; required CI `PASSED/TOTAL`
-
-Human merge decision still required.
+Next: SHORT_ACTION
 ```
 
-For `PENDING` or `BLOCKED`, replace the pass claim with the exact incomplete or failed evidence and the next action. Keep the identity statement unchanged.
+Use the percentage reported by the agent. Update only at a phase transition or changed blocker. Keep findings out until verified.
+
+Keep the reviewed SHA in hidden metadata. Render one robot emoji. Put disclosure,
+policy, waiting state, and human ownership in one blockquoted line. The visible
+review body only reports material issues found or fixed.
+
+```markdown
+<!-- harlan-agent-kit:pr-triage -->
+<!-- reviewed-sha: HEAD_SHA -->
+### 🤖 READY · 96/100
+
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required.
+
+`▓▓▓▓▓ 100%`
+```
+
+When the review found issues, add at most five issue bullets. Show each issue once:
+
+```markdown
+- **Fixed:** SHORT_DESCRIPTION
+- **Open:** SHORT_DESCRIPTION. Next: NEXT_ACTION
+```
+
+Do not list the reviewed SHA, base state, metadata conformance, commands, passed
+checks, CI counts, review lanes, or other routine evidence in the visible body.
+Preserve that evidence in the review record outside the comment when available.
+
+For `WAITING`, append one short waiting reason to that line. For `BLOCKED`, report the
+blocker as an open issue when it affects the pull request. Quote operational or
+permission blockers. Keep the exact outcome reason and next action. Do not use
+an issue bullet for a clean result.
 
 ## Deployment extension
 
-When `pr-owner` is active, update the same marked comment after merge. Preserve the review outcome and evidence.
+When `take-ownership` is active, update the same marked comment after merge. Preserve the review outcome and evidence.
 
-Append the merge SHA, deployment outcome, production target, and smoke evidence. Replace `Human merge decision still required.` with the current ownership state.
+Before merge, replace `Human merge decision still required.` only when explicit merge authority exists.
+Use `Automated merge authorized by explicit user request.` for that state.
+
+Keep the merge SHA in hidden metadata. Append the deployment outcome, production
+target, smoke evidence, and current ownership state to the blockquoted line. Add
+a visible issue bullet only when deployment found or fixed a material issue.
 
 Use `Deployment: VERIFIED`, `Deployment: PENDING`, or `Deployment: BLOCKED`. Never claim `VERIFIED` from CI alone.
 
@@ -100,10 +140,29 @@ List issue comments through:
 gh api "repos/$repo/issues/$number/comments" --paginate
 ```
 
-Find the newest comment authored by the authenticated login whose body contains the exact marker. Create one when absent. Otherwise update that comment with:
+Find the newest comment authored by the authenticated login whose body contains the exact marker. Before creation, repeat the trusted current head commit check. Create one when absent. Otherwise update that comment with:
 
 ```bash
 gh api --method PATCH "repos/$repo/issues/comments/$comment_id" --input payload.json
 ```
 
 Build `payload.json` from the final body with `jq`; do not interpolate JSON manually. Never modify another author's marked comment.
+
+## Local journal
+
+When `harlan-github-agent` dispatches the review, record one immutable Attempt
+against the exact Revision before publication. Store the six gates, evidence
+digests, Review findings, derived outcome, agent version, skill digest, and
+timestamps. Store confidence only for `READY`.
+
+For an outside contributor, reject the Attempt unless the same Revision has Review and repair Approval. Queue verified repairs under that Approval.
+
+Carry Approval only to an exact repair commit published by the controller for the approved Revision.
+
+After each GitHub write, record one Publication with the exact Markdown and the
+GitHub comment ID and URL. If the write fails, record the attempted Markdown and
+failure reason. Never store secrets or full tool transcripts.
+
+Reject an Attempt when its Revision or head SHA does not match. Reject duplicate
+identifiers with different content. A dispatched review remains incomplete until
+both its Attempt and Publication result are durable.

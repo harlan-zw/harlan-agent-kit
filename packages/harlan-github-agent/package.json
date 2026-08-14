@@ -1,0 +1,59 @@
+{
+  "name": "harlan-github-agent",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local service for Harlan's GitHub agents.",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "bin": {
+    "harlan-github-agent": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "pnpm dashboard:build && obuild",
+    "dashboard:build": "nuxt generate dashboard",
+    "dashboard:dev": "nuxt dev dashboard",
+    "dev": "node --experimental-strip-types src/cli.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "start": "node dist/cli.mjs",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit && nuxt typecheck dashboard"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "catalog:",
+    "citty": "catalog:",
+    "consola": "catalog:",
+    "h3": "catalog:",
+    "octokit": "catalog:",
+    "srvx": "catalog:",
+    "yaml": "catalog:"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "catalog:",
+    "@nuxt/fonts": "catalog:",
+    "@nuxt/icon": "catalog:",
+    "@nuxt/ui": "catalog:",
+    "@types/node": "catalog:",
+    "@vueuse/nuxt": "catalog:",
+    "nuxt": "catalog:",
+    "obuild": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

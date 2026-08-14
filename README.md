@@ -19,8 +19,8 @@ as a Codex plugin for its skills.
 - **Architecture review**: Find deeper seams in Nuxt apps and TypeScript packages
 - **Package conformance**: Sync package, module, test, and release conventions
 - **PR and release writing**: Draft PRs, release notes, tweets, and launch copy
-- **Issue and email triage**: Rank GitHub issues and process inboxes
-- **Claude hooks**: Enforce pnpm, lint changed files, block risky git actions, and show session context
+- **Issue and email triage**: Rank [GitHub](https://github.com) issues and process inboxes
+- **Claude hooks**: Enforce [pnpm](https://pnpm.io), lint changed files, block risky git actions, and show session context
 
 ## Quick Start
 
@@ -93,6 +93,7 @@ the skills only; the Claude hook config is not portable to Codex as-is.
 | SessionStart | `session-start.sh` | Detect project type, show git status |
 | PreToolUse | `merged-branch-guard.sh` | Block commits on merged branches |
 | PreToolUse | `pnpm-only.sh` | Block npm/yarn commands |
+| PreToolUse | `wt-only.sh` | Keep worktrees under `wt` and off `.claude/worktrees` |
 | PreToolUse | `pre-commit-push.sh` | Run lint/typecheck/test before commit/push |
 | PostToolUse | `eslint.sh` | Auto-lint + fix after file changes |
 | PostToolUse | `command-not-found.sh` | Help recover from missing shell commands |
@@ -111,14 +112,14 @@ the skills only; the Claude hook config is not portable to Codex as-is.
 | `nuxt-frontend-design` | Build and polish Nuxt UI v4+ frontend work |
 | `nuxt-frontend-review` | Adversarially review frontend work against a build contract |
 | `nuxt-improve-codebase-architecture` | Find Nuxt-native architecture improvements |
-| `pkg-conform` | Conform or scaffold npm package and Nuxt module architecture |
+| `pkg-conform` | Conform or scaffold [npm](https://npmjs.com) package and Nuxt module architecture |
 | `plan-ceo` | Produce CEO-level planning artifacts |
 | `pr` | Create, update, or sync pull requests |
-| `pr-owner` | Own one personal site PR through deployment and smoke tests |
 | `pr-triage` | Review and rank the owned PR backlog |
 | `release-notes` | Draft changelogs, release notes, and upgrade guidance |
 | `ripast` | Perform AST-aware TS/JS/Vue refactors |
 | `social-presence` | Plan social content and launch posts |
+| `take-ownership` | Finish current work through delivery and smoke verification |
 | `tweet` | Draft and polish tweets with visual direction |
 
 ## Configuration

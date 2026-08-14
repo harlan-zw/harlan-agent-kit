@@ -1,0 +1,4 @@
+interface:
+  display_name: Harlan GitHub Agent
+  short_description: Control the local GitHub maintenance service
+  default_prompt: Use $harlan-github-agent to inspect and manage the local GitHub maintenance service.

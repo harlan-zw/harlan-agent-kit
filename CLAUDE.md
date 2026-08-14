@@ -17,10 +17,12 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Hook lifecycle** (`harlan-agent-kit/hooks/`, wired in `.claude-plugin/plugin.json`):
 - `SessionStart`: detect project type (Nuxt module/app, UnJS, Vue, Node), show git info, warn if not pnpm
-- `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); on commit/push/PR run `check` and block on failure (`pre-commit-push.sh`)
+- `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); block raw `git worktree` mutation and `.claude/worktrees` paths (`wt-only.sh`); on commit/push/PR run `check` and block on failure (`pre-commit-push.sh`)
 - `PostToolUse` (Write|Edit): eslint autofix on the edited file
 
 **Disable hooks per-project**: `.claude/hooks.json` with `{"disabled": ["eslint", "pre-commit-push"]}`
+
+**Worktrees**: `wt` (worktrunk) owns every worktree, at `<parent>/<repo>.<branch-slug>`. Full rules in `harlan-agent-kit/references/worktree-isolation.md`.
 
 ## Adding Components
 

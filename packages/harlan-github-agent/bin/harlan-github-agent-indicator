@@ -1,0 +1,603 @@
+#!/usr/bin/python3
+
+import base64
+import fcntl
+import json
+import os
+import selectors
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+import webbrowser
+from pathlib import Path
+
+import gi
+
+gi.require_version('AyatanaAppIndicator3', '0.1')
+gi.require_version('Gtk', '3.0')
+from gi.repository import AyatanaAppIndicator3, GLib, Gtk
+
+DASHBOARD_URL = 'http://harlan-github-agent.local/'
+DASHBOARD_API = f'{DASHBOARD_URL}api/state'
+DASHBOARD_ORIGIN = DASHBOARD_URL.rstrip('/')
+PASSWORD_FILE = Path.home() / '.config/harlan-github-agent/dashboard-password'
+APP_ICON = Path(__file__).resolve().parent.parent / 'assets/github-app-icon.png'
+WATCHER = Path(__file__).resolve().parent / 'harlan-github-agent-watch'
+RUNNER_LABEL = 'com.harlanzw.desktop-runner=true'
+WEEKLY_LIMIT_MINS = 7 * 24 * 60
+CODEX_LIMIT_REFRESH_SECONDS = 60
+AGENT_ROLE_LABELS = {
+    'adversarial_review': 'Adversarial review',
+    'baseline_repair': 'Baseline repair',
+    'conflict_resolution': 'Conflict resolution',
+    'issue_triage': 'Issue triage',
+    'issue_work': 'Issue work',
+    'review_fix': 'Repair',
+}
+
+
+def dashboard_authorization():
+    password = PASSWORD_FILE.read_text().rstrip('\n')
+    credentials = base64.b64encode(f'agent:{password}'.encode()).decode()
+    return f'Basic {credentials}'
+
+
+def request_dashboard():
+    request = urllib.request.Request(DASHBOARD_API, headers={'Authorization': dashboard_authorization()})
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.load(response)
+
+
+def request_agent_control(action):
+    if action not in ('pause', 'resume'):
+        raise ValueError(f'Unsupported agent control action: {action}')
+    request = urllib.request.Request(
+        f'{DASHBOARD_URL}api/agents/{action}',
+        data=b'',
+        method='POST',
+        headers={
+            'Authorization': dashboard_authorization(),
+            'Origin': DASHBOARD_ORIGIN,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.load(response)
+
+
+def request_agent_eject(task_id):
+    request = urllib.request.Request(
+        f'{DASHBOARD_URL}api/agents/eject',
+        data=json.dumps({'taskId': task_id}, separators=(',', ':')).encode(),
+        method='POST',
+        headers={
+            'Authorization': dashboard_authorization(),
+            'Content-Type': 'application/json',
+            'Origin': DASHBOARD_ORIGIN,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+def parse_labels(value):
+    return dict(label.split('=', 1) for label in value.split(',') if '=' in label)
+
+
+def runner_activity(runner, logs):
+    if runner.get('State', '').lower() != 'running':
+        return {'_tag': 'Offline', 'detail': runner.get('Status', 'Container stopped')}
+    for line in reversed(logs.splitlines()):
+        if 'Listening for Jobs' in line or 'completed with result:' in line:
+            return {'_tag': 'Idle'}
+        if 'Running job:' in line:
+            return {'_tag': 'Running', 'job': line.split('Running job:', 1)[1].strip()}
+    return {'_tag': 'Starting'}
+
+
+def request_runners():
+    completed = subprocess.run(
+        ['docker', 'ps', '--all', '--filter', f'label={RUNNER_LABEL}', '--format', '{{json .}}'],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=4,
+    )
+    runners = []
+    for line in completed.stdout.splitlines():
+        if not line:
+            continue
+        runner = json.loads(line)
+        logs = subprocess.run(
+            ['docker', 'logs', '--tail', '80', runner['ID']],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        activity = runner_activity(runner, logs.stdout + logs.stderr) if logs.returncode == 0 else {
+            '_tag': 'Unknown',
+            'detail': logs.stderr.strip() or 'Runner logs unavailable',
+        }
+        runners.append({
+            **runner,
+            'Activity': activity,
+            'RunnerLabels': parse_labels(runner.get('Labels', '')),
+        })
+    return runners
+
+
+def weekly_codex_limit(response):
+    limits = response.get('rateLimitsByLimitId', {}).get('codex') or response.get('rateLimits', {})
+    window = next((
+        candidate
+        for candidate in (limits.get('primary'), limits.get('secondary'))
+        if candidate is not None and candidate.get('windowDurationMins') == WEEKLY_LIMIT_MINS
+    ), None)
+    if window is None or not isinstance(window.get('usedPercent'), (int, float)) or not isinstance(window.get('resetsAt'), (int, float)):
+        return {'_tag': 'Unavailable'}
+    return {
+        '_tag': 'Available',
+        'usedPercent': window['usedPercent'],
+        'resetsAt': window['resetsAt'],
+    }
+
+
+def codex_limit_label(limit, now=None):
+    if limit is None:
+        return 'Weekly Codex limit · Loading…'
+    if limit.get('_tag') != 'Available':
+        return 'Weekly Codex limit unavailable'
+    remaining = max(0, min(100, int(100 - limit['usedPercent'] + 0.5)))
+    seconds = max(0, int(limit['resetsAt'] - (time.time() if now is None else now)))
+    days, day_seconds = divmod(seconds, 86400)
+    hours, hour_seconds = divmod(day_seconds, 3600)
+    minutes = hour_seconds // 60
+    if days > 0:
+        reset = f'{days}d {hours}h'
+    elif hours > 0:
+        reset = f'{hours}h {minutes}m'
+    elif minutes > 0:
+        reset = f'{minutes}m'
+    else:
+        reset = 'now'
+    return f'Weekly Codex limit · {remaining}% left · resets in {reset}'
+
+
+def request_codex_limit(timeout=10):
+    process = subprocess.Popen(
+        ['codex', 'app-server'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        bufsize=1,
+    )
+    selector = selectors.DefaultSelector()
+    try:
+        selector.register(process.stdout, selectors.EVENT_READ)
+
+        def send(message):
+            process.stdin.write(f'{json.dumps(message, separators=(",", ":"))}\n')
+            process.stdin.flush()
+
+        send({
+            'method': 'initialize',
+            'id': 0,
+            'params': {
+                'clientInfo': {
+                    'name': 'harlan_github_agent_indicator',
+                    'title': 'Harlan GitHub Agent Indicator',
+                    'version': '0.1.0',
+                },
+            },
+        })
+        deadline = time.monotonic() + timeout
+        initialized = False
+        while time.monotonic() < deadline:
+            events = selector.select(deadline - time.monotonic())
+            if not events:
+                break
+            line = process.stdout.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message.get('id') == 0 and not initialized:
+                if 'error' in message:
+                    raise RuntimeError(message['error'].get('message', 'Codex initialization failed.'))
+                initialized = True
+                send({'method': 'initialized', 'params': {}})
+                send({'method': 'account/rateLimits/read', 'id': 1})
+            if message.get('id') == 1:
+                if 'error' in message:
+                    raise RuntimeError(message['error'].get('message', 'Codex limits are unavailable.'))
+                return weekly_codex_limit(message.get('result', {}))
+        raise TimeoutError('Codex limits request timed out.')
+    finally:
+        selector.close()
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1)
+
+
+def open_url(url):
+    return lambda *_args: webbrowser.open(url)
+
+
+def open_agent_watch(agent):
+    session = agent.get('session', {})
+    if session.get('_tag') != 'Connected':
+        return
+    subprocess.Popen([
+        '/usr/bin/ghostty',
+        f"--title=Watch logs · {agent['repository']} #{agent['subjectNumber']}",
+        '-e',
+        sys.executable,
+        str(WATCHER),
+        session['id'],
+    ], start_new_session=True)
+
+
+def menu_item(label, url=None, enabled=True):
+    item = Gtk.MenuItem(label=label)
+    item.set_sensitive(enabled)
+    if url is not None:
+        item.connect('activate', open_url(url))
+    item.show()
+    return item
+
+
+def submenu_item(label, items):
+    item = menu_item(label)
+    submenu = Gtk.Menu()
+    for child in items:
+        submenu.append(child)
+    submenu.show_all()
+    item.set_submenu(submenu)
+    return item
+
+
+def separator():
+    item = Gtk.SeparatorMenuItem()
+    item.show()
+    return item
+
+
+def progress_bar(percent):
+    complete = min(5, max(0, int(percent / 20 + 0.5)))
+    return f"{'▓' * complete}{'░' * (5 - complete)}"
+
+
+def agent_role_label(agent):
+    return AGENT_ROLE_LABELS[agent['role']]
+
+
+def active_agent_label(agent):
+    progress = agent.get('progress', {'percent': 0, 'label': 'Starting'})
+    return (
+        f"{progress_bar(progress['percent'])}  {progress['percent']}% · "
+        f"{agent_role_label(agent)} · {agent['repository']} #{agent['subjectNumber']}"
+    )
+
+
+def confirm_agent_eject(agent, eject_agent):
+    dialog = Gtk.MessageDialog(
+        transient_for=None,
+        flags=0,
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.CANCEL,
+        text=f"Eject {agent['repository']} #{agent['subjectNumber']}?",
+    )
+    dialog.format_secondary_text('Automation stops. Ghostty resumes the saved Codex session.')
+    dialog.add_button('Eject', Gtk.ResponseType.OK)
+    response = dialog.run()
+    dialog.destroy()
+    if response == Gtk.ResponseType.OK:
+        eject_agent(agent['id'])
+
+
+def runner_label(runner):
+    labels = runner['RunnerLabels']
+    repository = labels.get('com.harlanzw.desktop-runner.repository', 'Unknown repository')
+    name = runner.get('Names') or labels.get('com.harlanzw.desktop-runner.pool', 'runner')
+    activity = runner['Activity']
+    marker = {
+        'Idle': '⚪',
+        'Offline': '🔴',
+        'Running': '🟢',
+        'Starting': '🟡',
+        'Unknown': '🟠',
+    }.get(activity['_tag'], '🟠')
+    if activity['_tag'] == 'Running':
+        return f"{marker} Running · {activity['job']} · {repository} · {name}"
+    if activity['_tag'] == 'Offline':
+        return f"{marker} Offline · {repository} · {name} · {activity['detail']}"
+    if activity['_tag'] == 'Unknown':
+        return f"{marker} Status unavailable · {repository} · {name}"
+    return f"{marker} {activity['_tag']} · {repository} · {name}"
+
+
+def queue_state(entry):
+    labels = {
+        'Active': '🟢 Running',
+        'AwaitingApproval': '🟠 Approval needed',
+        'NeedsAttention': '🔴 Needs attention',
+        'Queued': '🔵 Queued',
+        'Waiting': '🟡 Waiting',
+    }
+    return labels.get(entry.get('state', {}).get('_tag'), '🟡 Waiting')
+
+
+def agent_control_action(agent_control):
+    if agent_control.get('_tag') == 'Paused':
+        return ('▶ Resume agents', 'resume')
+    return ('⏸ Pause agents', 'pause')
+
+
+def counted(count, singular, plural=None):
+    return f'{count} {singular if count == 1 else plural or f"{singular}s"}'
+
+
+def agent_status_label(agent_control, agents):
+    if agent_control.get('_tag') == 'Paused':
+        return '🟡 Agents paused'
+    marker = '🟢' if agents else '⚪'
+    return f'{marker} {counted(len(agents), "agent running", "agents running")}'
+
+
+def indicator_summary(dashboard, agents, runners, error):
+    if error is not None:
+        return ('🔴', 'Harlan GitHub Agent unavailable')
+    if dashboard is None:
+        return ('🟡', 'Loading Harlan GitHub Agent')
+
+    queue_count = len(dashboard.get('queue', []))
+    runner_count = len(runners)
+    if dashboard.get('status') == 'degraded':
+        return ('🔴', 'Harlan GitHub Agent needs attention')
+    if dashboard.get('agentControl', {}).get('_tag') == 'Paused':
+        parts = ['Agents paused']
+        if agents:
+            parts.append(counted(len(agents), 'agent finishing', 'agents finishing'))
+        parts.extend((counted(queue_count, 'queued', 'queued'), counted(runner_count, 'self-hosted runner')))
+        return ('🟡', ' · '.join(parts))
+
+    marker = f'🟢 {len(agents)}' if agents else '⚪'
+    title = ' · '.join((
+        counted(len(agents), 'agent running', 'agents running'),
+        counted(queue_count, 'queued', 'queued'),
+        counted(runner_count, 'self-hosted runner'),
+    ))
+    return (marker, title)
+
+
+def recently_finished(dashboard, limit=5):
+    candidates = []
+    for agent in dashboard.get('agents', []):
+        if agent.get('_tag') != 'ReviewAgent':
+            continue
+        repository = agent['repository']
+        number = agent['pullRequestNumber']
+        outcome = agent.get('outcome', {}).get('_tag', 'Done').upper()
+        pull_request_status = agent.get('pullRequestStatus', {}).get('_tag', 'Unknown')
+        status_label = 'Status syncing' if pull_request_status == 'Unknown' else pull_request_status
+        candidates.append({
+            'key': f'review:{repository}:{number}',
+            'completedAt': agent['completedAt'],
+            'label': f'{repository} #{number} · Review {outcome} · {status_label}',
+            'url': agent['subjectUrl'],
+        })
+
+    task_labels = {
+        'resolve_conflict': ('Conflict fix', 'pull', 'pullRequestNumber'),
+        'issue_triage': ('Issue triage', 'issues', 'issueNumber'),
+    }
+    for task in dashboard.get('tasks', []):
+        if task.get('state', {}).get('_tag') != 'Completed' or task.get('kind') not in task_labels:
+            continue
+        label, path, number_key = task_labels[task['kind']]
+        repository = task['repository']
+        number = task[number_key]
+        candidates.append({
+            'key': f"{task['kind']}:{repository}:{number}",
+            'completedAt': task['updatedAt'],
+            'label': f'{repository} #{number} · {label} · Done',
+            'url': f'https://github.com/{repository}/{path}/{number}',
+        })
+
+    finished = []
+    seen = set()
+    for candidate in sorted(candidates, key=lambda item: item['completedAt'], reverse=True):
+        if candidate['key'] in seen:
+            continue
+        seen.add(candidate['key'])
+        finished.append({key: value for key, value in candidate.items() if key != 'key'})
+        if len(finished) == limit:
+            break
+    return finished
+
+
+def build_menu(indicator, dashboard, runners, codex_limit, error, action_error, refresh, set_agent_control, eject_agent):
+    menu = Gtk.Menu()
+    agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
+    queue = [] if dashboard is None else dashboard.get('queue', [])
+    menu.append(menu_item(codex_limit_label(codex_limit), enabled=False))
+    menu.append(separator())
+    menu.append(menu_item('Open Harlan GitHub Agent', DASHBOARD_URL))
+    menu.append(separator())
+
+    if dashboard is None and error is None:
+        menu.append(menu_item('🟡 Loading agent activity…', enabled=False))
+    elif error is not None:
+        menu.append(menu_item('🔴 GitHub agent unavailable', enabled=False))
+        menu.append(menu_item(error[:100], enabled=False))
+    else:
+        agent_control = dashboard.get('agentControl', {'_tag': 'Running'})
+        menu.append(menu_item(agent_status_label(agent_control, agents), enabled=False))
+        if not agents:
+            menu.append(menu_item('No active pull requests or issues', enabled=False))
+        for agent in agents:
+            progress = agent.get('progress', {'percent': 0, 'label': 'Starting'})
+            kind = 'issue' if agent.get('subjectKind') == 'issue' else 'pull request'
+            links = [
+                menu_item(progress['label'], enabled=False),
+                menu_item(f'Open {kind}', agent['subjectUrl']),
+            ]
+            if agent.get('commitUrl'):
+                links.append(menu_item('Open head commit', agent['commitUrl']))
+            watch_item = menu_item('Watch logs', enabled=agent.get('session', {}).get('_tag') == 'Connected')
+            watch_item.connect('activate', lambda *_args, current=agent: open_agent_watch(current))
+            links.append(watch_item)
+            eject_item = menu_item('Eject into terminal…', enabled=agent.get('session', {}).get('_tag') == 'Connected')
+            eject_item.connect('activate', lambda *_args, current=agent: confirm_agent_eject(current, eject_agent))
+            links.append(eject_item)
+            menu.append(submenu_item(active_agent_label(agent), links))
+
+        finished = recently_finished(dashboard)
+        if finished:
+            menu.append(submenu_item(
+                f'✓ Recently finished · {len(finished)}',
+                [menu_item(entry['label'], entry['url']) for entry in finished],
+            ))
+
+        repositories = [repository for repository in dashboard.get('repositories', []) if repository.get('lastError')]
+        if repositories:
+            menu.append(submenu_item(
+                f'⚠ {len(repositories)} repositories need attention',
+                [menu_item(repository['github'], f"https://github.com/{repository['github']}") for repository in repositories],
+            ))
+
+        if queue:
+            menu.append(submenu_item(
+                f'Queue · {len(queue)}',
+                [
+                    menu_item(f"{entry['position']} · {entry['repository']} #{entry['number']} · {queue_state(entry)}", entry['subjectUrl'])
+                    for entry in queue[:10]
+                ],
+            ))
+
+    menu.append(separator())
+    menu.append(submenu_item(
+        f'Self-hosted runners · {len(runners)}',
+        [
+            menu_item(runner_label(runner), f"https://github.com/{runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository', '')}/actions")
+            for runner in sorted(runners, key=lambda item: runner_label(item))
+        ] or [menu_item('No runners online', enabled=False)],
+    ))
+
+    menu.append(separator())
+    if dashboard is not None:
+        control_label, action = agent_control_action(dashboard.get('agentControl', {'_tag': 'Running'}))
+        control_item = menu_item(control_label)
+        control_item.connect('activate', lambda *_args: set_agent_control(action))
+        menu.append(control_item)
+        if action_error is not None:
+            menu.append(menu_item(action_error[:100], enabled=False))
+    refresh_item = menu_item('Refresh')
+    refresh_item.connect('activate', lambda *_args: refresh())
+    menu.append(refresh_item)
+    quit_item = menu_item('Quit')
+    quit_item.connect('activate', lambda *_args: Gtk.main_quit())
+    menu.append(quit_item)
+    menu.show_all()
+    indicator.set_menu(menu)
+
+
+def main():
+    runtime = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
+    lock = (runtime / 'harlan-github-agent-indicator.lock').open('w')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+
+    indicator = AyatanaAppIndicator3.Indicator.new(
+        'harlan-github-agent',
+        str(APP_ICON),
+        AyatanaAppIndicator3.IndicatorCategory.SYSTEM_SERVICES,
+    )
+    indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
+    indicator.set_title('Harlan GitHub Agent')
+    refreshing = {'active': False}
+    pending_action = {'value': None}
+    codex_limit_cache = {'value': None, 'updatedAt': 0.0}
+
+    def apply_state(dashboard, runners, codex_limit, error, control_error):
+        refreshing['active'] = False
+        agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
+        label, title = indicator_summary(dashboard, agents, runners, error)
+        indicator.set_label(label, '🟢 99')
+        indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
+        indicator.set_title(title)
+        build_menu(indicator, dashboard, runners, codex_limit, error, control_error, refresh, set_agent_control, eject_agent)
+        if pending_action['value'] is not None:
+            refresh()
+        return False
+
+    def load_state():
+        dashboard = None
+        runners = []
+        error = None
+        control_error = None
+        action = pending_action['value']
+        pending_action['value'] = None
+        if action is not None:
+            try:
+                if action['_tag'] == 'AgentControl':
+                    request_agent_control(action['action'])
+                else:
+                    request_agent_eject(action['taskId'])
+            except Exception as caught:
+                control_error = f"{action['label']} failed: {caught}"
+        try:
+            dashboard = request_dashboard()
+        except Exception as caught:
+            error = str(caught)
+        try:
+            runners = request_runners()
+        except Exception as caught:
+            error = str(caught) if error is None else error
+        if time.monotonic() - codex_limit_cache['updatedAt'] >= CODEX_LIMIT_REFRESH_SECONDS:
+            try:
+                codex_limit_cache['value'] = request_codex_limit()
+            except Exception:
+                codex_limit_cache['value'] = {'_tag': 'Unavailable'}
+            codex_limit_cache['updatedAt'] = time.monotonic()
+        GLib.idle_add(apply_state, dashboard, runners, codex_limit_cache['value'], error, control_error)
+
+    def refresh(*_args):
+        if refreshing['active']:
+            return True
+        refreshing['active'] = True
+        threading.Thread(target=load_state, daemon=True).start()
+        return True
+
+    def set_agent_control(action):
+        pending_action['value'] = {
+            '_tag': 'AgentControl',
+            'action': action,
+            'label': action.capitalize(),
+        }
+        return refresh()
+
+    def eject_agent(task_id):
+        pending_action['value'] = {
+            '_tag': 'AgentEject',
+            'taskId': task_id,
+            'label': 'Eject',
+        }
+        return refresh()
+
+    build_menu(indicator, None, [], None, None, None, refresh, set_agent_control, eject_agent)
+    refresh()
+    GLib.timeout_add_seconds(5, refresh)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

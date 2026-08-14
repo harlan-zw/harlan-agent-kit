@@ -1,0 +1,21 @@
+github:
+  app_id: 12345
+  private_key_path: /home/harlan/.config/harlan-github-agent/app.pem
+  allowed_owners: [harlan-zw]
+server:
+  host: 127.0.0.1
+  port: 3210
+  allowed_host: harlan-github-agent.local
+storage:
+  path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
+mutations_enabled: false
+poll_interval_seconds: 60
+issue_cutoff: 2026-07-14
+# Public, read-only watches outside the GitHub App installation.
+# - github: nuxt-modules/sitemap
+#   issues: [658]
+# - github: nuxt-modules/robots
+#   issues: all
+external_repositories: []
+repositories: []
+# Owned repositories enable issue work and conflict resolution by default.

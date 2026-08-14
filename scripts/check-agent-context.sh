@@ -13,7 +13,7 @@ CODEX="${HOME}/.codex/AGENTS.md"
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/harlan-agent-kit/skills/ts-design-patterns/SKILL.md"
 
 # Divergences that are intentional. Update this when you deliberately add one.
-EXPECTED_HUNKS=4
+EXPECTED_HUNKS=5
 
 fail=0
 note() { printf '%s\n' "$1"; }

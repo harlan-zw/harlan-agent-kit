@@ -39,6 +39,8 @@ Before any edit, follow the [worktree isolation contract](../../references/workt
 
 An existing worktree alone does not prove another agent is active.
 
+`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
+
 Use `wt` only when another agent is actively modifying the same repository. If no other agent is active there, keep the current checkout. If it is on the default branch, create a normal task branch with `git switch -c BRANCH`, then continue to Step 1.
 
 If another agent is active in the repository:
@@ -81,7 +83,7 @@ See [references/conventional-commits.md](references/conventional-commits.md) for
 **Title:** Conventional commit format -- `feat:`, `fix:`, `docs:`, `chore:`, etc. Under 70 chars. Use scopes where
 appropriate (e.g., `feat(auth):`, `fix(ui):`).
 
-**Use the repo's own template if it has one.** Check `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`, and `docs/PULL_REQUEST_TEMPLATE.md`. If one exists, fill it and add only the required AI disclosure. Only if none exists, use this:
+**Use the repo's effective template if it has one.** Check `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`, and `docs/PULL_REQUEST_TEMPLATE.md`. If none exists locally, read `files.pull_request_template` from `repos/OWNER/REPO/community/profile`. This resolves inherited templates from the owner's `.github` repository. Fetch the returned `url`, fill that template, and add only the required AI disclosure. Only use this fallback when the community profile has no template:
 
 ```markdown
 ### 🔗 Linked issue
@@ -251,4 +253,4 @@ This skill owns PR creation, metadata, CI monitoring, and review feedback repair
 
 `../adversarial-review/SKILL.md` exclusively owns the automated adversarial review outcome and marked bot status. Do not create or update that status here.
 
-`../pr-owner/SKILL.md` wraps this workflow when one agent owns a personal site PR through deployment and smoke verification.
+`../take-ownership/SKILL.md` wraps this workflow when one agent owns the current work through delivery verification.

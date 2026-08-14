@@ -2,6 +2,33 @@
 
 Use a live task claim to detect concurrent repository mutation. A worktree's existence does not prove an agent is active.
 
+## Worktree ownership
+
+`wt` is the only tool that may create, enter, or remove a worktree.
+
+Never run `git worktree add`. Never use a harness worktree feature: Claude Code's `EnterWorktree` tool, an `Agent` call with `isolation: "worktree"`, or a workflow step with `isolation: 'worktree'`. Those write to `.claude/worktrees/`, which is banned. If a harness worktree already exists, do not extend it. Move the work into a `wt` worktree.
+
+`~/.config/worktrunk/config.toml` fixes the location for every repository:
+
+```
+<parent>/<repo>.<branch-slug>
+```
+
+Example: branch `fix/auth` in `~/pkg/app` resolves to `~/pkg/app.fix-auth`. Never pass an explicit worktree path. Never use `wt switch --clobber`.
+
+`harlan-github-agent` follows the same contract. It creates each agent worktree from the configured repository checkout with `wt`.
+
+## Commands
+
+| Action | Command |
+| --- | --- |
+| List worktrees and absolute paths | `wt list --format=json` |
+| Create from a base | `wt switch --create <branch> --base <base>` |
+| Enter an existing worktree | `wt switch <branch>` |
+| Remove after merge | `wt remove <branch>` |
+
+Read the absolute `path` from `wt list --format=json`. Pass that path as the working directory to every later command. Never force removal with `--force` or `--force-delete`.
+
 ## Claim interface
 
 Prefer an active controller's atomic claim when it records the normalized repository, absolute checkout, session owner, and lease. The controller must support acquire, list, renew, and release operations.

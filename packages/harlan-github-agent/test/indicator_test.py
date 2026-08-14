@@ -1,0 +1,366 @@
+import importlib.machinery
+import importlib.util
+import io
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+def load_indicator():
+    path = Path(__file__).parents[1] / 'bin/harlan-github-agent-indicator'
+    loader = importlib.machinery.SourceFileLoader('harlan_github_agent_indicator', str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+indicator = load_indicator()
+
+
+def load_watch():
+    path = Path(__file__).parents[1] / 'bin/harlan-github-agent-watch'
+    loader = importlib.machinery.SourceFileLoader('harlan_github_agent_watch', str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+watch = load_watch()
+
+
+class RecentlyFinishedTest(unittest.TestCase):
+    def test_lists_unique_finished_agents_newest_first(self):
+        dashboard = {
+            'agents': [
+                {
+                    '_tag': 'ReviewAgent',
+                    'repository': 'harlan-zw/mdream',
+                    'pullRequestNumber': 211,
+                    'completedAt': '2026-08-13T10:44:54.415Z',
+                    'outcome': {'_tag': 'Ready'},
+                    'pullRequestStatus': {'_tag': 'Merged', 'mergedAt': '2026-08-13T11:00:00.000Z'},
+                    'subjectUrl': 'https://github.com/harlan-zw/mdream/pull/211',
+                },
+                {
+                    '_tag': 'ReviewAgent',
+                    'repository': 'harlan-zw/mdream',
+                    'pullRequestNumber': 211,
+                    'completedAt': '2026-08-13T10:40:00.000Z',
+                    'outcome': {'_tag': 'Blocked'},
+                    'subjectUrl': 'https://github.com/harlan-zw/mdream/pull/211',
+                },
+            ],
+            'tasks': [
+                {
+                    'kind': 'resolve_conflict',
+                    'repository': 'harlan-zw/request-indexing',
+                    'pullRequestNumber': 35,
+                    'updatedAt': '2026-08-13T11:00:00.000Z',
+                    'state': {'_tag': 'Completed', 'evidence': 'Pushed conflict fix.'},
+                },
+                {
+                    'kind': 'issue_triage',
+                    'repository': 'harlan-zw/example',
+                    'issueNumber': 4,
+                    'updatedAt': '2026-08-13T12:00:00.000Z',
+                    'state': {'_tag': 'Failed', 'reason': 'Tests failed.'},
+                },
+            ],
+        }
+
+        self.assertEqual(indicator.recently_finished(dashboard), [
+            {
+                'completedAt': '2026-08-13T11:00:00.000Z',
+                'label': 'harlan-zw/request-indexing #35 · Conflict fix · Done',
+                'url': 'https://github.com/harlan-zw/request-indexing/pull/35',
+            },
+            {
+                'completedAt': '2026-08-13T10:44:54.415Z',
+                'label': 'harlan-zw/mdream #211 · Review READY · Merged',
+                'url': 'https://github.com/harlan-zw/mdream/pull/211',
+            },
+        ])
+
+
+class RunnerActivityTest(unittest.TestCase):
+    def test_reports_idle_runner(self):
+        self.assertEqual(indicator.runner_activity(
+            {'State': 'running', 'Status': 'Up 10 minutes'},
+            "2026-08-13T15:43:11Z: Listening for Jobs\n",
+        ), {'_tag': 'Idle'})
+
+    def test_reports_current_job(self):
+        self.assertEqual(indicator.runner_activity(
+            {'State': 'running', 'Status': 'Up 10 minutes'},
+            "Listening for Jobs\n2026-08-13T15:50:00Z: Running job: deploy production\n",
+        ), {'_tag': 'Running', 'job': 'deploy production'})
+
+    def test_reports_offline_runner(self):
+        self.assertEqual(indicator.runner_activity(
+            {'State': 'exited', 'Status': 'Exited (1) 2 minutes ago'},
+            '',
+        ), {'_tag': 'Offline', 'detail': 'Exited (1) 2 minutes ago'})
+
+
+class IndicatorDisplayTest(unittest.TestCase):
+    def test_shows_remaining_weekly_codex_limit_and_reset(self):
+        resets_at = 1787196635
+        result = indicator.weekly_codex_limit({
+            'rateLimitsByLimitId': {
+                'codex': {
+                    'primary': {'usedPercent': 10, 'windowDurationMins': 300, 'resetsAt': 1786700000},
+                    'secondary': {'usedPercent': 89, 'windowDurationMins': 10080, 'resetsAt': resets_at},
+                },
+            },
+        })
+
+        self.assertEqual(result, {'_tag': 'Available', 'usedPercent': 89, 'resetsAt': resets_at})
+        self.assertEqual(
+            indicator.codex_limit_label(result, resets_at - 5 * 86400 - 18 * 3600),
+            'Weekly Codex limit · 11% left · resets in 5d 18h',
+        )
+
+    def test_uses_minimal_coloured_state_markers(self):
+        self.assertEqual(indicator.queue_state({'state': {'_tag': 'Active'}}), '🟢 Running')
+        self.assertEqual(indicator.queue_state({'state': {'_tag': 'AwaitingApproval'}}), '🟠 Approval needed')
+        self.assertEqual(indicator.queue_state({'state': {'_tag': 'NeedsAttention'}}), '🔴 Needs attention')
+        self.assertEqual(indicator.queue_state({'state': {'_tag': 'Queued'}}), '🔵 Queued')
+        self.assertEqual(indicator.queue_state({'state': {'_tag': 'Waiting'}}), '🟡 Waiting')
+
+    def test_marks_runner_activity_without_replacing_detail(self):
+        runner = {
+            'Names': 'runner-1',
+            'RunnerLabels': {'com.harlanzw.desktop-runner.repository': 'harlan-zw/example'},
+            'Activity': {'_tag': 'Running', 'job': 'deploy production'},
+        }
+
+        self.assertEqual(
+            indicator.runner_label(runner),
+            '🟢 Running · deploy production · harlan-zw/example · runner-1',
+        )
+
+    def test_keeps_progress_bar_for_active_agents(self):
+        self.assertEqual(indicator.progress_bar(57), '▓▓▓░░')
+
+    def test_labels_active_agents_with_their_role(self):
+        agent = {
+            'role': 'issue_triage',
+            'progress': {'percent': 57, 'label': 'Checking issue context'},
+            'repository': 'harlan-zw/example',
+            'subjectNumber': 12,
+        }
+
+        self.assertEqual(
+            indicator.active_agent_label(agent),
+            '▓▓▓░░  57% · Issue triage · harlan-zw/example #12',
+        )
+
+    def test_uses_canonical_labels_for_every_agent_role(self):
+        labels = {
+            'adversarial_review': 'Adversarial review',
+            'baseline_repair': 'Baseline repair',
+            'conflict_resolution': 'Conflict resolution',
+            'issue_triage': 'Issue triage',
+            'issue_work': 'Issue work',
+            'review_fix': 'Repair',
+        }
+
+        for role, label in labels.items():
+            with self.subTest(role=role):
+                self.assertEqual(indicator.agent_role_label({'role': role}), label)
+
+    def test_exposes_pause_and_resume_for_agent_control_state(self):
+        self.assertEqual(indicator.agent_control_action({'_tag': 'Running'}), ('⏸ Pause agents', 'pause'))
+        self.assertEqual(
+            indicator.agent_control_action({'_tag': 'Paused', 'pausedAt': '2026-08-14T00:00:00.000Z'}),
+            ('▶ Resume agents', 'resume'),
+        )
+
+    def test_pluralises_agent_menu_status(self):
+        self.assertEqual(indicator.agent_status_label({'_tag': 'Running'}, []), '⚪ 0 agents running')
+        self.assertEqual(indicator.agent_status_label({'_tag': 'Running'}, [{}]), '🟢 1 agent running')
+        self.assertEqual(indicator.agent_status_label({'_tag': 'Paused'}, []), '🟡 Agents paused')
+
+    def test_summarises_loading_running_paused_and_unavailable_states(self):
+        self.assertEqual(indicator.indicator_summary(None, [], [], None), ('🟡', 'Loading Harlan GitHub Agent'))
+        self.assertEqual(
+            indicator.indicator_summary({'agentControl': {'_tag': 'Running'}, 'queue': []}, [{}], [], None),
+            ('🟢 1', '1 agent running · 0 queued · 0 self-hosted runners'),
+        )
+        self.assertEqual(
+            indicator.indicator_summary({'agentControl': {'_tag': 'Paused'}, 'queue': [{}, {}]}, [], [{}], None),
+            ('🟡', 'Agents paused · 2 queued · 1 self-hosted runner'),
+        )
+        self.assertEqual(indicator.indicator_summary(None, [], [], 'Connection refused'), ('🔴', 'Harlan GitHub Agent unavailable'))
+
+    def test_opens_a_read_only_watch_terminal_for_the_exact_session(self):
+        agent = {
+            'id': 'task-123',
+            'repository': 'harlan-zw/example',
+            'subjectNumber': 24,
+            'session': {'_tag': 'Connected', 'id': '019fff56-466c-7980-9a63-962018752af2'},
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            indicator.open_agent_watch(agent)
+
+        spawn.assert_called_once_with([
+            '/usr/bin/ghostty',
+            '--title=Watch logs · harlan-zw/example #24',
+            '-e',
+            sys.executable,
+            str(indicator.WATCHER),
+            '019fff56-466c-7980-9a63-962018752af2',
+        ], start_new_session=True)
+
+
+class AgentControlRequestTest(unittest.TestCase):
+    def test_sends_authenticated_pause_request(self):
+        requests = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"_tag":"Paused","pausedAt":"2026-08-14T00:00:00.000Z"}'
+
+        def open_request(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            password_file = Path(directory) / 'dashboard-password'
+            password_file.write_text('secret\n')
+            with patch.object(indicator, 'PASSWORD_FILE', password_file), patch.object(
+                indicator.urllib.request,
+                'urlopen',
+                side_effect=open_request,
+            ):
+                result = indicator.request_agent_control('pause')
+
+        request, timeout = requests[0]
+        self.assertEqual(result, {'_tag': 'Paused', 'pausedAt': '2026-08-14T00:00:00.000Z'})
+        self.assertEqual(request.full_url, 'http://harlan-github-agent.local/api/agents/pause')
+        self.assertEqual(request.get_method(), 'POST')
+        self.assertEqual(request.get_header('Origin'), 'http://harlan-github-agent.local')
+        self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
+        self.assertEqual(timeout, 3)
+
+    def test_sends_authenticated_eject_request_for_the_exact_agent(self):
+        requests = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"_tag":"Ejected"}'
+
+        def open_request(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            password_file = Path(directory) / 'dashboard-password'
+            password_file.write_text('secret\n')
+            with patch.object(indicator, 'PASSWORD_FILE', password_file), patch.object(
+                indicator.urllib.request,
+                'urlopen',
+                side_effect=open_request,
+            ):
+                result = indicator.request_agent_eject('task-123')
+
+        request, timeout = requests[0]
+        self.assertEqual(result, {'_tag': 'Ejected'})
+        self.assertEqual(request.full_url, 'http://harlan-github-agent.local/api/agents/eject')
+        self.assertEqual(request.get_method(), 'POST')
+        self.assertEqual(request.data, b'{"taskId":"task-123"}')
+        self.assertEqual(request.get_header('Content-type'), 'application/json')
+        self.assertEqual(request.get_header('Origin'), 'http://harlan-github-agent.local')
+        self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
+        self.assertEqual(timeout, 10)
+
+
+class WatchLogTest(unittest.TestCase):
+    def test_formats_agent_commands_results_and_completion(self):
+        timestamp = '2026-08-14T08:10:23.321Z'
+        self.assertEqual(watch.format_event({
+            'timestamp': timestamp,
+            'type': 'event_msg',
+            'payload': {'type': 'agent_message', 'message': 'Checking the failing test.'},
+        }), '08:10:23  Agent\nChecking the failing test.')
+        self.assertEqual(watch.format_event({
+            'timestamp': timestamp,
+            'type': 'response_item',
+            'payload': {
+                'type': 'custom_tool_call',
+                'name': 'exec',
+                'input': 'const r = await tools.exec_command({cmd:"pnpm test",yield_time_ms:30000});text(r.output)',
+            },
+        }), '08:10:23  $ pnpm test')
+        self.assertEqual(watch.format_event({
+            'timestamp': timestamp,
+            'type': 'response_item',
+            'payload': {'type': 'custom_tool_call_output', 'output': [
+                {'type': 'input_text', 'text': 'Script completed\nOutput:\n'},
+                {'type': 'input_text', 'text': 'passed\n'},
+            ]},
+        }), '08:10:23  Result\nScript completed\nOutput:\npassed')
+        self.assertEqual(watch.format_event({
+            'timestamp': timestamp,
+            'type': 'event_msg',
+            'payload': {'type': 'task_complete'},
+        }), '08:10:23  Task complete')
+
+    def test_finds_the_exact_newest_session_log(self):
+        session_id = '019fff56-466c-7980-9a63-962018752af2'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            older = root / f'rollout-old-{session_id}.jsonl'
+            newer = root / 'nested' / f'rollout-new-{session_id}.jsonl'
+            older.write_text('{}\n')
+            newer.parent.mkdir()
+            newer.write_text('{}\n')
+            os.utime(older, (1, 1))
+            os.utime(newer, (2, 2))
+            self.assertEqual(watch.find_session_log(session_id, root), newer)
+
+        with self.assertRaisesRegex(ValueError, 'Invalid Codex session ID'):
+            watch.find_session_log('../session', Path('/tmp'))
+
+    def test_renders_commands_with_terminal_syntax_highlighting(self):
+        output = io.StringIO()
+        event = {
+            'timestamp': '2026-08-14T08:10:23.321Z',
+            'type': 'response_item',
+            'payload': {
+                'type': 'custom_tool_call',
+                'name': 'exec',
+                'input': 'const r = await tools.exec_command({cmd:"pnpm test"});text(r.output)',
+            },
+        }
+
+        self.assertTrue(watch.render_event(event, watch.Console(
+            file=output,
+            force_terminal=True,
+            color_system='truecolor',
+            width=100,
+        )))
+        self.assertIn('pnpm test', output.getvalue())
+        self.assertIn('\x1b[', output.getvalue())
+
+
+if __name__ == '__main__':
+    unittest.main()

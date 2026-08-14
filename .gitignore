@@ -1,8 +1,14 @@
 .idea
 node_modules
+dist
+.nuxt
+.output
 __pycache__/
 *.py[cod]
 
 # Session tracking files
 .claude/.active-plan-*
 .claude/.edit-count-*
+
+# Harness worktrees; wt owns worktrees as repo siblings
+.claude/worktrees/

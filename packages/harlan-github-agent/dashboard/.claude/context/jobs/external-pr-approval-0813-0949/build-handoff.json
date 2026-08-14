@@ -1,0 +1,36 @@
+{
+  "schema_version": 4,
+  "job_id": "external-pr-approval-0813-0949",
+  "created": "2026-08-13T10:05:35Z",
+  "git_hash": "0163e3aebc0f01e3569d06b4e4c3ebfdc84cd65d",
+  "dev_port": 3210,
+  "pages_changed": ["app/pages/index.vue"],
+  "components_created": [],
+  "routes_to_test": ["/"],
+  "design_system_changes": false,
+  "theme_name": "devtool",
+  "contract_path": ".claude/context/jobs/external-pr-approval-0813-0949/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met",
+    "C10": "met",
+    "C11": "met",
+    "C12": "met"
+  },
+  "self_assessment": {
+    "confidence": "high",
+    "weakest_area": "Live Approval clicks remain reserved for Harlan.",
+    "hardest_decision": "Bind every Approval to the exact Revision and split review from fix authority."
+  },
+  "has_client_animations": true,
+  "known_limitations": ["Review and fix runners remain outside this build."],
+  "next_steps": ["Connect approved Revisions to isolated review and fix schedulers."],
+  "dark_mode_relevant": true
+}

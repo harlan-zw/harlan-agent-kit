@@ -9,182 +9,85 @@ description: >
 
 # Take Ownership
 
-Own one current work item until its intended delivery result is verified or visibly blocked.
+Stay responsible for one current work item until its intended result is `VERIFIED`, `BLOCKED`, or `CANCELLED`.
 
-A commit, green CI, or merge is intermediate when later delivery stages apply.
+A commit, green CI, or merge remains intermediate when later delivery stages apply.
 
-## Worktree isolation
+## Use existing contracts
 
-Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
+Read these completely when they apply:
 
-An existing worktree alone does not prove another agent is active.
+1. `../pr/SKILL.md` for pull request creation, updates, CI, and review feedback.
+2. `../adversarial-review/SKILL.md` for readiness.
+3. `../adversarial-review/references/mutation-authority.md` for mutation and merge authority.
+4. `../unit-tests/SKILL.md` before repairing behavior or validation.
 
-Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+Follow repository instructions and delivery configuration. Use `dev-browser` for browser smoke tests.
 
-## Load contracts
+Delegate detailed permissions, review gates, worktree isolation, publication, and cleanup to those contracts.
 
-Read these completely:
+If `harlan-github-agent` already controls the repository, resume its existing worker. Do not start another watcher.
 
-1. `../pr/SKILL.md` before creating or updating a pull request.
-2. `../adversarial-review/SKILL.md` before deciding merge readiness.
-3. `../adversarial-review/references/mutation-authority.md` before any mutation.
-4. `../adversarial-review/references/review-contract.md` before updating the bot status.
-5. `../unit-tests/SKILL.md` before repairing behavior or validation.
+## Start ownership
 
-Read repository instructions, required workflows, release configuration, deployment configuration, and smoke commands.
+Inspect local Git state and remote state. Select one exact target:
 
-Use `dev-browser` for browser smoke tests.
+- `LocalWork`: current uncommitted or unpushed work.
+- `PullRequest`: one open pull request and its exact head commit.
+- `Revision`: one pushed commit without an open pull request.
 
-## Resolve the work item
+Determine the intended result and applicable CI, merge, deployment, release, and smoke stages.
 
-Inspect local Git state and GitHub state. Record exactly one subject:
+Ask only when multiple targets remain plausible or the intended result materially changes the work.
 
-- `LocalWork`: uncommitted or unpushed work for the current request.
-- `PullRequest`: an open pull request with its exact head revision.
-- `Revision`: a pushed commit without an open pull request.
+Keep the exact commit and delivery targets attached to ownership.
 
-Ask for a target only when multiple subjects remain plausible.
+Record whether the user invoked `$take-ownership`, `/take-ownership`, or explicitly requested a merge.
 
-Record the repository, subject, initial revision, default branch, canonical checkout, and intended result.
+Pass that context to mutation authority. Other ownership requests permit eligible repairs but never grant merge authority.
 
-Also record required CI, merge policy, production targets, release targets, and smoke assertions.
+## Complete and review
 
-Treat configured delivery stages as required. Never silently shorten the intended result.
+Complete local work with the relevant domain skills and verification.
 
-If `harlan-github-agent` already controls the repository, resume its existing worker and journal. Do not start another watcher.
+Use `pr` when code needs review. Use `adversarial-review` before deciding readiness.
 
-## Establish authority
+Restart readiness after the remote head changes.
 
-Apply the mutation authority contract before every code, branch, metadata, comment, or merge mutation.
+## Land and follow
 
-Only an explicit, unnegated merge instruction for the resolved pull request authorizes an eligible merge. Examples include `get PR #42 merged` and `land this pull request`.
+When authority permits, land the exact ready head through the repository's normal merge path.
 
-Skill selection, `$take-ownership`, `/take-ownership`, `finish this`, or `make the PR` does not authorize a merge. Confirm the instruction still applies immediately before merging.
+Otherwise wait for the human merge decision and keep ownership active.
 
-Other ownership requests activate tracking and eligible repair authority. They do not authorize a merge.
+Follow the exact commit through every applicable delivery stage. Do not infer delivery success from unrelated green checks.
 
-For example, `watch this through deploy` permits eligible repairs for the exact subject. Wait for the human merge decision.
+If newer work supersedes the target, explicitly adopt its commit or cancel ownership with evidence.
 
-Merge only repositories owned by the authenticated GitHub user. Never merge maintained or external repositories.
+## Repair and recover
 
-Require `PASS` for the exact pull request head. Recheck every gate immediately before merging.
+Prove a failure belongs to the owned change before editing.
 
-Honor branch protection, required approvals, merge queues, and repository merge methods. Never bypass them.
+Add a failing test first for behavior or validation regressions. Apply the smallest useful repair and verify it.
 
-Never approve the pull request, use administrator privileges, force push, or amend a published commit.
+Use `chore: <specific problem>` for CI or delivery pipeline repairs. Use `fix:` for deployed product behavior.
 
-## Lifecycle
+Let the loaded contracts choose a direct push, branch repair, or repair pull request.
 
-Run each applicable phase in order. Resume the same durable session when new evidence arrives.
+If production remains unsafe, choose the safest viable recovery: repair, rollback, or block with evidence.
 
-### 1. Finish the change
+Keep trying while meaningful progress remains. Block after three failed repairs for the same cause.
 
-For `LocalWork`, complete the requested implementation and its required verification.
+## Smoke and close
 
-Load any domain skill required by the change. Keep unrelated work outside the ownership subject.
+Verify the result against a meaningful target and assertion.
 
-Use `pr` to create or update the pull request when code needs review.
+For browser targets, check health, changed behavior, console errors, and one relevant critical path.
 
-For a feature branch `Revision`, create or resolve its pull request. For a default branch revision, continue to delivery tracking.
+If smoke finds a regression, return to repair.
 
-### 2. Reach readiness
+Update the existing marked comment or durable record. Preserve delivery and smoke evidence.
 
-Use `pr` for metadata, publication, CI monitoring, and review feedback repairs.
-
-Run `adversarial-review` against the complete remote head. Resume until the exact head receives `PASS`.
-
-Restart readiness checks after every pushed repair or remote head change.
-
-### 3. Land the change
-
-If merge authority exists, refetch the pull request and confirm `PASS` for the exact head.
-
-Use the repository's normal merge method. If GitHub queues the merge, track the queue until it lands.
-
-Without merge authority, wait for the human merge decision and keep ownership active.
-
-When merged, record the merge commit and exact default branch head. Treat a pull request closed unmerged as `CANCELLED`.
-
-### 4. Track delivery
-
-For already pushed code, start from this phase when earlier phases do not apply.
-
-Track required checks, workflows, deployments, releases, and provider jobs for the owned revision.
-
-For a pull request, follow the merge commit and only its proven default branch descendants.
-
-Match the revision, workflow identity, environment, target, and delivery source. Ignore unrelated green jobs.
-
-Do not infer deployment or publication success from CI success.
-
-### 5. Repair failures
-
-Prove the failure belongs to the owned revision before editing.
-
-Read the failing logs and classify the cause. Distinguish subject failures, baseline failures, and transient provider failures.
-
-Retry one proven transient failure once. Repair deterministic failures.
-
-After merge, fetch the remote default branch and record its exact head. Never build a repair from the merged feature checkout.
-
-Create a repair branch from that remote default head. If another agent is active, use `wt switch --create <repair-branch> --base <remote>/<default-branch>`. Otherwise use `git switch -c <repair-branch> <remote>/<default-branch>`. Add a failing test first for behavior or validation regressions.
-
-Use `chore: <specific problem>` for every CI or delivery pipeline repair. Never use the generic `chore: fix ci`.
-
-Use a precise `fix:` subject when deployed product behavior is wrong.
-
-Apply the smallest repair and run focused verification. Let required CI provide broad verification.
-
-Recheck the remote default head before pushing. Rebuild the repair on its new head when it changed.
-
-If the default branch repair contract permits a direct push, push the verified repair commit to the unchanged remote default branch. Otherwise open a normal repair pull request. Use a repair pull request when branch protection rejects the direct push.
-
-Never weaken protection, bypass hooks, force push, or hide a failed repair.
-
-Stop after three failed repairs for the same cause. Mark ownership `BLOCKED` with exact evidence.
-
-### 6. Smoke the result
-
-Wait for the matched deployment or release to succeed. Then test the configured target.
-
-For browser targets, check HTTP health, changed behavior, console errors, and one critical path.
-
-For packages or services, run the configured consumer, release, or protocol smoke command.
-
-Choose assertions from the request, changed files, pull request description, and repository configuration.
-
-If smoke finds a regression, return to Repair failures.
-
-Never claim verification without a meaningful target and assertion. Keep ownership active while evidence can still arrive.
-
-Use `BLOCKED` when required evidence is unavailable and no safe discovery path remains.
-
-### 7. Close ownership
-
-For a pull request, update and confirm the existing marked bot comment.
-
-Preserve review evidence. Append the owned revision, delivery target, delivery outcome, and smoke evidence.
-
-For a direct revision, preserve the same evidence in the durable journal or final ownership record.
-
-Close only as `VERIFIED`, `BLOCKED`, or `CANCELLED`. If this task created a worktree, run `wt remove <branch>` after closure. Do not force removal.
+Close only as `VERIFIED`, `BLOCKED`, or `CANCELLED`. Apply the loaded cleanup contract.
 
 Do not stop at an intermediate state while an expected CI, merge, deployment, release, or smoke event can progress.
-
-## Examples
-
-Input: `Take ownership of the current work`
-
-Output:
-
-```text
-owner/repo#42 · VERIFIED · MERGE_SHA · https://example.com/path · COMMENT_URL
-```
-
-Input: `The code is pushed, watch it through deploy`
-
-Output:
-
-```text
-owner/repo@REVISION · BLOCKED · chore: correct Linux artifact path failed three times
-```

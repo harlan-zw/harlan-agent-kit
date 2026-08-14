@@ -1,0 +1,44 @@
+{
+  "schema_version": 4,
+  "job_id": "dashboard-0813-0911",
+  "created": "2026-08-13T09:25:00Z",
+  "git_hash": "0163e3aebc0f01e3569d06b4e4c3ebfdc84cd65d",
+  "dev_port": 3210,
+  "pages_changed": [
+    "dashboard/app/pages/index.vue"
+  ],
+  "components_created": [],
+  "routes_to_test": [
+    "/"
+  ],
+  "design_system_changes": true,
+  "theme_name": "devtool",
+  "contract_path": ".claude/context/jobs/dashboard-0813-0911/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "partial",
+    "C9": "partial",
+    "C10": "met",
+    "C11": "met",
+    "C12": "met",
+    "C13": "met",
+    "C14": "met"
+  },
+  "self_assessment": {
+    "confidence": "medium",
+    "weakest_area": "The live error and repository empty states need one browser pass against a real failing API.",
+    "hardest_decision": "The repository table uses a bounded scroll region so agent work stays visible."
+  },
+  "has_client_animations": true,
+  "known_limitations": [
+    "The error and repository empty paths were not confirmed against a real failing service."
+  ],
+  "next_steps": [],
+  "dark_mode_relevant": true
+}

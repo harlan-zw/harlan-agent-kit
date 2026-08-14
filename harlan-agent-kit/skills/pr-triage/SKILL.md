@@ -13,6 +13,8 @@ Before repair edits, follow the [worktree isolation contract](../../references/w
 
 An existing worktree alone does not prove another agent is active.
 
+`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
+
 Discovery stays read only. Use `wt` for a repair worker only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
 
 ## Load contracts
@@ -29,6 +31,10 @@ Run `scripts/discover-prs.sh` from this skill directory.
 
 It returns every human-authored open PR in the allowed base repositories. Exclude GitHub Apps and bot accounts unless the user requests `--include-bots`.
 
+Skip automated authors before dispatch, review attempts, or comments. Do not post a skip status.
+
+For an author outside configured `writable_pr_authors`, wait for exact-Revision Review Approval in `harlan-github-agent`. Do not create a status comment before Approval. Require separate fix Approval after open findings and before edits.
+
 If discovery reaches GitHub's 1,000 result cap, stop before mutations and report incomplete discovery.
 
 ## Process the backlog
@@ -37,20 +43,25 @@ Process one PR at a time. Parallelize read-only GitHub queries when useful.
 
 For each PR, run the complete `adversarial-review` workflow. A PR is unfinished until its marked bot comment is confirmed on GitHub.
 
-For a personal repository mapped under `~/sites`, use `pr-owner` by convention unless repository policy or the user disables it. Other PRs stop after adversarial review.
+Treat one trusted marked comment for the current head commit as the active review. Never dispatch a second agent for that head commit.
 
-Continue to the next PR after a confirmed `PASS`, `PENDING`, or `BLOCKED` status. Preserve exact failure evidence.
+For a personal repository mapped under `~/sites`, use `take-ownership` by convention unless repository policy or the user disables it. Other PRs stop after adversarial review.
 
-Finish repairs across the backlog, then revisit pending CI once. Never sign off a stale SHA.
+Continue to the next PR after a confirmed `READY`, `WAITING`, or `BLOCKED` status. Preserve exact failure evidence.
+
+Finish repairs across the backlog, then revisit `WAITING` pull requests once. Never sign off a stale SHA.
+
+When required CI also fails on the current base of an owned repository, dispatch one focused baseline repair worker. Open its repair pull request, link it from the original PR status, and revisit the original after merge.
 
 ## Return the merge queue
 
-Sort by confidence descending and group results into high, medium, and low confidence.
+List `READY` pull requests first, sorted by confidence. Then list `WAITING` and
+`BLOCKED` pull requests without confidence scores.
 
 ```text
 Confidence | PR | Outcome | Checked | Next action
-96/100 high | owner/repo#42 | PASS | Base, review, tests, CI | Merge after human glance
-39/100 low | owner/repo#17 | BLOCKED | Review passed; CI failed | Fix Linux job
+96/100 high | owner/repo#42 | READY | Base, review, tests, CI | Human merge decision
+— | owner/repo#17 | BLOCKED | Review complete; CI failed | Fix Linux job
 ```
 
 Include skipped PRs and the exact safety reason. Never merge unless the user separately asks.

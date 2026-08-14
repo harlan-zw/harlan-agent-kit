@@ -1,0 +1,41 @@
+{
+  "schema_version": 4,
+  "job_id": "agent-queue-dashboard-0813-2104",
+  "created": "2026-08-13T11:17:04Z",
+  "git_hash": "0163e3aebc0f01e3569d06b4e4c3ebfdc84cd65d",
+  "dev_port": 3210,
+  "pages_changed": ["app/pages/index.vue"],
+  "components_created": [],
+  "routes_to_test": ["/"],
+  "design_system_changes": true,
+  "theme_name": "devtool",
+  "contract_path": ".claude/context/jobs/agent-queue-dashboard-0813-2104/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met",
+    "C10": "met",
+    "C11": "met",
+    "C12": "met",
+    "C13": "met",
+    "C14": "met",
+    "C15": "met",
+    "C16": "met",
+    "C17": "met"
+  },
+  "self_assessment": {
+    "confidence": "high",
+    "weakest_area": "The automatic review dispatcher remains outside this UI change.",
+    "hardest_decision": "The Queue excludes current READY reviews and orders human decisions before runnable review work."
+  },
+  "has_client_animations": false,
+  "known_limitations": ["Automatic review dispatch remains outside this UI change."],
+  "next_steps": [],
+  "dark_mode_relevant": true
+}
