@@ -1,0 +1,42 @@
+{
+  "schema_version": 4,
+  "job_id": "dashboard-cancel-0814-0309",
+  "created": "2026-08-14T03:19:19+10:00",
+  "git_hash": "0163e3aebc0f01e3569d06b4e4c3ebfdc84cd65d",
+  "dev_port": 45231,
+  "pages_changed": [
+    "dashboard/app/pages/index.vue",
+    "dashboard/app/pages/flow.vue"
+  ],
+  "components_created": [],
+  "routes_to_test": [
+    "/",
+    "/flow"
+  ],
+  "design_system_changes": false,
+  "theme_name": "DevTool",
+  "contract_path": ".claude/context/jobs/dashboard-cancel-0814-0309/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met",
+    "C10": "met"
+  },
+  "self_assessment": {
+    "confidence": "high",
+    "weakest_area": "The browser check rendered live controls but did not cancel real queued work.",
+    "hardest_decision": "Cancellation uses a durable marker so later polls cannot restart the same task."
+  },
+  "has_client_animations": false,
+  "known_limitations": [
+    "No bulk cancellation or undo."
+  ],
+  "next_steps": [],
+  "dark_mode_relevant": true
+}

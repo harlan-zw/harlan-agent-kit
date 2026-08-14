@@ -1,0 +1,37 @@
+{
+  "job_id": "flow-dashboard-0814-0201",
+  "commit": "0163e3aebc0f01e3569d06b4e4c3ebfdc84cd65d",
+  "completed_at": "2026-08-14T02:14:02+10:00",
+  "dev_port": 45231,
+  "route": "/flow",
+  "theme": "DevTool",
+  "changed_pages": [
+    "dashboard/app/pages/index.vue",
+    "dashboard/app/pages/flow.vue"
+  ],
+  "criteria": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met",
+    "C10": "met",
+    "C11": "met"
+  },
+  "verification": {
+    "tests": "116 passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "browser": "1440px and 375px passed without console errors or overflow"
+  },
+  "confidence": "high",
+  "weakest_area": "The map is static documentation, not a live execution trace.",
+  "known_limitations": [
+    "Review fixes, issue implementation, Claude review, and deployment ownership remain unconnected service paths."
+  ]
+}
