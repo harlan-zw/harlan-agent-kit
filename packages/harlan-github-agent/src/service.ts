@@ -145,6 +145,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const recovered = store.recoverInterruptedAgentTasks(startedAt)
     if (recovered > 0)
       options.logger.info(`Recovered ${recovered} interrupted agent tasks.`)
+    // Repositories GitHub is answering again get back the recovery budget an
+    // outage spent, before the first pass decides what to requeue.
+    const stale = store.resolveStaleTaskIncidents(startedAt)
+    if (stale > 0)
+      options.logger.info(`Closed ${stale} incidents whose task can no longer run.`)
+    const freed = store.restoreOutageRecoveryBudget(startedAt)
+    if (freed > 0)
+      options.logger.info(`Restored the recovery budget of ${freed} tasks that a GitHub outage exhausted.`)
     const retried = store.retryRecoverableWorkerFailures(startedAt)
     if (retried > 0)
       options.logger.info(`Retried ${retried} tasks after recoverable controller failures were repaired.`)
@@ -412,6 +420,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // restart is what kept a transient GitHub reject holding a review down
       // for a whole day.
       if (config.mutationsEnabled) {
+        store.resolveStaleTaskIncidents(now().toISOString())
         const retried = store.retryRecoverableWorkerFailures(now().toISOString())
         if (retried > 0)
           options.logger.info(`Requeued ${retried} tasks after recoverable failures.`)

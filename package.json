@@ -1,7 +1,7 @@
 {
   "name": "harlan-agent-kit",
   "type": "module",
-  "packageManager": "pnpm@11.21.0",
+  "packageManager": "pnpm@11.22.0",
   "scripts": {
     "build": "pnpm --filter harlan-github-agent build",
     "lint": "eslint .",
@@ -9,6 +9,9 @@
     "test": "pnpm --filter harlan-github-agent test:run",
     "typecheck": "pnpm --filter harlan-github-agent typecheck",
     "check:context": "scripts/check-agent-context.sh",
+    "service:update": "bash scripts/service.sh update",
+    "service:restart": "bash scripts/service.sh restart",
+    "service:status": "bash scripts/service.sh status",
     "test:worktree-claim": "bash harlan-agent-kit/scripts/worktree-claim.test.sh",
     "test:wt-only": "bash harlan-agent-kit/hooks/wt-only.test.sh",
     "release": "node --experimental-strip-types scripts/release.ts"

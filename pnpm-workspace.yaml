@@ -6,7 +6,7 @@ trustPolicyIgnoreAfter: 262800
 catalog:
   '@antfu/eslint-config': ^9.3.0
   '@openai/codex-sdk': ^0.147.0
-  '@iconify-json/lucide': ^1.2.81
+  '@iconify-json/lucide': ^1.2.123
   '@iconify-json/simple-icons': ^1.2.93
   '@nuxt/fonts': ^0.14.0
   '@nuxt/icon': ^2.5.0
@@ -24,7 +24,7 @@ catalog:
   srvx: ^0.12.5
   typescript: 6.0.3
   vitest: ^4.1.10
-  vue-tsc: ^3.3.9
+  vue-tsc: ^3.3.10
   yaml: ^2.9.0
 
 allowBuilds:
