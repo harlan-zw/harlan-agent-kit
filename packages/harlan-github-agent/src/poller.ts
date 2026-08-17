@@ -14,6 +14,11 @@ export interface PollerOptions {
    * stop the poller for the life of the process while it still looked healthy.
    */
   timeoutMilliseconds?: number
+  /**
+   * How many abandoned passes may still be settling before the poller stops
+   * starting new ones. Defaults to 1, so at most two passes ever overlap.
+   */
+  maximumAbandonedPasses?: number
   poll: (signal: AbortSignal) => Promise<void>
   random?: () => number
   onError: (error: unknown) => void
@@ -25,17 +30,29 @@ export function createPoller(options: PollerOptions): Poller {
   let active: Promise<void> = Promise.resolve()
   let controller: AbortController | undefined
   let consecutiveFailures = 0
+  /** Passes that ran out of time and are still settling in the background. */
+  let abandoned = 0
   const timeoutMilliseconds = options.timeoutMilliseconds ?? 10 * 60_000
+  const maximumAbandonedPasses = options.maximumAbandonedPasses ?? 1
 
   /**
    * Resolves when the pass finishes or when it runs out of time.
    *
-   * The abandoned pass is aborted and left to settle on its own. Waiting for it
-   * would reintroduce the wedge this guard exists to prevent.
+   * An abandoned pass is aborted and left to settle on its own. Waiting for it
+   * would reintroduce the wedge this guard exists to prevent, so instead the
+   * poller counts it and stops starting new passes once too many are
+   * outstanding. That bounds how many passes can overlap without ever letting
+   * one hung request stop the loop for good.
    */
   const withTimeout = (pass: Promise<void>, abort: () => void): Promise<void> => new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       abort()
+      abandoned += 1
+      void pass.catch(() => {
+        // The abandoned pass reports through the rejection below, not twice.
+      }).finally(() => {
+        abandoned -= 1
+      })
       reject(new Error(`One poll pass exceeded ${Math.round(timeoutMilliseconds / 1_000)} seconds and was abandoned.`))
     }, timeoutMilliseconds)
     timeout.unref()
@@ -43,6 +60,12 @@ export function createPoller(options: PollerOptions): Poller {
   })
 
   const runNow = (): Promise<void> => {
+    if (abandoned > maximumAbandonedPasses) {
+      options.onError(new Error(`${abandoned} abandoned poll passes are still settling, so this pass was skipped.`))
+      // Resolved, never the pending pass. Returning `active` here would stop the
+      // caller rescheduling until the hung pass settled, which is the wedge.
+      return Promise.resolve()
+    }
     const passController = new AbortController()
     controller = passController
     active = active

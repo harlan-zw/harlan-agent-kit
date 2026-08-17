@@ -224,3 +224,84 @@ describe('recoverable failure budget', () => {
     expect(store.retryRecoverableWorkerFailures('2026-08-18T01:00:00.000Z')).toBe(0)
   })
 })
+
+describe('task incidents from the mutation journal', () => {
+  /**
+   * Conflict resolution, repair, Baseline repair, and issue work all settle
+   * through `failTask`, which is a different path from the review and triage
+   * tasks. Both have to reach the System pane or half the work fails silently.
+   */
+  it('names a failed conflict resolution task', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'conflicting-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'conflicting' }),
+    })
+
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-18T00:00:0${attempt}.000Z`
+      const task = store.claimNextConflictTask(`worker-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected conflict resolution attempt ${attempt}.`)
+      store.failTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'The worker changed a file that was not conflicted: src/main.rs.',
+      })
+    }
+
+    const incidents = store.listIncidents()
+    expect(incidents).toHaveLength(1)
+    expect(incidents[0]).toMatchObject({
+      scope: { _tag: 'Task', repository: 'harlan-zw/example', itemNumber: 24 },
+      operation: 'resolve_conflict',
+      kind: 'unknown',
+      severity: 'error',
+      recovery: { _tag: 'ActionRequired' },
+    })
+  })
+
+  it('clears a conflict resolution incident once the task completes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'recovering-conflict',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'conflicting' }),
+    })
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-18T00:00:0${attempt}.000Z`
+      const failing = store.claimNextConflictTask(`worker-${attempt}`, at, 10_000)
+      if (failing === null)
+        throw new Error(`Expected conflict resolution attempt ${attempt}.`)
+      store.failTask({
+        taskId: failing.id,
+        workerId: failing.state.workerId,
+        fence: failing.state.fence,
+        at,
+        reason: 'fetch failed',
+      })
+    }
+    expect(store.listIncidents()).toHaveLength(1)
+
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T00:00:05.000Z')).toBe(1)
+    const recovered = store.claimNextConflictTask('worker-4', '2026-08-18T00:00:06.000Z', 10_000)
+    if (recovered === null)
+      throw new Error('Expected the recovered conflict resolution task.')
+    store.completeTask({
+      taskId: recovered.id,
+      workerId: recovered.state.workerId,
+      fence: recovered.state.fence,
+      at: '2026-08-18T00:00:07.000Z',
+      evidence: 'resolved',
+    })
+
+    expect(store.listIncidents()).toEqual([])
+  })
+})

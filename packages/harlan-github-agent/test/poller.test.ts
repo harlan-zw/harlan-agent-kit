@@ -66,3 +66,47 @@ describe('poller', () => {
     }
   })
 })
+
+describe('abandoned pass containment', () => {
+  it('skips a pass instead of piling onto passes that never settle', async () => {
+    vi.useFakeTimers()
+    try {
+      const errors: string[] = []
+      let started = 0
+      const release: Array<() => void> = []
+      const poller = createPoller({
+        intervalMilliseconds: 1_000,
+        // Keep backoff flat so the assertions describe containment, not delay.
+        maxIntervalMilliseconds: 1_000,
+        timeoutMilliseconds: 2_000,
+        maximumAbandonedPasses: 1,
+        random: () => 0,
+        onError: error => errors.push(String(error)),
+        poll: () => {
+          started += 1
+          return new Promise<void>((resolve) => {
+            release.push(resolve)
+          })
+        },
+      })
+
+      poller.start()
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      // One abandoned pass is tolerated, so at most two ever run at once.
+      expect(started).toBe(2)
+      expect(errors.some(error => error.includes('was skipped'))).toBe(true)
+      // A skip still reschedules, so the loop is slowed and never stopped.
+      expect(errors.filter(error => error.includes('was skipped')).length).toBeGreaterThan(1)
+
+      release.forEach(resolve => resolve())
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(started).toBeGreaterThan(2)
+
+      poller.stop().catch(() => undefined)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+})

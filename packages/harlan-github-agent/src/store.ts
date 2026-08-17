@@ -5060,8 +5060,13 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
           AND lease_expires_at > ?
           AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id)
       `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
-      if (result.changes === 1)
+      if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
+        database.prepare(`
+          UPDATE incidents SET resolved_at = ?
+          WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?
+        `).run(input.at, input.taskId)
+      }
       database.exec('COMMIT')
       return result.changes === 1
     }
@@ -5120,6 +5125,11 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         fence: input.fence,
         at: input.at,
       })
+      // Conflict resolution, repair, Baseline repair, and issue work all fail
+      // through here. Without this they never reached the System pane, so half
+      // the Task kinds could die silently.
+      if (!retry)
+        recordTaskIncident(database, input.taskId, input.reason, input.at)
       database.exec('COMMIT')
       return retry ? 'Retrying' : 'Failed'
     }
