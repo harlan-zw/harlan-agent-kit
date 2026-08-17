@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createIssueWorktreeManager } from '../src/worktree.ts'
-import { issueSubject, repositoryMapping } from './fixtures.ts'
+import { issueItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -47,13 +47,13 @@ describe('issue worktree', () => {
       updatedAt: '2026-08-13T01:00:00.000Z',
       state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
       repositoryMapping: mapping,
-      issue: issueSubject(),
+      issue: issueItem(),
     }
     const manager = createIssueWorktreeManager({
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }) },
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
     const prepared = await manager.prepare(task, new AbortController().signal)
     if (prepared._tag === 'Err')

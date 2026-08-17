@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
 import { err } from '../src/result.ts'
 import { createWorkerTaskScheduler } from '../src/worker-task-scheduler.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 afterEach(() => vi.useRealTimers())
 
@@ -44,7 +44,7 @@ describe('agent task scheduler', () => {
       state: { _tag: 'Running', workerId: 'review-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
       updatedAt: '2026-08-13T01:00:00.000Z',
       repositoryMapping: repositoryMapping(),
-      pullRequest: pullRequestSubject(),
+      pullRequest: pullRequestItem(),
       rerun: { _tag: 'NotRequested' },
     }
     let stopped = false
@@ -94,7 +94,7 @@ describe('agent task scheduler', () => {
       state: { _tag: 'Running', workerId: 'review-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
       updatedAt: '2026-08-13T01:00:00.000Z',
       repositoryMapping: repositoryMapping(),
-      pullRequest: pullRequestSubject(),
+      pullRequest: pullRequestItem(),
       rerun: { _tag: 'NotRequested' },
     }
     const failures: string[] = []

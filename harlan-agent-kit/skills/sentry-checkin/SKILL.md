@@ -73,6 +73,8 @@ python3 scripts/sentry_api.py --org ORG snapshot --project PROJECT \
 
 The wrapper parses exact numeric and short IDs, writes a checksum, and stops at the CLI row cap. Treat `title_hint` as a hint because the CLI truncates long titles. Issue evidence supplies the complete title.
 
+The CLI paginates a live query, so one issue can appear on two pages. The wrapper keeps the first row per ID and lists every dropped ID in `duplicate_ids_dropped`. Report a non-empty list with the run. `issue_ids_sha256` covers the unique IDs in numeric order, so it compares directly with the `ledger.py audit` checksum.
+
 The snapshot is the run contract. New issues after discovery belong to the next run. Disappearing issues still need a ledger disposition.
 
 ## Delegate one agent per site

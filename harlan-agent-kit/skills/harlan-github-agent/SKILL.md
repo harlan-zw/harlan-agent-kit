@@ -19,7 +19,11 @@ Require an explicit configuration file. Start from `config.example.yml` only whe
 
 Use `github.allowed_owners` before GitHub App installation access. Ignore installations from every other GitHub owner. Scan only immediate directories under `~/pkg` and `~/sites` to find trusted local checkouts. Treat configured repositories as policy overrides. Never act on a checkout without matching its GitHub origin and App installation.
 
-Review every tracked pull request authored by `harlan-zw` without Approval. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Remove the label and confirm removal before storing Approval for that head commit. Never let a persistent label approve later commits.
+Review every tracked pull request authored by `harlan-zw` without Approval. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Keep the label in place, so a later head commit stays approved for a fresh review. Bind Approval to the exact head commit; never let the label approve a head commit twice.
+
+Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
+
+Start no new issue work above `max_open_pull_requests` open pull requests. Keep review, repair, and conflict fixes running.
 
 Enable issue triage by default on owned repositories. Keep it disabled on maintained repositories unless explicit policy enables it.
 
@@ -41,7 +45,7 @@ Require every enabled discovered repository mapping to pass these checks:
 6. Keep `take_ownership` disabled unless the repository is owned and mapped below `~/sites`.
 7. Require explicit pull request authors and branch prefixes for conflict publication.
 8. Require one fixed `issue_cutoff` date. Never calculate a rolling cutoff.
-9. If mutation Workers are enabled, require `codex login status`, `gh auth status`, and `wt --version` to pass. Never require `CODEX_API_KEY`.
+9. If mutation Workers are enabled, require `gh auth status` and `wt --version` to pass. For the `codex` Agent provider also require `codex login status`. For the `opencode` Agent provider require `opencode auth list` to list a credential. Never require `CODEX_API_KEY`.
 
 Run package tests, typecheck, and build after changing service code.
 
@@ -56,16 +60,24 @@ pnpm --filter harlan-github-agent exec node --experimental-strip-types src/cli.t
 
 Use `http://harlan-github-agent.local/`. Inspect `/health` first, then `/api/state`.
 
-Workers run as normal local Codex sessions inside disposable Git worktrees. They inherit Harlan's global Codex context, installed skills, environment, ChatGPT login, and authenticated `gh` client. Use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for conflict resolution, issue triage, issue work, and Baseline repair.
+Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and authenticated `gh` client.
+
+`agent.provider` selects one Agent provider for every Worker. It defaults to `codex`.
+
+For `codex`, use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for conflict resolution, issue triage, issue work, and Baseline repair.
+
+For `opencode`, use `opencode-go/deepseek-v4-flash` at the `high` reasoning variant for every role.
+
+A saved session belongs to the Agent provider that created it. Switching providers starts new sessions.
 
 The controller creates every agent worktree from its mapped repository checkout with `wt`. The global Worktrunk configuration places it beside the checkout as `<repo>.<branch-slug>`. Workers must not create, enter, or remove worktrees themselves.
 
-Limit reviews, issue triage, and conflict fixes to three active Codex agents in total. Show that limit in the dashboard profile.
+Limit reviews, issue triage, and conflict fixes to three active agents in total. Show that limit in the dashboard profile.
 
 Inspect one pull request's review Attempts and Publications through
 `/api/reviews?repository=OWNER%2FREPOSITORY&pull_request=NUMBER`.
 
-Use `Eject` to cancel one active automated Task and open its saved Codex session in Ghostty. The terminal resumes after the active SDK turn stops.
+Use `Eject` to cancel one active automated Task and open its saved agent session in Ghostty. The terminal resumes after the active turn stops.
 
 Treat the SQLite journal as service-owned state. Do not edit it manually.
 
@@ -106,7 +118,7 @@ Resume the same Worker for later commits on the same pull request. Never reuse a
 
 For an issue author outside `writable_pr_authors`, wait for Harlan to add `harlan-agent-review` or select `Approve`. Remove the label and confirm removal before storing Approval. A changed issue state cancels that authority.
 
-Skip issues and pull requests from GitHub Apps, bot accounts, and every login containing `bot`, case-insensitive. Skip before creating attempts, tasks, or comments.
+Skip issues from GitHub Apps, bot accounts, and every login containing `bot`, case-insensitive. Apply the same rule to pull requests unless their exact login appears in `writable_pr_authors`. Skip before creating attempts, tasks, or comments.
 
 For an author outside `writable_pr_authors`, wait for Harlan to add `harlan-agent-review` or select `Review and repair`. Bind Approval to the exact head commit. This Approval covers review and verified repairs in one workflow.
 
@@ -152,7 +164,7 @@ Use repository-scoped GitHub App tokens. Mint read and write tokens separately.
 
 Publish only pinned controller artifacts. Recheck pull request state, branch protection, artifact integrity, and the database lease before each push.
 
-Run Codex workers as normal local sessions with the prepared Git worktree as their working directory. Permit `gh` reads for GitHub history and context.
+Run Workers as normal local agent sessions with the prepared Git worktree as their working directory. Permit `gh` reads for GitHub history and context.
 
 Review and repair Approval and Issue Approval permit worktree edits. They do not permit workers to write GitHub state, merge, or change the default branch.
 

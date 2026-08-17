@@ -1,11 +1,13 @@
-import type { DashboardSnapshot, GitHubIssueSubject, GitHubPullRequestSubject, RepositoryMapping } from '../src/types.ts'
-import { CODEX_WORKER_PROFILE } from '../src/codex-worker-profile.ts'
+import type { AgentEvent, AgentProvider, AgentProviderName, AgentTurnRequest } from '../src/agent-provider.ts'
+import type { DashboardSnapshot, GitHubIssueItem, GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 
 export function repositoryMapping(overrides: Partial<RepositoryMapping> = {}): RepositoryMapping {
   return {
     github: 'harlan-zw/example',
     checkout: '/home/harlan/pkg/example',
     enabled: true,
+    authentication: 'app',
     ownership: 'owned',
     defaultBranch: 'main',
     writablePullRequestAuthors: ['harlan-zw'],
@@ -19,7 +21,7 @@ export function repositoryMapping(overrides: Partial<RepositoryMapping> = {}): R
   }
 }
 
-export function issueSubject(overrides: Partial<GitHubIssueSubject> = {}): GitHubIssueSubject {
+export function issueItem(overrides: Partial<GitHubIssueItem> = {}): GitHubIssueItem {
   return {
     kind: 'issue',
     approvalLabels: [],
@@ -35,10 +37,11 @@ export function issueSubject(overrides: Partial<GitHubIssueSubject> = {}): GitHu
   }
 }
 
-export function pullRequestSubject(overrides: Partial<GitHubPullRequestSubject> = {}): GitHubPullRequestSubject {
+export function pullRequestItem(overrides: Partial<GitHubPullRequestItem> = {}): GitHubPullRequestItem {
   return {
     kind: 'pull_request',
     approvalLabels: [],
+    autoMerge: false,
     repository: 'harlan-zw/example',
     number: 24,
     state: 'open',
@@ -66,12 +69,47 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     status: 'ready',
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
-    workerProfile: CODEX_WORKER_PROFILE,
+    agentProfile: CODEX_AGENT_PROFILE,
     agents: [],
+    incidents: [],
     queue: [],
     repositories: [],
-    subjects: [],
+    items: [],
     tasks: [],
     ...overrides,
   }
+}
+
+export interface ProviderCapture {
+  requests: AgentTurnRequest[]
+}
+
+/**
+ * One provider that replays a fixed event stream and records every request,
+ * so worker tests assert behaviour instead of a vendor transport.
+ */
+export function stubProvider(
+  events: AgentEvent[],
+  capture: ProviderCapture = { requests: [] },
+  name: AgentProviderName = 'codex',
+): AgentProvider {
+  return {
+    name,
+    runTurn: (request) => {
+      capture.requests.push(request)
+      return (async function* () {
+        yield* events
+      })()
+    },
+  }
+}
+
+/** The usual shape of a successful turn: a session, one command, one result. */
+export function turnEvents(response: unknown, command = 'pnpm test'): AgentEvent[] {
+  return [
+    { _tag: 'SessionStarted', sessionId: 'session-1' },
+    { _tag: 'CommandStarted', command },
+    { _tag: 'Message', text: JSON.stringify(response) },
+    { _tag: 'TurnCompleted' },
+  ]
 }

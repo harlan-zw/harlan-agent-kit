@@ -7,6 +7,13 @@ export interface Poller {
 export interface PollerOptions {
   intervalMilliseconds: number
   maxIntervalMilliseconds?: number
+  /**
+   * How long one pass may take before the poller abandons it.
+   *
+   * Passes run on one chained promise, so a request that never settles used to
+   * stop the poller for the life of the process while it still looked healthy.
+   */
+  timeoutMilliseconds?: number
   poll: (signal: AbortSignal) => Promise<void>
   random?: () => number
   onError: (error: unknown) => void
@@ -18,11 +25,31 @@ export function createPoller(options: PollerOptions): Poller {
   let active: Promise<void> = Promise.resolve()
   let controller: AbortController | undefined
   let consecutiveFailures = 0
+  const timeoutMilliseconds = options.timeoutMilliseconds ?? 10 * 60_000
+
+  /**
+   * Resolves when the pass finishes or when it runs out of time.
+   *
+   * The abandoned pass is aborted and left to settle on its own. Waiting for it
+   * would reintroduce the wedge this guard exists to prevent.
+   */
+  const withTimeout = (pass: Promise<void>, abort: () => void): Promise<void> => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      abort()
+      reject(new Error(`One poll pass exceeded ${Math.round(timeoutMilliseconds / 1_000)} seconds and was abandoned.`))
+    }, timeoutMilliseconds)
+    timeout.unref()
+    pass.then(resolve, reject).finally(() => clearTimeout(timeout))
+  })
 
   const runNow = (): Promise<void> => {
-    controller = new AbortController()
+    const passController = new AbortController()
+    controller = passController
     active = active
-      .then(() => options.poll(controller?.signal ?? AbortSignal.abort()))
+      .then(() => withTimeout(
+        options.poll(passController.signal),
+        () => passController.abort(),
+      ))
       .then(() => {
         consecutiveFailures = 0
       })

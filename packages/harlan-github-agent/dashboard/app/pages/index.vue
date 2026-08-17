@@ -1,24 +1,32 @@
 <script setup lang="ts">
+import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type {
   ActiveAgent,
   AgentTask,
   DashboardSnapshot,
+  ItemSummary,
   PullRequestApprovalKind,
   QueueEntry,
   ReviewAgent,
-  SubjectSummary,
 } from '../../../src/types.ts'
 import { formatTimeAgo, useClipboard, useDocumentVisibility, useEventListener, useEventSource, useLocalStorage, useNow } from '@vueuse/core'
-import { CODEX_WORKER_PROFILE } from '../../../src/codex-worker-profile.ts'
+import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import {
   activeAgentProgress,
   activeAgentRole,
+  agentRoleLabels,
   approvalConsequence,
   avatarUrl,
   buildHistory,
   decisionEntries,
   decisionKey,
   gateTone,
+  incidentEntries,
+  incidentKindLabel,
+  incidentRecoveryLabel,
+  incidentScopeLabel,
+  incidentTone,
+  incidentUrl,
   isProgressStalled,
   isSnapshotStale,
   queueDetail,
@@ -36,7 +44,6 @@ import {
   taskStateTone,
   taskSubjectUrl,
   upNextEntries,
-  workerRoleLabels,
 } from '../utils/dashboard.ts'
 
 const reviewGateNames = ['head', 'merge', 'metadata', 'review', 'verification', 'ci'] as const
@@ -46,11 +53,12 @@ function emptySnapshot(): DashboardSnapshot {
     status: 'starting',
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
-    workerProfile: CODEX_WORKER_PROFILE,
+    agentProfile: CODEX_AGENT_PROFILE,
     agents: [],
+    incidents: [],
     queue: [],
     repositories: [],
-    subjects: [],
+    items: [],
     tasks: [],
   }
 }
@@ -123,7 +131,24 @@ const queueContext = computed(() => ({
   agentsPaused: snapshot.value.agentControl._tag === 'Paused',
 }))
 
+/** Provider marks, so the running agent runtime is readable at a glance. */
+const providerIcons: Record<AgentProviderName, string> = {
+  codex: 'i-simple-icons-openai',
+  opencode: 'i-simple-icons-opencode',
+}
+
+const providerLabels: Record<AgentProviderName, string> = {
+  codex: 'Codex',
+  opencode: 'opencode',
+}
+
+const activeProvider = computed(() => snapshot.value.agentProfile.provider)
+
 const unhealthyRepositories = computed(() => snapshot.value.repositories.filter(repository => repository.lastError !== null).length)
+
+const incidents = computed(() => incidentEntries(snapshot.value.incidents))
+/** Incidents the controller will not clear on its own. */
+const blockingIncidents = computed(() => incidents.value.filter(incident => incident.recovery._tag !== 'Retrying').length)
 
 const filteredRepositories = computed(() => {
   const query = repositoryQuery.value.trim().toLowerCase()
@@ -132,8 +157,8 @@ const filteredRepositories = computed(() => {
     : snapshot.value.repositories.filter(repository => repository.github.toLowerCase().includes(query))
 })
 const filteredSubjects = computed(() => subjectFilter.value === 'all'
-  ? snapshot.value.subjects
-  : snapshot.value.subjects.filter(subject => subject.kind === subjectFilter.value))
+  ? snapshot.value.items
+  : snapshot.value.items.filter(subject => subject.kind === subjectFilter.value))
 
 const connectionLabel = computed(() => {
   if (liveStatus.value === 'OPEN')
@@ -201,11 +226,11 @@ function toggleReview(agent: ReviewAgent, index: number): void {
   }
 }
 
-function subjectKind(subject: SubjectSummary): string {
+function subjectKind(subject: ItemSummary): string {
   return subject.kind === 'issue' ? 'Issue' : 'Pull request'
 }
 
-function approvalKey(subject: Extract<SubjectSummary, { kind: 'pull_request' }>, kind: PullRequestApprovalKind): string {
+function approvalKey(subject: Extract<ItemSummary, { kind: 'pull_request' }>, kind: PullRequestApprovalKind): string {
   return `${subject.repository}:${subject.number}:${subject.revisionId}:${kind}`
 }
 
@@ -219,10 +244,10 @@ function queueApprovalError(entry: QueueEntry): string | undefined {
   return approvalErrors.value[`${entry.repository}:${entry.number}:${entry.revisionId}`]
 }
 
-function queuePullRequest(entry: QueueEntry): Extract<SubjectSummary, { kind: 'pull_request' }> | undefined {
+function queuePullRequest(entry: QueueEntry): Extract<ItemSummary, { kind: 'pull_request' }> | undefined {
   if (entry.kind !== 'pull_request')
     return undefined
-  return snapshot.value.subjects.find((subject): subject is Extract<SubjectSummary, { kind: 'pull_request' }> =>
+  return snapshot.value.items.find((subject): subject is Extract<ItemSummary, { kind: 'pull_request' }> =>
     subject.kind === 'pull_request'
     && subject.repository === entry.repository
     && subject.number === entry.number
@@ -244,8 +269,8 @@ function rerunKey(repository: string, pullRequestNumber: number, revisionId: str
   return `${repository}:${pullRequestNumber}:${revisionId}`
 }
 
-function currentReviewSubject(agent: ReviewAgent): Extract<SubjectSummary, { kind: 'pull_request' }> | undefined {
-  return snapshot.value.subjects.find((subject): subject is Extract<SubjectSummary, { kind: 'pull_request' }> =>
+function currentReviewSubject(agent: ReviewAgent): Extract<ItemSummary, { kind: 'pull_request' }> | undefined {
+  return snapshot.value.items.find((subject): subject is Extract<ItemSummary, { kind: 'pull_request' }> =>
     subject.kind === 'pull_request'
     && subject.repository === agent.repository
     && subject.number === agent.pullRequestNumber
@@ -317,7 +342,7 @@ async function setAgentControl(action: 'pause' | 'resume'): Promise<void> {
     })
 }
 
-async function approvePullRequest(subject: Extract<SubjectSummary, { kind: 'pull_request' }>, kind: PullRequestApprovalKind): Promise<void> {
+async function approvePullRequest(subject: Extract<ItemSummary, { kind: 'pull_request' }>, kind: PullRequestApprovalKind): Promise<void> {
   const pendingKey = approvalKey(subject, kind)
   const subjectKey = `${subject.repository}:${subject.number}:${subject.revisionId}`
   approvalPending.value = pendingKey
@@ -623,12 +648,25 @@ useHead({
             />
             <span>{{ connectionLabel }}</span>
             <span aria-hidden="true" class="text-dimmed">·</span>
-            <span>{{ activeAgents.length }}/{{ snapshot.workerProfile.maximumActiveAgents }} agents</span>
+            <span>{{ activeAgents.length }}/{{ snapshot.agentProfile.maximumActiveAgents }} agents</span>
+            <span aria-hidden="true" class="text-dimmed">·</span>
+            <span class="inline-flex items-center gap-1.5" :title="`Agent provider: ${providerLabels[activeProvider]}`">
+              <UIcon :name="providerIcons[activeProvider]" class="size-4 shrink-0" aria-hidden="true" />
+              <span>{{ providerLabels[activeProvider] }}</span>
+            </span>
             <span aria-hidden="true" class="text-dimmed">·</span>
             <span :class="snapshot.mutationsEnabled ? statusClass('warning') : undefined">writes {{ snapshot.mutationsEnabled ? 'on' : 'off' }}</span>
             <template v-if="snapshot.mutationsEnabled">
               <span aria-hidden="true" class="text-dimmed">·</span>
               <span :class="snapshot.agentControl._tag === 'Paused' ? statusClass('warning') : undefined">{{ agentControlLabel }}</span>
+            </template>
+            <template v-if="incidents.length > 0">
+              <span aria-hidden="true" class="text-dimmed">·</span>
+              <a
+                href="#system"
+                class="entity-link"
+                :class="statusClass(blockingIncidents > 0 ? 'error' : 'warning')"
+              >{{ incidents.length }} incident{{ incidents.length === 1 ? '' : 's' }}</a>
             </template>
             <template v-if="unhealthyRepositories > 0">
               <span aria-hidden="true" class="text-dimmed">·</span>
@@ -708,6 +746,56 @@ useHead({
       </div>
 
       <div :class="isStale ? 'stale-content' : undefined">
+        <!-- Zone 0: what is currently wrong. Absent when nothing is. -->
+        <section v-if="incidents.length > 0" id="system" aria-labelledby="system-heading" class="mb-12 scroll-mt-20">
+          <div class="zone-header">
+            <h2 id="system-heading" class="field-label" :class="statusClass(blockingIncidents > 0 ? 'error' : 'warning')">
+              System
+            </h2>
+            <span class="font-mono text-sm" :class="statusClass(blockingIncidents > 0 ? 'error' : 'warning')">{{ incidents.length }}</span>
+            <hr class="zone-rule">
+          </div>
+
+          <ul class="grid gap-3" role="list">
+            <li
+              v-for="incident in incidents"
+              :key="incident.id"
+              class="rounded-md border p-4"
+              :class="incident.severity === 'error' ? 'border-error/40 bg-error/5' : 'border-warning/40 bg-warning/5'"
+            >
+              <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-sm">
+                    <span :class="statusClass(incidentTone(incident))">{{ incidentKindLabel(incident) }}</span>
+                    <span aria-hidden="true" class="text-dimmed">·</span>
+                    <a
+                      v-if="incidentUrl(incident)"
+                      :href="incidentUrl(incident)"
+                      target="_blank"
+                      rel="noreferrer"
+                      class="entity-link text-muted"
+                    >{{ incidentScopeLabel(incident) }}</a>
+                    <span v-else class="text-muted">{{ incidentScopeLabel(incident) }}</span>
+                    <span aria-hidden="true" class="text-dimmed">·</span>
+                    <span class="text-dimmed">{{ incident.operation }}</span>
+                  </div>
+                  <p class="mt-2 break-words text-sm text-muted">
+                    {{ incident.message }}
+                  </p>
+                </div>
+                <div class="flex flex-col gap-1 font-mono text-sm sm:items-end">
+                  <span :class="statusClass(incident.recovery._tag === 'Retrying' ? 'primary' : 'error')">
+                    {{ incidentRecoveryLabel(incident) }}
+                  </span>
+                  <span class="text-dimmed">
+                    {{ incident.occurrences }}&times; · {{ relativeTime(incident.lastSeenAt) }}
+                  </span>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </section>
+
         <!-- Zone 1: the only thing on the page that cannot resolve itself. Absent when empty. -->
         <section v-if="decisions.length > 0" id="decisions" aria-labelledby="decisions-heading" class="mb-12 scroll-mt-20">
           <div class="zone-header">
@@ -740,7 +828,7 @@ useHead({
                     <span aria-hidden="true">·</span>
                     <a :href="entry.subjectUrl" target="_blank" rel="noreferrer" class="entity-link">{{ entry.kind === 'issue' ? 'Issue' : 'PR' }} #{{ entry.number }}</a>
                   </div>
-                  <p v-if="entry.state._tag === 'NeedsAttention'" class="status-error mt-2 text-sm">
+                  <p v-if="entry.state._tag === 'ActionRequired'" class="status-error mt-2 text-sm">
                     {{ entry.state.reason }}
                   </p>
                   <p v-else class="mt-2 text-sm text-muted">
@@ -793,7 +881,7 @@ useHead({
             <h2 id="running-heading" class="field-label">
               Running now
             </h2>
-            <span class="font-mono text-sm text-dimmed">{{ activeAgents.length }}/{{ snapshot.workerProfile.maximumActiveAgents }}</span>
+            <span class="font-mono text-sm text-dimmed">{{ activeAgents.length }}/{{ snapshot.agentProfile.maximumActiveAgents }}</span>
             <hr class="zone-rule">
           </div>
 
@@ -813,6 +901,11 @@ useHead({
               <div class="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                 <p class="flex items-center gap-2.5 font-mono text-sm">
                   <span class="live-dot size-2 shrink-0 rounded-full bg-success" aria-hidden="true" />
+                  <UIcon
+                    :name="providerIcons[agent.provider]"
+                    class="size-4 shrink-0 text-dimmed"
+                    :aria-label="`${providerLabels[agent.provider]} agent`"
+                  />
                   <span class="font-medium">{{ activeAgentRole(agent) }}</span>
                   <span class="text-dimmed" aria-hidden="true">·</span>
                   <span class="text-muted tabular-nums">{{ duration(agent.startedAt) }}</span>
@@ -846,8 +939,8 @@ useHead({
                     :loading="cancelPending === agent.id"
                     :disabled="cancelPending !== undefined || ejectPending !== undefined"
                     :aria-label="confirmingCancel === agent.id
-                      ? `Confirm cancelling the task for ${agent.repository} ${agent.subjectKind === 'issue' ? 'issue' : 'pull request'} ${agent.subjectNumber}`
-                      : `Cancel task for ${agent.repository} ${agent.subjectKind === 'issue' ? 'issue' : 'pull request'} ${agent.subjectNumber}`"
+                      ? `Confirm cancelling the task for ${agent.repository} ${agent.subjectKind === 'issue' ? 'issue' : 'pull request'} ${agent.itemNumber}`
+                      : `Cancel task for ${agent.repository} ${agent.subjectKind === 'issue' ? 'issue' : 'pull request'} ${agent.itemNumber}`"
                     @click="requestCancel(agent.id)"
                   >
                     {{ confirmingCancel === agent.id ? 'Confirm cancel' : 'Cancel' }}
@@ -861,7 +954,7 @@ useHead({
               </a>
               <p class="mt-1.5 font-mono text-sm text-muted">
                 <a :href="agent.repositoryUrl" target="_blank" rel="noreferrer" class="entity-link">{{ agent.repository }}</a>
-                <span> · {{ agent.subjectKind === 'issue' ? 'Issue' : 'PR' }} #{{ agent.subjectNumber }}</span>
+                <span> · {{ agent.subjectKind === 'issue' ? 'Issue' : 'PR' }} #{{ agent.itemNumber }}</span>
               </p>
 
               <p class="mt-5 text-base">
@@ -1012,7 +1105,7 @@ useHead({
                   {{ confirmingCancel === queueTask(entry)!.id ? 'Confirm cancel' : 'Cancel' }}
                 </UButton>
                 <UButton
-                  v-else-if="entry.kind === 'pull_request' && entry.state._tag === 'Waiting'"
+                  v-else-if="entry.kind === 'pull_request' && entry.state._tag === 'Pending'"
                   size="sm"
                   color="neutral"
                   variant="ghost"
@@ -1232,7 +1325,7 @@ useHead({
             <h2 id="watching-heading" class="field-label">
               Watching
             </h2>
-            <span class="font-mono text-sm text-dimmed">{{ snapshot.repositories.length }} repositories · {{ snapshot.subjects.length }} open</span>
+            <span class="font-mono text-sm text-dimmed">{{ snapshot.repositories.length }} repositories · {{ snapshot.items.length }} open</span>
             <hr class="zone-rule">
           </div>
 
@@ -1376,10 +1469,13 @@ useHead({
     </main>
 
     <footer class="mx-auto flex max-w-[90rem] flex-wrap gap-x-6 gap-y-1 px-4 pb-10 pt-12 font-mono text-sm text-dimmed sm:px-6 lg:px-8">
-      <span v-for="[role, label] in workerRoleLabels" :key="role">
-        {{ label }}: {{ snapshot.workerProfile.roles[role].model }} · {{ snapshot.workerProfile.roles[role].reasoningEffort }}
+      <span v-for="[role, label] in agentRoleLabels" :key="role">
+        {{ label }}: {{ snapshot.agentProfile.roles[role].model }}<template v-if="snapshot.agentProfile.roles[role].reasoningEffort"> · {{ snapshot.agentProfile.roles[role].reasoningEffort }}</template>
       </span>
-      <span>{{ snapshot.workerProfile.maximumActiveAgents }} agents max</span>
+      <span class="inline-flex items-center gap-1.5">
+        <UIcon :name="providerIcons[activeProvider]" class="size-4 shrink-0" aria-hidden="true" />
+        {{ providerLabels[activeProvider] }} · {{ snapshot.agentProfile.maximumActiveAgents }} agents max
+      </span>
       <span>Loopback only · GitHub App scoped · Repository tokens isolated</span>
       <span><kbd>j</kbd> <kbd>k</kbd> move decisions · <kbd>a</kbd> approve · <kbd>/</kbd> filter repositories</span>
     </footer>

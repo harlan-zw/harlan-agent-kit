@@ -3,7 +3,7 @@ import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
 import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { createTaskScheduler } from '../src/task-scheduler.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 afterEach(() => vi.useRealTimers())
 
@@ -38,7 +38,7 @@ describe('task scheduler', () => {
       externalId: 'conflicting',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const scheduler = createTaskScheduler({
       intervalMilliseconds: 60_000,
@@ -84,7 +84,7 @@ describe('task scheduler', () => {
       externalId: 'throwing-conflict',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const errors: unknown[] = []
     const scheduler = createTaskScheduler({
@@ -113,7 +113,7 @@ describe('task scheduler', () => {
       externalId: 'stopped-conflict',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     let markStarted: (() => void) | undefined
     const started = new Promise<void>((resolve) => {
@@ -151,7 +151,7 @@ describe('task scheduler', () => {
       externalId: 'cancelled-running-conflict',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     let taskId: string | undefined
     let stopped = false

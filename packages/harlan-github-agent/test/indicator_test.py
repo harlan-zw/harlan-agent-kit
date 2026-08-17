@@ -128,9 +128,9 @@ class IndicatorDisplayTest(unittest.TestCase):
     def test_uses_minimal_coloured_state_markers(self):
         self.assertEqual(indicator.queue_state({'state': {'_tag': 'Active'}}), '🟢 Running')
         self.assertEqual(indicator.queue_state({'state': {'_tag': 'AwaitingApproval'}}), '🟠 Approval needed')
-        self.assertEqual(indicator.queue_state({'state': {'_tag': 'NeedsAttention'}}), '🔴 Needs attention')
+        self.assertEqual(indicator.queue_state({'state': {'_tag': 'ActionRequired'}}), '🔴 Action required')
         self.assertEqual(indicator.queue_state({'state': {'_tag': 'Queued'}}), '🔵 Queued')
-        self.assertEqual(indicator.queue_state({'state': {'_tag': 'Waiting'}}), '🟡 Waiting')
+        self.assertEqual(indicator.queue_state({'state': {'_tag': 'Pending'}}), '🟡 Pending')
 
     def test_marks_runner_activity_without_replacing_detail(self):
         runner = {

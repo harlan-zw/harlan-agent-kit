@@ -116,8 +116,10 @@ def audit_ledger(args):
     content = Path(args.ledger).read_bytes()
     return {
         "rows": len(actual),
+        # Same canonical order as sentry_api.issue_ids_checksum, so this value
+        # is directly comparable with the frozen snapshot's checksum.
         "issue_ids_sha256": hashlib.sha256(
-            ("\n".join(sorted(actual_ids, key=int)) + "\n").encode()
+            ("\n".join(sorted(set(actual_ids), key=int)) + "\n").encode()
         ).hexdigest(),
         "ledger_sha256": hashlib.sha256(content).hexdigest(),
         "dispositions": dict(sorted(Counter(row["disposition"] for row in actual).items())),

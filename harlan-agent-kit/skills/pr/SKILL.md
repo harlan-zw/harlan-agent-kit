@@ -1,10 +1,23 @@
 ---
 name: pr
-description: Create, make, open, update, submit, or sync a PR / pull request. Use when user says "open a PR", "submit PR", "create pull request", "push this up", "send for review", "make a PR", or "sync PR".
+description: Create, make, open, update, submit, or sync a PR / pull request, and land finished work on GitHub. Use whenever the next step is branch + commit + push + PR, however the user phrases it -- "open a PR", "submit PR", "create pull request", "push this up", "send for review", "make a PR", "sync PR", "ship it", "land this", or a bare "fix" / "do it" / "yes" once a fix is ready. These are examples, not a required wording any intent to get work onto a branch and into a PR routes here.
 user_invocable: true
 ---
 
 Create or update a pull request for the current branch. Idempotent -- safe to run at any stage.
+
+## When to invoke
+
+Invoke on intent, not on phrasing. If the next command you are about to run is `git switch -c`, `git commit`, `git push`, or `gh pr create`, stop: this skill owns that sequence. Run it instead of the raw commands.
+
+None of these are reasons to skip it:
+
+- **The user never said "PR".** Once a fix is written and verified, "fix", "ship it", "land this", or a bare "yes" all mean land it. The trigger list in the description is examples, not a required wording.
+- **The change is small.** A one-line fix still needs the repo's template, the AI disclosure, a body with no verification section, and green CI. Size changes none of that.
+- **Invoking costs a turn.** Rewriting a hand-made PR body costs more, and a PR pushed without Step 4 can fail CI in front of a reviewer.
+- **You already ran the git commands.** Then a PR exists and is probably wrong. Re-enter here anyway -- Step 1 detects the existing PR and Step 5 syncs it in place.
+
+Running the git and `gh` commands by hand is the failure mode this skill exists to prevent.
 
 ## Gotchas
 
@@ -192,6 +205,26 @@ EOF
 ```
 
 Output the PR URL when done. Log to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
+
+### Let the agent merge it
+
+`harlan-github-agent` reviews every pull request it tracks. Add `harlan-agent-auto-merge` when the change holds no judgement, and the service merges it after a `READY` review:
+
+- documentation, comments, or wording with no code change
+- dependency bump or lockfile refresh
+- formatting, lint autofix, or generated file refresh
+- changelog or version bump
+
+Never add the label to a change a reviewer must judge: source behaviour, public API, configuration, CI workflow, authentication, authorization, payments, data handling, or user-visible copy. When unsure, leave it off. A missing label costs one human merge. A wrong label ships an unreviewed change.
+
+Read [references/auto-merge.md](../../references/auto-merge.md) for the exact conditions.
+
+```bash
+gh label create harlan-agent-auto-merge --color 0e8a16 --description "Lets harlan-github-agent merge this after a READY review" 2>/dev/null || true
+gh pr edit NUMBER --add-label harlan-agent-auto-merge
+```
+
+Pass `--label harlan-agent-auto-merge` to `gh pr create` instead when the label already exists. Remove it with `gh pr edit NUMBER --remove-label harlan-agent-auto-merge` when the pull request grows past the change it was added for.
 
 **Verification evidence goes here, as a comment, not in the description.** Post it directly only on a repo the user owns or maintains, since it is part of submitting their own PR. Anywhere else, show the draft and let them post it. Post one only when you did something CI cannot show: ran a migration against a restored database, exercised the change in a browser, checked an authorization boundary by hand. Skip it entirely when the proof is just lint, typecheck, and the test suite; CI already reports those.
 

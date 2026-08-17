@@ -3,12 +3,33 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildRepositoryMappings, discoverLocalCheckouts } from '../src/repository-discovery.ts'
+import { buildRepositoryMappings, discoverLocalCheckouts, installedWithoutCheckout } from '../src/repository-discovery.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 
 afterEach(() => temporaryDirectories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })))
+
+describe('installedWithoutCheckout', () => {
+  const installed = [
+    { github: 'harlan-zw/example', defaultBranch: 'main', archived: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
+    { github: 'harlan-zw/unlighthouse.dev', defaultBranch: 'main', archived: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
+    { github: 'harlan-zw/retired', defaultBranch: 'main', archived: true, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
+    { github: 'someone-else/tool', defaultBranch: 'main', archived: false, topics: [], authentication: 'app' as const, owner: { login: 'someone-else', type: 'User' as const } },
+  ]
+
+  it('names every granted repository that no agent can see', () => {
+    expect(installedWithoutCheckout(installed, [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }], ['harlan-zw']))
+      .toEqual(['harlan-zw/unlighthouse.dev'])
+  })
+
+  it('says nothing once every granted repository has a checkout', () => {
+    expect(installedWithoutCheckout(installed, [
+      { github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' },
+      { github: 'harlan-zw/unlighthouse.dev', checkout: '/home/harlan/sites/unlighthouse.dev' },
+    ], ['harlan-zw'])).toEqual([])
+  })
+})
 
 describe('repository discovery', () => {
   it('ignores temporary worktrees beside the canonical checkout', async () => {
@@ -37,6 +58,7 @@ describe('repository discovery', () => {
         defaultBranch: 'main',
         archived: false,
         topics: [],
+        authentication: 'app' as const,
         owner: { login: 'harlan-zw', type: 'User' },
       },
       {
@@ -44,6 +66,7 @@ describe('repository discovery', () => {
         defaultBranch: 'main',
         archived: false,
         topics: ['harlan-agent-issues', 'harlan-agent-conflicts'],
+        authentication: 'app' as const,
         owner: { login: 'skilld-dev', type: 'Organization' },
       },
       {
@@ -51,6 +74,7 @@ describe('repository discovery', () => {
         defaultBranch: 'main',
         archived: false,
         topics: [],
+        authentication: 'app' as const,
         owner: { login: 'harlan-zw', type: 'User' },
       },
     ], [
@@ -63,13 +87,13 @@ describe('repository discovery', () => {
         github: 'harlan-zw/example',
         checkout: '/home/harlan/pkg/example',
         ownership: 'owned',
-        writablePullRequestAuthors: ['harlan-zw'],
         issueWork: true,
         pullRequestReview: true,
         pullRequestConformance: true,
         conflictResolution: true,
       }),
     ])
+    expect(mappings[0]?.writablePullRequestAuthors).toEqual(['harlan-zw', 'harlan-github-agent[bot]'])
   })
 
   it('applies explicit policy without trusting its stale path or default branch', () => {
@@ -83,6 +107,7 @@ describe('repository discovery', () => {
       defaultBranch: 'main',
       archived: false,
       topics: [],
+      authentication: 'app' as const,
       owner: { login: 'harlan-zw', type: 'User' },
     }], [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }], [override], ['harlan-zw'])
 
@@ -99,6 +124,7 @@ describe('repository discovery', () => {
       defaultBranch: 'main',
       archived: true,
       topics: [],
+      authentication: 'app' as const,
       owner: { login: 'harlan-zw', type: 'User' },
     }], [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }], [], ['harlan-zw'])
 

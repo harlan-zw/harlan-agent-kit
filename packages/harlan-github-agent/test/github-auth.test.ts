@@ -1,5 +1,6 @@
+import { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
-import { createRepositoryTokenProvider } from '../src/github-auth.ts'
+import { createAuthenticatedClient, createRepositoryTokenProvider } from '../src/github-auth.ts'
 import { ok } from '../src/result.ts'
 
 describe('gitHub App authentication', () => {
@@ -29,6 +30,7 @@ describe('gitHub App authentication', () => {
       installationId: 42,
       permissions,
       repositoryName: 'example',
+      refresh: false,
     }])
   })
 
@@ -70,5 +72,109 @@ describe('gitHub App authentication', () => {
       expiresAt: '2026-08-13T01:00:00.000Z',
     }))
     expect(requests).toEqual([1, 1, 2])
+  })
+})
+
+describe('rejected credential recovery', () => {
+  it('mints a fresh token after a caller reports a rejection', async () => {
+    const minted: Array<{ refresh: boolean }> = []
+    let issued = 0
+    const provider = createRepositoryTokenProvider({
+      getInstallationId: () => Promise.resolve(42),
+      mintToken: (input) => {
+        minted.push({ refresh: input.refresh })
+        issued += 1
+        return Promise.resolve({ token: `token-${issued}`, expiresAt: '2126-01-01T00:00:00.000Z' })
+      },
+    })
+
+    const first = await provider.getToken('harlan-zw/example', 'read')
+    const cached = await provider.getToken('harlan-zw/example', 'read')
+    expect(first).toEqual(cached)
+    expect(minted).toHaveLength(1)
+
+    provider.invalidate('harlan-zw/example', 'read')
+    const refreshed = await provider.getToken('harlan-zw/example', 'read')
+
+    expect(minted).toEqual([{ refresh: false }, { refresh: true }])
+    expect(refreshed).toEqual({ _tag: 'Ok', value: { token: 'token-2', expiresAt: '2126-01-01T00:00:00.000Z' } })
+  })
+
+  it('leaves other access levels of the same repository alone', async () => {
+    let issued = 0
+    const provider = createRepositoryTokenProvider({
+      getInstallationId: () => Promise.resolve(42),
+      mintToken: () => {
+        issued += 1
+        return Promise.resolve({ token: `token-${issued}`, expiresAt: '2126-01-01T00:00:00.000Z' })
+      },
+    })
+
+    await provider.getToken('harlan-zw/example', 'read')
+    const write = await provider.getToken('harlan-zw/example', 'issues_write')
+    provider.invalidate('harlan-zw/example', 'read')
+
+    expect(await provider.getToken('harlan-zw/example', 'issues_write')).toEqual(write)
+    expect(issued).toBe(2)
+  })
+})
+
+describe('createAuthenticatedClient', () => {
+  function tokenProvider(tokens: string[]) {
+    const invalidated: string[] = []
+    let index = 0
+    return {
+      invalidated,
+      provider: {
+        getToken: () => Promise.resolve(ok({ token: tokens[Math.min(index++, tokens.length - 1)]!, expiresAt: '2126-01-01T00:00:00.000Z' })),
+        invalidate: (repository: string, access: string) => invalidated.push(`${repository}:${access}`),
+      },
+    }
+  }
+
+  /** One fake transport that reports which credential each request carried. */
+  function client(accepted: string, seen: string[], tokens: ReturnType<typeof tokenProvider>) {
+    return createAuthenticatedClient({
+      access: 'read',
+      repository: 'harlan-zw/example',
+      token: 'stale-token',
+      tokens: tokens.provider,
+      userAgent: 'test',
+      createClient: clientOptions => new Octokit({
+        ...clientOptions,
+        request: {
+          fetch: (_url: string, init: { headers: Record<string, string> }) => {
+            const authorization = init.headers.authorization ?? ''
+            seen.push(authorization)
+            const allowed = authorization.endsWith(accepted)
+            return Promise.resolve(new Response(
+              JSON.stringify(allowed ? [{ number: 1 }] : { message: 'Resource not accessible by integration' }),
+              { status: allowed ? 200 : 403, headers: { 'content-type': 'application/json' } },
+            ))
+          },
+        },
+      }),
+    })
+  }
+
+  it('re-mints and retries once when GitHub rejects the credential', async () => {
+    const seen: string[] = []
+    const tokens = tokenProvider(['fresh-token'])
+    const octokit = client('fresh-token', seen, tokens)
+
+    const response = await octokit.rest.pulls.list({ owner: 'harlan-zw', repo: 'example' })
+
+    expect(response.data).toEqual([{ number: 1 }])
+    expect(seen).toEqual(['token stale-token', 'token fresh-token'])
+    expect(tokens.invalidated).toEqual(['harlan-zw/example:read'])
+  })
+
+  it('reports a second rejection instead of retrying forever', async () => {
+    const seen: string[] = []
+    const tokens = tokenProvider(['also-rejected'])
+    const octokit = client('never', seen, tokens)
+
+    await expect(octokit.rest.pulls.list({ owner: 'harlan-zw', repo: 'example' })).rejects.toThrow(/not accessible/)
+    expect(seen).toHaveLength(2)
   })
 })

@@ -1,15 +1,18 @@
-import type { RepositoryMapping } from './types.ts'
+import type { RepositoryAuthentication, RepositoryMapping } from './types.ts'
 import { execFile } from 'node:child_process'
 import { readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { App, Octokit } from 'octokit'
 import { normalizeGitHubRemote } from './config.ts'
+import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 
 export interface InstalledRepository {
   github: string
   defaultBranch: string
   archived: boolean
   topics: string[]
+  /** How the controller reached this repository: the App, or Harlan's own token. */
+  authentication: RepositoryAuthentication
   owner: {
     login: string
     type: 'User' | 'Organization'
@@ -87,6 +90,7 @@ export async function discoverGitHubAppRepositories(options: GitHubAppRepository
       defaultBranch: repository.default_branch,
       archived: repository.archived,
       topics: repository.topics ?? [],
+      authentication: 'app',
       owner: { login: repository.owner.login, type: ownerType },
     })
   }
@@ -99,9 +103,10 @@ function defaultMapping(repository: InstalledRepository, checkout: string): Repo
     github: repository.github,
     checkout,
     enabled: !repository.archived,
+    authentication: repository.authentication,
     ownership,
     defaultBranch: repository.defaultBranch,
-    writablePullRequestAuthors: ['harlan-zw'],
+    writablePullRequestAuthors: ['harlan-zw', AGENT_ACTOR_LOGIN],
     writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/'],
     issueWork: ownership === 'owned',
     pullRequestReview: true,
@@ -109,6 +114,66 @@ function defaultMapping(repository: InstalledRepository, checkout: string): Repo
     conflictResolution: ownership === 'owned',
     takeOwnership: { _tag: 'Disabled' },
   }
+}
+
+export interface UserRepositoryDiscoveryOptions {
+  checkouts: LocalCheckout[]
+  installed: InstalledRepository[]
+  allowedOwners: string[]
+  /** Reads one repository with Harlan's own token. Returns undefined when he cannot reach it. */
+  readRepository: (github: string) => Promise<Omit<InstalledRepository, 'authentication'> | undefined>
+}
+
+/**
+ * Repositories Harlan maintains that the App cannot reach.
+ *
+ * An organization can refuse the App, so the controller falls back to his own
+ * access: a trusted local checkout plus a repository he can read himself.
+ */
+export async function discoverUserRepositories(options: UserRepositoryDiscoveryOptions): Promise<InstalledRepository[]> {
+  const installed = new Set(options.installed.map(repository => repository.github.toLowerCase()))
+  const allowedOwners = new Set(options.allowedOwners.map(owner => owner.toLowerCase()))
+  const candidates = options.checkouts.filter((checkout) => {
+    const owner = checkout.github.split('/')[0]?.toLowerCase()
+    return owner !== undefined && allowedOwners.has(owner) && !installed.has(checkout.github.toLowerCase())
+  })
+  const unique = [...new Map(candidates.map(checkout => [checkout.github.toLowerCase(), checkout])).values()]
+  const repositories = await Promise.all(unique.map(checkout => options.readRepository(checkout.github)
+    .then((repository) => {
+      // GitHub answers a renamed repository with its current name. A checkout that
+      // still points at the old name says nothing about the repository behind it.
+      if (repository === undefined || repository.github.toLowerCase() !== checkout.github.toLowerCase())
+        return undefined
+      return installed.has(repository.github.toLowerCase())
+        ? undefined
+        : { ...repository, authentication: 'user' as const }
+    })
+    .catch(() => {
+      // An unreadable repository is one Harlan cannot reach either, so it stays untracked.
+      return undefined
+    })))
+  return repositories.flatMap(repository => repository === undefined || repository.archived ? [] : [repository])
+}
+
+/**
+ * Granted repositories with no trusted local checkout.
+ *
+ * These stay invisible to every Worker, so the service names them instead of
+ * dropping them without a word.
+ */
+export function installedWithoutCheckout(
+  repositories: InstalledRepository[],
+  checkouts: LocalCheckout[],
+  allowedOwners: string[],
+): string[] {
+  const checkoutByRepository = new Set(checkouts.map(checkout => checkout.github.toLowerCase()))
+  const allowedOwnerSet = new Set(allowedOwners.map(owner => owner.toLowerCase()))
+  return repositories
+    .filter(repository => !repository.archived
+      && allowedOwnerSet.has(repository.owner.login.toLowerCase())
+      && !checkoutByRepository.has(repository.github.toLowerCase()))
+    .map(repository => repository.github)
+    .sort((left, right) => left.localeCompare(right))
 }
 
 export function buildRepositoryMappings(

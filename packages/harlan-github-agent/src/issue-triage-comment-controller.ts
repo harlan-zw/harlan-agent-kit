@@ -1,4 +1,4 @@
-import type { GitHubWorkerSource, PublishedReviewStatus } from './github-worker-source.ts'
+import type { GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedIssueTriageTask } from './types.ts'
@@ -9,7 +9,7 @@ export interface IssueTriageCommentController {
 }
 
 export interface IssueTriageCommentControllerOptions {
-  github: Pick<GitHubWorkerSource, 'getIssueTriageSnapshot' | 'upsertIssueTriageComment'>
+  github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'upsertIssueTriageComment'>
   leaseMilliseconds: number
   now: () => Date
   store: Pick<JournalStore, 'claimIssueTriageComment' | 'completeIssueTriageComment' | 'deferIssueTriageComment' | 'stageIssueTriageComment'>

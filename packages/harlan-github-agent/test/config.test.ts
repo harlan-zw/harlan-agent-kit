@@ -66,12 +66,71 @@ describe('configuration boundary', () => {
     })
   })
 
+  it('leaves auto merge off and caps open pull requests until configured', () => {
+    const parsed = parseConfigText(configText)
+    expect(parsed._tag === 'Ok' && parsed.value.autoMerge).toEqual({ _tag: 'Disabled' })
+    expect(parsed._tag === 'Ok' && parsed.value.maxOpenPullRequests).toBe(8)
+  })
+
+  it('parses an enabled auto merge policy with its defaults', () => {
+    const enabled = parseConfigText(`auto_merge:\n  enabled: true\nmax_open_pull_requests: 3\n${configText}`)
+    expect(enabled._tag === 'Ok' && enabled.value.autoMerge).toEqual({
+      _tag: 'Enabled',
+      minimumConfidence: 100,
+      method: 'squash',
+    })
+    expect(enabled._tag === 'Ok' && enabled.value.maxOpenPullRequests).toBe(3)
+  })
+
+  it('rejects an out of range confidence, an unknown merge method, and an invalid limit', () => {
+    const confidence = parseConfigText(`auto_merge:\n  enabled: true\n  minimum_confidence: 101\n${configText}`)
+    expect(confidence._tag === 'Err' && confidence.error.map(issue => issue.path)).toContain('$.auto_merge.minimum_confidence')
+
+    const method = parseConfigText(`auto_merge:\n  enabled: true\n  method: rocket\n${configText}`)
+    expect(method._tag === 'Err' && method.error.map(issue => issue.path)).toContain('$.auto_merge.method')
+
+    const limit = parseConfigText(`max_open_pull_requests: 0\n${configText}`)
+    expect(limit._tag === 'Err' && limit.error.map(issue => issue.path)).toContain('$.max_open_pull_requests')
+  })
+
+  it('runs Codex until the configuration names another agent provider', () => {
+    const parsed = parseConfigText(configText)
+    expect(parsed._tag === 'Ok' && parsed.value.agent.provider).toBe('codex')
+
+    const opencode = parseConfigText(`agent:\n  provider: opencode\n${configText}`)
+    expect(opencode._tag === 'Ok' && opencode.value.agent.provider).toBe('opencode')
+  })
+
+  it('rejects an unknown agent provider', () => {
+    const parsed = parseConfigText(`agent:\n  provider: gemini\n${configText}`)
+    expect(parsed).toEqual({
+      _tag: 'Err',
+      error: expect.arrayContaining([{ path: '$.agent.provider', message: 'Expected codex or opencode.' }]),
+    })
+  })
+
   it('allows GitHub App permissions to define repository scope', () => {
     const result = parseConfigText(configText.replace(/\nrepositories:[\s\S]*$/, '\nrepositories: []\n'))
 
     expect(result).toEqual({
       _tag: 'Ok',
       value: expect.objectContaining({ repositories: [] }),
+    })
+  })
+
+  it('accepts an explicitly allowed GitHub App pull request author', () => {
+    const result = parseConfigText(configText.replace(
+      'writable_pr_authors: [harlan-zw]',
+      'writable_pr_authors: [harlan-zw, "harlan-github-agent[bot]"]',
+    ))
+
+    expect(result).toEqual({
+      _tag: 'Ok',
+      value: expect.objectContaining({
+        repositories: [expect.objectContaining({
+          writablePullRequestAuthors: ['harlan-zw', 'harlan-github-agent[bot]'],
+        })],
+      }),
     })
   })
 

@@ -1,14 +1,19 @@
-import type { ActiveAgent, AgentTask, QueueEntry, ReviewAgent } from '../src/types.ts'
+import type { ActiveAgent, AgentTask, Incident, QueueEntry, ReviewAgent } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import {
   approvalConsequence,
   buildHistory,
   decisionEntries,
+  incidentEntries,
+  incidentRecoveryLabel,
+  incidentScopeLabel,
+  incidentUrl,
   isProgressStalled,
   isSnapshotStale,
   queueDetail,
   queueStateLabel,
   repositoryState,
+  reviewOutcomeLabel,
   taskKindLabel,
   taskStateTone,
   taskSubjectUrl,
@@ -27,7 +32,7 @@ function activeAgent(overrides: Partial<ActiveAgent> = {}): ActiveAgent {
     repository: 'harlan-zw/nuxt-seo',
     repositoryUrl: 'https://github.com/harlan-zw/nuxt-seo',
     subjectKind: 'pull_request',
-    subjectNumber: 412,
+    itemNumber: 412,
     title: 'A pull request',
     subjectUrl: 'https://github.com/harlan-zw/nuxt-seo/pull/412',
     startedAt: '2026-08-14T11:00:00.000Z',
@@ -165,7 +170,7 @@ describe('decisionEntries', () => {
   it('collects approvals and failures only', () => {
     const entries = [
       queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } }),
-      queueEntry({ state: { _tag: 'NeedsAttention', reason: 'Not writable.' } }),
+      queueEntry({ state: { _tag: 'ActionRequired', reason: 'Not writable.' } }),
       queueEntry({ state: { _tag: 'Queued', work: 'adversarial_review' } }),
     ]
     expect(decisionEntries(entries)).toHaveLength(2)
@@ -181,7 +186,7 @@ describe('queue copy', () => {
   })
 
   it('reports the reason a subject needs attention', () => {
-    const entry = queueEntry({ state: { _tag: 'NeedsAttention', reason: 'The fork branch is not writable.' } })
+    const entry = queueEntry({ state: { _tag: 'ActionRequired', reason: 'The fork branch is not writable.' } })
     expect(queueDetail(entry, { agentsCanStart: true, agentsPaused: false })).toBe('The fork branch is not writable.')
   })
 })
@@ -242,5 +247,58 @@ describe('repositoryState', () => {
     expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: 'boom', subjectCount: 0 }).tone).toBe('error')
     expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null, subjectCount: 0 }).tone).toBe('warning')
     expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: null, subjectCount: 0 }).tone).toBe('success')
+  })
+})
+
+function incident(overrides: Partial<Incident> = {}): Incident {
+  return {
+    id: 'incident-1',
+    scope: { _tag: 'Repository', repository: 'harlan-zw/example' },
+    kind: 'github_access',
+    severity: 'warning',
+    message: 'Resource not accessible by integration',
+    operation: 'poll',
+    recovery: { _tag: 'Retrying', attempt: 2, nextAttemptAt: '2026-08-14T12:01:00.000Z' },
+    occurrences: 3,
+    firstSeenAt: '2026-08-14T11:50:00.000Z',
+    lastSeenAt: '2026-08-14T11:59:00.000Z',
+    ...overrides,
+  }
+}
+
+describe('incident pane', () => {
+  it('puts errors above warnings, then the most recent first', () => {
+    const ordered = incidentEntries([
+      incident({ id: 'old-warning', severity: 'warning', lastSeenAt: '2026-08-14T11:00:00.000Z' }),
+      incident({ id: 'error', severity: 'error', lastSeenAt: '2026-08-14T10:00:00.000Z' }),
+      incident({ id: 'new-warning', severity: 'warning', lastSeenAt: '2026-08-14T11:59:00.000Z' }),
+    ])
+    expect(ordered.map(entry => entry.id)).toEqual(['error', 'new-warning', 'old-warning'])
+  })
+
+  it('says what the controller will do next', () => {
+    expect(incidentRecoveryLabel(incident())).toBe('Retrying · attempt 2')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'Exhausted' } }))).toBe('Retries exhausted')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'ActionRequired' } }))).toBe('Action required')
+  })
+
+  it('names the scope a person can act on', () => {
+    expect(incidentScopeLabel(incident())).toBe('harlan-zw/example')
+    expect(incidentScopeLabel(incident({
+      scope: { _tag: 'Task', taskId: 'task-1', repository: 'harlan-zw/example', itemNumber: 54 },
+    }))).toBe('harlan-zw/example#54')
+    expect(incidentScopeLabel(incident({ scope: { _tag: 'Service' } }))).toBe('Controller')
+  })
+
+  it('links a task incident to its pull request', () => {
+    expect(incidentUrl(incident({
+      scope: { _tag: 'Task', taskId: 'task-1', repository: 'harlan-zw/example', itemNumber: 54 },
+    }))).toBe('https://github.com/harlan-zw/example/pull/54')
+    expect(incidentUrl(incident({ scope: { _tag: 'Service' } }))).toBeUndefined()
+  })
+
+  it('reads a passing review that named no confidence as READY', () => {
+    expect(reviewOutcomeLabel({ ...reviewAgent(), outcome: { _tag: 'Ready' } })).toBe('READY')
+    expect(reviewOutcomeLabel({ ...reviewAgent(), outcome: { _tag: 'Ready', confidence: 92 } })).toBe('READY · 92/100')
   })
 })

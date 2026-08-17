@@ -23,7 +23,7 @@ export function syncReviewRerunRequests(
     if (requests._tag === 'Err')
       return err(requests.error.message)
     const at = dependencies.now().toISOString()
-    const subjects = dependencies.store.getDashboardSnapshot(at).subjects
+    const subjects = dependencies.store.getDashboardSnapshot(at).items
     const allowedAuthors = new Set(dependencies.allowedAuthors.map(author => author.toLowerCase()))
     const results = requests.value.flatMap((request): ReviewRerunResult[] => {
       if (!allowedAuthors.has(request.author.toLowerCase()))

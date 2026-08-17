@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
+import type { TerminalSessionInput } from './terminal-session.ts'
 import type { DashboardSnapshot } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -12,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { createError, createEventStream, H3 } from 'h3'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewAttempts' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'setRepositoryPaused'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'setRepositoryPaused'>
   allowedHost: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -20,7 +21,7 @@ export interface AgentAppOptions {
   eventIntervalMilliseconds?: number
   shutdownSignal?: AbortSignal
   activityLog?: Pick<AgentActivityLog, 'read'>
-  ejectAgent?: (input: { taskId: string, sessionId: string, repository: string, subjectNumber: number }) => Promise<Result<void, string>>
+  ejectAgent?: (input: TerminalSessionInput) => Promise<Result<void, string>>
 }
 
 const securityHeaders = {
@@ -199,7 +200,7 @@ function issueApprovalRequest(value: unknown): IssueApprovalRequest | undefined 
 
 function approvalRejectionMessage(reason: ReturnType<JournalStore['approvePullRequest']> & { _tag: 'Rejected' }): string {
   switch (reason.reason._tag) {
-    case 'SubjectNotFound': return 'The pull request is no longer open.'
+    case 'ItemNotFound': return 'The pull request is no longer open.'
     case 'RevisionMismatch': return 'The pull request changed. Refresh before approving it.'
     case 'ApprovalNotRequired': return 'This pull request does not require local approval.'
   }
@@ -236,8 +237,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       status: snapshot.status,
       mutationsEnabled: snapshot.mutationsEnabled,
       repositories: snapshot.repositories.length,
-      issues: snapshot.subjects.filter(item => item.kind === 'issue').length,
-      pullRequests: snapshot.subjects.filter(item => item.kind === 'pull_request').length,
+      issues: snapshot.items.filter(item => item.kind === 'issue').length,
+      pullRequests: snapshot.items.filter(item => item.kind === 'pull_request').length,
       tasks: snapshot.tasks.length,
     }, { status: snapshot.status === 'ready' ? 200 : 503 })
   })
@@ -261,15 +262,16 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (agent?._tag !== 'ActiveAgent')
       throw createError({ status: 404, statusText: 'Not Found', message: 'The running agent was not found.' })
     if (agent.session._tag !== 'Connected')
-      throw createError({ status: 409, statusText: 'Conflict', message: 'The Codex session is still starting.' })
+      throw createError({ status: 409, statusText: 'Conflict', message: 'The agent session is still starting.' })
     const cancelled = options.store.cancelTask({ taskId: body.taskId, at: options.now().toISOString() })
     if (cancelled._tag === 'Rejected')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The agent already finished. Refresh before ejecting.' })
     const launched = await options.ejectAgent({
       taskId: body.taskId,
       sessionId: agent.session.id,
+      provider: agent.provider,
       repository: agent.repository,
-      subjectNumber: agent.subjectNumber,
+      itemNumber: agent.itemNumber,
     })
     if (launched._tag === 'Err')
       throw createError({ status: 500, statusText: 'Internal Server Error', message: launched.error })
@@ -286,7 +288,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const pullRequestNumber = Number(query.get('pull_request'))
     if (repository === null || !/^[^/]+\/[^/]+$/.test(repository) || !Number.isSafeInteger(pullRequestNumber) || pullRequestNumber < 1)
       throw createError({ status: 400, statusText: 'Bad Request', message: 'Valid repository and pull_request query values are required.' })
-    return { attempts: options.store.listReviewAttempts(repository, pullRequestNumber) }
+    return { runs: options.store.listReviewRuns(repository, pullRequestNumber) }
   })
 
   app.post('/api/approvals', async (event) => {
@@ -313,7 +315,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (result._tag !== 'Rejected')
       return result
     switch (result.reason._tag) {
-      case 'SubjectNotFound': throw createError({ status: 404, statusText: 'Not Found', message: 'The issue is no longer open.' })
+      case 'ItemNotFound': throw createError({ status: 404, statusText: 'Not Found', message: 'The issue is no longer open.' })
       case 'RevisionMismatch': throw createError({ status: 409, statusText: 'Conflict', message: 'The issue changed. Refresh before approving it.' })
       case 'ApprovalNotRequired': throw createError({ status: 409, statusText: 'Conflict', message: 'This issue does not require local approval.' })
       case 'TriageRequired': throw createError({ status: 409, statusText: 'Conflict', message: 'Issue triage must finish before approval.' })
@@ -352,7 +354,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     })
     if (result._tag !== 'Rejected')
       return result
-    if (result.reason._tag === 'SubjectNotFound')
+    if (result.reason._tag === 'ItemNotFound')
       throw createError({ status: 404, statusText: 'Not Found', message: 'The pull request is no longer open.' })
     if (result.reason._tag === 'RevisionMismatch')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request head commit changed. Refresh before rerunning.' })

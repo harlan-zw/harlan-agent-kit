@@ -79,6 +79,88 @@ print('''+----------+----------+----------------------+-------------------------
             self.assertEqual([issue["id"] for issue in snapshot["issues"]], ["123"])
             self.assertTrue(snapshot["issues"][0]["title_truncated"])
 
+    def test_snapshot_drops_duplicate_ids_and_reports_the_drop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "fake_cli.py"
+            fixture.write_text(
+                """#!/usr/bin/env python3
+print('''+----------+----------+----------------------+-----------------------------+------------+-------+
+| Issue ID | Short ID | Title                | Last seen                   | Status     | Level |
++----------+----------+----------------------+-----------------------------+------------+-------+
+| 500      | SITE-2   | Second               | 2026-08-13T00:00:00.000000Z | unresolved | error |
+| 123      | SITE-1   | First                | 2026-08-13T00:00:00.000000Z | unresolved | error |
+| 500      | SITE-2   | Second               | 2026-08-13T00:00:00.000000Z | unresolved | error |
++----------+----------+----------------------+-----------------------------+------------+-------+''')
+"""
+            )
+            output = Path(directory) / "snapshot.json"
+            env = dict(os.environ)
+            env["SENTRY_CLI_COMMAND"] = f"{sys.executable} {fixture}"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("sentry_api.py")),
+                    "--org",
+                    "test",
+                    "snapshot",
+                    "--project",
+                    "site",
+                    "--output",
+                    str(output),
+                ],
+                capture_output=True,
+                check=False,
+                env=env,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            snapshot = json.loads(output.read_text())
+            self.assertEqual([issue["id"] for issue in snapshot["issues"]], ["123", "500"])
+            self.assertEqual(snapshot["issue_count"], 2)
+            self.assertEqual(snapshot["duplicate_ids_dropped"], ["500"])
+
+    def test_snapshot_checksum_ignores_cli_row_order(self):
+        digests = []
+        for rows in (
+            "| 123      | SITE-1   | First  | 2026-08-13T00:00:00.000000Z | unresolved | error |\n"
+            "| 500      | SITE-2   | Second | 2026-08-13T00:00:00.000000Z | unresolved | error |",
+            "| 500      | SITE-2   | Second | 2026-08-13T00:00:00.000000Z | unresolved | error |\n"
+            "| 123      | SITE-1   | First  | 2026-08-13T00:00:00.000000Z | unresolved | error |",
+        ):
+            with tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory) / "fake_cli.py"
+                fixture.write_text(
+                    "#!/usr/bin/env python3\nprint('''"
+                    "+----------+----------+--------+-----------------------------+------------+-------+\n"
+                    "| Issue ID | Short ID | Title  | Last seen                   | Status     | Level |\n"
+                    "+----------+----------+--------+-----------------------------+------------+-------+\n"
+                    f"{rows}\n"
+                    "+----------+----------+--------+-----------------------------+------------+-------+''')\n"
+                )
+                output = Path(directory) / "snapshot.json"
+                env = dict(os.environ)
+                env["SENTRY_CLI_COMMAND"] = f"{sys.executable} {fixture}"
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("sentry_api.py")),
+                        "--org",
+                        "test",
+                        "snapshot",
+                        "--project",
+                        "site",
+                        "--output",
+                        str(output),
+                    ],
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                digests.append(json.loads(output.read_text())["issue_ids_sha256"])
+        self.assertEqual(digests[0], digests[1])
+
     def test_bundle_returns_requested_event_count(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

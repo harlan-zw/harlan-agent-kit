@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { syncReviewRerunRequests } from '../src/review-rerun-controller.ts'
-import { dashboardSnapshot, pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { dashboardSnapshot, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('review rerun controller', () => {
   it('requests the current pull request head once for a GitHub command', async () => {
     const requests: unknown[] = []
-    const subject = { ...pullRequestSubject({ mergeState: 'clean' }), revisionId: 'a'.repeat(64), observedAt: '2026-08-13T01:00:00.000Z', approval: { _tag: 'NotRequired' as const } }
+    const subject = { ...pullRequestItem({ mergeState: 'clean' }), revisionId: 'a'.repeat(64), observedAt: '2026-08-13T01:00:00.000Z', approval: { _tag: 'NotRequired' as const } }
     const result = await syncReviewRerunRequests(repositoryMapping(), {
       allowedAuthors: ['harlan-zw'],
       github: {
@@ -18,7 +18,7 @@ describe('review rerun controller', () => {
         }])),
       },
       store: {
-        getDashboardSnapshot: () => dashboardSnapshot({ subjects: [subject] }),
+        getDashboardSnapshot: () => dashboardSnapshot({ items: [subject] }),
         requestReviewRerun(input) {
           requests.push(input)
           return { _tag: 'Queued', taskId: 'b'.repeat(64) }

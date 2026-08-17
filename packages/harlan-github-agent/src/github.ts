@@ -1,8 +1,11 @@
+import type { Octokit } from 'octokit'
+import type { AutoMergeMethod } from './auto-merge.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { Result } from './result.ts'
-import type { GitHubPullRequestSubject, GitHubSubject, RepositoryMapping } from './types.ts'
-import { Octokit } from 'octokit'
+import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 import { approvalLabels } from './approval-labels.ts'
+import { hasAutoMergeLabel } from './auto-merge.ts'
+import { createAuthenticatedClient } from './github-auth.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { isReviewRerunCommand } from './review-rerun.ts'
@@ -22,14 +25,17 @@ export interface GitHubReviewRerunRequest {
 
 export interface GitHubSource {
   isBranchProtected: (repository: RepositoryMapping, branch: string, signal?: AbortSignal) => Promise<Result<boolean, GitHubReadError>>
-  getPullRequest: (repository: RepositoryMapping, number: number, signal?: AbortSignal) => Promise<Result<GitHubPullRequestSubject, GitHubReadError>>
-  listOpenSubjects: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<GitHubSubject[], GitHubReadError>>
+  hasOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal?: AbortSignal) => Promise<Result<boolean, GitHubReadError>>
+  getPullRequest: (repository: RepositoryMapping, number: number, signal?: AbortSignal) => Promise<Result<GitHubPullRequestItem, GitHubReadError>>
+  listOpenItems: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<GitHubItem[], GitHubReadError>>
   listReviewRerunRequests: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<GitHubReviewRerunRequest[], GitHubReadError>>
 }
 
 export interface GitHubSourceOptions {
   tokens: GitHubTokenProvider
   issueCutoff: string
+  /** The login the controller posts as, which depends on how the repository authenticates. */
+  actorLogin: (repository: RepositoryMapping) => string
   userAgent?: string
 }
 
@@ -65,8 +71,13 @@ function errorStatus(error: unknown): number | undefined {
   return typeof error.status === 'number' ? error.status : undefined
 }
 
-export function isAutomatedGitHubActor(actor: { login: string, type?: string | undefined }): boolean {
+export function isAutomatedGitHubActor(
+  actor: { login: string, type?: string | undefined },
+  allowedPullRequestAuthors: readonly string[] = [],
+): boolean {
   const login = actor.login.toLowerCase()
+  if (allowedPullRequestAuthors.some(author => author.toLowerCase() === login))
+    return false
   return actor.type === 'Bot' || login.includes('bot') || login.startsWith('app/')
 }
 
@@ -74,10 +85,16 @@ export function isIssueAtOrAfterCutoff(createdAt: string, cutoff: string): boole
   return Date.parse(createdAt) >= Date.parse(`${cutoff}T00:00:00.000Z`)
 }
 
-function pullRequestSubject(repository: RepositoryMapping, pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data']): GitHubPullRequestSubject {
+function labelNames(labels: Array<string | { name?: string }>): string[] {
+  return labels.flatMap(label => typeof label === 'string' ? [label] : label.name === undefined ? [] : [label.name])
+}
+
+function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data']): GitHubPullRequestItem {
+  const labels = labelNames(pull.labels)
   return {
     kind: 'pull_request',
-    approvalLabels: approvalLabels(pull.labels.flatMap(label => typeof label === 'string' || label.name === undefined ? [] : [label.name])),
+    approvalLabels: approvalLabels(labels),
+    autoMerge: hasAutoMergeLabel(labels),
     repository: repository.github,
     number: pull.number,
     state: pull.state === 'closed' ? 'closed' : 'open',
@@ -127,7 +144,14 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
     const token = await options.tokens.getToken(repository, 'read', signal)
     if (token._tag === 'Err')
       return err(token.error)
-    return ok(new Octokit({ auth: token.value.token, userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0' }))
+    return ok(createAuthenticatedClient({
+      access: 'read',
+      repository,
+      signal,
+      token: token.value.token,
+      tokens: options.tokens,
+      userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+    }))
   }
 
   return {
@@ -147,14 +171,37 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           })
         })
     },
+    hasOpenPullRequestForBranch: async (repository, headRef, signal) => {
+      const { owner, repo } = repositoryParts(repository.github)
+      const octokit = await client(repository.github, signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      return octokit.value.rest.pulls.list({
+        owner,
+        repo,
+        state: 'open',
+        head: `${owner}:${headRef}`,
+        per_page: 1,
+        ...(signal === undefined ? {} : { request: { signal } }),
+      })
+        .then(response => ok(response.data.length > 0))
+        .catch((error: unknown): Result<boolean, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({
+            repository: repository.github,
+            message: error instanceof Error ? error.message : 'GitHub request failed.',
+            ...(status === undefined ? {} : { status }),
+          })
+        })
+    },
     getPullRequest: async (repository, number, signal) => {
       const { owner, repo } = repositoryParts(repository.github)
       const octokit = await client(repository.github, signal)
       if (octokit._tag === 'Err')
         return octokit
       return octokit.value.rest.pulls.get({ owner, repo, pull_number: number, ...(signal === undefined ? {} : { request: { signal } }) })
-        .then(response => ok(pullRequestSubject(repository, response.data)))
-        .catch((error: unknown): Result<GitHubPullRequestSubject, GitHubReadError> => {
+        .then(response => ok(pullRequestItem(repository, response.data)))
+        .catch((error: unknown): Result<GitHubPullRequestItem, GitHubReadError> => {
           const status = errorStatus(error)
           return err({
             repository: repository.github,
@@ -191,7 +238,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
         })
       })
     },
-    listOpenSubjects: async (repository, signal) => {
+    listOpenItems: async (repository, signal) => {
       const { owner, repo } = repositoryParts(repository.github)
       const requestOptions = signal === undefined ? {} : { request: { signal } }
       const octokit = await client(repository.github, signal)
@@ -202,7 +249,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
         octokit.value.paginate(octokit.value.rest.issues.listForRepo, { owner, repo, state: 'open', per_page: 100, ...requestOptions }),
         octokit.value.paginate(octokit.value.rest.pulls.list, { owner, repo, state: 'open', per_page: 100, ...requestOptions }),
       ]).then(async ([issueRows, pullRows]) => {
-        const issues: GitHubSubject[] = issueRows
+        const issues: GitHubItem[] = issueRows
           .filter(issue => issue.pull_request === undefined)
           .filter(issue => !isAutomatedGitHubActor({
             login: issue.user?.login ?? 'ghost',
@@ -211,7 +258,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           .filter(issue => isIssueAtOrAfterCutoff(issue.created_at, options.issueCutoff))
           .map(issue => ({
             kind: 'issue',
-            approvalLabels: approvalLabels(issue.labels.flatMap(label => typeof label === 'string' || label.name === undefined ? [] : [label.name])),
+            approvalLabels: approvalLabels(labelNames(issue.labels)),
             repository: repository.github,
             number: issue.number,
             state: issue.state === 'closed' ? 'closed' : 'open',
@@ -222,17 +269,17 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             updatedAt: issue.updated_at,
           }))
 
-        const humanPullRows = pullRows.filter(pull => !isAutomatedGitHubActor({
+        const eligiblePullRows = pullRows.filter(pull => !isAutomatedGitHubActor({
           login: pull.user?.login ?? 'ghost',
           type: pull.user?.type,
-        }))
-        const pullRequests: GitHubSubject[] = await mapConcurrent(humanPullRows, 4, async (pull) => {
+        }, repository.writablePullRequestAuthors))
+        const pullRequests: GitHubItem[] = await mapConcurrent(eligiblePullRows, 4, async (pull) => {
           const [detail, comments] = await Promise.all([
             octokit.value.rest.pulls.get({ owner, repo, pull_number: pull.number, ...requestOptions }).then(response => response.data),
             octokit.value.paginate(octokit.value.rest.issues.listComments, { owner, repo, issue_number: pull.number, per_page: 100, ...requestOptions }),
           ])
           return {
-            ...pullRequestSubject(repository, detail),
+            ...pullRequestItem(repository, detail),
             priorAutomatedReview: priorAutomatedReviewForHead(comments.flatMap(comment =>
               comment.body === undefined || comment.body === null || comment.user?.login === undefined
                 ? []
@@ -241,7 +288,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
                     authorLogin: comment.user.login,
                     body: comment.body,
                     url: comment.html_url,
-                  }]), detail.head.sha, 'harlan-github-agent[bot]'),
+                  }]), detail.head.sha, options.actorLogin(repository)),
           }
         })
 
@@ -249,8 +296,8 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
       })
 
       return request
-        .then((subjects): Result<GitHubSubject[], GitHubReadError> => ok(subjects))
-        .catch((error: unknown): Result<GitHubSubject[], GitHubReadError> => {
+        .then((subjects): Result<GitHubItem[], GitHubReadError> => ok(subjects))
+        .catch((error: unknown): Result<GitHubItem[], GitHubReadError> => {
           const status = errorStatus(error)
           return err({
             repository: repository.github,
@@ -270,7 +317,14 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
       if (credential._tag === 'Err')
         return credential
       const octokit = options.createClient?.(credential.value.token)
-        ?? new Octokit({ auth: credential.value.token, userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0' })
+        ?? createAuthenticatedClient({
+          access: 'pull_requests_write',
+          repository: input.repository.github,
+          signal,
+          token: credential.value.token,
+          tokens: options.tokens,
+          userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+        })
       const request = signal === undefined ? {} : { request: { signal } }
       return octokit.rest.pulls.list({
         owner,
@@ -308,6 +362,130 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           ...(status === undefined ? {} : { status }),
         })
       })
+    },
+  }
+}
+
+/**
+ * How one pull request reached its merge.
+ *
+ * `AutoMergeEnabled` means GitHub owns the merge from here and will perform it
+ * when its own branch protection is satisfied. `Merged` means GitHub had
+ * nothing left to wait for, so the merge happened in this call.
+ */
+export type MergeHandoff
+  = | { _tag: 'AutoMergeEnabled' }
+    | { _tag: 'Merged', sha: string }
+
+export interface GitHubPullRequestMerger {
+  merge: (input: {
+    repository: RepositoryMapping
+    number: number
+    expectedHeadSha: string
+    method: AutoMergeMethod
+  }, signal?: AbortSignal) => Promise<Result<MergeHandoff, GitHubReadError>>
+}
+
+/**
+ * GitHub refuses to enable auto-merge on a pull request that has nothing left
+ * to wait for. The message differs by API version, so match on the shape of the
+ * complaint rather than one exact sentence.
+ */
+function refusedBecauseNothingToWaitFor(message: string): boolean {
+  return /\bclean status\b/i.test(message)
+    || /\bnot in the correct state\b/i.test(message)
+    || /\bcannot be enabled\b/i.test(message)
+}
+
+function graphqlMergeMethod(method: AutoMergeMethod): 'MERGE' | 'REBASE' | 'SQUASH' {
+  return method === 'rebase' ? 'REBASE' : method === 'squash' ? 'SQUASH' : 'MERGE'
+}
+
+const enableAutoMergeMutation = `
+  mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!, $expectedHeadOid: GitObjectID!) {
+    enablePullRequestAutoMerge(input: {
+      pullRequestId: $pullRequestId,
+      mergeMethod: $mergeMethod,
+      expectedHeadOid: $expectedHeadOid
+    }) {
+      pullRequest { number }
+    }
+  }
+`
+
+export function createGitHubPullRequestMerger(options: GitHubPullRequestPublisherOptions): GitHubPullRequestMerger {
+  return {
+    async merge(input, signal) {
+      const { owner, repo } = repositoryParts(input.repository.github)
+      const credential = await options.tokens.getToken(input.repository.github, 'pull_requests_write', signal)
+      if (credential._tag === 'Err')
+        return credential
+      const octokit = options.createClient?.(credential.value.token)
+        ?? createAuthenticatedClient({
+          access: 'pull_requests_write',
+          repository: input.repository.github,
+          signal,
+          token: credential.value.token,
+          tokens: options.tokens,
+          userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+        })
+      const request = signal === undefined ? {} : { request: { signal } }
+      const failure = (error: unknown): Result<never, GitHubReadError> => {
+        const status = errorStatus(error)
+        return err({
+          repository: input.repository.github,
+          message: error instanceof Error ? error.message : 'GitHub request failed.',
+          ...(status === undefined ? {} : { status }),
+        })
+      }
+
+      /**
+       * Merges in this call, pinned to the reviewed head SHA.
+       *
+       * Only reached when GitHub says auto-merge has nothing to wait for, which
+       * means the pull request already satisfies every requirement GitHub knows
+       * about. GitHub rejects the call when `sha` is not the current head, so a
+       * head that moved after the review can still never be merged here.
+       */
+      const mergeNow = (): Promise<Result<MergeHandoff, GitHubReadError>> => octokit.rest.pulls.merge({
+        owner,
+        repo,
+        pull_number: input.number,
+        sha: input.expectedHeadSha,
+        merge_method: input.method,
+        ...request,
+      })
+        .then((response): Result<MergeHandoff, GitHubReadError> => response.data.merged
+          ? ok({ _tag: 'Merged', sha: response.data.sha })
+          : err({ repository: input.repository.github, message: response.data.message }))
+        .catch(failure)
+
+      const pullRequest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
+        .then(response => ok(response.data))
+        .catch(failure)
+      if (pullRequest._tag === 'Err')
+        return pullRequest
+      if (pullRequest.value.head.sha !== input.expectedHeadSha) {
+        return err({
+          repository: input.repository.github,
+          message: 'The head commit moved before the merge was handed to GitHub.',
+        })
+      }
+
+      // GitHub owns the merge decision from here. `expectedHeadOid` makes GitHub
+      // cancel its own auto-merge when a new commit lands, so a review can never
+      // merge a commit it did not read.
+      return octokit.graphql(enableAutoMergeMutation, {
+        pullRequestId: pullRequest.value.node_id,
+        mergeMethod: graphqlMergeMethod(input.method),
+        expectedHeadOid: input.expectedHeadSha,
+        ...request,
+      })
+        .then((): Result<MergeHandoff, GitHubReadError> => ok({ _tag: 'AutoMergeEnabled' }))
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : 'GitHub request failed.'
+          return refusedBecauseNothingToWaitFor(message) ? mergeNow() : failure(error)
+        })
     },
   }
 }

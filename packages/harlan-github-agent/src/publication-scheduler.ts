@@ -101,8 +101,12 @@ export function createPublicationScheduler(options: PublicationSchedulerOptions)
           fail(command, finalized.error)
         return
       }
-      const expectedRemoteHead = command._tag === 'OpenPullRequest' ? null : command.expectedHeadSha
-      if (head.value !== expectedRemoteHead) {
+      // The branch as it stood before this attempt pushed. A later reconcile
+      // compares against it to tell a failed push from a changed branch.
+      const observedHead = head.value
+      // An OpenPullRequest owns its branch, so a leftover branch from an earlier
+      // attempt must not block every retry. validateAuthority still gates the write.
+      if (command._tag !== 'OpenPullRequest' && observedHead !== command.expectedHeadSha) {
         options.store.supersedePublication({
           commandId: command.id,
           workerId: command.workerId,
@@ -151,7 +155,7 @@ export function createPublicationScheduler(options: PublicationSchedulerOptions)
           else
             fail(command, finalized.error)
         }
-        else if (reconciledHead.value === expectedRemoteHead) {
+        else if (reconciledHead.value === observedHead) {
           fail(command, pushed.error)
         }
         else {

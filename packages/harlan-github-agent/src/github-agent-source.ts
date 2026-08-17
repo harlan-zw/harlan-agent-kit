@@ -1,8 +1,10 @@
+import type { Octokit } from 'octokit'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
-import type { GitHubPullRequestSubject, RepositoryMapping } from './types.ts'
-import { Octokit } from 'octokit'
+import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
+import { hasAutoMergeLabel } from './auto-merge.ts'
+import { createAuthenticatedClient } from './github-auth.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
@@ -42,7 +44,7 @@ export interface PullRequestReviewSnapshot {
   checks: GitHubChecksSnapshot
   comments: string[]
   priorAutomatedReview: PriorAutomatedReview
-  pullRequest: GitHubPullRequestSubject
+  pullRequest: GitHubPullRequestItem
   reviews: string[]
 }
 
@@ -63,8 +65,8 @@ export interface PublishedReviewStatus {
   url: string
 }
 
-export interface GitHubWorkerSource {
-  consumeApprovalLabel: (repository: RepositoryMapping, subjectKind: 'issue' | 'pull_request', subjectNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
+export interface GitHubAgentSource {
+  consumeApprovalLabel: (repository: RepositoryMapping, subjectKind: 'issue' | 'pull_request', itemNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   ensureApprovalLabel: (repository: RepositoryMapping, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   getIssueTriageSnapshot: (repository: RepositoryMapping, issueNumber: number, signal: AbortSignal) => Promise<Result<IssueTriageSnapshot, string>>
   getPullRequestTemplate: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<PullRequestTemplate, string>>
@@ -73,8 +75,9 @@ export interface GitHubWorkerSource {
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
 }
 
-export interface GitHubWorkerSourceOptions {
-  actorLogin: string
+export interface GitHubAgentSourceOptions {
+  /** The login the controller posts as, which depends on how the repository authenticates. */
+  actorLogin: (repository: RepositoryMapping) => string
   tokens: GitHubTokenProvider
   userAgent?: string
 }
@@ -96,10 +99,11 @@ function errorStatus(error: unknown): number | undefined {
     : undefined
 }
 
-function pullRequestSubject(repository: RepositoryMapping, pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data']): GitHubPullRequestSubject {
+function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data']): GitHubPullRequestItem {
   return {
     kind: 'pull_request',
     approvalLabels: [],
+    autoMerge: hasAutoMergeLabel(pull.labels.flatMap(label => label.name === undefined ? [] : [label.name])),
     repository: repository.github,
     number: pull.number,
     state: pull.state === 'closed' ? 'closed' : 'open',
@@ -120,22 +124,29 @@ function pullRequestSubject(repository: RepositoryMapping, pull: Awaited<ReturnT
   }
 }
 
-export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): GitHubWorkerSource {
+export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource {
   const client = async (repository: string, access: 'read' | 'checks_read' | 'issues_write' | 'pull_requests_write', signal: AbortSignal): Promise<Result<Octokit, string>> => {
     const token = await options.tokens.getToken(repository, access, signal)
     return token._tag === 'Err'
       ? err(token.error.message)
-      : ok(new Octokit({ auth: token.value.token, userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0' }))
+      : ok(createAuthenticatedClient({
+          access,
+          repository,
+          signal,
+          token: token.value.token,
+          tokens: options.tokens,
+          userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+        }))
   }
 
   return {
-    async consumeApprovalLabel(repository, subjectKind, subjectNumber, label, signal) {
+    async consumeApprovalLabel(repository, subjectKind, itemNumber, label, signal) {
       const access = subjectKind === 'issue' ? 'issues_write' : 'pull_requests_write'
       const octokit = await client(repository.github, access, signal)
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, issue_number: subjectNumber, request: { signal } }
+      const request = { owner, repo, issue_number: itemNumber, request: { signal } }
       const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
         .then((): Result<void, string> => ok(undefined))
         .catch((error: unknown): Result<void, string> => err(message(error)))
@@ -189,7 +200,7 @@ export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): Gi
       ]).then(([issue, comments]) => ok({
         body: issue.data.body ?? '',
         comments: comments.flatMap(comment => comment.body === undefined || comment.body === null
-          || (comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase() && comment.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
+          || (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
           ? []
           : [comment.body]),
         state: issue.data.state === 'closed' ? 'closed' as const : 'open' as const,
@@ -237,10 +248,10 @@ export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): Gi
       }).then(async (comments) => {
         const existing = commentId === null
           ? comments
-            .filter(comment => comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase() && comment.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
+            .filter(comment => comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
             .sort((left, right) => right.id - left.id)[0]
           : comments.find(comment => comment.id === commentId)
-        if (existing !== undefined && existing.user?.login.toLowerCase() !== options.actorLogin.toLowerCase())
+        if (existing !== undefined && existing.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase())
           return err('The stored issue triage comment belongs to another GitHub actor.')
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
@@ -249,7 +260,7 @@ export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): Gi
           : await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body, ...requestOptions })
         const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
         if (
-          confirmed.data.user?.login.toLowerCase() !== options.actorLogin.toLowerCase()
+          confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
           || confirmed.data.body !== body
           || !confirmed.data.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER)
         ) {
@@ -303,11 +314,11 @@ export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): Gi
           checks,
           comments: [
             ...issueComments.flatMap(comment => comment.body === undefined || comment.body === null
-              || (comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase() && comment.body.includes(AUTOMATED_REVIEW_MARKER))
+              || (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body.includes(AUTOMATED_REVIEW_MARKER))
               ? []
               : [comment.body]),
             ...reviewComments.flatMap(comment => comment.body === undefined
-              || (comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase() && comment.body.includes(AUTOMATED_REVIEW_MARKER))
+              || (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body.includes(AUTOMATED_REVIEW_MARKER))
               ? []
               : [comment.body]),
           ],
@@ -319,8 +330,8 @@ export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): Gi
                   authorLogin: comment.user.login,
                   body: comment.body,
                   url: comment.html_url,
-                }]), pull.data.head.sha, options.actorLogin),
-          pullRequest: pullRequestSubject(repository, pull.data),
+                }]), pull.data.head.sha, options.actorLogin(repository)),
+          pullRequest: pullRequestItem(repository, pull.data),
           reviews: reviews.flatMap(review => review.body === undefined || review.body === null ? [] : [review.body]),
         })
       }).catch((error: unknown) => err(message(error)))
@@ -350,15 +361,15 @@ export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): Gi
                 authorLogin: comment.user.login,
                 body: comment.body,
                 url: comment.html_url,
-              }]), headSha, options.actorLogin)
+              }]), headSha, options.actorLogin(repository))
         if (priorReview._tag === 'Found' && !replacePriorReview)
           return err(`The current head commit already has an automated review by @${priorReview.authorLogin}: ${priorReview.url}`)
         const existing = commentId === null
           ? comments
-            .filter(comment => comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase() && comment.body?.includes(AUTOMATED_REVIEW_MARKER))
+            .filter(comment => comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body?.includes(AUTOMATED_REVIEW_MARKER))
             .sort((left, right) => right.id - left.id)[0]
           : comments.find(comment => comment.id === commentId)
-        if (existing !== undefined && existing.user?.login.toLowerCase() !== options.actorLogin.toLowerCase())
+        if (existing !== undefined && existing.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase())
           return err('The stored automated review comment belongs to another GitHub actor.')
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
@@ -367,7 +378,7 @@ export function createGitHubWorkerSource(options: GitHubWorkerSourceOptions): Gi
           : await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body, ...requestOptions })
         const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
         if (
-          confirmed.data.user?.login.toLowerCase() !== options.actorLogin.toLowerCase()
+          confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
           || confirmed.data.body !== body
           || !confirmed.data.body.includes(AUTOMATED_REVIEW_MARKER)
         ) {

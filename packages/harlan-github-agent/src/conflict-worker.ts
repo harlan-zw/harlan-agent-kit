@@ -1,36 +1,31 @@
-import type { CodexOptions, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { AgentProvider } from './agent-provider.ts'
 import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
+import type { AgentProfile, AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { ConflictWorktreeManager } from './worktree.ts'
-import { Codex } from '@openai/codex-sdk'
-import { agentActivityFromEvent } from './agent-activity.ts'
-import { codexEventProgress } from './agent-progress.ts'
-import { runCodexTurn } from './codex-session.ts'
-import { CODEX_WORKER_PROFILE } from './codex-worker-profile.ts'
+import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
 import { err, ok } from './result.ts'
+import { cleanLine } from './text.ts'
 
 export interface ConflictWorker {
   run: (task: ClaimedConflictResolutionTask, signal: AbortSignal) => Promise<Result<MutationWorkerOutcome, string>>
 }
 
 export interface ConflictWorkerOptions {
-  createCodex?: (options: CodexOptions) => {
-    startThread: (options: ThreadOptions) => { runStreamed: (prompt: string, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }> }
-    resumeThread: (sessionId: string, options: ThreadOptions) => { runStreamed: (prompt: string, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }> }
-  }
   github: Pick<GitHubSource, 'getPullRequest'>
   now: () => Date
+  profile: AgentProfile
+  provider: AgentProvider
   activityLog?: Pick<AgentActivityLog, 'record'>
   store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: ConflictWorktreeManager
 }
 
-interface WorkerResponse {
+interface AgentResponse {
   outcome: 'resolved' | 'blocked'
   summary: string
   checks: string[]
@@ -52,7 +47,7 @@ const outputSchema = {
 function workerPrompt(task: ClaimedConflictResolutionTask): string {
   return `Resolve the existing merge conflicts for ${task.repository}#${task.pullRequestNumber}.
 
-Work as a normal local Codex session inside this Git worktree. Use the user's global Codex context, installed skills, environment, and authenticated GitHub CLI.
+Work as a normal local agent session inside this Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
 Select every installed skill whose trigger matches the work. Apply the unit-tests skill before regression repair.
 The controller already merged the current base into this worktree. Only resolve the conflicted files.
 Follow repository AGENTS.md and contributor instructions. Preserve the pull request intent.
@@ -61,12 +56,13 @@ Edit the conflicted files only. Do not stage files. The controller stages verifi
 Do not commit, push, amend, rebase, abort the merge, or edit Git configuration.
 Choose a commit message that describes the resolved conflict.
 Use GitHub read commands when issue or pull request history clarifies intent. Do not post comments.
-Return the required JSON result. Use outcome blocked when intent is ambiguous or safe verification cannot finish.`
+Return the required JSON result. Use outcome blocked when intent is ambiguous or safe verification cannot finish.
+The controller rejects a resolved outcome without a commit message. Return an empty commit message only with outcome blocked.`
 }
 
-function parseWorkerResponse(text: string): Result<WorkerResponse, string> {
+function parseAgentResponse(text: string): Result<AgentResponse, string> {
   try {
-    const value = JSON.parse(text) as Partial<WorkerResponse>
+    const value = JSON.parse(text) as Partial<AgentResponse>
     if (
       (value.outcome !== 'resolved' && value.outcome !== 'blocked')
       || typeof value.summary !== 'string'
@@ -75,16 +71,16 @@ function parseWorkerResponse(text: string): Result<WorkerResponse, string> {
       || typeof value.commitMessage !== 'string'
       || (value.outcome === 'resolved' && value.commitMessage.trim().length === 0)
     ) {
-      return err('Codex returned an invalid conflict resolution result.')
+      return err('The agent returned an invalid conflict resolution result.')
     }
-    return ok(value as WorkerResponse)
+    return ok(value as AgentResponse)
   }
   catch {
-    return err('Codex returned malformed conflict resolution JSON.')
+    return err('The agent returned malformed conflict resolution JSON.')
   }
 }
 
-export function createCodexConflictWorker(options: ConflictWorkerOptions): ConflictWorker {
+export function createConflictWorker(options: ConflictWorkerOptions): ConflictWorker {
   return {
     async run(task, signal) {
       const reportProgress = (progress: AgentProgress): Result<void, string> => options.store.updateAgentProgress({
@@ -105,13 +101,14 @@ export function createCodexConflictWorker(options: ConflictWorkerOptions): Confl
       const current = await options.github.getPullRequest(validated.value, task.pullRequestNumber, signal)
       if (current._tag === 'Err')
         return err(current.error.message)
+      const forkHead = current.value.headRepository.toLowerCase() !== validated.value.github.toLowerCase()
       if (
         current.value.state !== 'open'
         || current.value.draft
         || current.value.mergeState !== 'conflicting'
         || current.value.headSha !== task.pullRequest.headSha
-        || current.value.headRepository.toLowerCase() !== validated.value.github.toLowerCase()
-        || isAutomatedGitHubActor({ login: current.value.author })
+        || (forkHead && current.value.maintainerCanModify !== true)
+        || isAutomatedGitHubActor({ login: current.value.author }, validated.value.writablePullRequestAuthors)
       ) {
         return err('The pull request no longer matches the claimed head and base commit SHAs.')
       }
@@ -127,57 +124,24 @@ export function createCodexConflictWorker(options: ConflictWorkerOptions): Confl
       if (worktreeReady._tag === 'Err')
         return worktreeReady
 
-      const sessionId = options.store.getWorkerSession(task.repository, task.pullRequestNumber, 'conflict_resolution')
-      const codex = (options.createCodex ?? (codexOptions => new Codex(codexOptions)))({})
-      const threadOptions = {
-        model: CODEX_WORKER_PROFILE.roles.conflict_resolution.model,
-        modelReasoningEffort: CODEX_WORKER_PROFILE.roles.conflict_resolution.reasoningEffort,
-        workingDirectory: prepared.value.path,
-        webSearchMode: 'live' as const,
-        approvalPolicy: 'never' as const,
-      }
-      const streamed = await runCodexTurn({
-        client: codex,
-        outputSchema,
+      const turn = await runAgentTurn(options, {
+        number: task.pullRequestNumber,
+        progress: { currentPercent: 35, report: reportProgress, work: 'conflict' },
         prompt: workerPrompt(currentTask),
-        sessionId,
-        signal,
-        threadOptions,
-      })
-      let response: string | undefined
-      let failure: string | undefined
-      let currentPercent = 35
-      for await (const event of streamed.events) {
-        if (event.type === 'thread.started')
-          options.store.saveWorkerSession(task.repository, task.pullRequestNumber, 'conflict_resolution', event.thread_id, options.now().toISOString())
-        if (event.type === 'item.completed' && event.item.type === 'agent_message')
-          response = event.item.text
-        if (event.type === 'turn.failed')
-          failure = event.error.message
-        if (event.type === 'error')
-          failure = event.message
-        const activity = agentActivityFromEvent(event, options.now().toISOString())
-        if (activity !== undefined)
-          options.activityLog?.record(task.id, activity)
-        const progress = codexEventProgress(event, 'conflict')
-        if (progress !== undefined && progress.percent > currentPercent) {
-          const reported = reportProgress(progress)
-          if (reported._tag === 'Err')
-            failure ??= reported.error
-          else
-            currentPercent = progress.percent
-        }
-      }
-      if (failure !== undefined)
-        return err(failure)
-      if (response === undefined)
-        return err('Codex completed without a conflict resolution result.')
+        repository: task.repository,
+        role: 'conflict_resolution',
+        schema: outputSchema,
+        taskId: task.id,
+        workspace: prepared.value.path,
+      }, signal)
+      if (turn._tag === 'Err')
+        return turn
 
-      const parsed = parseWorkerResponse(response)
+      const parsed = parseAgentResponse(turn.value.response)
       if (parsed._tag === 'Err')
         return parsed
       if (parsed.value.outcome === 'blocked')
-        return err(parsed.value.summary)
+        return err(cleanLine(parsed.value.summary))
 
       const verified = await options.worktrees.verify(currentTask, prepared.value, signal)
       if (verified._tag === 'Err')
@@ -189,12 +153,13 @@ export function createCodexConflictWorker(options: ConflictWorkerOptions): Confl
       const publishSnapshot = await options.github.getPullRequest(validated.value, task.pullRequestNumber, signal)
       if (publishSnapshot._tag === 'Err')
         return err(publishSnapshot.error.message)
+      const publishForkHead = publishSnapshot.value.headRepository.toLowerCase() !== validated.value.github.toLowerCase()
       if (
         publishSnapshot.value.state !== 'open'
         || publishSnapshot.value.draft
         || publishSnapshot.value.mergeState !== 'conflicting'
         || publishSnapshot.value.headSha !== prepared.value.headSha
-        || publishSnapshot.value.headRepository.toLowerCase() !== validated.value.github.toLowerCase()
+        || (publishForkHead && publishSnapshot.value.maintainerCanModify !== true)
       ) {
         return err('The pull request changed before the fix was committed.')
       }
@@ -203,7 +168,7 @@ export function createCodexConflictWorker(options: ConflictWorkerOptions): Confl
         currentTask,
         prepared.value,
         verified.value,
-        parsed.value.commitMessage.replaceAll(/[\r\n]/g, ' ').replaceAll(/\s+/g, ' ').trim().slice(0, 240),
+        cleanLine(parsed.value.commitMessage),
         signal,
       )
       if (committed._tag === 'Err')

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { openJournalStore } from '../src/store.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 
@@ -21,7 +21,7 @@ function storeWithQueuedReview() {
     externalId: 'pause-observation',
     observedAt: '2026-08-13T01:00:00.000Z',
     source: 'poll',
-    subject: pullRequestSubject({ mergeState: 'clean' }),
+    subject: pullRequestItem({ mergeState: 'clean' }),
   })
   if (observed._tag !== 'Inserted')
     throw new Error('Expected a new pull request.')
@@ -52,7 +52,7 @@ describe('per repository pause', () => {
       externalId: 'other-observation',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ repository: 'harlan-zw/other', mergeState: 'clean' }),
+      subject: pullRequestItem({ repository: 'harlan-zw/other', mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request.')

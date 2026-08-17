@@ -1,14 +1,14 @@
-import type { CodexOptions, ThreadOptions } from '@openai/codex-sdk'
 import { describe, expect, it } from 'vitest'
-import { createCodexBaselineRepairWorker } from '../src/baseline-repair-worker.ts'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { createBaselineRepairWorker } from '../src/baseline-repair-worker.ts'
 import { ok } from '../src/result.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('baseline repair worker', () => {
   it('lets the agent describe and publish a verified default branch CI fix', async () => {
     const disclosure = '> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
     const mapping = repositoryMapping()
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let commitMessage = ''
     const response = {
       outcome: 'repaired',
@@ -18,19 +18,9 @@ describe('baseline repair worker', () => {
       pullRequestTitle: 'fix(types): regenerate runtime declarations',
       pullRequestBody: `Regenerates declarations so default branch CI passes.\n\n${disclosure}`,
     }
-    const worker = createCodexBaselineRepairWorker({
-      createCodex: (_options: CodexOptions) => ({
-        startThread: (_thread: ThreadOptions) => ({
-          runStreamed: () => Promise.resolve({
-            events: (async function* () {
-              yield { type: 'thread.started' as const, thread_id: 'baseline-session' }
-              yield { type: 'item.completed' as const, item: { type: 'agent_message' as const, id: 'message', text: JSON.stringify(response) } }
-              yield { type: 'turn.completed' as const, usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }
-            })(),
-          }),
-        }),
-        resumeThread: () => { throw new Error('A new Baseline repair must start a session.') },
-      }),
+    const worker = createBaselineRepairWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents(response)),
       github: {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({

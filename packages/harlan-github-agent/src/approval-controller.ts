@@ -1,17 +1,17 @@
-import type { GitHubWorkerSource } from './github-worker-source.ts'
+import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { GitHubPullRequestSubject, GitHubSubject, RepositoryMapping } from './types.ts'
+import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
 
 export interface ApprovalController {
-  reconcile: (repository: RepositoryMapping, subject: GitHubSubject, revisionId: string, signal: AbortSignal) => Promise<Result<void, string>>
+  reconcile: (repository: RepositoryMapping, subject: GitHubItem, revisionId: string, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
 export interface ApprovalControllerOptions {
-  github: Pick<GitHubWorkerSource, 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
+  github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
   now: () => Date
   store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'hasPullRequestApproval' | 'isIssueWorkApprovalReady'>
 }
@@ -50,7 +50,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
         return err(`Issue label Approval failed: ${approved.reason._tag}.`)
       }
 
-      const pullRequest: GitHubPullRequestSubject = subject
+      const pullRequest: GitHubPullRequestItem = subject
       if (!repository.enabled || !repository.pullRequestReview || trustedAuthor)
         return ok(undefined)
       if (options.store.hasPullRequestApproval(repository.github, pullRequest.number, revisionId, 'review'))
@@ -64,9 +64,6 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
         return options.github.upsertReviewStatus(repository, pullRequest.number, null, approvalPrompt(label, pullRequest.headSha), false, signal).then(result => result._tag === 'Err' ? result : ok(undefined))
       }
 
-      const consumed = await options.github.consumeApprovalLabel(repository, 'pull_request', pullRequest.number, label, signal)
-      if (consumed._tag === 'Err')
-        return consumed
       const approved = options.store.approvePullRequest({
         repository: repository.github,
         pullRequestNumber: pullRequest.number,

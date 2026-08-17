@@ -1,3 +1,7 @@
+# Agent provider that runs every Worker. Codex is the default.
+# opencode runs opencode-go/deepseek-v4-flash at the high reasoning variant.
+agent:
+  provider: codex
 github:
   app_id: 12345
   private_key_path: /home/harlan/.config/harlan-github-agent/app.pem
@@ -9,6 +13,14 @@ server:
 storage:
   path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
 mutations_enabled: false
+# The controller merges a pull request labelled harlan-agent-auto-merge after a
+# READY review at or above minimum_confidence. Everything else waits for Harlan.
+auto_merge:
+  enabled: false
+  minimum_confidence: 100
+  method: squash
+# No new issue work starts above this many open pull requests.
+max_open_pull_requests: 8
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14
 # Public, read-only watches outside the GitHub App installation.

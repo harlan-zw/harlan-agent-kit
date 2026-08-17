@@ -1,36 +1,14 @@
-import type { CodexOptions, ThreadOptions } from '@openai/codex-sdk'
-import type { RecordReviewAttemptInput } from '../src/types.ts'
+import type { RecordReviewRunInput } from '../src/types.ts'
+import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { createIssueTriageWorker, createReviewWorker, reviewSnapshotDigest } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
-import { createCodexIssueTriageWorker, createCodexReviewWorker, reviewSnapshotDigest } from '../src/subject-worker.ts'
-import { issueSubject, pullRequestSubject, repositoryMapping } from './fixtures.ts'
-
-function codexFactory(response: unknown, capture: { client?: CodexOptions, thread?: ThreadOptions }) {
-  return (options: CodexOptions) => {
-    capture.client = options
-    const thread = {
-      runStreamed: () => Promise.resolve({
-        events: (async function* () {
-          yield { type: 'thread.started' as const, thread_id: 'session-1' }
-          yield { type: 'item.started' as const, item: { id: 'command-1', type: 'command_execution' as const, command: 'pnpm test', aggregated_output: '', status: 'in_progress' as const } }
-          yield { type: 'item.completed' as const, item: { id: 'message-1', type: 'agent_message' as const, text: JSON.stringify(response) } }
-          yield { type: 'turn.completed' as const, usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 1 } }
-        })(),
-      }),
-    }
-    return {
-      startThread: (threadOptions: ThreadOptions) => {
-        capture.thread = threadOptions
-        return thread
-      },
-      resumeThread: () => thread,
-    }
-  }
-}
+import { issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('subject Workers', () => {
-  it('keeps one review session when only GitHub activity time changes', () => {
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
+  it('keeps one review identity while GitHub activity time and CI results move', () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const snapshot = {
       baseChecks: { _tag: 'Available' as const, checks: [] },
       body: 'Fixes the bug.',
@@ -45,23 +23,28 @@ describe('subject Workers', () => {
       ...snapshot,
       pullRequest: { ...pullRequest, updatedAt: '2026-08-13T02:00:00.000Z' },
     })).toBe(reviewSnapshotDigest(snapshot))
+    expect(reviewSnapshotDigest({
+      ...snapshot,
+      checks: { _tag: 'Available' as const, checks: [{ id: 1, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+    })).toBe(reviewSnapshotDigest(snapshot))
     expect(reviewSnapshotDigest({ ...snapshot, comments: ['Different human review comment.'] })).not.toBe(reviewSnapshotDigest(snapshot))
   })
 
   it('records and publishes one isolated adversarial review', async () => {
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
-    const capture: { client?: CodexOptions, thread?: ThreadOptions } = {}
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const capture: ProviderCapture = { requests: [] }
     const comments: string[] = []
-    let attempt: RecordReviewAttemptInput | undefined
-    const worker = createCodexReviewWorker({
-      createCodex: codexFactory({
+    let attempt: RecordReviewRunInput | undefined
+    const worker = createReviewWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
         findings: [],
         repair: { outcome: 'not_needed', summary: 'No repair needed.', checks: [], commitMessage: '' },
         confidence: 96,
-      }, capture),
+      }), capture),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -89,13 +72,14 @@ describe('subject Workers', () => {
         claimReviewFixTaskForReview: () => { throw new Error('A clean review must not claim repair work.') },
         failTask: () => { throw new Error('A clean review must not fail repair work.') },
         getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         saveWorkerSession: () => undefined,
         stagePublication: () => { throw new Error('A clean review must not stage a repair.') },
         updateAgentProgress: () => true,
-        recordReviewAttempt: (input) => {
+        recordReviewRun: (input) => {
           attempt = input
-          return { _tag: 'Inserted', attemptId: input.id }
+          return { _tag: 'Inserted', reviewRunId: input.id }
         },
         recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
       },
@@ -139,19 +123,16 @@ describe('subject Workers', () => {
     expect(comments[5]).toContain('READY · 96/100')
     expect(comments[5]).toContain('▓▓▓▓▓ 100%')
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
-    expect(capture.client).toEqual({})
-    expect(capture.thread).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', modelReasoningEffort: 'high', webSearchMode: 'live' }))
+    expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
   })
 
   it('does not start a second review for the same head commit', async () => {
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
-    let codexStarted = false
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let workspaceCreated = false
-    const worker = createCodexReviewWorker({
-      createCodex: () => {
-        codexStarted = true
-        throw new Error('A second review must not start.')
-      },
+    const capture: ProviderCapture = { requests: [] }
+    const worker = createReviewWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider([], capture),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -179,11 +160,12 @@ describe('subject Workers', () => {
         claimReviewFixTaskForReview: () => { throw new Error('A second review must not claim repair work.') },
         failTask: () => { throw new Error('A second review must not fail repair work.') },
         getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
         saveWorkerSession: () => undefined,
         stagePublication: () => { throw new Error('A second review must not stage a repair.') },
         updateAgentProgress: () => true,
-        recordReviewAttempt: () => { throw new Error('A second review must not be recorded.') },
+        recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
         recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
       },
       status: {
@@ -221,14 +203,14 @@ describe('subject Workers', () => {
       _tag: 'Ok',
       value: { evidence: 'Existing automated review by @harlan-zw: https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
     })
-    expect(codexStarted).toBe(false)
+    expect(capture.requests).toEqual([])
     expect(workspaceCreated).toBe(false)
   })
 
   it('repairs findings during the review turn and stages their publication', async () => {
     const repository = repositoryMapping()
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
-    let attempt: RecordReviewAttemptInput | undefined
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    let attempt: RecordReviewRunInput | undefined
     let claimed = false
     let staged = false
     const repairTask = {
@@ -243,15 +225,16 @@ describe('subject Workers', () => {
       pullRequest,
       findings: [{ _tag: 'Open' as const, summary: 'The parser drops data.', nextAction: 'Preserve the buffered bytes.' }],
     }
-    const worker = createCodexReviewWorker({
-      createCodex: codexFactory({
+    const worker = createReviewWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         review: { state: 'failed', reason: 'The parser drops data.', evidence: 'focused reproduction failed before repair' },
         verification: { state: 'passed', reason: '', evidence: 'regression passes after repair' },
         findings: [{ summary: 'The parser drops data.', nextAction: 'Preserve the buffered bytes.' }],
         repair: { outcome: 'repaired', summary: 'Preserved buffered bytes.', checks: ['pnpm vitest run test/parser.test.ts'], commitMessage: 'fix(core): preserve buffered parser bytes' },
         confidence: null,
-      }, {}),
+      })),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -276,11 +259,12 @@ describe('subject Workers', () => {
           return repairTask
         },
         getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         failTask: () => { throw new Error('A verified repair must not fail.') },
-        recordReviewAttempt: (input) => {
+        recordReviewRun: (input) => {
           attempt = input
-          return { _tag: 'Inserted', attemptId: input.id }
+          return { _tag: 'Inserted', reviewRunId: input.id }
         },
         recordReviewPublication: () => { throw new Error('A repaired head must not publish the old terminal review.') },
         saveWorkerSession: () => undefined,
@@ -334,10 +318,12 @@ describe('subject Workers', () => {
   })
 
   it('waits for Baseline repair without starting a review agent', async () => {
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let baselineQueued = false
-    const worker = createCodexReviewWorker({
-      createCodex: () => { throw new Error('Review must wait for Baseline repair.') },
+    const capture: ProviderCapture = { requests: [] }
+    const worker = createReviewWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider([], capture),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -360,11 +346,12 @@ describe('subject Workers', () => {
         claimReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent repair work.') },
         failTask: () => { throw new Error('No repair Task should exist.') },
         getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
         queueBaselineRepairForReview: () => {
           baselineQueued = true
           return { _tag: 'Queued', taskId: 'baseline-task' }
         },
-        recordReviewAttempt: () => { throw new Error('Review must not record an Attempt.') },
+        recordReviewRun: () => { throw new Error('Review must not record an Attempt.') },
         recordReviewPublication: () => { throw new Error('Review must not record a Publication.') },
         saveWorkerSession: () => undefined,
         stagePublication: () => { throw new Error('Base CI failure must prevent publication.') },
@@ -402,12 +389,95 @@ describe('subject Workers', () => {
     expect(baselineQueued).toBe(true)
   })
 
+  it('reviews the Baseline repair pull request itself while the default branch stays red', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean', headRef: 'fix/baseline-ci-abcdef012345' })
+    const capture: ProviderCapture = { requests: [] }
+    let published = ''
+    const worker = createReviewWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents({
+        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
+        verification: { state: 'passed', reason: '', evidence: 'build passes with the fix' },
+        findings: [],
+        repair: { outcome: 'not_needed', summary: 'No material defect.', checks: ['pnpm build'], commitMessage: '' },
+        confidence: 88,
+      }), capture),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          // The default branch is red. That failure is what this pull request repairs.
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
+          body: 'Repairs the default branch build.',
+          checks: { _tag: 'Available', checks: [{ id: 2, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        claimReviewFixTaskForReview: () => { throw new Error('No repair is needed.') },
+        failTask: () => { throw new Error('No repair Task should exist.') },
+        getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => true,
+        queueBaselineRepairForReview: () => { throw new Error('A Baseline repair must not queue another Baseline repair.') },
+        recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
+        recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),
+        saveWorkerSession: () => undefined,
+        stagePublication: () => { throw new Error('No repair is needed.') },
+        updateAgentProgress: () => true,
+      },
+      status: {
+        publish: (_task, phase, body) => {
+          if (phase === 'terminal')
+            published = body
+          return Promise.resolve(ok({ commentId: 1, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-1' }))
+        },
+        publishRepair: () => Promise.reject(new Error('No repair is needed.')),
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+      },
+      repairs: {
+        commit: () => Promise.reject(new Error('No repair is needed.')),
+        verify: () => Promise.reject(new Error('No repair is needed.')),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repositoryMapping(),
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(capture.requests).toHaveLength(1)
+    expect(published).toContain('READY · 88/100')
+  })
+
   it('publishes a valid issue triage result on the issue', async () => {
-    const issue = issueSubject()
-    const capture: { thread?: ThreadOptions } = {}
+    const issue = issueItem()
+    const capture: ProviderCapture = { requests: [] }
     let triageBody = ''
-    const worker = createCodexIssueTriageWorker({
-      createCodex: codexFactory({
+    const worker = createIssueTriageWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents({
         validity: 'valid',
         difficulty: 2,
         impact: 4,
@@ -415,7 +485,7 @@ describe('subject Workers', () => {
         needsCodebaseReview: false,
         summary: 'The parser drops valid input.',
         nextAction: 'Write a regression test and repair the parser.',
-      }, capture),
+      }), capture),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -428,9 +498,10 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
         saveWorkerSession: () => undefined,
         updateAgentProgress: () => true,
-        recordReviewAttempt: () => { throw new Error('Unexpected review Attempt.') },
+        recordReviewRun: () => { throw new Error('Unexpected review Attempt.') },
         recordReviewPublication: () => { throw new Error('Unexpected review Publication.') },
       },
       status: { publish: () => Promise.reject(new Error('Issue triage must not publish status.')) },
@@ -472,7 +543,7 @@ describe('subject Workers', () => {
         }),
       },
     })
-    expect(capture.thread).toEqual(expect.objectContaining({ model: 'gpt-5.6-terra', modelReasoningEffort: 'medium' }))
+    expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium' })])
     expect(triageBody).toBe(`<!-- harlan-agent-kit:issue-triage -->
 ### 🤖 Issue triage
 
