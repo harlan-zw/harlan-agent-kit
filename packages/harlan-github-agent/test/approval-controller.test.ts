@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createApprovalController } from '../src/approval-controller.ts'
-import { err, ok } from '../src/result.ts'
-import { issueSubject, pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { ok } from '../src/result.ts'
+import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const unusedIssueApproval = {
   approveIssueWork: () => { throw new Error('Unexpected issue Approval.') },
@@ -37,7 +37,7 @@ describe('approval controller', () => {
       },
     })
 
-    expect(await controller.reconcile(repositoryMapping(), pullRequestSubject({ author: 'harlan-zw' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'harlan-zw' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
     expect(calls).toEqual([])
   })
 
@@ -56,21 +56,19 @@ describe('approval controller', () => {
       store: { ...unusedIssueApproval, hasPullRequestApproval: () => false, approvePullRequest: () => { throw new Error('Unexpected Approval.') } },
     })
 
-    expect(await controller.reconcile(repositoryMapping(), pullRequestSubject({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
     expect(body).toContain('Harlan GitHub Agent posted this automated comment.')
     expect(body).toContain('<!-- reviewed-sha: abc123 -->')
     expect(body).toContain('`harlan-agent-review` label')
     expect(body).toContain('head commit `abc123`')
   })
 
-  it('consumes the label before approving its exact head commit', async () => {
+  it('keeps the label and approves the exact head commit', async () => {
     const calls: string[] = []
-    let consumedSubjectKind: unknown
     const revisionId = 'a'.repeat(64)
     const controller = createApprovalController({
       github: {
-        consumeApprovalLabel: (...args: unknown[]) => {
-          consumedSubjectKind = args[1]
+        consumeApprovalLabel: () => {
           calls.push('consume')
           return Promise.resolve(ok(undefined))
         },
@@ -89,18 +87,51 @@ describe('approval controller', () => {
       },
     })
 
-    expect(await controller.reconcile(repositoryMapping(), pullRequestSubject({ author: 'contributor', approvalLabels: ['review'] }), revisionId, new AbortController().signal)).toEqual(ok(undefined))
-    expect(calls).toEqual(['consume', 'approve'])
-    expect(consumedSubjectKind).toBe('pull_request')
+    expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor', approvalLabels: ['review'] }), revisionId, new AbortController().signal)).toEqual(ok(undefined))
+    expect(calls).toEqual(['approve'])
   })
 
-  it('fails closed when label consumption cannot be confirmed', async () => {
+  it('approves a later head commit when the label is still present', async () => {
+    const calls: string[] = []
+    const firstRevision = 'a'.repeat(64)
+    const secondRevision = 'b'.repeat(64)
+    const approvals = new Set<string>()
+    const controller = createApprovalController({
+      github: {
+        consumeApprovalLabel: () => {
+          calls.push('consume')
+          return Promise.resolve(ok(undefined))
+        },
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label creation.')),
+        upsertReviewStatus: () => Promise.reject(new Error('Unexpected comment.')),
+      },
+      now: () => new Date('2026-08-14T01:00:00.000Z'),
+      store: {
+        ...unusedIssueApproval,
+        hasPullRequestApproval: (_repository, _number, revisionId) => approvals.has(revisionId),
+        approvePullRequest(input) {
+          calls.push('approve')
+          approvals.add(input.revisionId)
+          return { _tag: 'Approved', approval: { _tag: 'ReviewApproved', approvedAt: input.at } }
+        },
+      },
+    })
+    const pullRequest = pullRequestItem({ author: 'contributor', approvalLabels: ['review'] })
+
+    expect(await controller.reconcile(repositoryMapping(), pullRequest, firstRevision, new AbortController().signal)).toEqual(ok(undefined))
+    expect(calls).toEqual(['approve'])
+    calls.length = 0
+    expect(await controller.reconcile(repositoryMapping(), pullRequest, secondRevision, new AbortController().signal)).toEqual(ok(undefined))
+    expect(calls).toEqual(['approve'])
+  })
+
+  it('fails closed when the label disappears before approval', async () => {
     let approved = false
     const controller = createApprovalController({
       github: {
-        consumeApprovalLabel: () => Promise.resolve(err('Label remains.')),
-        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label creation.')),
-        upsertReviewStatus: () => Promise.reject(new Error('Unexpected comment.')),
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label consumption.')),
+        ensureApprovalLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewStatus: () => Promise.resolve(ok({ commentId: 1, url: 'url' })),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
@@ -113,7 +144,7 @@ describe('approval controller', () => {
       },
     })
 
-    expect(await controller.reconcile(repositoryMapping(), pullRequestSubject({ author: 'contributor', approvalLabels: ['review'] }), 'a'.repeat(64), new AbortController().signal)).toEqual(err('Label remains.'))
+    expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
     expect(approved).toBe(false)
   })
 
@@ -132,7 +163,7 @@ describe('approval controller', () => {
       },
     })
 
-    expect(await controller.reconcile(repositoryMapping(), pullRequestSubject({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
   })
 
   it('leaves an outside issue Approval label until valid triage finishes', async () => {
@@ -158,7 +189,7 @@ describe('approval controller', () => {
       },
     })
 
-    const issue = issueSubject({ approvalLabels: ['review'] })
+    const issue = issueItem({ approvalLabels: ['review'] })
     expect(await controller.reconcile(repositoryMapping(), issue, 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
     expect(calls).toEqual([])
   })
@@ -183,18 +214,18 @@ describe('approval controller', () => {
       },
     })
 
-    expect(await controller.reconcile(repositoryMapping(), issueSubject({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.reconcile(repositoryMapping(), issueItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
     expect(calls).toEqual(['ensure'])
   })
 
   it('consumes the shared label before approving the exact outside issue state', async () => {
     const calls: string[] = []
-    let consumedSubjectKind: unknown
+    let consumedItemKind: unknown
     const revisionId = 'a'.repeat(64)
     const controller = createApprovalController({
       github: {
         consumeApprovalLabel: (...args: unknown[]) => {
-          consumedSubjectKind = args[1]
+          consumedItemKind = args[1]
           calls.push('consume')
           return Promise.resolve(ok(undefined))
         },
@@ -214,9 +245,9 @@ describe('approval controller', () => {
       },
     })
 
-    const issue = issueSubject({ approvalLabels: ['review'] })
+    const issue = issueItem({ approvalLabels: ['review'] })
     expect(await controller.reconcile(repositoryMapping(), issue, revisionId, new AbortController().signal)).toEqual(ok(undefined))
     expect(calls).toEqual(['consume', 'approve'])
-    expect(consumedSubjectKind).toBe('issue')
+    expect(consumedItemKind).toBe('issue')
   })
 })

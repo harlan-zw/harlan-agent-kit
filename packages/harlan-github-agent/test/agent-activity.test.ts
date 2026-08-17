@@ -1,19 +1,11 @@
-import type { ThreadEvent } from '@openai/codex-sdk'
+import type { AgentEvent } from '../src/agent-provider.ts'
 import { describe, expect, it } from 'vitest'
 import { agentActivityFromEvent, createAgentActivityLog, redactSecrets, truncateOutput } from '../src/agent-activity.ts'
 
-function commandEvent(type: 'item.started' | 'item.completed', command: string, output: string, exitCode?: number): ThreadEvent {
-  return {
-    type,
-    item: {
-      id: 'item-1',
-      type: 'command_execution',
-      command,
-      aggregated_output: output,
-      status: type === 'item.started' ? 'in_progress' : 'completed',
-      ...(exitCode === undefined ? {} : { exit_code: exitCode }),
-    },
-  } as ThreadEvent
+function commandEvent(state: 'started' | 'completed', command: string, output: string, exitCode?: number): AgentEvent {
+  return state === 'started'
+    ? { _tag: 'CommandStarted', command }
+    : { _tag: 'CommandCompleted', command, output, exitCode: exitCode ?? null }
 }
 
 describe('redactSecrets', () => {
@@ -44,7 +36,7 @@ describe('truncateOutput', () => {
 
 describe('agentActivityFromEvent', () => {
   it('records a finished command with its redacted output and exit code', () => {
-    const item = agentActivityFromEvent(commandEvent('item.completed', 'pnpm test', 'token=ghp_ABCDEFGHIJKLMNOPQRSTUVWX\nfailed', 1), '2026-08-14T00:00:00.000Z')
+    const item = agentActivityFromEvent(commandEvent('completed', 'pnpm test', 'token=ghp_ABCDEFGHIJKLMNOPQRSTUVWX\nfailed', 1), '2026-08-14T00:00:00.000Z')
     expect(item).toEqual({
       _tag: 'Command',
       at: '2026-08-14T00:00:00.000Z',
@@ -55,15 +47,15 @@ describe('agentActivityFromEvent', () => {
   })
 
   it('ignores events that say nothing about what the agent is doing', () => {
-    expect(agentActivityFromEvent({ type: 'thread.started', thread_id: 'thread-1' } as ThreadEvent, '2026-08-14T00:00:00.000Z')).toBeUndefined()
+    expect(agentActivityFromEvent({ _tag: 'SessionStarted', sessionId: 'session-1' }, '2026-08-14T00:00:00.000Z')).toBeUndefined()
   })
 })
 
 describe('createAgentActivityLog', () => {
   it('replaces a started command with its completed line rather than duplicating it', () => {
     const log = createAgentActivityLog()
-    log.record('task-1', agentActivityFromEvent(commandEvent('item.started', 'pnpm test', ''), '2026-08-14T00:00:00.000Z')!)
-    log.record('task-1', agentActivityFromEvent(commandEvent('item.completed', 'pnpm test', 'ok', 0), '2026-08-14T00:00:01.000Z')!)
+    log.record('task-1', agentActivityFromEvent(commandEvent('started', 'pnpm test', ''), '2026-08-14T00:00:00.000Z')!)
+    log.record('task-1', agentActivityFromEvent(commandEvent('completed', 'pnpm test', 'ok', 0), '2026-08-14T00:00:01.000Z')!)
     expect(log.read('task-1')).toEqual([
       { _tag: 'Command', at: '2026-08-14T00:00:01.000Z', command: 'pnpm test', output: 'ok', exitCode: 0 },
     ])

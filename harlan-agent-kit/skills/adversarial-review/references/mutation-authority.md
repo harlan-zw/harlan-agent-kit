@@ -53,6 +53,26 @@ Use the repository's normal merge method or merge queue. Never bypass protection
 
 Skill selection and generated default prompts never grant merge authority. This authority does not let `adversarial-review` merge. It never permits self-approval, force push, branch-protection bypass, or merging maintained and external repositories.
 
+## Auto merge authority
+
+`harlan-github-agent` merges a labelled pull request without a per-pull-request instruction. Configuration carries the decision instead. See [auto merge](../../../references/auto-merge.md).
+
+Allow it only when every condition holds:
+
+1. The service configuration enables auto merge.
+2. The pull request carries the `harlan-agent-auto-merge` label.
+3. The base repository owner exactly matches the authenticated GitHub login.
+4. The pull request author is a trusted author for that repository.
+5. `adversarial-review` returned `READY` for the exact current head commit.
+6. Review confidence meets the configured minimum.
+7. The pull request is open, is not a draft, and GitHub reports it mergeable.
+
+Recheck the head commit immediately before the merge. Abandon the merge when it moved, then review the new head.
+
+The label never changes whether a pull request is reviewed. Review runs either way.
+
+This authority belongs to the service alone. It never applies to `adversarial-review`, `pr-triage`, or an interactive session. It never permits force push, branch-protection bypass, self-approval, or merging a maintained or external repository.
+
 ## Default branch repair
 
 Direct default branch repair has a narrower boundary. Allow it only when every condition holds:

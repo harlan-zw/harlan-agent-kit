@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { createGitPublicationRemote } from '../src/worktree.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -86,12 +86,83 @@ function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPu
 }
 
 describe('git publication remote', () => {
+  it('refuses to rewrite a branch that already has an open pull request', async () => {
+    const { bare, command, root } = fixture()
+    const open: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> = {
+      ...command,
+      _tag: 'OpenPullRequest',
+      taskKind: 'baseline_repair',
+      pullRequestTitle: 'fix(ci): repair the default branch',
+      pullRequestBody: 'Repairs default branch CI.',
+    }
+    const remote = createGitPublicationRemote({
+      github: {
+        getPullRequest: () => Promise.reject(new Error('An OpenPullRequest reads no pull request by number.')),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(true)),
+        isBranchProtected: () => Promise.resolve(ok(false)),
+      },
+      remoteUrl: () => bare,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+
+    expect(await remote.validateAuthority(open, new AbortController().signal))
+      .toEqual({ _tag: 'Err', error: 'An open pull request already uses this branch.' })
+  })
+
+  it('replaces its own leftover branch when it opens a pull request', async () => {
+    const { bare, checkout, command, root } = fixture()
+    const controller = join(root, 'repositories', 'harlan-zw__example.git')
+    git(checkout, 'checkout', 'main')
+    writeFileSync(join(checkout, 'stale.txt'), 'stale\n')
+    git(checkout, 'add', 'stale.txt')
+    git(checkout, 'commit', '-m', 'stale attempt')
+    // A branch left behind by an attempt that never opened a pull request.
+    const staleSha = git(checkout, 'rev-parse', 'HEAD')
+    git(checkout, 'push', 'origin', `${staleSha}:refs/heads/fix/baseline-ci`)
+    expect(git(bare, 'rev-parse', 'refs/heads/fix/baseline-ci')).toBe(staleSha)
+    git(checkout, 'reset', '--hard', command.baseSha)
+    writeFileSync(join(checkout, 'repair.txt'), 'repair\n')
+    git(checkout, 'add', 'repair.txt')
+    git(checkout, 'commit', '-m', 'fix(ci): repair the default branch')
+    const repairSha = git(checkout, 'rev-parse', 'HEAD')
+    git(controller, 'fetch', checkout, '+refs/heads/*:refs/remotes/checkout/*')
+    const artifactRef = 'refs/harlan-github-agent/publications/baseline'
+    git(controller, 'update-ref', artifactRef, repairSha)
+    const open: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> = {
+      ...command,
+      _tag: 'OpenPullRequest',
+      taskKind: 'baseline_repair',
+      pullRequestTitle: 'fix(ci): repair the default branch',
+      pullRequestBody: 'Repairs default branch CI.',
+      commitSha: repairSha,
+      expectedHeadSha: command.baseSha,
+      headRef: 'fix/baseline-ci',
+      artifactRef,
+      patchDigest: createHash('sha256').update(git(controller, 'diff', '--binary', command.baseSha, repairSha)).digest('hex'),
+      changedFiles: 1,
+    }
+    const remote = createGitPublicationRemote({
+      github: {
+        getPullRequest: () => Promise.reject(new Error('An OpenPullRequest reads no pull request by number.')),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
+        isBranchProtected: () => Promise.resolve(ok(false)),
+      },
+      remoteUrl: () => bare,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+
+    expect(await remote.push(open, new AbortController().signal)).toEqual(ok(undefined))
+    expect(git(bare, 'rev-parse', 'refs/heads/fix/baseline-ci')).toBe(repairSha)
+  })
+
   it('authorizes an approved repair while the pull request remains clean', async () => {
     const { bare, command, root } = fixture()
     const repair = { ...command, taskKind: 'review_fix' as const }
     const remote = createGitPublicationRemote({
       github: {
-        getPullRequest: () => Promise.resolve(ok(pullRequestSubject({
+        getPullRequest: () => Promise.resolve(ok(pullRequestItem({
           repository: repair.repository,
           number: 1,
           baseSha: repair.baseSha,
@@ -100,11 +171,12 @@ describe('git publication remote', () => {
           headRef: repair.headRef,
           mergeState: 'clean',
         }))),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
         isBranchProtected: () => Promise.resolve(ok(false)),
       },
       remoteUrl: () => bare,
       root,
-      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })) },
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
 
     expect(await remote.validateAuthority(repair, new AbortController().signal)).toEqual(ok(undefined))
@@ -118,7 +190,7 @@ describe('git publication remote', () => {
     const remote = createGitPublicationRemote({
       github: {
         getPullRequest: () => Promise.resolve(ok({
-          ...pullRequestSubject({
+          ...pullRequestItem({
             author: 'contributor',
             repository: repair.repository,
             number: 1,
@@ -130,6 +202,7 @@ describe('git publication remote', () => {
           }),
           maintainerCanModify: true,
         })),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
         isBranchProtected: () => Promise.reject(new Error('External branch protection is enforced by GitHub.')),
       },
       remoteUrl: (repository) => {
@@ -137,12 +210,49 @@ describe('git publication remote', () => {
         return bare
       },
       root,
-      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })) },
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
     const signal = new AbortController().signal
 
     expect(await remote.validateAuthority(repair, signal)).toEqual(ok(undefined))
     expect(await remote.getHeadSha(repair, signal)).toEqual(ok(repair.expectedHeadSha))
+    expect(remotes).toContain(headRepository)
+  })
+
+  it('publishes conflict resolution to a modifiable contributor branch', async () => {
+    const { bare, command, root } = fixture()
+    const headRepository = 'contributor/example'
+    const conflict = { ...command, headRepository }
+    const remotes: string[] = []
+    const remote = createGitPublicationRemote({
+      github: {
+        getPullRequest: () => Promise.resolve(ok({
+          ...pullRequestItem({
+            author: 'contributor',
+            repository: conflict.repository,
+            number: 1,
+            baseSha: conflict.baseSha,
+            headSha: conflict.expectedHeadSha,
+            headRepository,
+            headRef: conflict.headRef,
+            mergeState: 'conflicting',
+          }),
+          maintainerCanModify: true,
+        })),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
+        isBranchProtected: () => Promise.reject(new Error('External branch protection is enforced by GitHub.')),
+      },
+      remoteUrl: (repository) => {
+        remotes.push(repository)
+        return bare
+      },
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const signal = new AbortController().signal
+
+    expect(await remote.validateAuthority(conflict, signal)).toEqual(ok(undefined))
+    expect(await remote.getHeadSha(conflict, signal)).toEqual(ok(conflict.expectedHeadSha))
     expect(remotes).toContain(headRepository)
   })
 
@@ -153,6 +263,7 @@ describe('git publication remote', () => {
         getPullRequest: () => Promise.resolve(ok({
           kind: 'pull_request',
           approvalLabels: [],
+          autoMerge: false,
           repository: command.repository,
           number: 1,
           state: 'open',
@@ -170,11 +281,12 @@ describe('git publication remote', () => {
           mergeState: 'conflicting',
           priorAutomatedReview: { _tag: 'None' },
         })),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
         isBranchProtected: () => Promise.resolve(ok(false)),
       },
       remoteUrl: () => bare,
       root,
-      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })) },
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
     const signal = new AbortController().signal
 
@@ -193,11 +305,12 @@ describe('git publication remote', () => {
     const remote = createGitPublicationRemote({
       github: {
         getPullRequest: () => Promise.reject(new Error('Not needed.')),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
         isBranchProtected: () => Promise.reject(new Error('Not needed.')),
       },
       remoteUrl: () => bare,
       root,
-      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })) },
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
 
     const result = await remote.push(command, new AbortController().signal)
@@ -214,7 +327,7 @@ describe('git publication remote', () => {
     git(checkout, 'push', 'origin', 'main')
     const remote = createGitPublicationRemote({
       github: {
-        getPullRequest: () => Promise.resolve(ok(pullRequestSubject({
+        getPullRequest: () => Promise.resolve(ok(pullRequestItem({
           repository: command.repository,
           number: 1,
           baseSha: 'stale-pull-request-base-sha',
@@ -222,11 +335,12 @@ describe('git publication remote', () => {
           headRepository: command.repository,
           headRef: command.headRef,
         }))),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
         isBranchProtected: () => Promise.resolve(ok(false)),
       },
       remoteUrl: () => bare,
       root,
-      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })) },
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
 
     expect(await remote.validateAuthority(command, new AbortController().signal)).toEqual({

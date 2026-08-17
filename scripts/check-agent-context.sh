@@ -13,7 +13,9 @@ CODEX="${HOME}/.codex/AGENTS.md"
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/harlan-agent-kit/skills/ts-design-patterns/SKILL.md"
 
 # Divergences that are intentional. Update this when you deliberately add one.
-EXPECTED_HUNKS=5
+# Today: Artifacts, AskUserQuestion, skill paths, file search tools, skill loading,
+# and the Codex-only Reference material section.
+EXPECTED_HUNKS=6
 
 fail=0
 note() { printf '%s\n' "$1"; }

@@ -2,12 +2,12 @@ import type { ClaimedReviewFixTask } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { createReviewStatusController } from '../src/review-status-controller.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('review status controller', () => {
   it('replaces the blocked review comment with repair progress', async () => {
     const repository = repositoryMapping()
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const task: ClaimedReviewFixTask = {
       id: 'repair-task',
       kind: 'review_fix',

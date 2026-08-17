@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openJournalStore } from '../src/store.ts'
-import { issueSubject, pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 const temporaryDirectories: string[] = []
@@ -66,7 +66,7 @@ describe('journal store', () => {
       externalId: 'pause-active-work',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     expect(store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)).not.toBeNull()
 
@@ -86,7 +86,7 @@ describe('journal store', () => {
       externalId: 'pause-stale-status',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request.')
@@ -121,12 +121,12 @@ describe('journal store', () => {
       externalId: 'delivery-1',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll' as const,
-      subject: issueSubject(),
+      subject: issueItem(),
     }
 
     expect(store.recordObservation(input)._tag).toBe('Inserted')
     expect(store.recordObservation(input)._tag).toBe('Duplicate')
-    expect(store.getDashboardSnapshot(input.observedAt).subjects).toHaveLength(1)
+    expect(store.getDashboardSnapshot(input.observedAt).items).toHaveLength(1)
   })
 
   it('keeps the same issue Revision when its Approval label changes', () => {
@@ -136,13 +136,13 @@ describe('journal store', () => {
       externalId: 'issue-without-label',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
     const labelled = store.recordObservation({
       externalId: 'issue-with-label',
       observedAt: '2026-08-13T01:01:00.000Z',
       source: 'poll',
-      subject: issueSubject({ approvalLabels: ['review'] }),
+      subject: issueItem({ approvalLabels: ['review'] }),
     })
 
     if (first._tag !== 'Inserted')
@@ -161,13 +161,13 @@ describe('journal store', () => {
       externalId: 'delivery-1',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'webhook',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
     const result = store.recordObservation({
       externalId: 'delivery-1',
       observedAt: '2026-08-13T01:01:00.000Z',
       source: 'webhook',
-      subject: issueSubject({ title: 'Different content' }),
+      subject: issueItem({ title: 'Different content' }),
     })
 
     expect(result._tag).toBe('Conflict')
@@ -181,7 +181,7 @@ describe('journal store', () => {
       externalId: 'poll-pr-24',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
 
     expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').tasks).toEqual([
@@ -196,9 +196,9 @@ describe('journal store', () => {
   it('requeues conflict resolution when GitHub reports conflicts again', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const conflicting = pullRequestSubject({ mergeState: 'conflicting' })
+    const conflicting = pullRequestItem({ mergeState: 'conflicting' })
     store.recordObservation({ externalId: 'conflicting-1', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: conflicting })
-    store.recordObservation({ externalId: 'clean', observedAt: '2026-08-13T01:01:00.000Z', source: 'poll', subject: pullRequestSubject({ mergeState: 'clean' }) })
+    store.recordObservation({ externalId: 'clean', observedAt: '2026-08-13T01:01:00.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
     store.recordObservation({ externalId: 'conflicting-1', observedAt: '2026-08-13T01:02:00.000Z', source: 'poll', subject: conflicting })
 
     expect(store.getDashboardSnapshot('2026-08-13T01:02:00.000Z').queue[0]?.state).toEqual({
@@ -210,7 +210,7 @@ describe('journal store', () => {
   it('keeps a manually cancelled task cancelled across later polls', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const subject = pullRequestSubject({ mergeState: 'conflicting' })
+    const subject = pullRequestItem({ mergeState: 'conflicting' })
     store.recordObservation({ externalId: 'cancelled-conflict', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
     const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)
     if (task === null)
@@ -236,7 +236,7 @@ describe('journal store', () => {
   it('cancels current work when its pull request closes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const subject = pullRequestSubject({ mergeState: 'conflicting' })
+    const subject = pullRequestItem({ mergeState: 'conflicting' })
     store.recordObservation({ externalId: 'open-pull-request', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
     const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)
     if (task === null)
@@ -259,7 +259,7 @@ describe('journal store', () => {
   it('cancels review work and its pending GitHub status update', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const subject = pullRequestSubject({ mergeState: 'clean' })
+    const subject = pullRequestItem({ mergeState: 'clean' })
     const observed = store.recordObservation({ externalId: 'cancelled-review', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request.')
@@ -296,7 +296,7 @@ describe('journal store', () => {
   it('cancels a conflict task before its commit is pushed', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    store.recordObservation({ externalId: 'cancelled-publication', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestSubject() })
+    store.recordObservation({ externalId: 'cancelled-publication', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestItem() })
     const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)
     if (task === null)
       throw new Error('Expected a running conflict task.')
@@ -326,7 +326,7 @@ describe('journal store', () => {
   it('retries base movement without asking for attention', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const subject = pullRequestSubject({ mergeState: 'conflicting' })
+    const subject = pullRequestItem({ mergeState: 'conflicting' })
     store.recordObservation({ externalId: 'moving-base', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
     for (const attempt of [1, 2, 3]) {
       const task = store.claimNextConflictTask(`worker-${attempt}`, `2026-08-13T01:00:0${attempt}.000Z`, 10_000)
@@ -351,7 +351,7 @@ describe('journal store', () => {
   it('retries conflict verification after the patch buffer limit is repaired', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const subject = pullRequestSubject({ mergeState: 'conflicting' })
+    const subject = pullRequestItem({ mergeState: 'conflicting' })
     store.recordObservation({ externalId: 'large-conflict', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
     for (const attempt of [1, 2, 3]) {
       const task = store.claimNextConflictTask(`worker-${attempt}`, `2026-08-13T01:00:0${attempt}.000Z`, 10_000)
@@ -374,10 +374,10 @@ describe('journal store', () => {
     })
   })
 
-  it('retries invalid Codex review output without asking for attention', () => {
+  it('retries an invalid agent review result without asking for attention', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const subject = pullRequestSubject({ mergeState: 'clean' })
+    const subject = pullRequestItem({ mergeState: 'clean' })
     store.recordObservation({ externalId: 'invalid-review', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
     for (const attempt of [1, 2, 3]) {
       const task = store.claimNextAdversarialReviewTask(`worker-${attempt}`, `2026-08-13T01:00:0${attempt}.000Z`, 10_000)
@@ -388,7 +388,7 @@ describe('journal store', () => {
         workerId: task.state.workerId,
         fence: task.state.fence,
         at: `2026-08-13T01:00:0${attempt}.000Z`,
-        reason: 'Codex returned an invalid adversarial review result.',
+        reason: 'The agent returned an invalid adversarial review result.',
       })
     }
 
@@ -406,7 +406,7 @@ describe('journal store', () => {
       externalId: 'running-conflict',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 600_000)
     if (task === null)
@@ -430,7 +430,7 @@ describe('journal store', () => {
         session: { _tag: 'Connected', id: 'session-1' },
         repository: 'harlan-zw/example',
         subjectKind: 'pull_request',
-        subjectNumber: 24,
+        itemNumber: 24,
         subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
         progress: { percent: 70, label: 'Running tests and checks' },
         state: expect.objectContaining({ _tag: 'Working', workerId: 'worker-1' }),
@@ -445,13 +445,13 @@ describe('journal store', () => {
       externalId: 'active-conflict',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     store.recordObservation({
       externalId: 'active-issue',
       observedAt: '2026-08-13T01:00:01.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
     const conflict = store.claimNextConflictTask('conflict-worker', '2026-08-13T01:01:00.000Z', 600_000)
     const issue = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:02:00.000Z', 600_000)
@@ -478,7 +478,7 @@ describe('journal store', () => {
       externalId: 'review-heartbeat',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 45 * 60_000)
     if (task === null)
@@ -503,25 +503,25 @@ describe('journal store', () => {
       externalId: 'issue',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
     store.recordObservation({
       externalId: 'review-ready',
       observedAt: '2026-08-13T01:01:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ number: 23, mergeState: 'clean' }),
+      subject: pullRequestItem({ number: 23, mergeState: 'clean' }),
     })
     store.recordObservation({
       externalId: 'approval',
       observedAt: '2026-08-13T01:02:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ number: 25, author: 'contributor', mergeState: 'clean' }),
+      subject: pullRequestItem({ number: 25, author: 'contributor', mergeState: 'clean' }),
     })
     store.recordObservation({
       externalId: 'active',
       observedAt: '2026-08-13T01:03:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ number: 26 }),
+      subject: pullRequestItem({ number: 26 }),
     })
     store.claimNextConflictTask('worker-1', '2026-08-13T01:04:00.000Z', 600_000)
 
@@ -544,7 +544,7 @@ describe('journal store', () => {
       externalId: 'issue-triage',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
 
     const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
@@ -558,7 +558,7 @@ describe('journal store', () => {
         id: task.id,
         role: 'issue_triage',
         subjectKind: 'issue',
-        subjectNumber: 12,
+        itemNumber: 12,
         session: { _tag: 'Connected', id: 'issue-session' },
       }),
     ])
@@ -624,7 +624,7 @@ describe('journal store', () => {
       externalId: 'issue-triage-comment',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new issue Revision.')
@@ -675,7 +675,7 @@ describe('journal store', () => {
       externalId: 'issue-triage-comment-rerun',
       observedAt: '2026-08-13T02:00:00.000Z',
       source: 'poll',
-      subject: issueSubject({ title: 'Changed issue', updatedAt: '2026-08-13T02:00:00.000Z' }),
+      subject: issueItem({ title: 'Changed issue', updatedAt: '2026-08-13T02:00:00.000Z' }),
     })
     if (changed._tag !== 'Inserted')
       throw new Error('Expected a changed issue Revision.')
@@ -704,7 +704,7 @@ describe('journal store', () => {
       externalId: 'trusted-issue',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject({ author: 'harlan-zw' }),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     const triage = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
     if (triage === null)
@@ -742,7 +742,7 @@ describe('journal store', () => {
       externalId: 'issue-needs-information',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
     const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
     if (task === null)
@@ -773,10 +773,42 @@ describe('journal store', () => {
       externalId: 'poll-pr-24',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ headRepository: 'contributor/example' }),
+      subject: pullRequestItem({ headRepository: 'contributor/example' }),
     })
 
-    expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').tasks[0]?.state._tag).toBe('NeedsAttention')
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').tasks[0]?.state._tag).toBe('ActionRequired')
+  })
+
+  it('queues conflict resolution for an approved outside contributor fork', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'approved-fork-conflict',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ author: 'contributor', headRepository: 'contributor/example' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    expect(store.approvePullRequest({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      kind: 'review',
+      at: '2026-08-13T01:01:00.000Z',
+    })).toEqual({ _tag: 'Approved', approval: { _tag: 'ReviewApproved', approvedAt: '2026-08-13T01:01:00.000Z' } })
+    expect(store.recordObservation({
+      externalId: 'approved-fork-conflict',
+      observedAt: '2026-08-13T01:02:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ author: 'contributor', headRepository: 'contributor/example' }),
+    })).toEqual(expect.objectContaining({ _tag: 'Duplicate' }))
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:02:00.000Z').queue[0]?.state).toEqual({
+      _tag: 'Queued',
+      work: 'conflict_resolution',
+    })
+    expect(store.claimNextConflictTask('worker-1', '2026-08-13T01:02:01.000Z', 10_000)).not.toBeNull()
   })
 
   it('requires Revision-bound Review and repair approval for an outside contributor', () => {
@@ -786,14 +818,14 @@ describe('journal store', () => {
       externalId: 'outside-pr',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ author: 'contributor', mergeState: 'clean' }),
+      subject: pullRequestItem({ author: 'contributor', mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
-    expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').subjects[0]).toEqual(expect.objectContaining({
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'ReviewRequired' },
     }))
-    expect(store.recordReviewAttempt({
+    expect(store.recordReviewRun({
       id: 'unapproved-attempt',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -836,7 +868,7 @@ describe('journal store', () => {
       externalId: 'outside-pr-findings',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ author: 'contributor', mergeState: 'clean' }),
+      subject: pullRequestItem({ author: 'contributor', mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
@@ -853,7 +885,7 @@ describe('journal store', () => {
       throw new Error('Expected the approved review Task.')
     const gates = passedReviewGates()
     gates.review = { _tag: 'Failed', reason: 'Unsafe input reached a command boundary.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'outside-attempt',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -870,7 +902,7 @@ describe('journal store', () => {
       findings: [{ _tag: 'Open', summary: 'Unsafe command input.', nextAction: 'Apply the guarded fix.' }],
     })
 
-    expect(store.getDashboardSnapshot('2026-08-13T01:05:00.000Z').subjects[0]).toEqual(expect.objectContaining({
+    expect(store.getDashboardSnapshot('2026-08-13T01:05:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'ReviewApproved', approvedAt: '2026-08-13T01:02:00.000Z' },
     }))
     const repair = store.claimReviewFixTaskForReview({
@@ -916,7 +948,7 @@ describe('journal store', () => {
       externalId: 'outside-pr-repaired',
       observedAt: '2026-08-13T01:07:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({
+      subject: pullRequestItem({
         author: 'contributor',
         headSha: repairCommit,
         mergeState: 'clean',
@@ -925,10 +957,201 @@ describe('journal store', () => {
     })
     if (repaired._tag !== 'Inserted')
       throw new Error('Expected the published repair to create a new revision.')
-    expect(store.getDashboardSnapshot('2026-08-13T01:07:00.000Z').subjects[0]).toEqual(expect.objectContaining({
+    expect(store.getDashboardSnapshot('2026-08-13T01:07:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'ReviewApproved', approvedAt: '2026-08-13T01:07:00.000Z' },
       revisionId: repaired.revisionId,
     }))
+  })
+
+  it('lists a review that stopped while its progress comment still claims it runs', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.recordObservation({
+      externalId: 'stopped-review-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'review',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 REVIEWING · Git worktree ready',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+
+    expect(store.listStoppedReviews()).toEqual([])
+
+    store.failWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:03:00.000Z',
+      reason: 'The agent returned malformed adversarial review JSON.',
+    })
+    // A retry keeps the Task live, so the pull request waits for the retry instead.
+    expect(store.listStoppedReviews()).toEqual([])
+
+    const retry = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:04:00.000Z', 600_000)
+    if (retry === null)
+      throw new Error('Expected the retry.')
+    store.failWorkerTask({ taskId: retry.id, workerId: retry.state.workerId, fence: retry.state.fence, at: '2026-08-13T01:05:00.000Z', reason: 'Malformed again.' })
+    const last = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:06:00.000Z', 600_000)
+    if (last === null)
+      throw new Error('Expected the last attempt.')
+    store.failWorkerTask({ taskId: last.id, workerId: last.state.workerId, fence: last.state.fence, at: '2026-08-13T01:07:00.000Z', reason: 'Malformed again.' })
+
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
+      taskId: review.id,
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      headSha: pullRequest.headSha,
+      commentId: 42,
+    })])
+
+    expect(store.recordStoppedReviewStatus({
+      taskId: review.id,
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 STOPPED',
+      at: '2026-08-13T01:08:00.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([])
+  })
+
+  it('recognises the pull request the controller opened to repair the default branch', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'baseline-identity-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+    if (queued._tag === 'Rejected')
+      throw new Error(queued.reason)
+    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
+    if (repair === null)
+      throw new Error('Expected the Baseline repair Task.')
+    const staged = store.stagePublication({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:04:00.000Z',
+      publication: {
+        _tag: 'OpenPullRequest',
+        taskKind: 'baseline_repair',
+        pullRequestNumber: repair.pullRequestNumber,
+        pullRequestTitle: 'fix(ci): repair the default branch',
+        pullRequestBody: 'Repairs default branch CI.',
+        commitSha: 'baseline-commit',
+        baseSha: repair.pullRequest.baseSha,
+        expectedHeadSha: repair.pullRequest.baseSha,
+        headRef: 'fix/baseline-ci-abcdef012345',
+        artifactRef: 'refs/harlan-github-agent/publications/baseline',
+        patchDigest: 'patch',
+        changedFiles: 1,
+      },
+    })
+    if (staged._tag !== 'Staged')
+      throw new Error('Expected a staged publication.')
+
+    expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/baseline-ci-abcdef012345')).toBe(false)
+
+    const claimed = store.claimNextPublication('publisher', '2026-08-13T01:05:00.000Z', 60_000)
+    if (claimed === null)
+      throw new Error('Expected the publication command.')
+    store.completePublication({
+      commandId: claimed.id,
+      workerId: claimed.workerId,
+      fence: claimed.fence,
+      at: '2026-08-13T01:05:30.000Z',
+      evidence: 'Opened pull request #99.',
+    })
+
+    expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/baseline-ci-abcdef012345')).toBe(true)
+    expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/other')).toBe(false)
+  })
+
+  it('queues a new Baseline repair after the previous one failed', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'baseline-retry-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const input = {
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    }
+    const queued = store.queueBaselineRepairForReview(input)
+    if (queued._tag === 'Rejected')
+      throw new Error(queued.reason)
+    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
+    if (repair === null)
+      throw new Error('Expected the Baseline repair Task.')
+    for (const attempt of [1, 2, 3]) {
+      const claimed = attempt === 1
+        ? repair
+        : store.claimNextBaselineRepairTask('baseline-agent', `2026-08-13T01:0${2 + attempt}:00.000Z`, 600_000)
+      if (claimed === null)
+        throw new Error('Expected the Baseline repair Task to retry.')
+      store.failTask({
+        taskId: claimed.id,
+        workerId: claimed.state.workerId,
+        fence: claimed.state.fence,
+        at: `2026-08-13T01:0${2 + attempt}:30.000Z`,
+        reason: 'The remote branch changed before publication.',
+      })
+    }
+    expect(store.getDashboardSnapshot('2026-08-13T01:06:00.000Z').tasks)
+      .toContainEqual(expect.objectContaining({ id: queued.taskId, state: { _tag: 'Failed', reason: 'The remote branch changed before publication.' } }))
+
+    expect(store.queueBaselineRepairForReview({ ...input, at: '2026-08-13T01:07:00.000Z' }))
+      .toEqual({ _tag: 'Queued', taskId: queued.taskId })
+    expect(store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:08:00.000Z', 600_000))
+      .toEqual(expect.objectContaining({ id: queued.taskId }))
   })
 
   it('queues one Baseline repair for one failing base commit', () => {
@@ -938,7 +1161,7 @@ describe('journal store', () => {
       externalId: 'baseline-repair-pr',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
     if (review === null)
@@ -999,7 +1222,7 @@ describe('journal store', () => {
       externalId: 'owned-pr-findings',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
@@ -1008,7 +1231,7 @@ describe('journal store', () => {
       throw new Error('Expected the review Task.')
     const gates = passedReviewGates()
     gates.review = { _tag: 'Failed', reason: 'The boundary accepts invalid input.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'owned-attempt',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -1025,7 +1248,7 @@ describe('journal store', () => {
       findings: [{ _tag: 'Open', summary: 'Invalid input crosses the boundary.', nextAction: 'Parse the input before use.' }],
     })
 
-    expect(store.getDashboardSnapshot('2026-08-13T01:03:00.000Z').subjects[0]).toEqual(expect.objectContaining({
+    expect(store.getDashboardSnapshot('2026-08-13T01:03:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'NotRequired' },
     }))
     const repair = store.claimReviewFixTaskForReview({
@@ -1043,7 +1266,7 @@ describe('journal store', () => {
       throw new Error('Expected the approved repair task.')
     const dashboard = store.getDashboardSnapshot('2026-08-13T01:05:00.050Z')
     expect(dashboard.agents.filter(agent => agent._tag === 'ActiveAgent')).toEqual([
-      expect.objectContaining({ role: 'adversarial_review', subjectNumber: 24 }),
+      expect.objectContaining({ role: 'adversarial_review', itemNumber: 24 }),
     ])
     expect(dashboard.queue).toContainEqual(expect.objectContaining({
       number: 24,
@@ -1110,7 +1333,7 @@ describe('journal store', () => {
       externalId: 'repair-head-a',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (first._tag !== 'Inserted')
       throw new Error('Expected the first pull request head.')
@@ -1119,7 +1342,7 @@ describe('journal store', () => {
       throw new Error('Expected the first review Task.')
     const gates = passedReviewGates()
     gates.review = { _tag: 'Failed', reason: 'The boundary accepts invalid input.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'repair-head-a-attempt',
       repository: mapping.github,
       pullRequestNumber: firstReview.pullRequestNumber,
@@ -1177,7 +1400,7 @@ describe('journal store', () => {
       externalId: 'outside-pr-old',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ author: 'contributor', mergeState: 'clean' }),
+      subject: pullRequestItem({ author: 'contributor', mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
@@ -1192,10 +1415,10 @@ describe('journal store', () => {
       externalId: 'outside-pr-new',
       observedAt: '2026-08-13T02:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ author: 'contributor', mergeState: 'clean', headSha: 'new-head', updatedAt: '2026-08-13T02:00:00.000Z' }),
+      subject: pullRequestItem({ author: 'contributor', mergeState: 'clean', headSha: 'new-head', updatedAt: '2026-08-13T02:00:00.000Z' }),
     })
 
-    expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').subjects[0]).toEqual(expect.objectContaining({
+    expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'ReviewRequired' },
     }))
   })
@@ -1207,7 +1430,7 @@ describe('journal store', () => {
       externalId: 'outside-pr-before-agent-comment',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ author: 'contributor', mergeState: 'clean' }),
+      subject: pullRequestItem({ author: 'contributor', mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
@@ -1223,7 +1446,7 @@ describe('journal store', () => {
       externalId: 'outside-pr-after-agent-comment',
       observedAt: '2026-08-13T01:02:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({
+      subject: pullRequestItem({
         author: 'contributor',
         mergeState: 'clean',
         updatedAt: '2026-08-13T01:02:00.000Z',
@@ -1231,7 +1454,7 @@ describe('journal store', () => {
     })
 
     expect(afterComment).toEqual({ _tag: 'Duplicate', revisionId: observed.revisionId })
-    expect(store.getDashboardSnapshot('2026-08-13T01:02:00.000Z').subjects[0]).toEqual(expect.objectContaining({
+    expect(store.getDashboardSnapshot('2026-08-13T01:02:00.000Z').items[0]).toEqual(expect.objectContaining({
       updatedAt: '2026-08-13T01:02:00.000Z',
       approval: { _tag: 'ReviewApproved', approvedAt: '2026-08-13T01:01:00.000Z' },
     }))
@@ -1244,18 +1467,18 @@ describe('journal store', () => {
       externalId: 'newer',
       observedAt: '2026-08-13T02:00:00.000Z',
       source: 'poll',
-      subject: issueSubject({ title: 'New title', updatedAt: '2026-08-13T02:00:00.000Z' }),
+      subject: issueItem({ title: 'New title', updatedAt: '2026-08-13T02:00:00.000Z' }),
     })
 
     const result = store.recordObservation({
       externalId: 'older',
       observedAt: '2026-08-13T03:00:00.000Z',
       source: 'webhook',
-      subject: issueSubject({ title: 'Old title', updatedAt: '2026-08-13T01:00:00.000Z' }),
+      subject: issueItem({ title: 'Old title', updatedAt: '2026-08-13T01:00:00.000Z' }),
     })
 
     expect(result._tag).toBe('Stale')
-    expect(store.getDashboardSnapshot('2026-08-13T03:00:00.000Z').subjects[0]?.title).toBe('New title')
+    expect(store.getDashboardSnapshot('2026-08-13T03:00:00.000Z').items[0]?.title).toBe('New title')
   })
 
   it('supersedes conflict work when the pull request becomes clean', () => {
@@ -1265,13 +1488,13 @@ describe('journal store', () => {
       externalId: 'conflicting',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     store.recordObservation({
       externalId: 'clean',
       observedAt: '2026-08-13T02:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean', updatedAt: '2026-08-13T02:00:00.000Z' }),
+      subject: pullRequestItem({ mergeState: 'clean', updatedAt: '2026-08-13T02:00:00.000Z' }),
     })
 
     expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').tasks[0]?.state._tag).toBe('Superseded')
@@ -1284,7 +1507,7 @@ describe('journal store', () => {
       externalId: 'conflicting',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const first = store.claimNextConflictTask('worker-1', '2026-08-13T01:00:00.000Z', 1_000)
     const second = store.claimNextConflictTask('worker-2', '2026-08-13T01:00:02.000Z', 2_000)
@@ -1314,7 +1537,7 @@ describe('journal store', () => {
       externalId: 'conflicting-expired',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:00:00.000Z', 1_000)
     if (task === null)
@@ -1347,7 +1570,7 @@ describe('journal store', () => {
       externalId: 'content-equivalent-conflict',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:00:00.000Z', 10_000)
     if (task === null)
@@ -1380,11 +1603,11 @@ describe('journal store', () => {
       externalId: 'issue-open',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
 
-    expect(store.closeMissingSubjects('harlan-zw/example', [], '2026-08-13T02:00:00.000Z')).toBe(1)
-    expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').subjects).toHaveLength(0)
+    expect(store.closeMissingItems('harlan-zw/example', [], '2026-08-13T02:00:00.000Z')).toBe(1)
+    expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').items).toHaveLength(0)
   })
 
   it('disables removed repository mappings and supersedes their tasks', () => {
@@ -1394,7 +1617,7 @@ describe('journal store', () => {
       externalId: 'conflicting',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
 
     store.syncRepositories([], '2026-08-13T02:00:00.000Z')
@@ -1411,7 +1634,7 @@ describe('journal store', () => {
       externalId: 'clean-review',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
 
     store.syncRepositories([repositoryMapping({ pullRequestReview: false })], '2026-08-13T01:01:00.000Z')
@@ -1423,7 +1646,7 @@ describe('journal store', () => {
   it('revokes a running review when a trusted review covers the current head commit', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    const pullRequest = pullRequestSubject({ mergeState: 'clean' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
     store.recordObservation({
       externalId: 'review-unclaimed',
       observedAt: '2026-08-13T01:00:00.000Z',
@@ -1469,7 +1692,7 @@ describe('journal store', () => {
       externalId: 'review-rerun',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request.')
@@ -1506,14 +1729,14 @@ describe('journal store', () => {
       externalId: 'review-old-base',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean', baseSha: 'old-base' }),
+      subject: pullRequestItem({ mergeState: 'clean', baseSha: 'old-base' }),
     })
     if (firstObservation._tag !== 'Inserted')
       throw new Error('Expected the first pull request revision.')
     const first = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 10_000)
     if (first === null)
       throw new Error('Expected the first review.')
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'old-base-attempt',
       repository: first.repository,
       pullRequestNumber: first.pullRequestNumber,
@@ -1541,7 +1764,7 @@ describe('journal store', () => {
       externalId: 'review-new-base',
       observedAt: '2026-08-13T02:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({
+      subject: pullRequestItem({
         mergeState: 'clean',
         baseSha: 'new-base',
         priorAutomatedReview: {
@@ -1568,7 +1791,7 @@ describe('journal store', () => {
       externalId: 'review-command',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request.')
@@ -1593,7 +1816,7 @@ describe('journal store', () => {
       externalId: 'untrusted-review-command',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request.')
@@ -1616,7 +1839,7 @@ describe('journal store', () => {
       externalId: 'status-fence',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
@@ -1676,7 +1899,7 @@ describe('journal store', () => {
       externalId: 'permission-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     const permissionError = 'The level of access for permissions requested are not granted to this installation.'
     let revisionId = ''
@@ -1696,7 +1919,7 @@ describe('journal store', () => {
     }
     const gates = passedReviewGates()
     gates.review = { _tag: 'Failed', reason: 'The previous review failed.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'permission-retry-attempt',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -1731,7 +1954,7 @@ describe('journal store', () => {
       externalId: 'inline-repair-claim-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     for (const attempt of [1, 2, 3]) {
       const at = `2026-08-13T01:00:0${attempt}.000Z`
@@ -1758,7 +1981,7 @@ describe('journal store', () => {
       externalId: 'review-publication-staging-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     const reason = 'The task already has a different publication command.'
     for (const attempt of [1, 2, 3]) {
@@ -1789,7 +2012,7 @@ describe('journal store', () => {
       externalId: 'mutation-publication-staging-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     for (const attempt of [1, 2, 3]) {
       const at = `2026-08-13T01:00:0${attempt}.000Z`
@@ -1816,7 +2039,7 @@ describe('journal store', () => {
       externalId: 'combined-review-recovery',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a pull request revision.')
@@ -1825,7 +2048,7 @@ describe('journal store', () => {
       throw new Error('Expected review work.')
     const gates = passedReviewGates()
     gates.review = { _tag: 'Failed', reason: 'The workflow needs repair.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'combined-review-recovery-attempt',
       repository: review.repository,
       pullRequestNumber: review.pullRequestNumber,
@@ -1893,7 +2116,7 @@ describe('journal store', () => {
       externalId: 'orphaned-review-repair',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a pull request revision.')
@@ -1902,7 +2125,7 @@ describe('journal store', () => {
       throw new Error('Expected review work.')
     const gates = passedReviewGates()
     gates.review = { _tag: 'Failed', reason: 'Repair required.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'orphaned-review-repair-attempt',
       repository: review.repository,
       pullRequestNumber: review.pullRequestNumber,
@@ -1957,7 +2180,7 @@ describe('journal store', () => {
       externalId: 'baseline-ref-access-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:00:01.000Z', 600_000)
     if (review === null)
@@ -1997,7 +2220,7 @@ describe('journal store', () => {
       externalId: 'corrected-publication',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const firstTask = store.claimNextConflictTask('worker-1', '2026-08-13T01:00:01.000Z', 60_000)
     if (firstTask === null)
@@ -2071,7 +2294,7 @@ describe('journal store', () => {
       externalId: 'issue-scope-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueSubject(),
+      subject: issueItem(),
     })
     const triage = store.claimNextIssueTriageTask('triage-worker', '2026-08-13T01:00:01.000Z', 10_000)
     if (triage === null)
@@ -2140,7 +2363,7 @@ describe('journal store', () => {
       externalId: 'worktrunk-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
@@ -2149,7 +2372,7 @@ describe('journal store', () => {
       throw new Error('Expected the review Task.')
     const gates = passedReviewGates()
     gates.review = { _tag: 'Failed', reason: 'The boundary is unsafe.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'worktrunk-retry-attempt',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -2207,7 +2430,7 @@ describe('journal store', () => {
       externalId: 'restart-recovery',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     expect(store.claimNextAdversarialReviewTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)).not.toBeNull()
 
@@ -2222,7 +2445,7 @@ describe('journal store', () => {
       externalId: 'aborted-restart-recovery',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     for (const attempt of [1, 2, 3]) {
       const task = store.claimNextConflictTask(`worker-${attempt}`, `2026-08-13T01:01:0${attempt}.000Z`, 10_000)
@@ -2248,12 +2471,12 @@ describe('journal store', () => {
       externalId: 'clean-pr',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
 
-    expect(store.recordReviewAttempt({
+    expect(store.recordReviewRun({
       id: 'attempt-1',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -2269,12 +2492,12 @@ describe('journal store', () => {
       gates: passedReviewGates(),
       confidence: 96,
       findings: [{ _tag: 'Fixed', summary: 'Rejected an unsafe path.' }],
-    })).toEqual({ _tag: 'Inserted', attemptId: 'attempt-1' })
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-1' })
 
     const body = '### 🤖 READY · 96/100\n\n- **Fixed:** Rejected an unsafe path.'
     expect(store.recordReviewPublication({
       id: 'publication-1',
-      attemptId: 'attempt-1',
+      reviewRunId: 'attempt-1',
       body,
       at: '2026-08-13T01:03:00.000Z',
       result: {
@@ -2284,7 +2507,7 @@ describe('journal store', () => {
       },
     })).toEqual({ _tag: 'Inserted', publicationId: 'publication-1' })
 
-    expect(store.listReviewAttempts('harlan-zw/example', 24)).toEqual([
+    expect(store.listReviewRuns('harlan-zw/example', 24)).toEqual([
       expect.objectContaining({
         id: 'attempt-1',
         outcome: { _tag: 'Ready', confidence: 96 },
@@ -2323,6 +2546,37 @@ describe('journal store', () => {
     expect(dashboard.queue).toEqual([])
   })
 
+  it('keeps a passing review that named no confidence', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'ready-without-confidence',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+
+    expect(store.recordReviewRun({
+      id: 'attempt-ready-without-confidence',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: passedReviewGates(),
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-ready-without-confidence' })
+    expect(store.listReviewRuns('harlan-zw/example', 24)[0]?.outcome).toEqual({ _tag: 'Ready' })
+  })
+
   it('rejects confidence unless every review gate passed', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -2330,14 +2584,14 @@ describe('journal store', () => {
       externalId: 'waiting-pr',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'unknown' }),
+      subject: pullRequestItem({ mergeState: 'unknown' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
 
     const gates = passedReviewGates()
-    gates.merge = { _tag: 'Waiting', reason: 'GitHub has not computed mergeability.', evidence: [] }
-    expect(store.recordReviewAttempt({
+    gates.merge = { _tag: 'Pending', reason: 'GitHub has not computed mergeability.', evidence: [] }
+    expect(store.recordReviewRun({
       id: 'attempt-waiting',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -2357,25 +2611,6 @@ describe('journal store', () => {
       _tag: 'Rejected',
       reason: { _tag: 'ConfidenceRequiresReady' },
     })
-    expect(store.recordReviewAttempt({
-      id: 'attempt-ready-without-confidence',
-      repository: 'harlan-zw/example',
-      pullRequestNumber: 24,
-      revisionId: observed.revisionId,
-      headSha: 'abc123',
-      provider: 'codex',
-      sessionId: 'session-1',
-      model: 'gpt-5.6',
-      agentVersion: '1.2.3',
-      skillDigest: 'f'.repeat(64),
-      startedAt: '2026-08-13T01:01:00.000Z',
-      completedAt: '2026-08-13T01:02:00.000Z',
-      gates: passedReviewGates(),
-      findings: [],
-    })).toEqual({
-      _tag: 'Rejected',
-      reason: { _tag: 'ReadyRequiresConfidence' },
-    })
   })
 
   it('never overwrites an immutable review attempt', () => {
@@ -2385,7 +2620,7 @@ describe('journal store', () => {
       externalId: 'immutable-pr',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
@@ -2407,13 +2642,13 @@ describe('journal store', () => {
       findings: [],
     }
 
-    expect(store.recordReviewAttempt(input)).toEqual({ _tag: 'Inserted', attemptId: input.id })
-    expect(store.recordReviewAttempt(input)).toEqual({ _tag: 'Duplicate', attemptId: input.id })
-    expect(store.recordReviewAttempt({ ...input, model: 'different-model' })).toEqual({
+    expect(store.recordReviewRun(input)).toEqual({ _tag: 'Inserted', reviewRunId: input.id })
+    expect(store.recordReviewRun(input)).toEqual({ _tag: 'Duplicate', reviewRunId: input.id })
+    expect(store.recordReviewRun({ ...input, model: 'different-model' })).toEqual({
       _tag: 'Conflict',
-      attemptId: input.id,
+      reviewRunId: input.id,
     })
-    expect(store.listReviewAttempts(input.repository, input.pullRequestNumber)[0]?.model).toBe('gpt-5.6')
+    expect(store.listReviewRuns(input.repository, input.pullRequestNumber)[0]?.model).toBe('gpt-5.6')
   })
 
   it('records comment publication failures for later analysis', () => {
@@ -2423,14 +2658,14 @@ describe('journal store', () => {
       externalId: 'blocked-pr',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'conflicting' }),
+      subject: pullRequestItem({ mergeState: 'conflicting' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
 
     const gates = passedReviewGates()
     gates.merge = { _tag: 'Failed', reason: 'Merge conflicts present.', evidence: [] }
-    store.recordReviewAttempt({
+    store.recordReviewRun({
       id: 'attempt-blocked',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -2449,12 +2684,12 @@ describe('journal store', () => {
 
     expect(store.recordReviewPublication({
       id: 'publication-failed',
-      attemptId: 'attempt-blocked',
+      reviewRunId: 'attempt-blocked',
       body: '### 🤖 BLOCKED',
       at: '2026-08-13T01:03:00.000Z',
       result: { _tag: 'Failed', reason: 'GitHub returned 502.' },
     })).toEqual({ _tag: 'Inserted', publicationId: 'publication-failed' })
-    expect(store.listReviewAttempts('harlan-zw/example', 24)[0]?.publications[0]?.result).toEqual({
+    expect(store.listReviewRuns('harlan-zw/example', 24)[0]?.publications[0]?.result).toEqual({
       _tag: 'Failed',
       reason: 'GitHub returned 502.',
     })
@@ -2470,12 +2705,12 @@ describe('journal store', () => {
       externalId: 'persisted-pr',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ mergeState: 'clean' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
 
-    expect(store.recordReviewAttempt({
+    expect(store.recordReviewRun({
       id: 'attempt-persisted',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -2491,12 +2726,12 @@ describe('journal store', () => {
       gates: passedReviewGates(),
       confidence: 96,
       findings: [],
-    })).toEqual({ _tag: 'Inserted', attemptId: 'attempt-persisted' })
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-persisted' })
     store.close()
 
     const reopened = openJournalStore(path)
     stores.push(reopened)
-    expect(reopened.listReviewAttempts('harlan-zw/example', 24)[0]?.id).toBe('attempt-persisted')
+    expect(reopened.listReviewRuns('harlan-zw/example', 24)[0]?.id).toBe('attempt-persisted')
   })
 
   it('reopens a staged Publication command', () => {
@@ -2509,7 +2744,7 @@ describe('journal store', () => {
       externalId: 'persisted-publication',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject(),
+      subject: pullRequestItem(),
     })
     const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10 * 60_000)
     if (task === null)

@@ -1,4 +1,4 @@
-import type { GitHubWorkerSource, PublishedReviewStatus } from './github-worker-source.ts'
+import type { GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ReviewStatusTaskPhase } from './types.ts'
@@ -12,7 +12,7 @@ export interface ReviewStatusController {
 }
 
 export interface ReviewStatusControllerOptions {
-  github: Pick<GitHubWorkerSource, 'getPullRequestReviewSnapshot' | 'upsertReviewStatus'>
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'upsertReviewStatus'>
   leaseMilliseconds: number
   now: () => Date
   store: Pick<JournalStore, 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'stageReviewStatus'>

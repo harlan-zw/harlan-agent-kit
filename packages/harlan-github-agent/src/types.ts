@@ -1,3 +1,5 @@
+import type { AgentProviderName } from './agent-provider.ts'
+import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
@@ -11,10 +13,17 @@ export type TakeOwnershipConfig
       smokePaths: string[]
     }
 
+export type RepositoryAuthentication = 'app' | 'user'
+
 export interface RepositoryMapping {
   github: string
   checkout: string
   enabled: boolean
+  /**
+   * `app` uses the GitHub App installation. `user` uses Harlan's own token, for
+   * a repository he maintains in an organization that cannot install the App.
+   */
+  authentication: RepositoryAuthentication
   ownership: RepositoryOwnership
   defaultBranch: string
   writablePullRequestAuthors: string[]
@@ -32,6 +41,9 @@ export interface ExternalRepositoryWatch {
 }
 
 export interface AgentConfig {
+  agent: {
+    provider: AgentProviderName
+  }
   github: {
     appId: number
     privateKeyPath: string
@@ -47,6 +59,9 @@ export interface AgentConfig {
   }
   trustedCheckoutRoots: string[]
   mutationsEnabled: boolean
+  autoMerge: AutoMergePolicy
+  /** New issue work stops above this many open pull requests waiting on Harlan. */
+  maxOpenPullRequests: number
   pollIntervalSeconds: number
   issueCutoff: string
   externalRepositories: ExternalRepositoryWatch[]
@@ -62,9 +77,9 @@ export interface ValidatedAgentConfig extends Omit<AgentConfig, 'repositories' |
   repositories: ValidatedRepositoryMapping[]
 }
 
-export type SubjectKind = 'issue' | 'pull_request'
+export type ItemKind = 'issue' | 'pull_request'
 
-interface GitHubSubjectBase {
+interface GitHubItemBase {
   repository: string
   number: number
   state: 'open' | 'closed'
@@ -75,14 +90,16 @@ interface GitHubSubjectBase {
   updatedAt: string
 }
 
-export interface GitHubIssueSubject extends GitHubSubjectBase {
+export interface GitHubIssueItem extends GitHubItemBase {
   kind: 'issue'
   approvalLabels: PullRequestApprovalKind[]
 }
 
-export interface GitHubPullRequestSubject extends GitHubSubjectBase {
+export interface GitHubPullRequestItem extends GitHubItemBase {
   kind: 'pull_request'
   approvalLabels: PullRequestApprovalKind[]
+  /** True when the Auto merge label lets the controller merge this pull request. */
+  autoMerge: boolean
   mergedAt: string | null
   draft: boolean
   baseSha: string
@@ -94,7 +111,7 @@ export interface GitHubPullRequestSubject extends GitHubSubjectBase {
   priorAutomatedReview: PriorAutomatedReview
 }
 
-export type GitHubSubject = GitHubIssueSubject | GitHubPullRequestSubject
+export type GitHubItem = GitHubIssueItem | GitHubPullRequestItem
 
 export type PullRequestStatus
   = | { _tag: 'Unknown' }
@@ -110,7 +127,7 @@ export type PullRequestApprovalState
     | { _tag: 'ReviewApproved', approvedAt: string }
 
 export type PullRequestApprovalRejection
-  = | { _tag: 'SubjectNotFound' }
+  = | { _tag: 'ItemNotFound' }
     | { _tag: 'RevisionMismatch' }
     | { _tag: 'ApprovalNotRequired' }
 
@@ -122,12 +139,12 @@ export type PullRequestApprovalResult
 export type IssueWorkApprovalResult
   = | { _tag: 'Approved', taskId: string }
     | { _tag: 'Duplicate', taskId: string }
-    | { _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'TriageRequired' | 'NotAuthorized' } }
+    | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'TriageRequired' | 'NotAuthorized' } }
 
 export type ReviewRerunSource = 'dashboard' | 'github_comment'
 
 export type ReviewRerunRejection
-  = | { _tag: 'SubjectNotFound' }
+  = | { _tag: 'ItemNotFound' }
     | { _tag: 'RevisionMismatch' }
     | { _tag: 'AuthorNotAllowed' }
     | { _tag: 'ReviewNotReady' }
@@ -138,14 +155,14 @@ export type ReviewRerunResult
     | { _tag: 'Duplicate', taskId: string }
     | { _tag: 'Rejected', reason: ReviewRerunRejection }
 
-interface SubjectSummaryBase {
+interface ItemSummaryBase {
   revisionId: string
   observedAt: string
 }
 
-export type SubjectSummary
-  = | GitHubIssueSubject & SubjectSummaryBase
-    | GitHubPullRequestSubject & SubjectSummaryBase & { approval: PullRequestApprovalState }
+export type ItemSummary
+  = | GitHubIssueItem & ItemSummaryBase
+    | GitHubPullRequestItem & ItemSummaryBase & { approval: PullRequestApprovalState }
 
 export interface ReviewEvidence {
   label: string
@@ -154,7 +171,7 @@ export interface ReviewEvidence {
 
 export type ReviewGateState
   = | { _tag: 'Passed', evidence: ReviewEvidence[] }
-    | { _tag: 'Waiting', reason: string, evidence: ReviewEvidence[] }
+    | { _tag: 'Pending', reason: string, evidence: ReviewEvidence[] }
     | { _tag: 'Failed', reason: string, evidence: ReviewEvidence[] }
 
 export interface ReviewGates {
@@ -171,8 +188,9 @@ export type ReviewFinding
     | { _tag: 'Open', summary: string, nextAction: string }
 
 export type ReviewOutcome
-  = | { _tag: 'Ready', confidence: number }
-    | { _tag: 'Waiting' }
+  /** `confidence` is absent when the agent passed every gate but named no score. */
+  = | { _tag: 'Ready', confidence?: number | undefined }
+    | { _tag: 'Pending' }
     | { _tag: 'Blocked' }
 
 export type ReviewPublicationResult
@@ -181,20 +199,20 @@ export type ReviewPublicationResult
 
 export interface ReviewPublication {
   id: string
-  attemptId: string
+  reviewRunId: string
   body: string
   bodySha256: string
   at: string
   result: ReviewPublicationResult
 }
 
-export interface ReviewAttempt {
+export interface ReviewRun {
   id: string
   repository: string
   pullRequestNumber: number
   revisionId: string
   headSha: string
-  provider: 'codex' | 'claude'
+  provider: AgentProviderName | 'claude'
   sessionId: string
   model: string
   agentVersion: string
@@ -207,32 +225,31 @@ export interface ReviewAttempt {
   publications: ReviewPublication[]
 }
 
-export interface RecordReviewAttemptInput extends Omit<ReviewAttempt, 'outcome' | 'publications'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'outcome' | 'publications'> {
   confidence?: number
 }
 
 export interface RecordReviewPublicationInput {
   id: string
-  attemptId: string
+  reviewRunId: string
   body: string
   at: string
   result: ReviewPublicationResult
 }
 
-export type RecordReviewAttemptRejection
+export type RecordReviewRunRejection
   = | { _tag: 'ConfidenceRequiresReady' }
-    | { _tag: 'ReadyRequiresConfidence' }
     | { _tag: 'InvalidConfidence' }
     | { _tag: 'InvalidEvidenceDigest', label: string }
     | { _tag: 'OpenFindingRequiresBlocked' }
     | { _tag: 'ReviewApprovalRequired' }
     | { _tag: 'RevisionMismatch' }
 
-export type RecordReviewAttemptResult
-  = | { _tag: 'Inserted', attemptId: string }
-    | { _tag: 'Duplicate', attemptId: string }
-    | { _tag: 'Conflict', attemptId: string }
-    | { _tag: 'Rejected', reason: RecordReviewAttemptRejection }
+export type RecordReviewRunResult
+  = | { _tag: 'Inserted', reviewRunId: string }
+    | { _tag: 'Duplicate', reviewRunId: string }
+    | { _tag: 'Conflict', reviewRunId: string }
+    | { _tag: 'Rejected', reason: RecordReviewRunRejection }
 
 export type RecordReviewPublicationResult
   = | { _tag: 'Inserted', publicationId: string }
@@ -242,7 +259,7 @@ export type RecordReviewPublicationResult
 
 export type TaskState
   = | { _tag: 'Queued' }
-    | { _tag: 'NeedsAttention', reason: string }
+    | { _tag: 'ActionRequired', reason: string }
     | { _tag: 'Running', workerId: string, fence: number, leaseExpiresAt: string }
     | { _tag: 'Publishing', commandId: string }
     | { _tag: 'Completed', evidence: string }
@@ -262,7 +279,7 @@ export interface ConflictResolutionTask {
 export interface ClaimedConflictResolutionTask extends ConflictResolutionTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
-  pullRequest: GitHubPullRequestSubject
+  pullRequest: GitHubPullRequestItem
 }
 
 export interface ReviewFixTask {
@@ -278,7 +295,7 @@ export interface ReviewFixTask {
 export interface ClaimedReviewFixTask extends ReviewFixTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
-  pullRequest: GitHubPullRequestSubject
+  pullRequest: GitHubPullRequestItem
   findings: Array<Extract<ReviewFinding, { _tag: 'Open' }>>
 }
 
@@ -295,7 +312,7 @@ export interface BaselineRepairTask {
 export interface ClaimedBaselineRepairTask extends BaselineRepairTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
-  pullRequest: GitHubPullRequestSubject
+  pullRequest: GitHubPullRequestItem
 }
 
 export interface AdversarialReviewTask {
@@ -311,7 +328,7 @@ export interface AdversarialReviewTask {
 export interface ClaimedAdversarialReviewTask extends AdversarialReviewTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
-  pullRequest: GitHubPullRequestSubject
+  pullRequest: GitHubPullRequestItem
   rerun: { _tag: 'NotRequested' } | { _tag: 'Requested' }
 }
 
@@ -328,7 +345,7 @@ export interface IssueTriageTask {
 export interface ClaimedIssueTriageTask extends IssueTriageTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
-  issue: GitHubIssueSubject
+  issue: GitHubIssueItem
 }
 
 export interface IssueWorkTask {
@@ -344,12 +361,12 @@ export interface IssueWorkTask {
 export interface ClaimedIssueWorkTask extends IssueWorkTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
-  issue: GitHubIssueSubject
+  issue: GitHubIssueItem
 }
 
 export type AgentTask = ConflictResolutionTask | ReviewFixTask | BaselineRepairTask | AdversarialReviewTask | IssueTriageTask | IssueWorkTask
 export type ClaimedAgentTask = ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask
-export type WorkerRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'issue_triage' | 'issue_work'
+export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'issue_triage' | 'issue_work'
 
 interface ReviewStatusCommandBase {
   id: string
@@ -444,7 +461,7 @@ export type PreparedPublication = PublicationCommand extends infer Command
 
 export type MutationWorkerOutcome
   = | { _tag: 'Publish', publication: PreparedPublication }
-    | { _tag: 'NeedsAttention', reason: string, evidence: string }
+    | { _tag: 'ActionRequired', reason: string, evidence: string }
 
 export type ClaimedPublicationCommand = PublicationCommand & {
   workerId: string
@@ -490,13 +507,13 @@ export type AgentActivityItem
 export interface ActiveAgent {
   _tag: 'ActiveAgent'
   id: string
-  provider: 'codex'
-  role: WorkerRole
+  provider: AgentProviderName
+  role: AgentRole
   session: AgentSession
   repository: string
   repositoryUrl: string
-  subjectKind: SubjectKind
-  subjectNumber: number
+  subjectKind: ItemKind
+  itemNumber: number
   title: string
   subjectUrl: string
   headSha?: string
@@ -508,7 +525,7 @@ export interface ActiveAgent {
   state: ActiveAgentState
 }
 
-export interface ReviewAgent extends ReviewAttempt {
+export interface ReviewAgent extends ReviewRun {
   _tag: 'ReviewAgent'
   role: 'adversarial_review'
   repositoryUrl: string
@@ -521,27 +538,30 @@ export interface ReviewAgent extends ReviewAttempt {
 
 export type DashboardAgent = ActiveAgent | ReviewAgent
 
-export type CodexWorkerModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna'
+export type CodexAgentModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna'
+export type OpencodeAgentModel = 'opencode-go/deepseek-v4-flash' | 'opencode-go/deepseek-v4-pro'
+export type AgentModel = CodexAgentModel | OpencodeAgentModel
 export type CodexReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
-export interface CodexRoleProfile {
-  model: CodexWorkerModel
-  reasoningEffort: CodexReasoningEffort
+export interface RoleProfile {
+  model: AgentModel
+  /** Omitted by models that expose no reasoning variants. */
+  reasoningEffort?: CodexReasoningEffort
 }
 
-export interface CodexWorkerProfile {
-  provider: 'codex'
-  authentication: 'chatgpt'
-  maximumActiveAgents: 3
-  roles: Record<WorkerRole, CodexRoleProfile>
+export interface AgentProfile {
+  provider: AgentProviderName
+  authentication: 'chatgpt' | 'opencode-go'
+  maximumActiveAgents: number
+  roles: Record<AgentRole, RoleProfile>
 }
 
 export type QueueState
-  = | { _tag: 'Active', work: WorkerRole }
-    | { _tag: 'NeedsAttention', reason: string }
+  = | { _tag: 'Active', work: AgentRole }
+    | { _tag: 'ActionRequired', reason: string }
     | { _tag: 'AwaitingApproval', kind: PullRequestApprovalKind | 'issue_work' }
-    | { _tag: 'Queued', work: WorkerRole }
-    | { _tag: 'Waiting', reason: string }
+    | { _tag: 'Queued', work: AgentRole }
+    | { _tag: 'Pending', reason: string }
 
 interface QueueEntryBase {
   position: number
@@ -569,16 +589,61 @@ export interface PullRequestQueueEntry extends QueueEntryBase {
 
 export type QueueEntry = IssueQueueEntry | PullRequestQueueEntry
 
+/** Where an Incident happened, which decides what clears it. */
+export type IncidentScope
+  = | { _tag: 'Service' }
+    | { _tag: 'Repository', repository: string }
+    | { _tag: 'Task', taskId: string, repository: string, itemNumber: number | null }
+
+export type IncidentKind
+  = | 'github_unavailable'
+    | 'github_access'
+    | 'rate_limit'
+    | 'network'
+    | 'agent_provider'
+    | 'controller'
+    | 'subject_changed'
+    | 'agent_result'
+    | 'policy'
+    | 'unknown'
+
+/** What the controller will do about an Incident without being asked. */
+export type IncidentRecovery
+  = | { _tag: 'Retrying', attempt: number, nextAttemptAt: string }
+    | { _tag: 'Exhausted' }
+    | { _tag: 'ActionRequired' }
+
+/**
+ * One named failure a person can read.
+ *
+ * Repeated identical failures raise `occurrences` on one Incident rather than
+ * filling the pane, so a degraded hour reads as one entry and not six hundred.
+ */
+export interface Incident {
+  id: string
+  scope: IncidentScope
+  kind: IncidentKind
+  severity: 'warning' | 'error'
+  message: string
+  /** What the controller was doing, for example `poll` or `adversarial_review`. */
+  operation: string
+  recovery: IncidentRecovery
+  occurrences: number
+  firstSeenAt: string
+  lastSeenAt: string
+}
+
 export interface DashboardSnapshot {
   generatedAt: string
   status: 'starting' | 'ready' | 'degraded'
   mutationsEnabled: boolean
   agentControl: AgentControl
-  workerProfile: CodexWorkerProfile
+  agentProfile: AgentProfile
   agents: DashboardAgent[]
+  incidents: Incident[]
   queue: QueueEntry[]
   repositories: RepositoryStatus[]
-  subjects: SubjectSummary[]
+  items: ItemSummary[]
   tasks: AgentTask[]
 }
 

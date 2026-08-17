@@ -12,12 +12,12 @@ user_invocable: true
 Effect-inspired, without an Effect dependency.
 
 - **Make illegal states unrepresentable.** `_tag` discriminated unions, not optional-field + boolean soup.
-- **Errors as values.** Tagged `Ok | Err` for expected domain failures so signatures show them. Unexpected/infra errors propagate; prefer `.catch()` over try/catch when handling is needed.
-- **No silent catches.** `.catch(() => null)` hides failures: handle (log, surface, fallback with reason) or propagate. Swallow only genuinely ignorable failures, with a comment saying so.
-- **Parse, don't validate.** Validate untrusted input once at the boundary into a precise type; trust it inward.
-- **Explicit dependencies.** Pass clients/config/clock as args; no hidden singletons or import-time side effects.
-- **Pure core, effectful shell.** Side effects at edges, decision logic pure data-in/data-out.
-- **Design out the bug.** After a production error, ask what design makes that kind of bug impossible. Prefer a type or structural change; guard at the failure site only when no design change exists.
+- **Errors as values.** Tagged `Ok | Err` for expected domain failures, so signatures show them. Unexpected and infra errors propagate; prefer `.catch()` over try/catch when handling is needed.
+- **No silent catches.** `.catch(() => null)` hides failures. Handle (log, surface, fallback with reason) or propagate. Swallow only genuinely ignorable failures, with a comment saying so.
+- **Parse, don't validate.** Parse untrusted input once at the boundary into a precise type; trust it inward.
+- **Explicit dependencies.** Pass clients, config, clock as args. No hidden singletons, no import-time side effects.
+- **Pure core, effectful shell.** Side effects at the edges, decision logic pure data-in/data-out.
+- **Design out the bug.** After a production error, find the design that kills the whole category. Prefer a type or structural change; guard at the failure site only when no design change exists.
 
 ## As a review rubric
 

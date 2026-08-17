@@ -1,4 +1,4 @@
-import type { ThreadEvent } from '@openai/codex-sdk'
+import type { AgentEvent } from './agent-provider.ts'
 import type { AgentActivityItem } from './types.ts'
 
 /** Keep the tail of a command's output: the end is where the failure is. */
@@ -32,37 +32,32 @@ export function truncateOutput(text: string): string {
 }
 
 /**
- * Maps one Codex thread event to a line of agent activity.
+ * Maps one agent event to a line of agent activity.
  * Returns undefined for events that say nothing about what the agent is doing.
  */
-export function agentActivityFromEvent(event: ThreadEvent, at: string): AgentActivityItem | undefined {
-  if (event.type === 'item.completed' && event.item.type === 'command_execution') {
+export function agentActivityFromEvent(event: AgentEvent, at: string): AgentActivityItem | undefined {
+  if (event._tag === 'CommandCompleted') {
     return {
       _tag: 'Command',
       at,
-      command: redactSecrets(event.item.command),
-      output: truncateOutput(redactSecrets(event.item.aggregated_output)),
-      exitCode: event.item.exit_code ?? null,
+      command: redactSecrets(event.command),
+      output: truncateOutput(redactSecrets(event.output)),
+      exitCode: event.exitCode,
     }
   }
-  if (event.type === 'item.started' && event.item.type === 'command_execution') {
+  if (event._tag === 'CommandStarted') {
     return {
       _tag: 'Command',
       at,
-      command: redactSecrets(event.item.command),
+      command: redactSecrets(event.command),
       output: '',
       exitCode: null,
     }
   }
-  if (event.type === 'item.completed' && event.item.type === 'file_change') {
-    return {
-      _tag: 'FileChange',
-      at,
-      changes: event.item.changes.map(change => ({ path: change.path, kind: change.kind })),
-    }
-  }
-  if (event.type === 'item.completed' && event.item.type === 'reasoning')
-    return { _tag: 'Reasoning', at, text: redactSecrets(event.item.text) }
+  if (event._tag === 'FileChanged')
+    return { _tag: 'FileChange', at, changes: event.changes }
+  if (event._tag === 'Reasoning')
+    return { _tag: 'Reasoning', at, text: redactSecrets(event.text) }
   return undefined
 }
 

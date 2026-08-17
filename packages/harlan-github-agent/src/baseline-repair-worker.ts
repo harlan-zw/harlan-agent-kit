@@ -1,16 +1,13 @@
-import type { CodexOptions, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentActivityLog } from './agent-activity.ts'
-import type { GitHubWorkerSource, PullRequestReviewSnapshot, PullRequestTemplate } from './github-worker-source.ts'
+import type { AgentProvider } from './agent-provider.ts'
+import type { GitHubAgentSource, PullRequestReviewSnapshot, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
+import type { AgentProfile, AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { BaselineRepairWorktreeManager } from './worktree.ts'
-import { Codex } from '@openai/codex-sdk'
-import { agentActivityFromEvent } from './agent-activity.ts'
-import { codexEventProgress } from './agent-progress.ts'
-import { runCodexTurn } from './codex-session.ts'
-import { CODEX_WORKER_PROFILE } from './codex-worker-profile.ts'
+import { runAgentTurn } from './agent-turn.ts'
 import { err, ok } from './result.ts'
+import { cleanLine } from './text.ts'
 
 interface RepairedResponse {
   outcome: 'repaired'
@@ -27,9 +24,9 @@ interface BlockedResponse {
   checks: string[]
 }
 
-type WorkerResponse = RepairedResponse | BlockedResponse
+type AgentResponse = RepairedResponse | BlockedResponse
 
-interface WorkerResponsePayload {
+interface AgentResponsePayload {
   outcome?: 'repaired' | 'blocked'
   summary?: string
   checks?: unknown[]
@@ -39,12 +36,10 @@ interface WorkerResponsePayload {
 }
 
 export interface BaselineRepairWorkerOptions {
-  createCodex?: (options: CodexOptions) => {
-    startThread: (options: ThreadOptions) => { runStreamed: (prompt: string, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }> }
-    resumeThread: (sessionId: string, options: ThreadOptions) => { runStreamed: (prompt: string, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }> }
-  }
-  github: Pick<GitHubWorkerSource, 'getPullRequestReviewSnapshot' | 'getPullRequestTemplate'>
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'getPullRequestTemplate'>
   now: () => Date
+  profile: AgentProfile
+  provider: AgentProvider
   activityLog?: Pick<AgentActivityLog, 'record'>
   store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
@@ -78,10 +73,6 @@ function failedChecks(snapshot: PullRequestReviewSnapshot): string[] {
     : []
 }
 
-function cleanLine(value: string): string {
-  return value.replaceAll(/[\r\n]/g, ' ').replaceAll(/\s+/g, ' ').trim().slice(0, 240)
-}
-
 function withDisclosure(body: string): string {
   const description = body
     .split(/\r?\n/)
@@ -91,12 +82,12 @@ function withDisclosure(body: string): string {
   return `${description}\n\n${disclosure}`
 }
 
-function parseResponse(text: string): Promise<Result<WorkerResponse, string>> {
+function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
   return Promise.resolve(text)
-    .then(value => JSON.parse(value) as WorkerResponsePayload)
-    .then((value): Result<WorkerResponse, string> => {
+    .then(value => JSON.parse(value) as AgentResponsePayload)
+    .then((value): Result<AgentResponse, string> => {
       if (typeof value.summary !== 'string' || !Array.isArray(value.checks) || !value.checks.every(check => typeof check === 'string'))
-        return err('Codex returned an invalid Baseline repair result.')
+        return err('The agent returned an invalid Baseline repair result.')
       if (value.outcome === 'blocked')
         return ok({ outcome: 'blocked', summary: value.summary, checks: value.checks as string[] })
       if (
@@ -108,7 +99,7 @@ function parseResponse(text: string): Promise<Result<WorkerResponse, string>> {
         || cleanLine(value.pullRequestTitle).length === 0
         || value.pullRequestBody.trim().length === 0
       ) {
-        return err('Codex returned an invalid Baseline repair result.')
+        return err('The agent returned an invalid Baseline repair result.')
       }
       return ok({
         outcome: 'repaired',
@@ -119,14 +110,14 @@ function parseResponse(text: string): Promise<Result<WorkerResponse, string>> {
         pullRequestBody: value.pullRequestBody.trim(),
       })
     })
-    .catch(() => err('Codex returned malformed Baseline repair JSON.'))
+    .catch(() => err('The agent returned malformed Baseline repair JSON.'))
 }
 
 function prompt(task: ClaimedBaselineRepairTask, checks: string[], template: PullRequestTemplate): string {
   return `Repair the failing default branch CI for ${task.repository} at commit ${task.pullRequest.baseSha}.
 
 Own the work end to end. Diagnose the actual failure, implement the complete fix, and verify it.
-Work as a normal local Codex session. Use the user's global Codex context and installed skills.
+Work as a normal local agent session. Use the user's global agent context and installed skills.
 Read repository AGENTS.md and contributor instructions. Apply the unit-tests skill for bug fixes.
 Use GitHub read commands to inspect the failed runs and logs. The failing checks are ${JSON.stringify(checks)}.
 Apply the PR skill to draft the pull request title and body. Use this template when useful: ${JSON.stringify(template)}.
@@ -135,7 +126,7 @@ Do not stage, commit, push, or publish. The controller handles those safety boun
 Return blocked only when you cannot safely complete the fix. Return only the required JSON.`
 }
 
-export function createCodexBaselineRepairWorker(options: BaselineRepairWorkerOptions): BaselineRepairWorker {
+export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions): BaselineRepairWorker {
   return {
     async run(task, signal) {
       const progress = (value: AgentProgress): Result<void, string> => options.store.updateAgentProgress({
@@ -171,55 +162,23 @@ export function createCodexBaselineRepairWorker(options: BaselineRepairWorkerOpt
       const ready = progress({ percent: 35, label: 'Git worktree ready' })
       if (ready._tag === 'Err')
         return ready
-      const sessionId = options.store.getWorkerSession(task.repository, task.pullRequestNumber, 'baseline_repair')
-      const codex = (options.createCodex ?? (codexOptions => new Codex(codexOptions)))({})
-      const streamed = await runCodexTurn({
-        client: codex,
-        outputSchema,
+      const turn = await runAgentTurn(options, {
+        number: task.pullRequestNumber,
+        progress: { currentPercent: 35, report: progress, work: 'baseline' },
         prompt: prompt(task, checks, template.value),
-        sessionId,
-        signal,
-        threadOptions: {
-          model: CODEX_WORKER_PROFILE.roles.baseline_repair.model,
-          modelReasoningEffort: CODEX_WORKER_PROFILE.roles.baseline_repair.reasoningEffort,
-          workingDirectory: prepared.value.path,
-          webSearchMode: 'live',
-          approvalPolicy: 'never',
-        },
-      })
-      let response: string | undefined
-      let failure: string | undefined
-      let currentPercent = 35
-      for await (const event of streamed.events) {
-        if (event.type === 'thread.started')
-          options.store.saveWorkerSession(task.repository, task.pullRequestNumber, 'baseline_repair', event.thread_id, options.now().toISOString())
-        if (event.type === 'item.completed' && event.item.type === 'agent_message')
-          response = event.item.text
-        if (event.type === 'turn.failed')
-          failure = event.error.message
-        if (event.type === 'error')
-          failure = event.message
-        const activity = agentActivityFromEvent(event, options.now().toISOString())
-        if (activity !== undefined)
-          options.activityLog?.record(task.id, activity)
-        const next = codexEventProgress(event, 'fix')
-        if (next !== undefined && next.percent > currentPercent) {
-          const reported = progress(next)
-          if (reported._tag === 'Err')
-            failure ??= reported.error
-          else
-            currentPercent = next.percent
-        }
-      }
-      if (failure !== undefined)
-        return err(failure)
-      if (response === undefined)
-        return err('Codex completed without a Baseline repair result.')
-      const parsed = await parseResponse(response)
+        repository: task.repository,
+        role: 'baseline_repair',
+        schema: outputSchema,
+        taskId: task.id,
+        workspace: prepared.value.path,
+      }, signal)
+      if (turn._tag === 'Err')
+        return turn
+      const parsed = await parseResponse(turn.value.response)
       if (parsed._tag === 'Err')
         return parsed
       if (parsed.value.outcome === 'blocked')
-        return ok({ _tag: 'NeedsAttention', reason: parsed.value.summary, evidence: JSON.stringify(parsed.value) })
+        return ok({ _tag: 'ActionRequired', reason: cleanLine(parsed.value.summary), evidence: JSON.stringify(parsed.value) })
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')
         return verified

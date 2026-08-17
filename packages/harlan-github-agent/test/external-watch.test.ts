@@ -23,7 +23,7 @@ describe('external repository watches', () => {
     await controller.poll()
     const snapshot = mergeExternalWatchSnapshot(dashboardSnapshot(), controller.snapshot())
 
-    expect(snapshot.subjects).toContainEqual(expect.objectContaining({
+    expect(snapshot.items).toContainEqual(expect.objectContaining({
       kind: 'issue',
       repository: 'nuxt-modules/sitemap',
       number: 658,
@@ -83,6 +83,6 @@ describe('external repository watches', () => {
 
     await controller.poll()
 
-    expect(controller.snapshot().subjects.map(subject => subject.number)).toEqual([100])
+    expect(controller.snapshot().items.map(subject => subject.number)).toEqual([100])
   })
 })

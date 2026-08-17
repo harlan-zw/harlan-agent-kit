@@ -16,6 +16,13 @@ describe('gitHub subjects', () => {
     expect(isAutomatedGitHubActor({ login: 'edevil', type: 'User' })).toBe(false)
   })
 
+  it('keeps an explicitly allowed GitHub App pull request author', () => {
+    expect(isAutomatedGitHubActor(
+      { login: 'harlan-github-agent[bot]', type: 'Bot' },
+      ['harlan-github-agent[bot]'],
+    )).toBe(false)
+  })
+
   it('uses one fixed inclusive issue cutoff', () => {
     expect(isIssueAtOrAfterCutoff('2026-07-13T23:59:59.999Z', '2026-07-14')).toBe(false)
     expect(isIssueAtOrAfterCutoff('2026-07-14T00:00:00.000Z', '2026-07-14')).toBe(true)

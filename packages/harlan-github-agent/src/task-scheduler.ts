@@ -76,7 +76,7 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
       if (executionController.signal.aborted)
         return
       if (result._tag === 'Ok') {
-        if (result.value._tag === 'NeedsAttention') {
+        if (result.value._tag === 'ActionRequired') {
           options.store.needsAttentionTask({
             taskId: task.id,
             workerId: options.workerId,

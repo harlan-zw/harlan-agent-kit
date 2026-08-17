@@ -24,7 +24,7 @@ function createApp(snapshot = dashboardSnapshot()) {
     dashboardPassword,
     dashboardRoot,
     now,
-    store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewAttempts: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }) },
+    store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
   })
 }
 
@@ -42,12 +42,12 @@ describe('dashboard HTTP app', () => {
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
-        listReviewAttempts: () => [],
+        listReviewRuns: () => [],
         pauseAgents(at) {
           controls.push({ _tag: 'Pause', at })
           return { _tag: 'Paused', pausedAt: at }
         },
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }),
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
         resumeAgents(at) {
           controls.push({ _tag: 'Resume', at })
           return { _tag: 'Running' }
@@ -93,7 +93,7 @@ describe('dashboard HTTP app', () => {
 
   it('renders the nonced Nuxt shell without embedding subject content', async () => {
     const snapshot = dashboardSnapshot({
-      subjects: [{
+      items: [{
         kind: 'issue',
         approvalLabels: [],
         repository: 'harlan-zw/example',
@@ -138,11 +138,11 @@ describe('dashboard HTTP app', () => {
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
-        listReviewAttempts(repository, pullRequestNumber) {
+        listReviewRuns(repository, pullRequestNumber) {
           requests.push({ repository, pullRequestNumber })
           return []
         },
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }),
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       },
     })
 
@@ -152,7 +152,7 @@ describe('dashboard HTTP app', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ attempts: [] })
+    expect(await response.json()).toEqual({ runs: [] })
     expect(requests).toEqual([{ repository: 'harlan-zw/example', pullRequestNumber: 24 }])
   })
 
@@ -182,8 +182,8 @@ describe('dashboard HTTP app', () => {
         },
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
-        listReviewAttempts: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       },
     })
     const response = await app.request(`http://${allowedHost}/api/approvals`, {
@@ -220,8 +220,8 @@ describe('dashboard HTTP app', () => {
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
-        listReviewAttempts: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       },
     })
     const response = await app.request(`http://${allowedHost}/api/issues/approve`, {
@@ -262,8 +262,8 @@ describe('dashboard HTTP app', () => {
           return { _tag: 'Cancelled' }
         },
         getDashboardSnapshot: () => dashboardSnapshot(),
-        listReviewAttempts: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       },
     })
 
@@ -293,7 +293,7 @@ describe('dashboard HTTP app', () => {
         repository: 'harlan-zw/example',
         repositoryUrl: 'https://github.com/harlan-zw/example',
         subjectKind: 'pull_request',
-        subjectNumber: 24,
+        itemNumber: 24,
         title: 'Fix parser',
         subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
         headSha: 'abc123',
@@ -323,8 +323,8 @@ describe('dashboard HTTP app', () => {
           return { _tag: 'Cancelled' }
         },
         getDashboardSnapshot: () => snapshot,
-        listReviewAttempts: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       },
     })
 
@@ -337,7 +337,7 @@ describe('dashboard HTTP app', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ _tag: 'Ejected' })
     expect(cancellations).toEqual([{ taskId, at: now().toISOString() }])
-    expect(launches).toEqual([{ taskId, sessionId, repository: 'harlan-zw/example', subjectNumber: 24 }])
+    expect(launches).toEqual([{ taskId, sessionId, provider: 'codex', repository: 'harlan-zw/example', itemNumber: 24 }])
   })
 
   it('queues one review rerun from the dashboard', async () => {
@@ -354,7 +354,7 @@ describe('dashboard HTTP app', () => {
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
-        listReviewAttempts: () => [],
+        listReviewRuns: () => [],
         requestReviewRerun(input) {
           requests.push(input)
           return { _tag: 'Queued', taskId: 'b'.repeat(64) }
@@ -399,8 +399,8 @@ describe('dashboard HTTP app', () => {
           reads += 1
           return dashboardSnapshot()
         },
-        listReviewAttempts: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'SubjectNotFound' } }),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       },
     })
     const response = await app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } })

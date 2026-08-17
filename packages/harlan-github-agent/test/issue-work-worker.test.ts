@@ -1,32 +1,24 @@
-import type { CodexOptions, ThreadOptions } from '@openai/codex-sdk'
+import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
-import { createCodexIssueWorkWorker } from '../src/issue-work-worker.ts'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { createIssueWorkWorker } from '../src/issue-work-worker.ts'
 import { ok } from '../src/result.ts'
-import { issueSubject, repositoryMapping } from './fixtures.ts'
+import { issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
-describe('codex issue work worker', () => {
+describe('issue work worker', () => {
   it('resumes triage, implements the issue, and prepares repository metadata', async () => {
     const repository = repositoryMapping()
-    const issue = issueSubject()
-    let resumedSession: string | undefined
-    let threadOptions: ThreadOptions | undefined
-    const worker = createCodexIssueWorkWorker({
-      createCodex: (_options: CodexOptions) => {
-        const thread = {
-          runStreamed: () => Promise.resolve({
-            events: (async function* () {
-              yield {
-                type: 'item.completed' as const,
-                item: {
-                  id: 'message-1',
-                  type: 'agent_message' as const,
-                  text: JSON.stringify({
-                    outcome: 'implemented',
-                    summary: 'Fixed the parser.',
-                    checks: ['pnpm test'],
-                    commitMessage: 'fix(parser): preserve valid input',
-                    pullRequestTitle: 'fix: broken thing',
-                    pullRequestBody: `### Description
+    const issue = issueItem()
+    const capture: ProviderCapture = { requests: [] }
+    const worker = createIssueWorkWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents({
+        outcome: 'implemented',
+        summary: 'Fixed the parser.',
+        checks: ['pnpm test'],
+        commitMessage: 'fix(parser): preserve valid input',
+        pullRequestTitle: 'fix: broken thing',
+        pullRequestBody: `### Description
 
 Fixed the parser.
 
@@ -35,25 +27,7 @@ Fixed the parser.
 ### Linked Issues
 
 Closes #12.`,
-                  }),
-                },
-              }
-              yield { type: 'turn.completed' as const, usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 1 } }
-            })(),
-          }),
-        }
-        return {
-          startThread: (options: ThreadOptions) => {
-            threadOptions = options
-            return thread
-          },
-          resumeThread: (sessionId: string, options: ThreadOptions) => {
-            resumedSession = sessionId
-            threadOptions = options
-            return thread
-          },
-        }
-      },
+      }), capture),
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
@@ -87,8 +61,12 @@ Closes #12.`,
       issue,
     }, new AbortController().signal)
 
-    expect(resumedSession).toBe('triage-session')
-    expect(threadOptions).toEqual(expect.objectContaining({ model: 'gpt-5.6-terra', modelReasoningEffort: 'medium' }))
+    expect(capture.requests).toEqual([expect.objectContaining({
+      model: 'gpt-5.6-terra',
+      reasoningEffort: 'medium',
+      sessionId: 'triage-session',
+      workspace: '/tmp/issue-work',
+    })])
     expect(result).toEqual(ok({
       _tag: 'Publish',
       publication: expect.objectContaining({
@@ -106,10 +84,11 @@ Closes #12.`,
 
   it('rejects issue work without the exact triage session', async () => {
     const repository = repositoryMapping()
-    const issue = issueSubject()
+    const issue = issueItem()
     let workspaceCreated = false
-    const worker = createCodexIssueWorkWorker({
-      createCodex: () => { throw new Error('Issue work must not start.') },
+    const worker = createIssueWorkWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider([]),
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({
           body: 'Changed after triage',

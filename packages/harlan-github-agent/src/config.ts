@@ -1,3 +1,5 @@
+import type { AgentProviderName } from './agent-provider.ts'
+import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
 import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, TakeOwnershipConfig, ValidatedAgentConfig } from './types.ts'
 import { execFile } from 'node:child_process'
@@ -74,6 +76,33 @@ function stringArray(source: UnknownRecord, key: string, path: string, issues: C
   issues.push({ path: `${path}.${key}`, message: 'Expected a list of non-empty strings.' })
 }
 
+/** Auto merge is off unless the configuration turns it on. */
+function autoMergePolicy(source: UnknownRecord, issues: ConfigIssue[]): AutoMergePolicy | undefined {
+  const value = source.auto_merge
+  if (value === undefined)
+    return { _tag: 'Disabled' }
+  if (!isRecord(value)) {
+    issues.push({ path: '$.auto_merge', message: 'Expected an object.' })
+    return undefined
+  }
+
+  const enabled = requiredBoolean(value, 'enabled', '$.auto_merge', issues)
+  const confidenceValue = value.minimum_confidence ?? 100
+  const minimumConfidence = typeof confidenceValue === 'number' && Number.isInteger(confidenceValue) && confidenceValue >= 0 && confidenceValue <= 100
+    ? confidenceValue
+    : undefined
+  if (minimumConfidence === undefined)
+    issues.push({ path: '$.auto_merge.minimum_confidence', message: 'Expected an integer from 0 to 100.' })
+  const methodValue = value.method ?? 'squash'
+  const method = methodValue === 'merge' || methodValue === 'rebase' || methodValue === 'squash' ? methodValue : undefined
+  if (method === undefined)
+    issues.push({ path: '$.auto_merge.method', message: 'Expected merge, rebase, or squash.' })
+
+  if (enabled === undefined || minimumConfidence === undefined || method === undefined)
+    return undefined
+  return enabled ? { _tag: 'Enabled', minimumConfidence, method } : { _tag: 'Disabled' }
+}
+
 function ownership(source: UnknownRecord, path: string, issues: ConfigIssue[]): RepositoryOwnership | undefined {
   const value = requiredString(source, 'ownership', path, issues)
   if (value === undefined)
@@ -117,6 +146,24 @@ function takeOwnership(source: UnknownRecord, path: string, repositoryOwnership:
   }
 }
 
+/** Defaults to Codex, so an existing configuration keeps its current agent. */
+function agentProvider(source: UnknownRecord, issues: ConfigIssue[]): AgentProviderName | undefined {
+  const agent = source.agent
+  if (agent === undefined)
+    return 'codex'
+  if (!isRecord(agent)) {
+    issues.push({ path: '$.agent', message: 'Expected an object.' })
+    return undefined
+  }
+  const provider = agent.provider
+  if (provider === undefined)
+    return 'codex'
+  if (provider === 'codex' || provider === 'opencode')
+    return provider
+
+  issues.push({ path: '$.agent.provider', message: 'Expected codex or opencode.' })
+}
+
 function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[]): RepositoryMapping | undefined {
   const path = `$.repositories[${index}]`
   if (!isRecord(value)) {
@@ -145,7 +192,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     issues.push({ path: `${path}.default_branch`, message: 'Expected a safe Git branch name.' })
   if (writablePullRequestAuthors?.length === 0)
     issues.push({ path: `${path}.writable_pr_authors`, message: 'Expected at least one author.' })
-  if (writablePullRequestAuthors?.some(author => !/^[\w-]+$/.test(author)))
+  if (writablePullRequestAuthors?.some(author => !/^[\w-]+(?:\[bot\])?$/.test(author)))
     issues.push({ path: `${path}.writable_pr_authors`, message: 'Expected GitHub login names.' })
   if (writablePullRequestHeadPrefixes?.length === 0)
     issues.push({ path: `${path}.writable_pr_head_prefixes`, message: 'Expected at least one branch prefix.' })
@@ -177,6 +224,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     github,
     checkout,
     enabled,
+    authentication: 'app',
     ownership: repositoryOwnership,
     defaultBranch,
     writablePullRequestAuthors,
@@ -222,6 +270,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     return err([{ path: '$', message: 'Expected an object.' }])
 
   const issues: ConfigIssue[] = []
+  const provider = agentProvider(document.value, issues)
   const github = requiredRecord(document.value, 'github', '$', issues)
   const server = requiredRecord(document.value, 'server', '$', issues)
   const storage = requiredRecord(document.value, 'storage', '$', issues)
@@ -269,6 +318,13 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     : undefined
   if (mutationsEnabled === undefined)
     issues.push({ path: '$.mutations_enabled', message: 'Expected a boolean.' })
+  const autoMerge = autoMergePolicy(document.value, issues)
+  const openPullRequestsValue = document.value.max_open_pull_requests ?? 8
+  const maxOpenPullRequests = typeof openPullRequestsValue === 'number' && Number.isInteger(openPullRequestsValue) && openPullRequestsValue >= 1 && openPullRequestsValue <= 100
+    ? openPullRequestsValue
+    : undefined
+  if (maxOpenPullRequests === undefined)
+    issues.push({ path: '$.max_open_pull_requests', message: 'Expected an integer from 1 to 100.' })
   const issueCutoff = fixedDate(document.value, 'issue_cutoff', '$', issues)
 
   const externalRepositoriesValue = document.value.external_repositories
@@ -310,6 +366,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   if (
     issues.length > 0
+    || provider === undefined
     || host === undefined
     || appId === undefined
     || privateKeyPath === undefined
@@ -319,6 +376,8 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || storagePath === undefined
     || pollIntervalSeconds === undefined
     || mutationsEnabled === undefined
+    || autoMerge === undefined
+    || maxOpenPullRequests === undefined
     || issueCutoff === undefined
     || externalRepositories === undefined
     || repositories === undefined
@@ -327,11 +386,14 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   }
 
   return ok({
+    agent: { provider },
     github: { appId, privateKeyPath, allowedOwners },
     server: { host, port, allowedHost },
     storage: { path: storagePath },
     trustedCheckoutRoots,
     mutationsEnabled,
+    autoMerge,
+    maxOpenPullRequests,
     pollIntervalSeconds,
     issueCutoff,
     externalRepositories,

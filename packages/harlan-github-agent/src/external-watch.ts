@@ -1,4 +1,4 @@
-import type { DashboardSnapshot, ExternalRepositoryWatch, GitHubIssueSubject, RepositoryStatus, SubjectSummary } from './types.ts'
+import type { DashboardSnapshot, ExternalRepositoryWatch, GitHubIssueItem, ItemSummary, RepositoryStatus } from './types.ts'
 import { createHash } from 'node:crypto'
 import { Octokit } from 'octokit'
 import { isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from './github.ts'
@@ -17,7 +17,7 @@ export interface PublicIssueSnapshot {
 
 export interface ExternalWatchSnapshot {
   repositories: RepositoryStatus[]
-  subjects: SubjectSummary[]
+  items: ItemSummary[]
 }
 
 export interface ExternalWatchController {
@@ -83,7 +83,7 @@ function defaultIssueListRequest(repository: string, signal?: AbortSignal): Prom
   })))
 }
 
-function issueSubject(repository: string, issue: PublicIssueSnapshot): GitHubIssueSubject {
+function issueItem(repository: string, issue: PublicIssueSnapshot): GitHubIssueItem {
   return {
     kind: 'issue',
     approvalLabels: [],
@@ -101,7 +101,7 @@ function issueSubject(repository: string, issue: PublicIssueSnapshot): GitHubIss
 export function createExternalWatchController(options: ExternalWatchControllerOptions): ExternalWatchController {
   const requestIssue = options.requestIssue ?? defaultIssueRequest
   const requestIssues = options.requestIssues ?? defaultIssueListRequest
-  const states = new Map<string, { repository: RepositoryStatus, subjects: SubjectSummary[] }>(options.watches.map(watch => [watch.github, {
+  const states = new Map<string, { repository: RepositoryStatus, items: ItemSummary[] }>(options.watches.map(watch => [watch.github, {
     repository: {
       github: watch.github,
       enabled: true,
@@ -112,7 +112,7 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
       lastError: null,
       subjectCount: 0,
     },
-    subjects: [] as SubjectSummary[],
+    items: [] as ItemSummary[],
   }]))
 
   const poll: ExternalWatchController['poll'] = async signal => Promise.all(options.watches.map(async (watch) => {
@@ -133,11 +133,11 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
           .filter(issue => isIssueAtOrAfterCutoff(issue.createdAt, options.issueCutoff))
           .filter(issue => !isAutomatedGitHubActor({ login: issue.author, type: issue.authorType }))
           .map((issue) => {
-            const subject = issueSubject(watch.github, issue)
+            const subject = issueItem(watch.github, issue)
             const revisionId = createHash('sha256').update(JSON.stringify(subject)).digest('hex')
             return { ...subject, revisionId, observedAt: at }
           })
-        current.subjects = subjects
+        current.items = subjects
         current.repository = {
           ...current.repository,
           lastSuccessAt: at,
@@ -149,7 +149,7 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : 'Public GitHub request failed.'
         current.repository = { ...current.repository, lastError: message }
-        return { repository: watch.github, subjects: current.subjects.length, error: message }
+        return { repository: watch.github, subjects: current.items.length, error: message }
       })
   }))
 
@@ -157,7 +157,7 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
     poll,
     snapshot: () => ({
       repositories: [...states.values()].map(state => state.repository),
-      subjects: [...states.values()].flatMap(state => state.subjects),
+      items: [...states.values()].flatMap(state => state.items),
     }),
   }
 }
@@ -165,12 +165,12 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
 export function mergeExternalWatchSnapshot(snapshot: DashboardSnapshot, external: ExternalWatchSnapshot): DashboardSnapshot {
   const repositories = new Set(snapshot.repositories.map(repository => repository.github.toLowerCase()))
   const externalRepositories = external.repositories.filter(repository => !repositories.has(repository.github.toLowerCase()))
-  const subjects = new Set(snapshot.subjects.map(subject => `${subject.repository.toLowerCase()}:${subject.kind}:${subject.number}`))
-  const externalSubjects = external.subjects.filter(subject => !subjects.has(`${subject.repository.toLowerCase()}:${subject.kind}:${subject.number}`))
+  const subjects = new Set(snapshot.items.map(subject => `${subject.repository.toLowerCase()}:${subject.kind}:${subject.number}`))
+  const externalItems = external.items.filter(subject => !subjects.has(`${subject.repository.toLowerCase()}:${subject.kind}:${subject.number}`))
   return {
     ...snapshot,
     status: snapshot.status === 'ready' && externalRepositories.some(repository => repository.lastError !== null) ? 'degraded' : snapshot.status,
     repositories: [...snapshot.repositories, ...externalRepositories].sort((left, right) => left.github.localeCompare(right.github)),
-    subjects: [...snapshot.subjects, ...externalSubjects],
+    items: [...snapshot.items, ...externalItems],
   }
 }

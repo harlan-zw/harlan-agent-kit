@@ -1,5 +1,5 @@
 import type { GitHubSource } from './github.ts'
-import type { DashboardSnapshot, GitHubPullRequestSubject, PullRequestStatus, RepositoryMapping, ReviewAgent } from './types.ts'
+import type { DashboardSnapshot, GitHubPullRequestItem, PullRequestStatus, RepositoryMapping, ReviewAgent } from './types.ts'
 
 export interface PullRequestStatusController {
   apply: (snapshot: DashboardSnapshot) => DashboardSnapshot
@@ -17,7 +17,7 @@ function reviewKey(review: ReviewAgent): string {
   return `${review.repository}:${review.pullRequestNumber}`
 }
 
-function statusFromPullRequest(pullRequest: GitHubPullRequestSubject): PullRequestStatus {
+function statusFromPullRequest(pullRequest: GitHubPullRequestItem): PullRequestStatus {
   if (pullRequest.state === 'open')
     return { _tag: 'Open' }
   return pullRequest.mergedAt === null
@@ -40,7 +40,7 @@ export function createPullRequestStatusController(options: PullRequestStatusCont
 
   const sync: PullRequestStatusController['sync'] = async (snapshot, signal) => {
     const now = options.now().getTime()
-    const openPullRequests = new Set(snapshot.subjects.flatMap(subject =>
+    const openPullRequests = new Set(snapshot.items.flatMap(subject =>
       subject.kind === 'pull_request' ? [`${subject.repository}:${subject.number}`] : []))
     const recentReviews = snapshot.agents
       .filter((agent): agent is ReviewAgent => agent._tag === 'ReviewAgent')

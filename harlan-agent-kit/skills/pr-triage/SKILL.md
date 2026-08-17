@@ -7,6 +7,8 @@ description: Triage all open pull requests in Harlan's owned GitHub repositories
 
 Turn the owned PR backlog into a ranked merge queue. Never merge.
 
+`harlan-github-agent` merges pull requests labelled `harlan-agent-auto-merge` on its own. This skill never does. See [auto merge](../../references/auto-merge.md).
+
 ## Worktree isolation
 
 Before repair edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.

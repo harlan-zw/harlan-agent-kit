@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createConflictWorktreeManager } from '../src/worktree.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -67,7 +67,7 @@ function fixture(): { currentBaseSha: string, remote: string, root: string, task
       updatedAt: '2026-08-13T01:00:00.000Z',
       state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
       repositoryMapping: mapping,
-      pullRequest: pullRequestSubject({ number: 1, baseSha: staleBaseSha, headSha }),
+      pullRequest: pullRequestItem({ number: 1, baseSha: staleBaseSha, headSha }),
     },
   }
 }
@@ -79,7 +79,7 @@ describe('conflict worktree', () => {
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }) },
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
 
     const result = await manager.prepare(task, new AbortController().signal)
@@ -93,7 +93,7 @@ describe('conflict worktree', () => {
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }) },
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
     const prepared = await manager.prepare(task, new AbortController().signal)
     if (prepared._tag === 'Err')
@@ -112,7 +112,7 @@ describe('conflict worktree', () => {
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }) },
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
     const prepared = await manager.prepare(task, new AbortController().signal)
     if (prepared._tag === 'Err')
@@ -130,7 +130,7 @@ describe('conflict worktree', () => {
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }) },
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
     const prepared = await manager.prepare(task, new AbortController().signal)
     if (prepared._tag === 'Err')

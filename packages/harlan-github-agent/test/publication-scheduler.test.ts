@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createPublicationScheduler } from '../src/publication-scheduler.ts'
 import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { issueSubject, pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 function stagedStore() {
   const store = openJournalStore(':memory:')
@@ -11,7 +11,7 @@ function stagedStore() {
     externalId: 'conflicting',
     observedAt: '2026-08-13T01:00:00.000Z',
     source: 'poll',
-    subject: pullRequestSubject(),
+    subject: pullRequestItem(),
   })
   const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10 * 60_000)
   if (task === null)
@@ -46,7 +46,7 @@ function stagedIssueStore() {
     externalId: 'issue',
     observedAt: '2026-08-13T01:00:00.000Z',
     source: 'poll',
-    subject: issueSubject(),
+    subject: issueItem(),
   })
   const triage = store.claimNextIssueTriageTask('triage', '2026-08-13T01:01:00.000Z', 60_000)
   if (triage === null || observed._tag !== 'Inserted')
@@ -174,6 +174,39 @@ describe('publication scheduler', () => {
 
     expect(calls).toEqual([])
     expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').tasks[0]?.state._tag).toBe('Superseded')
+    await scheduler.stop()
+    store.close()
+  })
+
+  it('replaces a leftover branch from an earlier attempt when it opens a pull request', async () => {
+    const store = stagedIssueStore()
+    const calls: string[] = []
+    const scheduler = createPublicationScheduler({
+      intervalMilliseconds: 60_000,
+      leaseMilliseconds: 10_000,
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
+      onError: (error) => { throw error },
+      store,
+      publisher: {
+        finalize: () => Promise.resolve(ok('Opened pull request #7.')),
+        // The branch survives from an attempt that never opened a pull request.
+        getHeadSha: () => Promise.resolve(ok(calls.includes('push') ? 'issue-commit' : 'orphan-commit')),
+        push: () => {
+          calls.push('push')
+          return Promise.resolve(ok(undefined))
+        },
+        validateAuthority: () => {
+          calls.push('validate')
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      workerId: 'publisher-1',
+    })
+
+    await scheduler.runNow()
+
+    expect(calls).toEqual(['validate', 'push'])
+    expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').tasks[0]?.state).toEqual({ _tag: 'Completed', evidence: 'Opened pull request #7.' })
     await scheduler.stop()
     store.close()
   })

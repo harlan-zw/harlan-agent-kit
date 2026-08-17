@@ -51,6 +51,15 @@ def sha256_text(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def issue_ids_checksum(issue_ids):
+    """Digest a set of numeric issue IDs in one canonical order.
+
+    ledger.py audit digests the same way, so a snapshot and the ledger built
+    from it produce equal checksums whenever they cover equal ID sets.
+    """
+    return sha256_text("\n".join(sorted(set(issue_ids), key=int)) + "\n")
+
+
 def load_cli_config():
     config = configparser.ConfigParser()
     config.read(Path.home() / ".sentryclirc")
@@ -161,14 +170,25 @@ def snapshot_issues(args):
         raise RuntimeError(
             f"Snapshot reached {SAFETY_CAP} rows; refusing possibly truncated discovery."
         )
-    issue_ids = [issue["id"] for issue in issues]
+    # sentry-cli paginates a live query, so an issue whose rank shifts between
+    # page requests can appear twice. Downstream bulk-bundles and ledger init
+    # both reject duplicates, so keep the first row per ID and name the drop.
+    unique = {}
+    duplicates = []
+    for issue in issues:
+        if issue["id"] in unique:
+            duplicates.append(issue["id"])
+            continue
+        unique[issue["id"]] = issue
+    issues = sorted(unique.values(), key=lambda issue: int(issue["id"]))
     snapshot = {
         "source": "sentry-cli",
         "org": args.org,
         "project": args.project,
         "query": args.query,
         "issue_count": len(issues),
-        "issue_ids_sha256": sha256_text("\n".join(issue_ids) + "\n"),
+        "issue_ids_sha256": issue_ids_checksum(unique),
+        "duplicate_ids_dropped": sorted(set(duplicates), key=int),
         "issues": issues,
     }
     output = stable_json(snapshot)
@@ -412,7 +432,7 @@ def bulk_bundles(args, base_url, token):
         "org": args.org,
         "project": args.project,
         "issue_count": len(issue_ids),
-        "issue_ids_sha256": sha256_text("\n".join(issue_ids) + "\n"),
+        "issue_ids_sha256": issue_ids_checksum(issue_ids),
         "events_per_issue": args.events,
         "completed": dict(sorted(checksums.items())),
         "errors": dict(sorted(errors.items())),

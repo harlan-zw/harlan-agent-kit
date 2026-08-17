@@ -50,7 +50,7 @@ export interface PreparedWorkerWorkspace {
   path: string
 }
 
-export interface WorkerWorkspaceManager {
+export interface AgentWorkspaceManager {
   prepareBaseline: (task: ClaimedBaselineRepairTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   prepareFix: (task: ClaimedReviewFixTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   prepareIssue: (task: ClaimedIssueTriageTask | ClaimedIssueWorkTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
@@ -479,7 +479,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
   return { commit, prepare, verify }
 }
 
-export function createWorkerWorkspaceManager(options: ConflictWorktreeManagerOptions): WorkerWorkspaceManager {
+export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOptions): AgentWorkspaceManager {
   async function prepareRepository(
     task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask,
     namespace: string,
@@ -588,7 +588,7 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
   const gitIdentity = options.gitIdentity
-  const workspaces = createWorkerWorkspaceManager(options)
+  const workspaces = createAgentWorkspaceManager(options)
 
   return {
     prepare: workspaces.prepareFix,
@@ -658,7 +658,7 @@ export function createBaselineRepairWorktreeManager(options: ConflictWorktreeMan
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
   const gitIdentity = options.gitIdentity
-  const workspaces = createWorkerWorkspaceManager(options)
+  const workspaces = createAgentWorkspaceManager(options)
 
   return {
     prepare: workspaces.prepareBaseline,
@@ -718,7 +718,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
   const gitIdentity = options.gitIdentity
-  const workspaces = createWorkerWorkspaceManager(options)
+  const workspaces = createAgentWorkspaceManager(options)
 
   return {
     prepare: workspaces.prepareIssue,
@@ -775,7 +775,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
 }
 
 export interface GitPublicationRemoteOptions {
-  github: Pick<GitHubSource, 'getPullRequest' | 'isBranchProtected'>
+  github: Pick<GitHubSource, 'getPullRequest' | 'hasOpenPullRequestForBranch' | 'isBranchProtected'>
   pullRequests?: GitHubPullRequestPublisher
   root: string
   remoteUrl?: (repository: string) => string
@@ -814,14 +814,21 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           return err('Repository policy no longer authorizes issue work.')
         if (command.taskKind === 'baseline_repair' && !command.repositoryMapping.pullRequestReview)
           return err('Repository policy no longer authorizes Baseline repair.')
+        // The controller replaces its own branch. A branch already under review belongs to its reviewers.
+        const reviewed = await options.github.hasOpenPullRequestForBranch(command.repositoryMapping, command.headRef, signal)
+        if (reviewed._tag === 'Err')
+          return err(reviewed.error.message)
+        if (reviewed.value)
+          return err('An open pull request already uses this branch.')
       }
       else {
         const headRepository = publicationTargetRepository(command)
         const pullRequest = await options.github.getPullRequest(command.repositoryMapping, command.pullRequestNumber, signal)
         if (pullRequest._tag === 'Err')
           return err(pullRequest.error.message)
-        const canWriteHead = pullRequest.value.headRepository.toLowerCase() === command.repository.toLowerCase()
-          || (command.taskKind === 'review_fix' && pullRequest.value.maintainerCanModify === true)
+        const ownedHead = pullRequest.value.headRepository.toLowerCase() === command.repository.toLowerCase()
+        const canWriteHead = ownedHead
+          || ((command.taskKind === 'review_fix' || command.taskKind === 'resolve_conflict') && pullRequest.value.maintainerCanModify === true)
         if (
           pullRequest.value.state !== 'open'
           || pullRequest.value.draft
@@ -830,7 +837,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           || pullRequest.value.headRef !== command.headRef
           || pullRequest.value.headRepository.toLowerCase() !== headRepository.toLowerCase()
           || !canWriteHead
-          || (command.taskKind === 'resolve_conflict' && !command.repositoryMapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.value.author.toLowerCase()))
+          || (command.taskKind === 'resolve_conflict' && ownedHead && !command.repositoryMapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.value.author.toLowerCase()))
         ) {
           return err('The pull request no longer authorizes publication.')
         }
@@ -908,10 +915,14 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       if (credential._tag === 'Err')
         return credential
       const ref = `refs/heads/${command.headRef}`
+      // Replace a leftover branch from an earlier attempt. Never rewrite a contributor's pull request branch.
+      const refspec = command._tag === 'OpenPullRequest'
+        ? `+${command.artifactRef}:${ref}`
+        : `${command.artifactRef}:${ref}`
       const result = await runGit(repository, [
         'push',
         remoteUrl(publicationTargetRepository(command)),
-        `${command.artifactRef}:${ref}`,
+        refspec,
       ], signal, credential.value, options.remoteUrl !== undefined)
       return result.exitCode === 0
         ? ok(undefined)

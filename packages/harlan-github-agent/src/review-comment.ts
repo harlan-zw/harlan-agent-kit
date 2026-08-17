@@ -1,4 +1,6 @@
 export const AUTOMATED_REVIEW_MARKER = '<!-- harlan-agent-kit:pr-triage -->'
+/** The login the GitHub App posts as. */
+export const AGENT_ACTOR_LOGIN = 'harlan-github-agent[bot]'
 
 export type PriorAutomatedReview
   = | { _tag: 'None' }

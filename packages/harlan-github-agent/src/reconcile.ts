@@ -1,4 +1,5 @@
 import type { ApprovalController } from './approval-controller.ts'
+import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
@@ -23,7 +24,8 @@ export interface ReconciliationError {
 
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
-  github: Pick<GitHubSource, 'listOpenSubjects'>
+  autoMerge?: AutoMergeController
+  github: Pick<GitHubSource, 'listOpenItems'>
   store: JournalStore
   now: () => Date
   signal?: AbortSignal
@@ -48,14 +50,17 @@ function countResults(results: RecordObservationResult[]): Pick<ReconciliationSu
 export async function reconcileRepository(repository: RepositoryMapping, dependencies: ReconciliationDependencies): Promise<Result<ReconciliationSummary, ReconciliationError>> {
   const observedAt = dependencies.now().toISOString()
   dependencies.store.recordPollAttempt(repository.github, observedAt)
-  const result = await dependencies.github.listOpenSubjects(repository, dependencies.signal)
+  const result = await dependencies.github.listOpenItems(repository, dependencies.signal)
   if (result._tag === 'Err') {
     dependencies.store.recordPollFailure(repository.github, observedAt, result.error.message)
     return err({ repository: repository.github, message: result.error.message })
   }
 
-  const eligibleSubjects = result.value.filter(subject => !isAutomatedGitHubActor({ login: subject.author }))
-  const writes = eligibleSubjects.map(subject => dependencies.store.recordObservation({
+  const eligibleItems = result.value.filter(subject => !isAutomatedGitHubActor(
+    { login: subject.author },
+    subject.kind === 'pull_request' ? repository.writablePullRequestAuthors : [],
+  ))
+  const writes = eligibleItems.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
     source: 'poll',
@@ -69,7 +74,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   }
 
   if (dependencies.approvals !== undefined) {
-    const approvals = await Promise.all(eligibleSubjects.map((subject, index) => {
+    const approvals = await Promise.all(eligibleItems.map((subject, index) => {
       const write = writes[index]
       if (write === undefined || write._tag === 'Conflict' || write._tag === 'Stale')
         return Promise.resolve(ok(undefined))
@@ -82,15 +87,24 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     }
   }
 
-  const closed = dependencies.store.closeMissingSubjects(
+  if (dependencies.autoMerge !== undefined) {
+    const merges = dependencies.autoMerge
+    await Promise.all(eligibleItems.map(subject => merges.reconcile(
+      repository,
+      subject,
+      dependencies.signal ?? AbortSignal.timeout(30_000),
+    )))
+  }
+
+  const closed = dependencies.store.closeMissingItems(
     repository.github,
-    eligibleSubjects.map(subject => ({ kind: subject.kind, number: subject.number })),
+    eligibleItems.map(subject => ({ kind: subject.kind, number: subject.number })),
     observedAt,
   )
   dependencies.store.recordPollSuccess(repository.github, observedAt)
   return ok({
     repository: repository.github,
-    subjects: eligibleSubjects.length,
+    subjects: eligibleItems.length,
     closed,
     ...countResults(writes),
   })

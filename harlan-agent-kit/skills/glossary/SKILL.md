@@ -31,8 +31,9 @@ Vocabulary is a product surface. Treat inventing a word with the same caution as
 2. **Never introduce a synonym for a term that exists.** If the glossary says Sprint, do not write "run", "batch", or "job", not even in a tooltip, a variable name, or a log line.
 3. **Never use a term on the ban list.** The ban list carries a replacement; use it.
 4. **A concept with no term does not get named silently.** Propose an addition, state the candidate term and the synonyms it displaces, and get confirmation. Inventing quietly is the whole failure mode.
-5. **Match the recorded casing exactly.** `Nuxt SEO` and `NuxtSEO` are different brands to a reader.
-6. **A term list without a relationship map is half a glossary.** See below. Terms are only ambiguous in relation to each other, so the map is what makes the list decidable.
+5. **Take the platform's word before inventing one.** GitHub, Nuxt, Vue, and HTTP have already named most things. `auto merge` beats a coined `merge tier`, because the reader knows it and nobody has to confirm it. Propose at most one new term per change; a set of new terms is a redesign, not a name.
+6. **Match the recorded casing exactly.** `Nuxt SEO` and `NuxtSEO` are different brands to a reader.
+7. **A term list without a relationship map is half a glossary.** See below. Terms are only ambiguous in relation to each other, so the map is what makes the list decidable.
 
 Rule 4 is the one that matters. Rules 1 to 3 only work on concepts someone already thought about.
 

@@ -21,6 +21,7 @@ describe('gitHub pull request publication', () => {
       }) as unknown as Octokit,
       tokens: {
         getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T02:00:00.000Z' })),
+        invalidate: () => undefined,
       },
     })
 

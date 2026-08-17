@@ -3,7 +3,7 @@ import type { Result } from './result.ts'
 import type { ClaimedAgentTask } from './types.ts'
 import { err } from './result.ts'
 
-export interface SubjectWorker<Task extends ClaimedAgentTask> {
+export interface ItemAgent<Task extends ClaimedAgentTask> {
   run: (task: Task, signal: AbortSignal) => Promise<Result<{ evidence: string }, string>>
 }
 
@@ -26,7 +26,7 @@ export interface WorkerTaskSchedulerOptions<Task extends ClaimedAgentTask> {
   /** Called once the worker stops running a task, whatever the outcome. */
   onTaskSettled?: (taskId: string) => void
   permits: AgentPermitPool
-  worker: SubjectWorker<Task>
+  worker: ItemAgent<Task>
   workerId: string
 }
 

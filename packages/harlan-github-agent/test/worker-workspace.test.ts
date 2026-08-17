@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { createWorkerWorkspaceManager } from '../src/worktree.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { createAgentWorkspaceManager } from '../src/worktree.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -50,15 +50,15 @@ describe('worker workspace', () => {
       externalId: 'advanced-base',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestSubject({ baseSha, headSha, mergeState: 'clean' }),
+      subject: pullRequestItem({ baseSha, headSha, mergeState: 'clean' }),
     })
     const task = store.claimNextAdversarialReviewTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)
     if (task === null)
       throw new Error('Expected a review task.')
-    const manager = createWorkerWorkspaceManager({
+    const manager = createAgentWorkspaceManager({
       remoteUrl: () => remote,
       root: join(root, 'worktrees'),
-      tokens: { getToken: () => Promise.resolve(ok({ token: 'test', expiresAt: '2026-08-13T02:00:00.000Z' })) },
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'test', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
 
     const prepared = await manager.prepareReview(task, AbortSignal.timeout(10_000))

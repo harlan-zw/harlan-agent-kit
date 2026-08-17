@@ -160,7 +160,7 @@ useHead({
               <span class="step-number">04</span>
               <div>
                 <h3>Adversarial review</h3>
-                <p>Codex reviews the full diff and surrounding code with <code>gpt-5.6-sol</code> at high reasoning.</p>
+                <p>The review agent reads the full diff and surrounding code at high reasoning. The configured provider decides the model.</p>
                 <p>Green CI supplies broad test, lint, typecheck, and build evidence. The agent runs focused checks only for a finding or uncovered behavior.</p>
               </div>
             </li>
@@ -208,7 +208,7 @@ useHead({
               <span class="step-number">02</span>
               <div>
                 <h3>Issue triage</h3>
-                <p>Codex checks the default branch, reproduction, comments, hidden scope, difficulty, and impact in a Git worktree.</p>
+                <p>The triage agent checks the default branch, reproduction, comments, hidden scope, difficulty, and impact in a Git worktree.</p>
               </div>
             </li>
             <li>
@@ -233,7 +233,7 @@ useHead({
               <span class="step-number">05</span>
               <div>
                 <h3>Issue work</h3>
-                <p>The triage agent resumes its Codex session, makes the change, and runs focused checks. The controller verifies and commits the result.</p>
+                <p>The triage agent resumes its own session, makes the change, and runs focused checks. The controller verifies and commits the result.</p>
               </div>
             </li>
             <li>
@@ -262,7 +262,7 @@ useHead({
             </li>
             <li class="recovery-row">
               <UIcon name="i-lucide-braces" class="text-dimmed" aria-hidden="true" />
-              <span><strong>Invalid Codex result</strong><span>Use the strict response schema, then retry on the next GitHub poll.</span></span>
+              <span><strong>Invalid agent result</strong><span>Use the strict response schema, then retry on the next GitHub poll.</span></span>
               <UBadge color="success" variant="subtle" class="status-success">
                 Requeue
               </UBadge>
@@ -304,7 +304,7 @@ useHead({
                 Not connected
               </UBadge>
             </summary>
-            <p>The data model permits Claude evidence, but the service starts Codex agents only. No Claude CLI review is dispatched.</p>
+            <p>The data model permits Claude evidence, but the service starts Codex or opencode agents only. No Claude CLI review is dispatched.</p>
           </details>
           <details class="gap-disclosure">
             <summary>
@@ -329,7 +329,7 @@ useHead({
               Agents
             </h3>
             <p class="mt-2 text-sm text-muted">
-              Run with the global Codex context in one Git worktree. They can use authenticated GitHub reads for project history.
+              Run with the global agent context in one Git worktree. They can use authenticated GitHub reads for project history.
             </p>
           </div>
           <div class="p-5">

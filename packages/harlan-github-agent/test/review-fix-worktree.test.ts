@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { createGitPublicationRemote, createReviewFixWorktreeManager } from '../src/worktree.ts'
-import { pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -69,7 +69,7 @@ function fixture(): { remote: string, root: string, task: ClaimedReviewFixTask }
       updatedAt: '2026-08-13T01:00:00.000Z',
       state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
       repositoryMapping: mapping,
-      pullRequest: pullRequestSubject({ number: 1, baseSha, headSha, headRef: 'fix/review', mergeState: 'clean' }),
+      pullRequest: pullRequestItem({ number: 1, baseSha, headSha, headRef: 'fix/review', mergeState: 'clean' }),
       findings: [{ _tag: 'Open', summary: 'The value is wrong.', nextAction: 'Set the correct value.' }],
     },
   }
@@ -78,7 +78,7 @@ function fixture(): { remote: string, root: string, task: ClaimedReviewFixTask }
 describe('review fix worktree', () => {
   it('rejects workflow edits that the controller cannot publish to a contributor fork', async () => {
     const { remote, root, task } = fixture()
-    task.pullRequest = pullRequestSubject({
+    task.pullRequest = pullRequestItem({
       ...task.pullRequest,
       author: 'contributor',
       headRepository: 'contributor/example',
@@ -88,7 +88,7 @@ describe('review fix worktree', () => {
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }) },
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
     const prepared = await manager.prepare(task, new AbortController().signal)
     if (prepared._tag === 'Err')
@@ -112,7 +112,7 @@ describe('review fix worktree', () => {
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }) },
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
     const prepared = await manager.prepare(task, new AbortController().signal)
     if (prepared._tag === 'Err')
@@ -158,11 +158,12 @@ describe('review fix worktree', () => {
     const publisher = createGitPublicationRemote({
       github: {
         getPullRequest: () => Promise.resolve(ok(task.pullRequest)),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
         isBranchProtected: () => Promise.resolve(ok(false)),
       },
       remoteUrl: () => remote,
       root,
-      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })) },
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
     const command = {
       _tag: 'UpdatePullRequest' as const,

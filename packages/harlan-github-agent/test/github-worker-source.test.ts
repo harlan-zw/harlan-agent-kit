@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { currentGitHubChecks } from '../src/github-worker-source.ts'
+import { currentGitHubChecks } from '../src/github-agent-source.ts'
 
 describe('current GitHub checks', () => {
   it('uses the latest run when one check context ran more than once', () => {

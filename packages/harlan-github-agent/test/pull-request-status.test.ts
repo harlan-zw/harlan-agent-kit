@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createPullRequestStatusController } from '../src/index.ts'
 import { ok } from '../src/result.ts'
-import { dashboardSnapshot, pullRequestSubject, repositoryMapping } from './fixtures.ts'
+import { dashboardSnapshot, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('pull request status controller', () => {
   it('shows a merged pull request on its completed review', async () => {
-    const getPullRequest = vi.fn(() => Promise.resolve(ok(pullRequestSubject({
+    const getPullRequest = vi.fn(() => Promise.resolve(ok(pullRequestItem({
       state: 'closed',
       mergedAt: '2026-08-13T11:00:00.000Z',
     }))))

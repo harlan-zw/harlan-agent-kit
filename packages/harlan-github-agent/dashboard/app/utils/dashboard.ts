@@ -1,11 +1,13 @@
 import type {
   ActiveAgent,
+  AgentRole,
   AgentTask,
+  Incident,
+  IncidentKind,
   QueueEntry,
   RepositoryStatus,
   ReviewAgent,
   ReviewGateState,
-  WorkerRole,
 } from '../../../src/types.ts'
 
 /** A progress label older than this means the agent may be wedged, not working. */
@@ -15,7 +17,7 @@ export const staleSnapshotSeconds = 90
 
 export type StatusTone = 'error' | 'warning' | 'primary' | 'success'
 
-export const workerRoleLabels: Array<[WorkerRole, string]> = [
+export const agentRoleLabels: Array<[AgentRole, string]> = [
   ['adversarial_review', 'Review'],
   ['baseline_repair', 'Baseline repair'],
   ['conflict_resolution', 'Conflict resolution'],
@@ -54,7 +56,7 @@ export function isSnapshotStale(generatedAt: string, now: Date): boolean {
 
 export function repositoryState(repository: RepositoryStatus): { label: string, tone: 'error' | 'warning' | 'success' } {
   if (repository.lastError !== null)
-    return { label: 'Needs attention', tone: 'error' }
+    return { label: 'Action required', tone: 'error' }
   if (repository.lastSuccessAt === null)
     return { label: 'Starting', tone: 'warning' }
   return { label: 'Healthy', tone: 'success' }
@@ -78,7 +80,7 @@ export function activeAgentProgress(agent: ActiveAgent): string {
   return agent.progress.label
 }
 
-export function workLabel(work: WorkerRole): string {
+export function workLabel(work: AgentRole): string {
   if (work === 'adversarial_review')
     return 'Adversarial review'
   if (work === 'issue_triage')
@@ -99,36 +101,36 @@ export interface QueueContext {
 export function queueStateLabel(entry: QueueEntry, context: QueueContext): string {
   switch (entry.state._tag) {
     case 'Active': return 'Active'
-    case 'NeedsAttention': return 'Needs attention'
+    case 'ActionRequired': return 'Action required'
     case 'AwaitingApproval': return entry.state.kind === 'issue_work'
       ? 'Issue approval'
       : 'Review and repair approval'
     case 'Queued': return context.agentsCanStart ? 'Queued' : context.agentsPaused ? 'Agents paused' : 'Agents disabled'
-    case 'Waiting': return 'Waiting'
+    case 'Pending': return 'Pending'
   }
 }
 
 export function queueStateTone(entry: QueueEntry): StatusTone | 'neutral' {
   switch (entry.state._tag) {
     case 'Active': return 'success'
-    case 'NeedsAttention': return 'error'
+    case 'ActionRequired': return 'error'
     case 'AwaitingApproval': return 'warning'
     case 'Queued': return 'primary'
-    case 'Waiting': return 'neutral'
+    case 'Pending': return 'neutral'
   }
 }
 
 export function queueDetail(entry: QueueEntry, context: QueueContext): string {
   switch (entry.state._tag) {
     case 'Active': return `${workLabel(entry.state.work)} is running.`
-    case 'NeedsAttention': return entry.state.reason
+    case 'ActionRequired': return entry.state.reason
     case 'AwaitingApproval': return entry.state.kind === 'issue_work'
       ? 'Issue work requires your approval.'
       : 'Review and repairs require your approval.'
     case 'Queued': return context.agentsCanStart
       ? `${workLabel(entry.state.work)} will start when an agent is free.`
       : 'Automatic reviews and fixes are disabled.'
-    case 'Waiting': return entry.state.reason
+    case 'Pending': return entry.state.reason
   }
 }
 
@@ -146,7 +148,65 @@ export function decisionKey(entry: QueueEntry): string {
 }
 
 export function reviewOutcomeLabel(agent: ReviewAgent): string {
-  return agent.outcome._tag === 'Ready' ? `READY · ${agent.outcome.confidence}/100` : agent.outcome._tag.toUpperCase()
+  if (agent.outcome._tag !== 'Ready')
+    return agent.outcome._tag.toUpperCase()
+  // A passing review that named no confidence still reads as READY.
+  return agent.outcome.confidence === undefined ? 'READY' : `READY · ${agent.outcome.confidence}/100`
+}
+
+const incidentKindLabels: Record<IncidentKind, string> = {
+  agent_provider: 'Agent provider',
+  agent_result: 'Agent result',
+  controller: 'Controller',
+  github_access: 'GitHub access',
+  github_unavailable: 'GitHub unavailable',
+  network: 'Network',
+  policy: 'Repository policy',
+  rate_limit: 'Rate limit',
+  subject_changed: 'Item changed',
+  unknown: 'Unclassified',
+}
+
+export function incidentKindLabel(incident: Incident): string {
+  return incidentKindLabels[incident.kind] ?? incident.kind
+}
+
+export function incidentTone(incident: Incident): StatusTone {
+  return incident.severity === 'error' ? 'error' : 'warning'
+}
+
+/** Says what the controller will do next, so the pane answers "do I act on this?". */
+export function incidentRecoveryLabel(incident: Incident): string {
+  if (incident.recovery._tag === 'Retrying')
+    return incident.recovery.attempt > 0 ? `Retrying · attempt ${incident.recovery.attempt}` : 'Retrying'
+  return incident.recovery._tag === 'Exhausted' ? 'Retries exhausted' : 'Action required'
+}
+
+export function incidentScopeLabel(incident: Incident): string {
+  if (incident.scope._tag === 'Service')
+    return 'Controller'
+  if (incident.scope._tag === 'Repository')
+    return incident.scope.repository
+  return incident.scope.itemNumber === null
+    ? incident.scope.repository
+    : `${incident.scope.repository}#${incident.scope.itemNumber}`
+}
+
+export function incidentUrl(incident: Incident): string | undefined {
+  if (incident.scope._tag === 'Repository')
+    return `https://github.com/${incident.scope.repository}`
+  if (incident.scope._tag === 'Task' && incident.scope.itemNumber !== null)
+    return `https://github.com/${incident.scope.repository}/pull/${incident.scope.itemNumber}`
+  return undefined
+}
+
+/** Errors first, then whatever happened most recently. */
+export function incidentEntries(incidents: Incident[]): Incident[] {
+  return [...incidents].sort((left, right) => {
+    if (left.severity !== right.severity)
+      return left.severity === 'error' ? -1 : 1
+    return right.lastSeenAt.localeCompare(left.lastSeenAt)
+  })
 }
 
 export function reviewOutcomeTone(agent: ReviewAgent): 'error' | 'warning' | 'success' {
@@ -170,8 +230,8 @@ export function taskIsIssue(task: AgentTask): boolean {
 }
 
 export function taskKindLabel(task: AgentTask): string {
-  const role: WorkerRole = task.kind === 'resolve_conflict' ? 'conflict_resolution' : task.kind
-  const match = workerRoleLabels.find(([candidate]) => candidate === role)
+  const role: AgentRole = task.kind === 'resolve_conflict' ? 'conflict_resolution' : task.kind
+  const match = agentRoleLabels.find(([candidate]) => candidate === role)
   return match === undefined ? task.kind : match[1]
 }
 
@@ -213,14 +273,14 @@ export function buildHistory(reviewAgents: ReviewAgent[], tasks: AgentTask[]): H
 
 /** Anything the engine cannot resolve without Harlan. This zone outranks everything else. */
 export function decisionEntries(queue: QueueEntry[]): QueueEntry[] {
-  return queue.filter(entry => entry.state._tag === 'AwaitingApproval' || entry.state._tag === 'NeedsAttention')
+  return queue.filter(entry => entry.state._tag === 'AwaitingApproval' || entry.state._tag === 'ActionRequired')
 }
 
 /** Queue minus decisions, minus work already visible as a running agent. */
 export function upNextEntries(queue: QueueEntry[], activeAgents: ActiveAgent[]): QueueEntry[] {
-  const running = new Set(activeAgents.map(agent => `${agent.repository}#${agent.subjectNumber}`))
+  const running = new Set(activeAgents.map(agent => `${agent.repository}#${agent.itemNumber}`))
   return queue.filter((entry) => {
-    if (entry.state._tag === 'AwaitingApproval' || entry.state._tag === 'NeedsAttention')
+    if (entry.state._tag === 'AwaitingApproval' || entry.state._tag === 'ActionRequired')
       return false
     return !(entry.state._tag === 'Active' && running.has(`${entry.repository}#${entry.number}`))
   })
