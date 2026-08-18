@@ -57,6 +57,7 @@ import type {
   StoredAgentControl,
   TaskState,
 } from './types.ts'
+import type { AgentWorktreeLease } from './worktree.ts'
 import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -436,6 +437,11 @@ export interface JournalStore {
    * can never become a stack base.
    */
   listOpenAgentPullRequests: (repository: string) => OpenAgentPullRequest[]
+  /**
+   * Every Task lease that may still write, so a sweep can tell an agent
+   * worktree still in use from one nothing will touch again.
+   */
+  listActiveTaskLeases: () => AgentWorktreeLease[]
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listStoppedReviews: () => StoppedReview[]
   recordStoppedReviewStatus: (input: {
@@ -6116,6 +6122,12 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     }
   }
 
+  const listActiveTaskLeases: JournalStore['listActiveTaskLeases'] = () => database.prepare(`
+    SELECT id AS taskId, fence FROM tasks WHERE state_tag NOT IN ('Completed', 'Failed', 'Superseded')
+    UNION ALL
+    SELECT id AS taskId, fence FROM worker_tasks WHERE state_tag NOT IN ('Completed', 'Failed', 'Superseded')
+  `).all() as unknown as AgentWorktreeLease[]
+
   const listStoppedReviews: JournalStore['listStoppedReviews'] = () => (database.prepare(`
     SELECT
       worker_tasks.id AS task_id,
@@ -6331,6 +6343,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     isBaselineRepairPullRequest,
     isIssueWorkApprovalReady,
     listOpenAgentPullRequests,
+    listActiveTaskLeases,
     listStoppedReviews,
     recordStoppedReviewStatus,
     approvePullRequest,

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { createAgentWorkspaceManager } from '../src/worktree.ts'
+import { agentWorktreeBranch, createAgentWorkspaceManager } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
@@ -70,10 +70,8 @@ describe('worker workspace', () => {
     }))
     if (prepared._tag === 'Err')
       throw new Error(prepared.error)
-    expect(prepared.value.path).toBe(join(
-      root,
-      `checkout.harlan-agent-review-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}-${task.state.fence}`,
-    ))
+    const branch = agentWorktreeBranch(`review-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}`, { taskId: task.id, fence: task.state.fence })
+    expect(prepared.value.path).toBe(join(root, `checkout.${branch.replaceAll('/', '-')}`))
     store.close()
   })
 })
