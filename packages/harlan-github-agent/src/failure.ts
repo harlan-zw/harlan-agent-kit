@@ -16,6 +16,15 @@ export type FailureClass
 export type TransientKind
   = | 'github_unavailable'
     | 'github_access'
+    /**
+     * The GitHub App installation does not hold the permission the work needs.
+     *
+     * Transient because a person can grant it, and the Task then succeeds
+     * unchanged. It is deliberately absent from the outage kinds a healthy
+     * GitHub gives budget back to, so the retry is bounded: a repository that
+     * polls fine while its installation stays narrow cannot refill this budget.
+     */
+    | 'installation_access'
     | 'rate_limit'
     | 'network'
     | 'agent_provider'
@@ -67,12 +76,28 @@ const githubUnavailablePatterns: RegExp[] = [
 ]
 
 /**
+ * GitHub says this when the installation itself does not hold the permission.
+ *
+ * Separated from the access patterns below because only a person fixes it. A
+ * healthy poll proves nothing about a narrow installation, so this kind is left
+ * out of the outage kinds that win their recovery budget back.
+ */
+const installationAccessPatterns: RegExp[] = [
+  /\bpermissions requested are not granted to this installation\b/i,
+]
+
+/**
  * An installation token can answer a request it is entitled to with a reject
  * while GitHub is degraded, so access rejects retry rather than kill the Task.
+ *
+ * Proven on 2026-08-17: for 105 minutes GitHub rejected calls the token
+ * provably covered, including `pulls.list` under a `pull_requests: read` grant,
+ * and minted tokens scoped below the request. The same calls passed before and
+ * after. Only the installation message above survives a retry unchanged.
  */
 const githubAccessPatterns: RegExp[] = [
   /\bresource not accessible by integration\b/i,
-  /\bpermissions requested are not granted to this installation\b/i,
+  /\bgranted less access than\b/i,
   /\bbad credentials\b/i,
   /\bauthentication error\b/i,
   /\brequires authentication\b/i,
@@ -168,6 +193,10 @@ export function classifyFailure(signal: FailureSignal): FailureClass {
     return { _tag: 'Transient', kind: 'github_unavailable' }
   if (matches(githubUnavailablePatterns, message))
     return { _tag: 'Transient', kind: 'github_unavailable' }
+  // Matched before the access patterns, because GitHub returns this with a 403
+  // and the wider access patterns would otherwise swallow it.
+  if (matches(installationAccessPatterns, message))
+    return { _tag: 'Transient', kind: 'installation_access' }
   if (signal.status === 401 || signal.status === 403 || matches(githubAccessPatterns, message))
     return { _tag: 'Transient', kind: 'github_access' }
   if (matches(networkPatterns, message))

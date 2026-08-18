@@ -374,6 +374,16 @@ describe('recovery budget after a GitHub outage', () => {
     expect(store.retryRecoverableWorkerFailures('2026-08-19T00:01:00.000Z')).toBe(0)
   })
 
+  it('keeps a narrow installation exhausted, because a healthy poll does not widen it', () => {
+    const store = storeWithExhaustedReview('The permissions requested are not granted to this installation.')
+
+    store.recordPollFailure('harlan-zw/example', '2026-08-18T12:00:00.000Z', 'fetch failed')
+    store.recordPollSuccess('harlan-zw/example', '2026-08-18T12:01:00.000Z')
+
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T12:02:00.000Z')).toBe(0)
+    expect(store.listIncidents()[0]?.recovery).toEqual({ _tag: 'Exhausted' })
+  })
+
   it('sweeps every healthy repository at startup', () => {
     const store = storeWithExhaustedReview('Resource not accessible by integration')
     store.recordPollSuccess('harlan-zw/example', '2026-08-18T12:00:00.000Z')

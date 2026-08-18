@@ -132,7 +132,7 @@ describe('createRoutedTokenProvider', () => {
     })
 
     await provider.getToken('harlan-zw/example', 'read')
-    await provider.getToken('nuxt-modules/sitemap', 'issues_write')
+    await provider.getToken('nuxt-modules/sitemap', 'item_write')
 
     expect(calls).toEqual(['app:harlan-zw/example', 'user:nuxt-modules/sitemap'])
   })
@@ -155,7 +155,7 @@ describe('createUserTokenProvider', () => {
       token: 'gho_token',
       expiresAt: '2026-08-15T01:05:00.000Z',
     }))
-    await provider.getToken('nuxt-modules/sitemap', 'issues_write')
+    await provider.getToken('nuxt-modules/sitemap', 'item_write')
     expect(reads).toBe(1)
 
     clock += 300_000

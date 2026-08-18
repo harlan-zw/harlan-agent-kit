@@ -23,17 +23,30 @@ export interface GitHubTokenProvider {
   invalidate: (repository: string, access: GitHubRepositoryAccess) => void
 }
 
+type PermissionLevel = 'read' | 'write'
+
 interface MintTokenInput {
   installationId: number
   repositoryName: string
-  permissions: Record<string, 'read' | 'write'>
+  permissions: Record<string, PermissionLevel>
   /** Mints a new token instead of reading the provider's own cache. */
   refresh: boolean
 }
 
+/**
+ * One credential and the access GitHub actually attached to it.
+ *
+ * GitHub answers a mint during a degraded window with a token scoped to less
+ * than was asked for. The grant travels with the token so the provider can see
+ * that before a caller spends a request on it.
+ */
+interface MintedToken extends GitHubRepositoryToken {
+  permissions: Record<string, PermissionLevel>
+}
+
 export interface RepositoryTokenDependencies {
   getInstallationId: (repository: string, signal?: AbortSignal) => Promise<number>
-  mintToken: (input: MintTokenInput) => Promise<GitHubRepositoryToken>
+  mintToken: (input: MintTokenInput) => Promise<MintedToken>
   now?: () => Date
 }
 
@@ -44,16 +57,37 @@ function repositoryName(repository: string): string {
   return name
 }
 
-function permissions(access: GitHubRepositoryAccess): Record<string, 'read' | 'write'> {
+/**
+ * The permissions one access level needs, and no more.
+ *
+ * `item_write` carries both `issues` and `pull_requests` because every comment
+ * and label call goes through GitHub's Issues API, whatever the Item is. GitHub
+ * states the same requirement in its `X-Accepted-GitHub-Permissions` header for
+ * those routes.
+ */
+function permissions(access: GitHubRepositoryAccess): Record<string, PermissionLevel> {
   if (access === 'read')
     return { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }
   if (access === 'checks_read')
     return { checks: 'read', metadata: 'read', statuses: 'read' }
-  if (access === 'issues_write')
-    return { issues: 'write', metadata: 'read' }
-  if (access === 'pull_requests_write')
-    return { contents: 'read', metadata: 'read', pull_requests: 'write' }
+  if (access === 'item_write')
+    return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
   return { contents: 'write', metadata: 'read', workflows: 'write' }
+}
+
+/**
+ * Names every permission GitHub granted below what was asked for.
+ *
+ * A write request is satisfied by a write grant alone. A read request is
+ * satisfied by either level.
+ */
+function shortGrants(requested: Record<string, PermissionLevel>, granted: Record<string, PermissionLevel>): string[] {
+  return Object.keys(requested).filter((name) => {
+    const level = granted[name]
+    if (level === undefined)
+      return true
+    return requested[name] === 'write' && level !== 'write'
+  }).sort()
 }
 
 function errorStatus(error: unknown): number | undefined {
@@ -78,12 +112,31 @@ export function createRepositoryTokenProvider(dependencies: RepositoryTokenDepen
     })
   }
 
-  const mint = (repository: string, access: GitHubRepositoryAccess, installationId: number, refresh: boolean): Promise<Result<GitHubRepositoryToken, GitHubTokenError>> => dependencies.mintToken({
-    installationId,
-    repositoryName: repositoryName(repository),
-    permissions: permissions(access),
-    refresh,
-  }).then(ok).catch((error: unknown) => failure(repository, error))
+  /**
+   * Mints one credential and proves it carries the access that was asked for.
+   *
+   * A short grant is reported here instead of at the call site. The caller then
+   * reads one failure that names the missing permission, rather than a GitHub
+   * rejection an hour of cached requests later.
+   */
+  const mint = (repository: string, access: GitHubRepositoryAccess, installationId: number, refresh: boolean): Promise<Result<GitHubRepositoryToken, GitHubTokenError>> => {
+    const requested = permissions(access)
+    return dependencies.mintToken({
+      installationId,
+      repositoryName: repositoryName(repository),
+      permissions: requested,
+      refresh,
+    }).then((minted): Result<GitHubRepositoryToken, GitHubTokenError> => {
+      const missing = shortGrants(requested, minted.permissions)
+      if (missing.length > 0) {
+        return err({
+          repository,
+          message: `GitHub granted less access than this token asked for: ${missing.join(', ')}.`,
+        })
+      }
+      return ok({ token: minted.token, expiresAt: minted.expiresAt })
+    }).catch((error: unknown) => failure(repository, error))
+  }
 
   return {
     invalidate(repository, access) {
@@ -168,8 +221,8 @@ export function createGitHubAppTokenProvider(options: GitHubAppTokenProviderOpti
       // reach past it or the caller is handed back the credential it rejected.
       ...(input.refresh ? { refresh: true } : {}),
     }).then((authentication) => {
-      const value = authentication as { token: string, expiresAt: string }
-      return { token: value.token, expiresAt: value.expiresAt }
+      const value = authentication as { token: string, expiresAt: string, permissions?: Record<string, PermissionLevel> }
+      return { token: value.token, expiresAt: value.expiresAt, permissions: value.permissions ?? {} }
     }),
   })
 }
