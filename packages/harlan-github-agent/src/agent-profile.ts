@@ -6,7 +6,7 @@ import { err, ok } from './result.ts'
 export const CODEX_AGENT_PROFILE = {
   provider: 'codex',
   authentication: 'chatgpt',
-  maximumActiveAgents: 3,
+  maximumActiveAgents: 4,
   roles: {
     adversarial_review: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
     baseline_repair: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
@@ -21,7 +21,7 @@ export const CODEX_AGENT_PROFILE = {
 export const OPENCODE_AGENT_PROFILE = {
   provider: 'opencode',
   authentication: 'opencode-go',
-  maximumActiveAgents: 3,
+  maximumActiveAgents: 4,
   roles: {
     adversarial_review: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
     baseline_repair: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
