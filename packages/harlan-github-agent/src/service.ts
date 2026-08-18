@@ -140,6 +140,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
   const runtime = createAgentRuntimeSource({
+    configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
     providers: { codex: createCodexProvider(), opencode: createOpencodeProvider() },
     selection: store.getAgentSelection,

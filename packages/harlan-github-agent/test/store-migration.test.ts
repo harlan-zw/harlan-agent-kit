@@ -183,7 +183,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(26)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(27)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
@@ -215,6 +215,48 @@ describe('gitHub vocabulary migration', () => {
     }
     finally {
       database.close()
+    }
+  })
+})
+
+/** Rewinds the Agent selection to version 26, which could only store a pin. */
+function pinnedSelectionAtVersion26(path: string): void {
+  const store = openJournalStore(path, false, CODEX_AGENT_PROFILE)
+  store.close()
+
+  const database = new DatabaseSync(path)
+  database.exec('DROP TABLE agent_selection')
+  database.exec(`
+    CREATE TABLE agent_selection (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      provider TEXT NOT NULL CHECK (provider IN ('codex', 'opencode')),
+      model TEXT,
+      reasoning_effort TEXT,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO agent_selection VALUES (1, 'opencode', 'opencode-go/deepseek-v4-pro', 'low', '2026-08-18T00:00:00.000Z');
+    PRAGMA user_version = 26;
+  `)
+  database.close()
+}
+
+describe('agent selection migration', () => {
+  it('keeps a version 26 pin, and lets it go back to the configuration', () => {
+    const path = join(directory, 'state.sqlite')
+    pinnedSelectionAtVersion26(path)
+
+    const store = openJournalStore(path, false, CODEX_AGENT_PROFILE)
+    try {
+      expect(store.getAgentSelection())
+        .toEqual({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' })
+
+      store.selectAgent({ _tag: 'FollowsConfiguration' }, '2026-08-18T01:00:00.000Z')
+
+      expect(store.getAgentSelection()).toEqual({ _tag: 'FollowsConfiguration' })
+      expect(store.getDashboardSnapshot('2026-08-18T01:00:01.000Z').agentProfile.provider).toBe('codex')
+    }
+    finally {
+      store.close()
     }
   })
 })

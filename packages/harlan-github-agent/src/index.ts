@@ -1,5 +1,5 @@
 export { createAgentPermitPool } from './agent-permit-pool.ts'
-export { AGENT_MODELS, AGENT_PROVIDER_NAMES, AGENT_ROLES, agentProfile, CODEX_AGENT_PROFILE, createAgentRuntimeSource, OPENCODE_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, roleProfile } from './agent-profile.ts'
+export { AGENT_MODELS, AGENT_PROVIDER_NAMES, AGENT_ROLES, agentProfile, CODEX_AGENT_PROFILE, createAgentRuntimeSource, OPENCODE_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection, roleProfile } from './agent-profile.ts'
 export type { AgentRuntime, AgentRuntimeSource } from './agent-profile.ts'
 export type { AgentEvent, AgentProvider, AgentProviderName, AgentTurnRequest } from './agent-provider.ts'
 export { createAgentApp } from './app.ts'

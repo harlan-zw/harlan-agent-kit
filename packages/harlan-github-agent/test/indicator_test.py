@@ -309,12 +309,17 @@ class AgentControlRequestTest(unittest.TestCase):
 
 class AgentSelectionTest(unittest.TestCase):
     def test_reads_the_selection_the_dashboard_sends(self):
-        dashboard = {'agentSelection': {'provider': 'opencode', 'model': None, 'reasoningEffort': 'high'}}
+        dashboard = {'agentSelection': {'_tag': 'Pinned', 'provider': 'opencode', 'model': None, 'reasoningEffort': 'high'}}
 
         self.assertEqual(
             indicator.agent_selection(dashboard),
-            {'provider': 'opencode', 'model': None, 'reasoningEffort': 'high'},
+            {'_tag': 'Pinned', 'provider': 'opencode', 'model': None, 'reasoningEffort': 'high'},
         )
+
+    def test_reads_a_selection_that_follows_the_configuration(self):
+        dashboard = {'agentSelection': {'_tag': 'FollowsConfiguration'}}
+
+        self.assertEqual(indicator.agent_selection(dashboard), {'_tag': 'FollowsConfiguration'})
 
     def test_reports_no_selection_when_the_dashboard_is_unavailable(self):
         self.assertIsNone(indicator.agent_selection(None))
@@ -322,20 +327,60 @@ class AgentSelectionTest(unittest.TestCase):
 
     def test_marks_the_current_provider_model_and_reasoning_effort(self):
         choices = indicator.agent_selection_choices({
+            '_tag': 'Pinned',
             'provider': 'opencode',
             'model': 'opencode-go/deepseek-v4-pro',
             'reasoningEffort': None,
-        })
+        }, 'opencode')
         selected = [entry['label'] for entry in choices if entry['_tag'] == 'Choice' and entry['selected']]
 
         self.assertEqual(selected, ['opencode', 'opencode-go/deepseek-v4-pro', 'Provider default'])
 
-    def test_offers_only_the_models_of_the_selected_provider(self):
-        choices = indicator.agent_selection_choices({'provider': 'codex', 'model': None, 'reasoningEffort': None})
+    def test_marks_following_the_configuration(self):
+        choices = indicator.agent_selection_choices({'_tag': 'FollowsConfiguration'}, 'codex')
+        selected = [entry['label'] for entry in choices if entry['_tag'] == 'Choice' and entry['selected']]
+
+        self.assertEqual(selected, ['Follow configuration', 'Provider default', 'Provider default'])
+
+    def test_offers_a_way_back_to_the_configuration(self):
+        choices = indicator.agent_selection_choices({
+            '_tag': 'Pinned',
+            'provider': 'opencode',
+            'model': 'opencode-go/deepseek-v4-pro',
+            'reasoningEffort': 'high',
+        }, 'opencode')
+        follow = next(
+            entry for entry in choices
+            if entry['_tag'] == 'Choice' and entry['label'] == 'Follow configuration'
+        )
+
+        self.assertEqual(follow['selection'], {'_tag': 'FollowsConfiguration'})
+        self.assertFalse(follow['selected'])
+
+    def test_lists_the_configured_provider_models_while_following_the_configuration(self):
+        choices = indicator.agent_selection_choices({'_tag': 'FollowsConfiguration'}, 'opencode')
         models = [
             entry['selection']['model']
             for entry in choices
-            if entry['_tag'] == 'Choice' and 'model' in entry['selection'] and entry['selection']['provider'] == 'codex'
+            if entry['_tag'] == 'Choice' and entry['selection'].get('_tag') == 'Pinned' and 'model' in entry['selection']
+        ]
+
+        self.assertIn('opencode-go/deepseek-v4-pro', models)
+        self.assertNotIn('gpt-5.6-luna', models)
+
+    def test_offers_only_the_models_of_the_selected_provider(self):
+        choices = indicator.agent_selection_choices({
+            '_tag': 'Pinned',
+            'provider': 'codex',
+            'model': None,
+            'reasoningEffort': None,
+        }, 'codex')
+        models = [
+            entry['selection']['model']
+            for entry in choices
+            if entry['_tag'] == 'Choice'
+            and 'model' in entry['selection']
+            and entry['selection'].get('provider') == 'codex'
         ]
 
         self.assertIn('gpt-5.6-luna', models)
@@ -343,19 +388,24 @@ class AgentSelectionTest(unittest.TestCase):
 
     def test_switching_provider_clears_the_model_and_reasoning_effort(self):
         choices = indicator.agent_selection_choices({
+            '_tag': 'Pinned',
             'provider': 'codex',
             'model': 'gpt-5.6-luna',
             'reasoningEffort': 'max',
-        })
+        }, 'codex')
         opencode = next(
             entry for entry in choices
             if entry['_tag'] == 'Choice' and entry['label'] == 'opencode'
         )
 
-        self.assertEqual(opencode['selection'], {'provider': 'opencode', 'model': None, 'reasoningEffort': None})
+        self.assertEqual(
+            opencode['selection'],
+            {'_tag': 'Pinned', 'provider': 'opencode', 'model': None, 'reasoningEffort': None},
+        )
 
     def test_lists_nothing_without_a_selection(self):
-        self.assertEqual(indicator.agent_selection_choices(None), [])
+        self.assertEqual(indicator.agent_selection_choices(None, None), [])
+        self.assertEqual(indicator.agent_selection_choices({'_tag': 'FollowsConfiguration'}, None), [])
 
     def test_sends_authenticated_agent_switch_request(self):
         requests = []

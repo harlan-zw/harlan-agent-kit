@@ -31,6 +31,7 @@ import type {
   IssueWorkTask,
   ItemSummary,
   OpenAgentPullRequest,
+  PinnedAgentSelection,
   PreparedPublication,
   PullRequestApprovalKind,
   PullRequestApprovalResult,
@@ -61,7 +62,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, resolveAgentProfile } from './agent-profile.ts'
+import { CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 
@@ -417,9 +418,9 @@ export interface JournalStore {
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getAgentControl: () => StoredAgentControl
-  /** The Agent selection in force, or the configured one while nothing is stored. */
+  /** The Agent selection in force. It follows the configuration until pinned. */
   getAgentSelection: () => AgentSelection
-  /** Switches the Agent provider, model, and reasoning effort for the next agent turn. */
+  /** Pins the Agent provider, model, and reasoning effort, or follows the configuration. */
   selectAgent: (selection: AgentSelection, at: string) => AgentSelection
   getWorkerSession: (repository: string, itemNumber: number, role: AgentRole, scopeDigest?: string) => string | null
   heartbeatTask: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
@@ -2876,6 +2877,32 @@ function queueIssueWork(
   return { inserted, taskId }
 }
 
+/**
+ * Stores whether the Agent selection is pinned or follows the configuration.
+ *
+ * Version 25 required a provider, so a pinned selection could never go back to
+ * the configuration file. The tag makes both states storable, and the CHECK
+ * keeps a provider and the tag from disagreeing.
+ */
+const followsConfigurationSelectionMigration = `
+  CREATE TABLE agent_selection_v27 (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    tag TEXT NOT NULL CHECK (tag IN ('FollowsConfiguration', 'Pinned')),
+    provider TEXT CHECK (provider IN ('codex', 'opencode')),
+    model TEXT,
+    reasoning_effort TEXT,
+    updated_at TEXT NOT NULL,
+    CHECK ((tag = 'Pinned') = (provider IS NOT NULL))
+  );
+
+  INSERT INTO agent_selection_v27 (singleton, tag, provider, model, reasoning_effort, updated_at)
+  SELECT singleton, 'Pinned', provider, model, reasoning_effort, updated_at FROM agent_selection;
+
+  DROP TABLE agent_selection;
+  ALTER TABLE agent_selection_v27 RENAME TO agent_selection;
+  PRAGMA user_version = 27;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -2901,7 +2928,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 26)
+  if (version === 27)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3006,6 +3033,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 25) {
     applyForeignKeyMigration(database, stackedPullRequestMigration)
+    version = 26
+  }
+  if (version === 26) {
+    applyMigration(database, followsConfigurationSelectionMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -3239,34 +3270,40 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
   const configuredSelection = providerAgentSelection(profile.provider)
 
   const getAgentSelection = (): AgentSelection => {
-    const row = database.prepare('SELECT provider, model, reasoning_effort FROM agent_selection WHERE singleton = 1').get() as {
-      provider: string
+    const row = database.prepare('SELECT tag, provider, model, reasoning_effort FROM agent_selection WHERE singleton = 1').get() as {
+      tag: string
+      provider: string | null
       model: string | null
       reasoning_effort: string | null
     } | undefined
-    if (row === undefined)
-      return configuredSelection
-    const parsed = parseAgentSelection({ provider: row.provider, model: row.model, reasoningEffort: row.reasoning_effort })
+    if (row === undefined || row.tag !== 'Pinned')
+      return { _tag: 'FollowsConfiguration' }
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: row.provider, model: row.model, reasoningEffort: row.reasoning_effort })
     // A build that drops a model leaves a stored selection nothing can answer.
-    // The configured Agent provider is the safe answer, and the dashboard shows it.
-    return parsed._tag === 'Ok' ? parsed.value : configuredSelection
+    // The configuration is the safe answer, and the dashboard shows what it names.
+    return parsed._tag === 'Ok' ? parsed.value : { _tag: 'FollowsConfiguration' }
   }
 
+  /** The Agent provider, model, and reasoning effort in force right now. */
+  const activeSelection = (): PinnedAgentSelection => resolveAgentSelection(getAgentSelection(), configuredSelection)
+
   const selectAgent = (selection: AgentSelection, at: string): AgentSelection => {
+    const pinned = selection._tag === 'Pinned' ? selection : null
     database.prepare(`
-      INSERT INTO agent_selection (singleton, provider, model, reasoning_effort, updated_at)
-      VALUES (1, ?, ?, ?, ?)
+      INSERT INTO agent_selection (singleton, tag, provider, model, reasoning_effort, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?)
       ON CONFLICT (singleton) DO UPDATE SET
+        tag = excluded.tag,
         provider = excluded.provider,
         model = excluded.model,
         reasoning_effort = excluded.reasoning_effort,
         updated_at = excluded.updated_at
-    `).run(selection.provider, selection.model, selection.reasoningEffort, at)
+    `).run(selection._tag, pinned?.provider ?? null, pinned?.model ?? null, pinned?.reasoningEffort ?? null, at)
     return getAgentSelection()
   }
 
   /** Sessions belong to the provider that created them, so every read is scoped. */
-  const provider = (): AgentProviderName => getAgentSelection().provider
+  const provider = (): AgentProviderName => activeSelection().provider
 
   const syncRepositories = (repositories: RepositoryMapping[], at: string): void => {
     const statement = database.prepare(`
@@ -6105,7 +6142,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       status,
       mutationsEnabled,
       agentControl,
-      agentProfile: resolveAgentProfile(getAgentSelection(), profile.maximumActiveAgents),
+      agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents),
       agentSelection: getAgentSelection(),
       agents,
       incidents: listIncidents(),

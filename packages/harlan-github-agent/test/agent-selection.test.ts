@@ -22,37 +22,49 @@ const opencodeProvider: AgentProvider = {
 
 describe('agent selection parsing', () => {
   it('accepts a provider on its own and keeps every role default', () => {
-    const parsed = parseAgentSelection({ provider: 'opencode' })
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'opencode' })
 
-    expect(parsed).toEqual({ _tag: 'Ok', value: { provider: 'opencode', model: null, reasoningEffort: null } })
+    expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'opencode', model: null, reasoningEffort: null } })
   })
 
   it('accepts a model and a reasoning effort the provider offers', () => {
-    const parsed = parseAgentSelection({ provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'max' })
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'max' })
 
-    expect(parsed).toEqual({ _tag: 'Ok', value: { provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'max' } })
+    expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'max' } })
   })
 
   it('rejects a model that belongs to the other provider', () => {
-    const parsed = parseAgentSelection({ provider: 'codex', model: 'opencode-go/deepseek-v4-pro' })
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'codex', model: 'opencode-go/deepseek-v4-pro' })
 
     expect(parsed).toEqual({ _tag: 'Err', error: 'The Agent provider codex does not offer that model.' })
   })
 
   it('rejects an unknown provider', () => {
-    const parsed = parseAgentSelection({ provider: 'claude' })
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'claude' })
 
     expect(parsed).toEqual({ _tag: 'Err', error: 'Select codex or opencode as the Agent provider.' })
   })
 
   it('rejects an unknown reasoning effort', () => {
-    const parsed = parseAgentSelection({ provider: 'codex', reasoningEffort: 'extreme' })
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'codex', reasoningEffort: 'extreme' })
 
     expect(parsed).toEqual({ _tag: 'Err', error: 'Select one reasoning effort: none, low, medium, high, xhigh, or max.' })
   })
 
+  it('accepts a selection that follows the configuration', () => {
+    const parsed = parseAgentSelection({ _tag: 'FollowsConfiguration' })
+
+    expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'FollowsConfiguration' } })
+  })
+
+  it('rejects a body that names no selection state', () => {
+    const parsed = parseAgentSelection({ provider: 'codex', model: null })
+
+    expect(parsed).toEqual({ _tag: 'Err', error: 'Pin an Agent provider, or follow the configuration.' })
+  })
+
   it('rejects a body that is not an object', () => {
-    expect(parseAgentSelection('codex')).toEqual({ _tag: 'Err', error: 'Send an Agent provider to switch to.' })
+    expect(parseAgentSelection('codex')).toEqual({ _tag: 'Err', error: 'Send an Agent selection to apply.' })
   })
 })
 
@@ -79,16 +91,17 @@ describe('agent profile resolution', () => {
 })
 
 describe('agent runtime source', () => {
-  it('answers with the provider the current selection names', () => {
-    let selection: AgentSelection = { provider: 'codex', model: null, reasoningEffort: null }
+  it('answers with the configured provider until the selection pins one', () => {
+    let selection: AgentSelection = { _tag: 'FollowsConfiguration' }
     const runtime = createAgentRuntimeSource({
+      configuredProvider: 'codex',
       maximumActiveAgents: 3,
       providers: { codex: codexProvider, opencode: opencodeProvider },
       selection: () => selection,
     })
 
     const before = runtime()
-    selection = { provider: 'opencode', model: null, reasoningEffort: null }
+    selection = { _tag: 'Pinned', provider: 'opencode', model: null, reasoningEffort: null }
     const after = runtime()
 
     expect(before.provider).toBe(codexProvider)
@@ -106,6 +119,7 @@ describe('switching the Agent selection at runtime', () => {
     const options = {
       now: () => new Date('2026-08-18T01:00:00.000Z'),
       runtime: createAgentRuntimeSource({
+        configuredProvider: 'codex',
         maximumActiveAgents: 3,
         providers: {
           codex: stubProvider(turnEvents({ outcome: 'resolved' }), codex),
@@ -127,7 +141,7 @@ describe('switching the Agent selection at runtime', () => {
 
     try {
       await runAgentTurn(options, input, new AbortController().signal)
-      store.selectAgent({ provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' }, '2026-08-18T01:01:00.000Z')
+      store.selectAgent({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' }, '2026-08-18T01:01:00.000Z')
       await runAgentTurn(options, input, new AbortController().signal)
     }
     finally {

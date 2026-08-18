@@ -77,7 +77,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
     agentProfile: CODEX_AGENT_PROFILE,
-    agentSelection: { provider: 'codex', model: null, reasoningEffort: null },
+    agentSelection: { _tag: 'FollowsConfiguration' },
     agents: [],
     incidents: [],
     queue: [],

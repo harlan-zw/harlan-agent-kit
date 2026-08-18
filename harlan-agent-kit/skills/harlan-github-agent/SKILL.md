@@ -64,7 +64,7 @@ Workers run as normal local agent sessions inside disposable Git worktrees. They
 
 `agent.provider` names the Agent provider the service starts with. It defaults to `codex`.
 
-The Agent selection overrides it. Harlan switches the Agent provider, model, and Reasoning effort from the dashboard header or the tray, and the switch survives a restart. Read it from `/api/state` as `agentSelection`.
+A pinned Agent selection overrides it. Harlan switches the Agent provider, model, and Reasoning effort from the dashboard header or the tray, and the switch survives a restart. Read it from `/api/state` as `agentSelection`, which is `{"_tag":"FollowsConfiguration"}` or `{"_tag":"Pinned", ...}`.
 
 For `codex`, use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for conflict resolution, issue triage, issue work, and Baseline repair.
 
@@ -75,7 +75,13 @@ A saved session belongs to the Agent provider that created it. Switching provide
 Switch the Agent selection with an authenticated request. Send the whole selection. A null model or Reasoning effort keeps that provider's own per-role default. A switch starts the next agent turn, and an agent already running keeps the model it started with.
 
 ```bash
-curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --header 'Content-Type: application/json' --request POST http://harlan-github-agent.local/api/agents/select --data '{"provider":"opencode","model":null,"reasoningEffort":null}'
+curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --header 'Content-Type: application/json' --request POST http://harlan-github-agent.local/api/agents/select --data '{"_tag":"Pinned","provider":"opencode","model":null,"reasoningEffort":null}'
+```
+
+To follow the configuration file again, send Follow configuration. The service then reads `agent.provider` at every start.
+
+```bash
+curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --header 'Content-Type: application/json' --request POST http://harlan-github-agent.local/api/agents/select --data '{"_tag":"FollowsConfiguration"}'
 ```
 
 The controller creates every agent worktree from its mapped repository checkout with `wt`. The global Worktrunk configuration places it beside the checkout as `<repo>.<branch-slug>`. Workers must not create, enter, or remove worktrees themselves.

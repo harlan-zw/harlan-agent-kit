@@ -1,6 +1,6 @@
 import type { AgentProvider, AgentProviderName } from './agent-provider.ts'
 import type { Result } from './result.ts'
-import type { AgentModel, AgentProfile, AgentRole, AgentSelection, CodexReasoningEffort, RoleProfile } from './types.ts'
+import type { AgentModel, AgentProfile, AgentRole, AgentSelection, CodexReasoningEffort, PinnedAgentSelection, RoleProfile } from './types.ts'
 import { err, ok } from './result.ts'
 
 export const CODEX_AGENT_PROFILE = {
@@ -56,7 +56,7 @@ export const AGENT_MODELS = {
 
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly CodexReasoningEffort[]
 
-export type { AgentSelection } from './types.ts'
+export type { AgentSelection, PinnedAgentSelection } from './types.ts'
 
 /** The profile and the provider runtime that answers it. They never disagree. */
 export interface AgentRuntime {
@@ -75,9 +75,20 @@ export function roleProfile(profile: AgentProfile, role: AgentRole): RoleProfile
   return profile.roles[role]
 }
 
-/** The selection that keeps every default of one Agent provider. */
-export function providerAgentSelection(provider: AgentProviderName): AgentSelection {
+/** The pinned selection that keeps every default of one Agent provider. */
+export function providerAgentSelection(provider: AgentProviderName): PinnedAgentSelection {
   return { provider, model: null, reasoningEffort: null }
+}
+
+/**
+ * Reads the Agent provider, model, and reasoning effort in force right now.
+ *
+ * If the Agent selection follows the configuration, the configuration decides.
+ * The service reads its configuration file at every start, so a cleared
+ * selection follows the file again after a restart.
+ */
+export function resolveAgentSelection(selection: AgentSelection, configured: PinnedAgentSelection): PinnedAgentSelection {
+  return selection._tag === 'Pinned' ? selection : configured
 }
 
 /**
@@ -88,8 +99,12 @@ export function providerAgentSelection(provider: AgentProviderName): AgentSelect
  */
 export function parseAgentSelection(value: unknown): Result<AgentSelection, string> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
-    return err('Send an Agent provider to switch to.')
+    return err('Send an Agent selection to apply.')
   const body = value as Record<string, unknown>
+  if (body._tag === 'FollowsConfiguration')
+    return ok({ _tag: 'FollowsConfiguration' })
+  if (body._tag !== 'Pinned')
+    return err('Pin an Agent provider, or follow the configuration.')
   const provider = AGENT_PROVIDER_NAMES.find(candidate => candidate === body.provider)
   if (provider === undefined)
     return err('Select codex or opencode as the Agent provider.')
@@ -105,10 +120,10 @@ export function parseAgentSelection(value: unknown): Result<AgentSelection, stri
   if (reasoningEffort === undefined)
     return err(`Select one reasoning effort: ${REASONING_EFFORTS.slice(0, -1).join(', ')}, or ${REASONING_EFFORTS.at(-1)}.`)
 
-  return ok({ provider, model, reasoningEffort })
+  return ok({ _tag: 'Pinned', provider, model, reasoningEffort })
 }
 
-function roleWithSelection(role: RoleProfile, selection: AgentSelection): RoleProfile {
+function roleWithSelection(role: RoleProfile, selection: PinnedAgentSelection): RoleProfile {
   const model = selection.model ?? role.model
   const reasoningEffort = selection.reasoningEffort ?? role.reasoningEffort
   return reasoningEffort === undefined ? { model } : { model, reasoningEffort }
@@ -120,7 +135,7 @@ function roleWithSelection(role: RoleProfile, selection: AgentSelection): RolePr
  * The service sizes its agent permits when it starts, so agent capacity comes
  * from the caller and never from the selected provider's own profile.
  */
-export function resolveAgentProfile(selection: AgentSelection, maximumActiveAgents: number): AgentProfile {
+export function resolveAgentProfile(selection: PinnedAgentSelection, maximumActiveAgents: number): AgentProfile {
   const base = agentProfile(selection.provider)
   const roles = Object.fromEntries(
     AGENT_ROLES.map(role => [role, roleWithSelection(base.roles[role], selection)]),
@@ -129,6 +144,8 @@ export function resolveAgentProfile(selection: AgentSelection, maximumActiveAgen
 }
 
 export interface AgentRuntimeSourceOptions {
+  /** The Agent provider the configuration file names, read at every start. */
+  configuredProvider: AgentProviderName
   maximumActiveAgents: number
   providers: Record<AgentProviderName, AgentProvider>
   selection: () => AgentSelection
@@ -141,8 +158,9 @@ export interface AgentRuntimeSourceOptions {
  * never restarts the service.
  */
 export function createAgentRuntimeSource(options: AgentRuntimeSourceOptions): AgentRuntimeSource {
+  const configured = providerAgentSelection(options.configuredProvider)
   return () => {
-    const selection = options.selection()
+    const selection = resolveAgentSelection(options.selection(), configured)
     return {
       profile: resolveAgentProfile(selection, options.maximumActiveAgents),
       provider: options.providers[selection.provider],

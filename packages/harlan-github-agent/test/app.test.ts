@@ -57,18 +57,18 @@ describe('dashboard HTTP app', () => {
     const switched = await app.request(`http://${allowedHost}/api/agents/select`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' }),
+      body: JSON.stringify({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' }),
     })
     const rejected = await app.request(`http://${allowedHost}/api/agents/select`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ provider: 'opencode', model: 'gpt-5.6-sol' }),
+      body: JSON.stringify({ _tag: 'Pinned', provider: 'opencode', model: 'gpt-5.6-sol' }),
     })
 
     expect(switched.status).toBe(200)
-    await expect(switched.json()).resolves.toEqual({ provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' })
+    await expect(switched.json()).resolves.toEqual({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' })
     expect(switches).toEqual([{
-      selection: { provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' },
+      selection: { _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' },
       at: now().toISOString(),
     }])
     expect(rejected.status).toBe(400)
@@ -81,7 +81,7 @@ describe('dashboard HTTP app', () => {
     const response = await app.request(`http://${allowedHost}/api/agents/select`, {
       method: 'POST',
       headers: { authorization, host: allowedHost, origin: 'http://evil.local' },
-      body: JSON.stringify({ provider: 'codex' }),
+      body: JSON.stringify({ _tag: 'Pinned', provider: 'codex' }),
     })
 
     expect(response.status).toBe(403)
