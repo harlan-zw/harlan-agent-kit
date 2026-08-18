@@ -449,12 +449,33 @@ export interface GitHubRepositoryToken {
   expiresAt: string
 }
 
+/**
+ * Where a new pull request will be based.
+ *
+ * `Stacked` is GitHub's stack: the base branch is another open pull request's
+ * head branch. The service only ever stacks on a branch it opened itself.
+ */
+export type PullRequestBase
+  = | { _tag: 'DefaultBranch', ref: string }
+    | { _tag: 'Stacked', ref: string, pullRequestNumber: number, headSha: string }
+
+/** One open pull request this service opened, which a new pull request may stack on. */
+export interface OpenAgentPullRequest {
+  pullRequestNumber: number
+  headRef: string
+  headSha: string
+  baseRef: string
+  taskKind: 'baseline_repair' | 'issue_work'
+}
+
 interface PublicationCommandBase {
   id: string
   taskId: string
   repository: string
   commitSha: string
   baseSha: string
+  /** The branch this publication merges into. A stack names another pull request's head branch. */
+  baseRef: string
   expectedHeadSha: string
   headRef: string
   artifactRef: string

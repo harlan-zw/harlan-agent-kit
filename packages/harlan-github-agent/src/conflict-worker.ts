@@ -183,6 +183,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
           pullRequestNumber: task.pullRequestNumber,
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
+          baseRef: currentTask.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch,
           expectedHeadSha: currentTask.pullRequest.headSha,
           headRef: currentTask.pullRequest.headRef,
           headRepository: currentTask.pullRequest.headRepository,

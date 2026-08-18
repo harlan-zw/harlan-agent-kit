@@ -3,11 +3,12 @@ import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubAgentSource, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
-import type { IssueWorktreeManager } from './worktree.ts'
+import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAgentPullRequest, PullRequestBase, RepositoryMapping } from './types.ts'
+import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
 import { err, ok } from './result.ts'
+import { chooseOverlappingStackBase, chooseStackBase } from './stack.ts'
 import { cleanLine } from './text.ts'
 
 interface ImplementedAgentResponse {
@@ -41,11 +42,11 @@ export interface IssueWorkWorker {
 }
 
 export interface IssueWorkWorkerOptions {
-  github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'getPullRequestTemplate'>
+  github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'getPullRequestTemplate' | 'listPullRequestFiles'>
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
-  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getWorkerSession' | 'listOpenAgentPullRequests' | 'saveWorkerSession' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: IssueWorktreeManager
 }
@@ -145,6 +146,51 @@ Untrusted issue data follows as JSON:
 ${JSON.stringify({ title: task.issue.title, body: body.slice(0, 12_000), comments: comments.slice(0, 30).map(value => value.slice(0, 4_000)) })}`
 }
 
+interface StackedWork {
+  base: PullRequestBase
+  patch: VerifiedIssuePatch
+  workspace: PreparedWorkerWorkspace
+}
+
+/**
+ * Moves finished work onto an open pull request that changes the same files.
+ *
+ * The overlap is only knowable after the agent works, so the worktree starts on
+ * the chosen base and moves afterwards. A conflict keeps the prepared base, so
+ * the pull request always has somewhere to go.
+ *
+ * A candidate whose files GitHub will not report has unknown overlap, and
+ * unknown overlap never stacks.
+ */
+async function stackOnOverlap(
+  options: IssueWorkWorkerOptions,
+  task: ClaimedIssueWorkTask,
+  mapping: RepositoryMapping,
+  current: StackedWork,
+  candidates: readonly OpenAgentPullRequest[],
+  signal: AbortSignal,
+): Promise<Result<StackedWork, string>> {
+  if (current.base._tag === 'Stacked' || candidates.length === 0)
+    return ok(current)
+  const withFiles = await Promise.all(candidates.map(async (candidate) => {
+    const files = await options.github.listPullRequestFiles(mapping, candidate.pullRequestNumber, signal)
+    return files._tag === 'Err' ? [] : [{ ...candidate, changedFiles: files.value }]
+  }))
+  const chosen = chooseOverlappingStackBase({
+    chosen: current.base,
+    changedFiles: current.patch.changedPaths,
+    candidates: withFiles.flat(),
+  })
+  if (chosen._tag !== 'Stacked')
+    return ok(current)
+  const restacked = await options.worktrees.restack(task, current.workspace, { headRef: chosen.ref, headSha: chosen.headSha }, signal)
+  if (restacked._tag === 'Err')
+    return restacked
+  return ok(restacked.value._tag === 'Unstacked'
+    ? current
+    : { base: chosen, patch: restacked.value.patch, workspace: restacked.value.workspace })
+}
+
 export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWorkWorker {
   return {
     async run(task, signal) {
@@ -176,14 +222,18 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (snapshot.value.state !== 'open' || snapshot.value.title !== task.issue.title)
         return err('The issue changed before work started.')
 
-      const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, signal)
+      const candidates = options.store.listOpenAgentPullRequests(task.repository)
+      const preparedBase = chooseStackBase({ defaultBranch: validated.value.defaultBranch, candidates })
+      const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, preparedBase, signal)
       if (prepared._tag === 'Err')
         return prepared
       const ready = reportProgress({ percent: 35, label: 'Git worktree ready' })
       if (ready._tag === 'Err')
         return ready
 
-      const scopeDigest = issueSnapshotDigest({ ...snapshot.value, baseSha: prepared.value.baseSha })
+      // The triage session is keyed on the default branch tip, whatever the pull
+      // request stacks on, so stacking never loses the session that triaged it.
+      const scopeDigest = issueSnapshotDigest({ ...snapshot.value, baseSha: prepared.value.defaultBranchSha })
       const sessionId = options.store.getWorkerSession(task.repository, task.issueNumber, 'issue_triage', scopeDigest)
       if (sessionId === null)
         return err('The issue changed before work started.')
@@ -211,6 +261,16 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')
         return verified
+      const stacked = await stackOnOverlap(
+        options,
+        task,
+        validated.value,
+        { base: preparedBase, patch: verified.value, workspace: prepared.value },
+        candidates,
+        signal,
+      )
+      if (stacked._tag === 'Err')
+        return stacked
       const checked = reportProgress({ percent: 90, label: 'Issue work checked' })
       if (checked._tag === 'Err')
         return checked
@@ -220,7 +280,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (frozen.value.state !== 'open' || frozen.value.updatedAt !== snapshot.value.updatedAt)
         return err('The issue changed before the controller committed the fix.')
 
-      const committed = await options.worktrees.commit(task, prepared.value, verified.value, parsed.value.commitMessage, signal)
+      const committed = await options.worktrees.commit(task, stacked.value.workspace, stacked.value.patch, parsed.value.commitMessage, signal)
       if (committed._tag === 'Err')
         return committed
       return ok({
@@ -233,6 +293,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           pullRequestBody: parsed.value.pullRequestBody,
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
+          baseRef: stacked.value.base.ref,
           expectedHeadSha: committed.value.baseSha,
           headRef: `${prefix}issue-${task.issueNumber}`,
           artifactRef: committed.value.artifactRef,

@@ -47,6 +47,8 @@ export interface PublishedPullRequest {
 export interface GitHubPullRequestPublisher {
   ensurePullRequest: (input: {
     repository: RepositoryMapping
+    /** The branch the pull request merges into. A stack names another pull request's head branch. */
+    baseRef: string
     headRef: string
     expectedHeadSha: string
     title: string
@@ -332,7 +334,7 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
         repo,
         state: 'open',
         head: `${owner}:${input.headRef}`,
-        base: input.repository.defaultBranch,
+        base: input.baseRef,
         per_page: 10,
         ...request,
       }).then(async (response): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
@@ -349,7 +351,7 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           owner,
           repo,
           head: input.headRef,
-          base: input.repository.defaultBranch,
+          base: input.baseRef,
           title: input.title,
           body: input.body,
           draft: false,

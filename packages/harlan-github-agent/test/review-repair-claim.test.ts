@@ -92,6 +92,7 @@ describe('review repair claim', () => {
       publication: {
         _tag: 'UpdatePullRequest',
         taskKind: 'review_fix',
+        baseRef: 'main',
         pullRequestNumber: claim.task.pullRequestNumber,
         commitSha: 'repair-commit',
         baseSha: 'base123',

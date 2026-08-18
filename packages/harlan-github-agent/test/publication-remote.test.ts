@@ -71,6 +71,7 @@ function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPu
       pullRequestNumber: 1,
       commitSha,
       baseSha,
+      baseRef: 'main',
       expectedHeadSha,
       headRef: 'fix/conflict',
       artifactRef,
@@ -86,6 +87,37 @@ function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPu
 }
 
 describe('git publication remote', () => {
+  it('pins the stack base branch, not the default branch', async () => {
+    const { bare, command, expectedHeadSha, root } = fixture()
+    const stacked: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> = {
+      ...command,
+      _tag: 'OpenPullRequest',
+      taskKind: 'issue_work',
+      issueNumber: 30,
+      headRef: 'fix/issue-30',
+      // The tip of `fix/conflict`, which this pull request stacks on.
+      baseRef: 'fix/conflict',
+      baseSha: expectedHeadSha,
+      pullRequestTitle: 'fix: broken thing',
+      pullRequestBody: 'Closes #30.',
+    }
+    const remote = createGitPublicationRemote({
+      github: {
+        getPullRequest: () => Promise.reject(new Error('An OpenPullRequest reads no pull request by number.')),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
+        isBranchProtected: () => Promise.resolve(ok(false)),
+      },
+      remoteUrl: () => bare,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+
+    expect(await remote.validateAuthority(stacked, new AbortController().signal)).toEqual(ok(undefined))
+    // The same commit is not the default branch tip, so the default branch cannot stand in for it.
+    expect(await remote.validateAuthority({ ...stacked, baseRef: 'main' }, new AbortController().signal))
+      .toEqual({ _tag: 'Err', error: 'The base branch changed before publication.' })
+  })
+
   it('refuses to rewrite a branch that already has an open pull request', async () => {
     const { bare, command, root } = fixture()
     const open: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> = {

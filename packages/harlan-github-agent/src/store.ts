@@ -30,6 +30,7 @@ import type {
   IssueWorkApprovalResult,
   IssueWorkTask,
   ItemSummary,
+  OpenAgentPullRequest,
   PreparedPublication,
   PullRequestApprovalKind,
   PullRequestApprovalResult,
@@ -427,6 +428,14 @@ export interface JournalStore {
   hasPullRequestApproval: (repository: string, pullRequestNumber: number, revisionId: string, kind: PullRequestApprovalKind) => boolean
   /** True when the controller opened this branch to repair the default branch. */
   isBaselineRepairPullRequest: (repository: string, headRef: string) => boolean
+  /**
+   * The open pull requests this service opened in one repository.
+   *
+   * A new pull request may stack on one of these. Proof of authorship is a
+   * Published Publication for the same head branch, so a branch a person opened
+   * can never become a stack base.
+   */
+  listOpenAgentPullRequests: (repository: string) => OpenAgentPullRequest[]
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listStoppedReviews: () => StoppedReview[]
   recordStoppedReviewStatus: (input: {
@@ -563,6 +572,7 @@ interface PublicationRow {
   github_number: number
   commit_sha: string
   base_sha: string
+  base_ref: string
   expected_head_sha: string
   head_ref: string
   artifact_ref: string
@@ -1718,6 +1728,85 @@ const reviewRunMigration = `
   PRAGMA user_version = 24;
 `
 
+/**
+ * Records the base branch on every Publication.
+ *
+ * A new pull request used to be opened against the repository default branch,
+ * which was the only base the controller could express. A stacked pull request
+ * names another pull request's head branch instead, so the base has to travel
+ * with the Publication. Every existing row targeted the default branch, so they
+ * are backfilled from their repository.
+ */
+const stackedPullRequestMigration = `
+  DROP INDEX IF EXISTS publication_commands_state_tag;
+  DROP INDEX IF EXISTS one_live_publication_command_per_task;
+
+  CREATE TABLE publication_commands_v26 (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Failed', 'Superseded')),
+    commit_sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    base_ref TEXT NOT NULL CHECK (base_ref != ''),
+    expected_head_sha TEXT NOT NULL,
+    head_ref TEXT NOT NULL,
+    artifact_ref TEXT NOT NULL,
+    patch_digest TEXT NOT NULL,
+    changed_files INTEGER NOT NULL CHECK (changed_files >= 0),
+    outcome_unknown INTEGER NOT NULL DEFAULT 0 CHECK (outcome_unknown IN (0, 1)),
+    reason TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    lease_expires_at TEXT,
+    published_at TEXT,
+    updated_at TEXT NOT NULL,
+    pull_request_title TEXT,
+    pull_request_body TEXT,
+    -- A pull request cannot merge into itself, so a stack can never name its own head.
+    CHECK (base_ref != head_ref),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (state_tag NOT IN ('Failed', 'Superseded') OR reason IS NOT NULL),
+    CHECK (state_tag != 'Published' OR published_at IS NOT NULL)
+  );
+
+  INSERT INTO publication_commands_v26 (
+    id, task_id, state_tag, commit_sha, base_sha, base_ref, expected_head_sha, head_ref,
+    artifact_ref, patch_digest, changed_files, outcome_unknown, reason, worker_id, fence,
+    attempts, max_attempts, lease_expires_at, published_at, updated_at,
+    pull_request_title, pull_request_body
+  )
+  SELECT
+    publication_commands.id, publication_commands.task_id, publication_commands.state_tag,
+    publication_commands.commit_sha, publication_commands.base_sha,
+    COALESCE(json_extract(repositories.policy_json, '$.defaultBranch'), 'main'),
+    publication_commands.expected_head_sha, publication_commands.head_ref,
+    publication_commands.artifact_ref, publication_commands.patch_digest,
+    publication_commands.changed_files, publication_commands.outcome_unknown,
+    publication_commands.reason, publication_commands.worker_id, publication_commands.fence,
+    publication_commands.attempts, publication_commands.max_attempts,
+    publication_commands.lease_expires_at, publication_commands.published_at,
+    publication_commands.updated_at, publication_commands.pull_request_title,
+    publication_commands.pull_request_body
+  FROM publication_commands
+  JOIN tasks ON tasks.id = publication_commands.task_id
+  JOIN subjects ON subjects.id = tasks.subject_id
+  JOIN repositories ON repositories.id = subjects.repository_id;
+
+  DROP TABLE publication_commands;
+  ALTER TABLE publication_commands_v26 RENAME TO publication_commands;
+  CREATE INDEX publication_commands_state_tag ON publication_commands(state_tag);
+  CREATE UNIQUE INDEX one_live_publication_command_per_task
+    ON publication_commands(task_id)
+    WHERE state_tag IN ('Pending', 'Running', 'Published');
+
+  PRAGMA user_version = 26;
+`
+
 function canonicalPayload(subject: GitHubItem): string {
   const { approvalLabels: _approvalLabels, ...payload } = subject
   // Labels are mutable GitHub metadata, so they never belong to the stored Revision.
@@ -2812,7 +2901,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 25)
+  if (version === 26)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -2913,6 +3002,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 24) {
     applyMigration(database, agentSelectionMigration)
+    version = 25
+  }
+  if (version === 25) {
+    applyForeignKeyMigration(database, stackedPullRequestMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -5389,7 +5482,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     database.exec('BEGIN IMMEDIATE')
     try {
       const existing = database.prepare(`
-        SELECT id, commit_sha, base_sha, expected_head_sha, head_ref, artifact_ref, patch_digest,
+        SELECT id, commit_sha, base_sha, base_ref, expected_head_sha, head_ref, artifact_ref, patch_digest,
           changed_files, pull_request_title, pull_request_body
         FROM publication_commands
         WHERE task_id = ? AND state_tag IN ('Pending', 'Running', 'Published')
@@ -5397,6 +5490,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         id: string
         commit_sha: string
         base_sha: string
+        base_ref: string
         expected_head_sha: string
         head_ref: string
         artifact_ref: string
@@ -5409,6 +5503,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         const publication = input.publication
         const duplicate = existing.commit_sha === publication.commitSha
           && existing.base_sha === publication.baseSha
+          && existing.base_ref === publication.baseRef
           && existing.expected_head_sha === publication.expectedHeadSha
           && existing.head_ref === publication.headRef
           && existing.artifact_ref === publication.artifactRef
@@ -5465,14 +5560,15 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       }))
       database.prepare(`
         INSERT INTO publication_commands (
-          id, task_id, state_tag, commit_sha, base_sha, expected_head_sha, head_ref,
+          id, task_id, state_tag, commit_sha, base_sha, base_ref, expected_head_sha, head_ref,
           artifact_ref, patch_digest, changed_files, pull_request_title, pull_request_body, updated_at
-        ) VALUES (?, ?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         commandId,
         input.taskId,
         publication.commitSha,
         publication.baseSha,
+        publication.baseRef,
         publication.expectedHeadSha,
         publication.headRef,
         publication.artifactRef,
@@ -5554,6 +5650,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
           subjects.github_number,
           publication_commands.commit_sha,
           publication_commands.base_sha,
+          publication_commands.base_ref,
           publication_commands.expected_head_sha,
           publication_commands.head_ref,
           publication_commands.artifact_ref,
@@ -5611,6 +5708,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         repository: row.repository,
         commitSha: row.commit_sha,
         baseSha: row.base_sha,
+        baseRef: row.base_ref,
         expectedHeadSha: row.expected_head_sha,
         headRef: row.head_ref,
         artifactRef: row.artifact_ref,
@@ -6126,6 +6224,44 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     LIMIT 1
   `).get(repository, headRef) !== undefined
 
+  const listOpenAgentPullRequests: JournalStore['listOpenAgentPullRequests'] = repository => (database.prepare(`
+    SELECT
+      subjects.github_number AS pull_request_number,
+      json_extract(revisions.payload, '$.headRef') AS head_ref,
+      json_extract(revisions.payload, '$.headSha') AS head_sha,
+      json_extract(revisions.payload, '$.baseRef') AS base_ref,
+      tasks.kind AS task_kind
+    FROM subjects
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = subjects.current_revision_id
+    JOIN publication_commands ON publication_commands.head_ref = json_extract(revisions.payload, '$.headRef')
+    JOIN tasks ON tasks.id = publication_commands.task_id
+    JOIN subjects AS publication_subjects ON publication_subjects.id = tasks.subject_id
+    WHERE repositories.github = ?
+      AND publication_subjects.repository_id = repositories.id
+      AND subjects.kind = 'pull_request'
+      AND json_extract(revisions.payload, '$.state') = 'open'
+      AND json_extract(revisions.payload, '$.draft') = 0
+      AND lower(json_extract(revisions.payload, '$.headRepository')) = lower(repositories.github)
+      AND json_extract(revisions.payload, '$.baseRef') IS NOT NULL
+      AND publication_commands.state_tag = 'Published'
+      AND tasks.kind IN ('baseline_repair', 'issue_work')
+    GROUP BY subjects.id
+    ORDER BY subjects.github_number DESC
+  `).all(repository) as unknown as Array<{
+    pull_request_number: number
+    head_ref: string
+    head_sha: string
+    base_ref: string
+    task_kind: 'baseline_repair' | 'issue_work'
+  }>).map(row => ({
+    pullRequestNumber: row.pull_request_number,
+    headRef: row.head_ref,
+    headSha: row.head_sha,
+    baseRef: row.base_ref,
+    taskKind: row.task_kind,
+  }))
+
   const getWorkerSession: JournalStore['getWorkerSession'] = (repository, itemNumber, role, scopeDigest) => {
     const publicationRole = role === 'conflict_resolution' || role === 'review_fix' || role === 'baseline_repair'
     const table = publicationRole ? 'worker_sessions' : 'subject_worker_sessions'
@@ -6194,6 +6330,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     approveIssueWork,
     isBaselineRepairPullRequest,
     isIssueWorkApprovalReady,
+    listOpenAgentPullRequests,
     listStoppedReviews,
     recordStoppedReviewStatus,
     approvePullRequest,

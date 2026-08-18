@@ -63,6 +63,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+      listPullRequestFiles: () => Promise.reject(new Error('Unexpected file listing.')),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
       getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot)),
       upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),

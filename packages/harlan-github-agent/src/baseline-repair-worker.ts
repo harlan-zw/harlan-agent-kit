@@ -206,6 +206,8 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           pullRequestBody: withDisclosure(parsed.value.pullRequestBody),
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
+          // A Baseline repair fixes the default branch, so it never stacks.
+          baseRef: validated.value.defaultBranch,
           expectedHeadSha: committed.value.baseSha,
           headRef: `${prefix}baseline-ci-${task.pullRequest.baseSha.slice(0, 12)}`,
           artifactRef: committed.value.artifactRef,

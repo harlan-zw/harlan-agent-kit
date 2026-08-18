@@ -27,7 +27,7 @@ did not cover it.
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
 | Conflict resolution | `tasks.kind` | Scheduler | One Task kind | conflict resolution |
 | Baseline repair | `tasks.kind` | Scheduler | One Task for one failing default branch commit | Baseline repair |
-| Stack | `subjects` base ref | GitHub | A pull request whose base is another pull request's head | stack |
+| Stack | `subjects` base ref, `publication_commands.base_ref` | GitHub | A pull request whose base is another pull request's head | stack |
 | Issue triage | `worker_tasks.kind` | Scheduler | One Task for one issue Revision | issue triage |
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |

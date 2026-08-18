@@ -82,6 +82,7 @@ function harness(input: {
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+      listPullRequestFiles: () => Promise.resolve(ok([])),
       getPullRequestReviewSnapshot: () => {
         const snapshot = snapshots[Math.min(read, snapshots.length - 1)]!
         read += 1

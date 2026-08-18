@@ -350,6 +350,7 @@ describe('journal store', () => {
         pullRequestNumber: task.pullRequestNumber,
         commitSha: 'merge123',
         baseSha: task.pullRequest.baseSha,
+        baseRef: 'main',
         expectedHeadSha: task.pullRequest.headSha,
         headRef: task.pullRequest.headRef,
         artifactRef: 'refs/harlan-github-agent/publications/cancelled',
@@ -641,6 +642,7 @@ describe('journal store', () => {
         pullRequestBody: 'Closes #12.',
         commitSha: 'issue-commit',
         baseSha: 'base-sha',
+        baseRef: 'main',
         expectedHeadSha: 'base-sha',
         headRef: 'fix/issue-12',
         artifactRef: 'refs/harlan-github-agent/publications/issue-work',
@@ -963,6 +965,7 @@ describe('journal store', () => {
         pullRequestNumber: repair.pullRequestNumber,
         commitSha: repairCommit,
         baseSha: 'base123',
+        baseRef: 'main',
         expectedHeadSha: 'abc123',
         headRef: 'fix/broken-thing',
         artifactRef: 'refs/harlan-github-agent/publications/outside-repair',
@@ -1116,6 +1119,7 @@ describe('journal store', () => {
         pullRequestBody: 'Repairs default branch CI.',
         commitSha: 'baseline-commit',
         baseSha: repair.pullRequest.baseSha,
+        baseRef: 'main',
         expectedHeadSha: repair.pullRequest.baseSha,
         headRef: 'fix/baseline-ci-abcdef012345',
         artifactRef: 'refs/harlan-github-agent/publications/baseline',
@@ -1141,6 +1145,118 @@ describe('journal store', () => {
 
     expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/baseline-ci-abcdef012345')).toBe(true)
     expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/other')).toBe(false)
+  })
+
+  it('lists the open pull requests this service opened, so a new one can stack on them', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'stack-source-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
+      throw new Error(queued.reason)
+    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
+    if (repair === null)
+      throw new Error('Expected the Baseline repair Task.')
+    const staged = store.stagePublication({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:04:00.000Z',
+      publication: {
+        _tag: 'OpenPullRequest',
+        taskKind: 'baseline_repair',
+        pullRequestNumber: repair.pullRequestNumber,
+        pullRequestTitle: 'fix(ci): repair the default branch',
+        pullRequestBody: 'Repairs default branch CI.',
+        commitSha: 'baseline-commit',
+        baseSha: repair.pullRequest.baseSha,
+        baseRef: 'main',
+        expectedHeadSha: repair.pullRequest.baseSha,
+        headRef: 'fix/baseline-ci-abcdef012345',
+        artifactRef: 'refs/harlan-github-agent/publications/baseline',
+        patchDigest: 'patch',
+        changedFiles: 1,
+      },
+    })
+    if (staged._tag !== 'Staged')
+      throw new Error('Expected a staged publication.')
+    const claimed = store.claimNextPublication('publisher', '2026-08-13T01:05:00.000Z', 60_000)
+    if (claimed === null)
+      throw new Error('Expected the publication command.')
+    store.completePublication({
+      commandId: claimed.id,
+      workerId: claimed.workerId,
+      fence: claimed.fence,
+      at: '2026-08-13T01:05:30.000Z',
+      evidence: 'Opened pull request #99.',
+    })
+
+    // The pull request GitHub now shows for that branch.
+    store.recordObservation({
+      externalId: 'stack-repair-pr',
+      observedAt: '2026-08-13T01:06:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        number: 99,
+        headRef: 'fix/baseline-ci-abcdef012345',
+        headSha: 'baseline-commit',
+        baseRef: 'main',
+        mergeState: 'clean',
+        url: 'https://github.com/harlan-zw/example/pull/99',
+      }),
+    })
+
+    expect(store.listOpenAgentPullRequests('harlan-zw/example')).toEqual([{
+      pullRequestNumber: 99,
+      headRef: 'fix/baseline-ci-abcdef012345',
+      headSha: 'baseline-commit',
+      baseRef: 'main',
+      taskKind: 'baseline_repair',
+    }])
+
+    store.recordObservation({
+      externalId: 'stack-repair-pr-closed',
+      observedAt: '2026-08-13T01:07:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        number: 99,
+        state: 'closed',
+        headRef: 'fix/baseline-ci-abcdef012345',
+        headSha: 'baseline-commit',
+        baseRef: 'main',
+        mergeState: 'clean',
+        url: 'https://github.com/harlan-zw/example/pull/99',
+      }),
+    })
+
+    expect(store.listOpenAgentPullRequests('harlan-zw/example')).toEqual([])
+  })
+
+  it('never offers a pull request someone else opened as a stack base', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'human-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+
+    expect(store.listOpenAgentPullRequests('harlan-zw/example')).toEqual([])
   })
 
   it('queues Baseline repair for a repository Harlan maintains but does not own', () => {
@@ -1300,6 +1416,7 @@ describe('journal store', () => {
         pullRequestBody: 'Repairs the default branch build.',
         commitSha: 'repair-commit',
         baseSha: subject.baseSha,
+        baseRef: 'main',
         expectedHeadSha: subject.baseSha,
         headRef: 'fix/baseline-ci-abcdef012345',
         artifactRef: 'artifact-ref',
@@ -1435,6 +1552,7 @@ describe('journal store', () => {
         pullRequestBody: 'Repairs the failing default branch check.',
         commitSha: 'repair-commit',
         baseSha: repair.pullRequest.baseSha,
+        baseRef: 'main',
         expectedHeadSha: repair.pullRequest.baseSha,
         headRef: 'fix/baseline-ci',
         artifactRef: 'refs/harlan-github-agent/publications/baseline',
@@ -1542,6 +1660,7 @@ describe('journal store', () => {
         pullRequestNumber: repair.pullRequestNumber,
         commitSha: 'repair-commit',
         baseSha: 'base123',
+        baseRef: 'main',
         expectedHeadSha: 'abc123',
         headRef: 'fix/broken-thing',
         artifactRef: 'refs/harlan-github-agent/publications/repair-task',
@@ -1783,6 +1902,7 @@ describe('journal store', () => {
         pullRequestNumber: task.pullRequestNumber,
         commitSha: 'commit123',
         baseSha: 'base123',
+        baseRef: 'main',
         expectedHeadSha: 'abc123',
         headRef: 'fix/broken-thing',
         artifactRef: 'refs/harlan-github-agent/publications/task-1',
@@ -1816,6 +1936,7 @@ describe('journal store', () => {
         pullRequestNumber: task.pullRequestNumber,
         commitSha: 'merge123',
         baseSha: 'base123',
+        baseRef: 'main',
         expectedHeadSha: 'abc123',
         headRef: 'fix/broken-thing',
         artifactRef: 'refs/harlan-github-agent/publications/task-1',
@@ -2461,6 +2582,7 @@ describe('journal store', () => {
         pullRequestNumber: firstTask.pullRequestNumber,
         commitSha: 'first-commit',
         baseSha: 'base-sha',
+        baseRef: 'main',
         expectedHeadSha: firstTask.pullRequest.headSha,
         headRef: firstTask.pullRequest.headRef,
         artifactRef: 'first-artifact',
@@ -2499,6 +2621,7 @@ describe('journal store', () => {
         pullRequestNumber: secondTask.pullRequestNumber,
         commitSha: 'corrected-commit',
         baseSha: 'base-sha',
+        baseRef: 'main',
         expectedHeadSha: secondTask.pullRequest.headSha,
         headRef: secondTask.pullRequest.headRef,
         artifactRef: 'corrected-artifact',
@@ -2983,6 +3106,7 @@ describe('journal store', () => {
         pullRequestNumber: task.pullRequestNumber,
         commitSha: 'commit123',
         baseSha: 'base123',
+        baseRef: 'main',
         expectedHeadSha: 'abc123',
         headRef: 'fix/broken-thing',
         artifactRef: 'refs/harlan-github-agent/publications/task-1',

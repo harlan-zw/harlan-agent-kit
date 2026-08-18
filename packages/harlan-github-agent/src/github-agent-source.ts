@@ -109,6 +109,8 @@ export interface GitHubAgentSource {
   getIssueTriageSnapshot: (repository: RepositoryMapping, issueNumber: number, signal: AbortSignal) => Promise<Result<IssueTriageSnapshot, string>>
   getPullRequestTemplate: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<PullRequestTemplate, string>>
   getPullRequestReviewSnapshot: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<PullRequestReviewSnapshot, string>>
+  /** Every file one open pull request changes, which decides whether new work stacks on it. */
+  listPullRequestFiles: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<string[], string>>
   upsertIssueTriageComment: (repository: RepositoryMapping, issueNumber: number, commentId: number | null, body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
 }
@@ -179,6 +181,22 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
   }
 
   return {
+    async listPullRequestFiles(repository, pullRequestNumber, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return octokit.value.paginate(octokit.value.rest.pulls.listFiles, {
+        owner,
+        repo,
+        pull_number: pullRequestNumber,
+        per_page: 100,
+        request: { signal },
+      })
+        .then(files => ok(files.map(file => file.filename)))
+        .catch((error: unknown): Result<string[], string> => err(message(error)))
+    },
+
     async consumeApprovalLabel(repository, _subjectKind, itemNumber, label, signal) {
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
