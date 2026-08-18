@@ -29,6 +29,7 @@ did not cover it.
 | Conflict resolution | `tasks.kind` | Scheduler | One Task kind | conflict resolution |
 | Baseline repair | `tasks.kind` | Scheduler | One Task for one failing default branch commit | Baseline repair |
 | Repair | `tasks.kind` | Scheduler | One Task for the findings of one Review run | repair |
+| Context budget | `agent.contextBudget` | Runner | One per agent session | Context budget |
 | Stack | `subjects` base ref, `publication_commands.base_ref` | GitHub | A pull request whose base is another pull request's head | stack |
 | Issue triage | `worker_tasks.kind` | Scheduler | One Task for one issue Revision | issue triage |
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
