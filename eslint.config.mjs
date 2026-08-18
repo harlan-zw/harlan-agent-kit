@@ -8,5 +8,5 @@ export default antfu(
     // misses it and every dashboard .vue file falls back to the plain TS parser.
     vue: true,
   },
-  ...harlanzw(),
+  ...harlanzw({ base: true }),
 )
