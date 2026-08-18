@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
+import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadConfig, loadGitHubAppPrivateKey, validateRepositoryMappings } from './config.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
@@ -96,7 +97,11 @@ const command = defineCommand({
   subCommands: {
     'sweep-worktrees': sweepWorktrees,
   },
-  async run({ args }) {
+  async run({ args, rawArgs }) {
+    // citty runs this after it ran the subcommand, so stop before the service
+    // starts and binds the dashboard port.
+    if (invokesSubCommand(rawArgs, ['sweep-worktrees']))
+      return
     const configPath = resolve(args.config)
     const parsed = await loadConfig(configPath)
     if (parsed._tag === 'Err')
