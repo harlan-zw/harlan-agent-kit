@@ -1309,6 +1309,31 @@ describe('journal store', () => {
       .toEqual(expect.objectContaining({ taskKind: 'baseline_repair' }))
   })
 
+  it.each([
+    ['stacked on another pull request', 'fix/parent-work', 'NotAuthorized'],
+    ['based on the default branch', 'main', 'Queued'],
+  ])('refuses Baseline repair for a pull request %s', (_name, baseRef, expected) => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ defaultBranch: 'main' })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: `baseline-stack-${baseRef}`,
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean', baseRef }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+
+    expect(store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })._tag).toBe(expected)
+  })
+
   it('queues a new Baseline repair after the previous one failed', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

@@ -103,6 +103,14 @@ export interface GitHubPullRequestItem extends GitHubItemBase {
   mergedAt: string | null
   draft: boolean
   baseSha: string
+  /**
+   * The branch this pull request merges into.
+   *
+   * A pull request based on another pull request's head is a stack. Baseline
+   * repair only ever applies to the default branch, so it needs to tell the
+   * two apart. Absent on Revisions observed before the controller recorded it.
+   */
+  baseRef?: string
   headSha: string
   headRepository: string
   headRef: string

@@ -53,6 +53,7 @@ export function pullRequestItem(overrides: Partial<GitHubPullRequestItem> = {}):
     updatedAt: '2026-08-13T00:00:00.000Z',
     draft: false,
     baseSha: 'base123',
+    baseRef: 'main',
     headSha: 'abc123',
     headRepository: 'harlan-zw/example',
     headRef: 'fix/broken-thing',

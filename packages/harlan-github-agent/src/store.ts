@@ -4236,6 +4236,14 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: 'The base commit changed before Baseline repair was queued.' }
       }
+      // A pull request based on another pull request's head is a stack, and its
+      // red base CI belongs to the parent. Baseline repair fetches the default
+      // branch tip and requires it to equal the base commit, so a stack could
+      // never finish one.
+      if (subject.baseRef !== mapping.defaultBranch) {
+        database.exec('COMMIT')
+        return { _tag: 'NotAuthorized', reason: 'This pull request is stacked on another pull request, not on the default branch.' }
+      }
       // Baseline repair opens a pull request against the default branch. Harlan
       // may do that on every repository he owns or maintains. Only a repository
       // he merely watches refuses it, and that refusal must not stop the review.

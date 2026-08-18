@@ -25,6 +25,7 @@ did not cover it.
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
 | Conflict resolution | `tasks.kind` | Scheduler | One Task kind | conflict resolution |
 | Baseline repair | `tasks.kind` | Scheduler | One Task for one failing default branch commit | Baseline repair |
+| Stack | `subjects` base ref | GitHub | A pull request whose base is another pull request's head | stack |
 | Issue triage | `worker_tasks.kind` | Scheduler | One Task for one issue Revision | issue triage |
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
@@ -55,6 +56,7 @@ knows GitHub already knows them.
 | draft | a pull request not ready for review | WIP, unfinished |
 | base branch, base SHA | what the pull request merges into | target branch, destination |
 | head ref, head SHA | the pull request's own branch and tip commit | source branch, commit id |
+| stack, stacked pull request | a pull request based on another pull request's head | chain, dependent PR, child PR |
 | default branch | the repository's default branch | main, master, trunk |
 | fork | a fork | copy, mirror |
 | mergeable state | GitHub's `clean`, `dirty`, `unknown` verdict | merge status, conflict flag |

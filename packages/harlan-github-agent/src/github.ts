@@ -106,6 +106,7 @@ function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType
     updatedAt: pull.updated_at,
     draft: pull.draft ?? false,
     baseSha: pull.base.sha,
+    baseRef: pull.base.ref,
     headSha: pull.head.sha,
     headRepository: pull.head.repo?.full_name ?? '',
     headRef: pull.head.ref,

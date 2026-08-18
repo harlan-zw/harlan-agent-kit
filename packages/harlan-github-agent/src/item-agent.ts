@@ -12,6 +12,7 @@ import type {
   ClaimedAgentTask,
   ClaimedIssueTriageTask,
   ClaimedReviewFixTask,
+  GitHubPullRequestItem,
   RepositoryMapping,
   ReviewFinding,
   ReviewGates,
@@ -327,6 +328,19 @@ function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): 
   return { ...head, evidence: [...base.evidence, ...head.evidence] }
 }
 
+/**
+ * True when this pull request merges into the default branch itself.
+ *
+ * A pull request based on another pull request's head is a stack, and its red
+ * base CI belongs to the parent. Baseline repair fetches the default branch
+ * tip and requires it to equal the base commit, which a stack can never
+ * satisfy, so one used to fail on every attempt. An unrecorded base ref is
+ * treated as a stack, because guessing wrong queues work that cannot finish.
+ */
+function basesDefaultBranch(pullRequest: GitHubPullRequestItem, mapping: RepositoryMapping): boolean {
+  return pullRequest.baseRef === mapping.defaultBranch
+}
+
 function baseChecksFailed(snapshot: PullRequestReviewSnapshot): boolean {
   return snapshot.baseChecks._tag === 'Available'
     && snapshot.baseChecks.checks.some(check => ['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'].includes(check.conclusion ?? ''))
@@ -488,7 +502,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       if (snapshot.value.priorAutomatedReview._tag === 'Found' && task.rerun._tag === 'NotRequested')
         return ok({ evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}` })
       const repairsBaseline = options.store.isBaselineRepairPullRequest(task.repository, task.pullRequest.headRef)
-      if (!repairsBaseline && baseChecksFailed(snapshot.value)) {
+      if (!repairsBaseline && baseChecksFailed(snapshot.value) && basesDefaultBranch(snapshot.value.pullRequest, task.repositoryMapping)) {
         const baseline = options.store.queueBaselineRepairForReview({
           taskId: task.id,
           workerId: task.state.workerId,

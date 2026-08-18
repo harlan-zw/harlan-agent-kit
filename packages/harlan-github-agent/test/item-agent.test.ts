@@ -479,6 +479,89 @@ describe('subject Workers', () => {
     expect(published).toContain('Base branch CI')
   })
 
+  it('reviews a stacked pull request instead of queueing a Baseline repair for its parent', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean', baseRef: 'fix/parent-work' })
+    const capture: ProviderCapture = { requests: [] }
+    let published = ''
+    const worker = createReviewWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents({
+        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
+        verification: { state: 'passed', reason: '', evidence: 'build passes' },
+        findings: [],
+        repair: { outcome: 'not_needed', summary: 'No material defect.', checks: ['pnpm build'], commitMessage: '' },
+        confidence: 90,
+      }), capture),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          // The parent pull request is red. That is the parent's problem.
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
+          body: 'Builds on the parent pull request.',
+          checks: { _tag: 'Available', checks: [{ id: 2, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        claimReviewFixTaskForReview: () => { throw new Error('No repair is needed.') },
+        failTask: () => { throw new Error('No repair Task should exist.') },
+        getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
+        queueBaselineRepairForReview: () => { throw new Error('A stacked pull request must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
+        recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),
+        saveWorkerSession: () => undefined,
+        stagePublication: () => { throw new Error('No repair is needed.') },
+        updateAgentProgress: () => true,
+      },
+      status: {
+        publish: (_task, phase, body) => {
+          if (phase === 'terminal')
+            published = body
+          return Promise.resolve(ok({ commentId: 1, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-1' }))
+        },
+        publishRepair: () => Promise.reject(new Error('No repair is needed.')),
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+      },
+      repairs: {
+        commit: () => Promise.reject(new Error('No repair is needed.')),
+        verify: () => Promise.reject(new Error('No repair is needed.')),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repositoryMapping({ defaultBranch: 'main' }),
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(capture.requests).toHaveLength(1)
+    expect(published).toContain('Base branch CI')
+  })
+
   it('reviews the Baseline repair pull request itself while the default branch stays red', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean', headRef: 'fix/baseline-ci-abcdef012345' })
     const capture: ProviderCapture = { requests: [] }
