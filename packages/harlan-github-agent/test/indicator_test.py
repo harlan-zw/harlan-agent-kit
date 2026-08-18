@@ -152,7 +152,7 @@ class IndicatorDisplayTest(unittest.TestCase):
             'role': 'issue_triage',
             'progress': {'percent': 57, 'label': 'Checking issue context'},
             'repository': 'harlan-zw/example',
-            'subjectNumber': 12,
+            'itemNumber': 12,
         }
 
         self.assertEqual(
@@ -202,7 +202,7 @@ class IndicatorDisplayTest(unittest.TestCase):
         agent = {
             'id': 'task-123',
             'repository': 'harlan-zw/example',
-            'subjectNumber': 24,
+            'itemNumber': 24,
             'session': {'_tag': 'Connected', 'id': '019fff56-466c-7980-9a63-962018752af2'},
         }
 

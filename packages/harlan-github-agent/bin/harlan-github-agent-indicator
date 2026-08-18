@@ -305,7 +305,7 @@ def open_agent_watch(agent):
         return
     subprocess.Popen([
         '/usr/bin/ghostty',
-        f"--title=Watch logs · {agent['repository']} #{agent['subjectNumber']}",
+        f"--title=Watch logs · {agent['repository']} #{agent['itemNumber']}",
         '-e',
         sys.executable,
         str(WATCHER),
@@ -351,7 +351,7 @@ def active_agent_label(agent):
     progress = agent.get('progress', {'percent': 0, 'label': 'Starting'})
     return (
         f"{progress_bar(progress['percent'])}  {progress['percent']}% · "
-        f"{agent_role_label(agent)} · {agent['repository']} #{agent['subjectNumber']}"
+        f"{agent_role_label(agent)} · {agent['repository']} #{agent['itemNumber']}"
     )
 
 
@@ -361,7 +361,7 @@ def confirm_agent_eject(agent, eject_agent):
         flags=0,
         message_type=Gtk.MessageType.WARNING,
         buttons=Gtk.ButtonsType.CANCEL,
-        text=f"Eject {agent['repository']} #{agent['subjectNumber']}?",
+        text=f"Eject {agent['repository']} #{agent['itemNumber']}?",
     )
     dialog.format_secondary_text('Automation stops. Ghostty resumes the saved Codex session.')
     dialog.add_button('Eject', Gtk.ResponseType.OK)
