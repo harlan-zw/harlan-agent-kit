@@ -498,7 +498,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         })
         if (baseline._tag === 'Rejected')
           return err(baseline.reason)
-        return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
+        // A repository Harlan only watches cannot get a Baseline repair. The
+        // review still runs, and its CI gate reports the red default branch.
+        if (baseline._tag !== 'NotAuthorized')
+          return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
       }
 
       const startedAt = options.now().toISOString()

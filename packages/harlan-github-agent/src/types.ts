@@ -462,6 +462,13 @@ export type PreparedPublication = PublicationCommand extends infer Command
 export type MutationWorkerOutcome
   = | { _tag: 'Publish', publication: PreparedPublication }
     | { _tag: 'ActionRequired', reason: string, evidence: string }
+    /**
+     * The world fixed the problem this Task existed for.
+     *
+     * Retrying cannot help and nobody needs to act, so the Task completes
+     * instead of failing. A failure here used to sit in the dashboard forever.
+     */
+    | { _tag: 'Obsolete', evidence: string }
 
 export type ClaimedPublicationCommand = PublicationCommand & {
   workerId: string

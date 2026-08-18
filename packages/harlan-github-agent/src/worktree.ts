@@ -11,6 +11,7 @@ import { mkdir } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { StringDecoder } from 'node:string_decoder'
+import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 
 export interface PreparedConflictWorktree {
@@ -221,7 +222,14 @@ function publicationArtifactRef(taskId: string): string {
   return `refs/harlan-github-agent/publications/${taskId}`
 }
 
-function parseWtWorktrees(stdout: string): Result<WtWorktree[], string> {
+/**
+ * Reads `wt list --format=json` into the branch worktrees the controller can claim.
+ *
+ * A detached worktree reports a null branch. That is a normal wt state, not
+ * malformed data, so it is dropped rather than failing the whole list. One
+ * detached worktree used to strand every agent task in the repository.
+ */
+export function parseWtWorktrees(stdout: string): Result<WtWorktree[], string> {
   try {
     const value: unknown = JSON.parse(stdout)
     if (!Array.isArray(value))
@@ -230,7 +238,11 @@ function parseWtWorktrees(stdout: string): Result<WtWorktree[], string> {
     for (const entry of value) {
       if (typeof entry !== 'object' || entry === null || !('branch' in entry) || !('path' in entry))
         return err('wt list returned an invalid worktree entry.')
-      if (typeof entry.branch !== 'string' || typeof entry.path !== 'string' || !isAbsolute(entry.path))
+      if (typeof entry.path !== 'string' || !isAbsolute(entry.path))
+        return err('wt list returned an invalid worktree entry.')
+      if (entry.branch === null)
+        continue
+      if (typeof entry.branch !== 'string')
         return err('wt list returned an invalid worktree entry.')
       worktrees.push({ branch: entry.branch, path: entry.path })
     }
@@ -516,11 +528,10 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
         baseRef,
         signal,
       )
-      if (prepared._tag === 'Err')
-        return prepared
-      return prepared.value.headSha === task.pullRequest.baseSha
-        ? prepared
-        : err('Fetched default branch no longer matches the failing base commit SHA.')
+      // The fetched default branch tip is returned as-is. The worker compares it
+      // to the queued base commit, because a moved default branch retires the
+      // repair rather than failing it.
+      return prepared
     },
 
     async prepareFix(task, signal) {
@@ -803,16 +814,16 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
   return {
     async validateAuthority(command, signal) {
       if (
-        command.repositoryMapping.ownership !== 'owned'
+        !canPushBranch(command.repositoryMapping)
         || command.headRef === command.repositoryMapping.defaultBranch
         || !command.repositoryMapping.writablePullRequestHeadPrefixes.some(prefix => command.headRef.startsWith(prefix))
       ) {
         return err('Repository policy does not authorize this pull request branch.')
       }
       if (command._tag === 'OpenPullRequest') {
-        if (command.taskKind === 'issue_work' && !command.repositoryMapping.issueWork)
+        if (command.taskKind === 'issue_work' && (!command.repositoryMapping.issueWork || !canWorkIssues(command.repositoryMapping)))
           return err('Repository policy no longer authorizes issue work.')
-        if (command.taskKind === 'baseline_repair' && !command.repositoryMapping.pullRequestReview)
+        if (command.taskKind === 'baseline_repair' && !canRepairBaseline(command.repositoryMapping))
           return err('Repository policy no longer authorizes Baseline repair.')
         // The controller replaces its own branch. A branch already under review belongs to its reviewers.
         const reviewed = await options.github.hasOpenPullRequestForBranch(command.repositoryMapping, command.headRef, signal)
@@ -822,6 +833,9 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           return err('An open pull request already uses this branch.')
       }
       else {
+        // Writing to a branch someone else opened needs a repository Harlan owns.
+        if (!canWritePullRequestHead(command.repositoryMapping))
+          return err('Repository policy does not authorize writing this pull request head.')
         const headRepository = publicationTargetRepository(command)
         const pullRequest = await options.github.getPullRequest(command.repositoryMapping, command.pullRequestNumber, signal)
         if (pullRequest._tag === 'Err')

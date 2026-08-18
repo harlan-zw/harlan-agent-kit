@@ -82,4 +82,57 @@ describe('baseline repair worker', () => {
       }),
     }))
   })
+  it.each([
+    ['the default branch went green', { green: true }, 'Default branch CI no longer fails'],
+    ['the default branch moved past the failing commit', { moved: true }, 'The default branch moved to'],
+  ])('retires the repair when %s', async (_name, scenario: { green?: boolean, moved?: boolean }, expected) => {
+    const mapping = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const baseChecks = scenario.green === true
+      ? []
+      : [{ id: 1, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed' as const, conclusion: 'failure' }]
+    const preparedHead = scenario.moved === true ? 'f'.repeat(40) : pullRequest.baseSha
+    const worker = createBaselineRepairWorker({
+      profile: CODEX_AGENT_PROFILE,
+      provider: stubProvider(turnEvents({})),
+      github: {
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: baseChecks },
+          body: '',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          reviews: [],
+        })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getWorkerSession: () => null,
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: value => Promise.resolve(ok(value)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/baseline-worktree', baseSha: pullRequest.baseSha, headSha: preparedHead })),
+        verify: () => Promise.reject(new Error('A retired repair must not verify a patch.')),
+        commit: () => Promise.reject(new Error('A retired repair must not commit.')),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'baseline-task',
+      kind: 'baseline_repair',
+      repository: mapping.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'baseline-agent', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: mapping,
+      pullRequest,
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ _tag: 'Obsolete', evidence: expect.stringContaining(expected) }))
+  })
 })

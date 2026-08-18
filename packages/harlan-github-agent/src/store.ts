@@ -60,6 +60,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { CODEX_AGENT_PROFILE } from './agent-profile.ts'
 import { classifyFailure, MAXIMUM_RECOVERY_ATTEMPTS, nextRecoveryAt } from './failure.ts'
+import { canRepairBaseline } from './repository-policy.ts'
 
 export interface RecordIncidentInput {
   scope: IncidentScope
@@ -379,7 +380,9 @@ export interface JournalStore {
     fence: number
     baseSha: string
     at: string
-  }) => { _tag: 'Queued' | 'Existing', taskId: string } | { _tag: 'Rejected', reason: string }
+  }) => { _tag: 'Queued' | 'Existing', taskId: string }
+    | { _tag: 'Rejected', reason: string }
+    | { _tag: 'NotAuthorized', reason: string }
   claimNextPublication: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedPublicationCommand | null
   claimIssueTriageComment: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueTriageCommentCommand | null
   claimReviewStatus: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
@@ -4154,15 +4157,16 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       }
       const subject = JSON.parse(row.payload) as GitHubItem
       const mapping = JSON.parse(row.policy_json) as RepositoryMapping
-      if (
-        subject.kind !== 'pull_request'
-        || subject.baseSha !== input.baseSha
-        || mapping.ownership !== 'owned'
-        || !mapping.pullRequestReview
-        || mapping.writablePullRequestHeadPrefixes.length === 0
-      ) {
+      if (subject.kind !== 'pull_request' || subject.baseSha !== input.baseSha) {
         database.exec('COMMIT')
-        return { _tag: 'Rejected', reason: 'Repository policy does not authorize Baseline repair for this base commit.' }
+        return { _tag: 'Rejected', reason: 'The base commit changed before Baseline repair was queued.' }
+      }
+      // Baseline repair opens a pull request against the default branch. Harlan
+      // may do that on every repository he owns or maintains. Only a repository
+      // he merely watches refuses it, and that refusal must not stop the review.
+      if (!canRepairBaseline(mapping)) {
+        database.exec('COMMIT')
+        return { _tag: 'NotAuthorized', reason: 'Repository policy does not authorize Baseline repair for this base commit.' }
       }
       const taskId = digest(`${row.github}:baseline:${input.baseSha}`)
       const existing = database.prepare('SELECT state_tag, fence FROM tasks WHERE id = ?').get(taskId) as

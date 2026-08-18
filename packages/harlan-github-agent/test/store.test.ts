@@ -1061,7 +1061,7 @@ describe('journal store', () => {
       baseSha: review.pullRequest.baseSha,
       at: '2026-08-13T01:02:00.000Z',
     })
-    if (queued._tag === 'Rejected')
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
       throw new Error(queued.reason)
     const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
     if (repair === null)
@@ -1106,6 +1106,54 @@ describe('journal store', () => {
     expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/other')).toBe(false)
   })
 
+  it('queues Baseline repair for a repository Harlan maintains but does not own', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ ownership: 'maintained' })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'baseline-maintained-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+
+    expect(queued._tag).toBe('Queued')
+  })
+
+  it('reports an external repository as unauthorized rather than rejected', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ ownership: 'external' })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'baseline-external-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+
+    expect(queued._tag).toBe('NotAuthorized')
+  })
+
   it('queues a new Baseline repair after the previous one failed', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -1126,7 +1174,7 @@ describe('journal store', () => {
       at: '2026-08-13T01:02:00.000Z',
     }
     const queued = store.queueBaselineRepairForReview(input)
-    if (queued._tag === 'Rejected')
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
       throw new Error(queued.reason)
     const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
     if (repair === null)
@@ -1176,7 +1224,7 @@ describe('journal store', () => {
 
     const queued = store.queueBaselineRepairForReview(input)
     expect(queued).toEqual({ _tag: 'Queued', taskId: expect.any(String) })
-    if (queued._tag === 'Rejected')
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
       throw new Error(queued.reason)
     expect(store.queueBaselineRepairForReview(input)).toEqual({ _tag: 'Existing', taskId: queued.taskId })
 
@@ -2192,7 +2240,7 @@ describe('journal store', () => {
       baseSha: review.pullRequest.baseSha,
       at: '2026-08-13T01:00:02.000Z',
     })
-    if (queued._tag === 'Rejected')
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
       throw new Error(queued.reason)
     const reason = 'Validation Failed: not all refs are readable'
     for (const attempt of [1, 2, 3]) {

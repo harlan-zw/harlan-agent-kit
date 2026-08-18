@@ -26,7 +26,7 @@ export interface TaskSchedulerOptions<Task extends PublicationTask = ClaimedConf
   /** Called once the worker stops running a task, whatever the outcome. */
   onTaskSettled?: (taskId: string) => void
   permits: AgentPermitPool
-  store: Pick<JournalStore, 'claimNextConflictTask' | 'failTask' | 'heartbeatTask' | 'needsAttentionTask' | 'stagePublication'>
+  store: Pick<JournalStore, 'claimNextConflictTask' | 'completeTask' | 'failTask' | 'heartbeatTask' | 'needsAttentionTask' | 'stagePublication'>
   worker: PublicationWorker<Task>
   workerId: string
 }
@@ -76,6 +76,16 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
       if (executionController.signal.aborted)
         return
       if (result._tag === 'Ok') {
+        if (result.value._tag === 'Obsolete') {
+          options.store.completeTask({
+            taskId: task.id,
+            workerId: options.workerId,
+            fence: task.state.fence,
+            at: options.now().toISOString(),
+            evidence: result.value.evidence,
+          })
+          return
+        }
         if (result.value._tag === 'ActionRequired') {
           options.store.needsAttentionTask({
             taskId: task.id,

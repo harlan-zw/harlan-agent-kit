@@ -6,6 +6,7 @@ import type { JournalStore } from './store.ts'
 import type { AgentProfile, AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { BaselineRepairWorktreeManager } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
+import { canRepairBaseline } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -143,7 +144,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       if (validated._tag === 'Err')
         return validated
       const prefix = validated.value.writablePullRequestHeadPrefixes[0]
-      if (!validated.value.enabled || validated.value.ownership !== 'owned' || !validated.value.pullRequestReview || prefix === undefined)
+      if (!canRepairBaseline(validated.value) || prefix === undefined)
         return err('Repository policy no longer authorizes Baseline repair.')
       const [snapshot, template] = await Promise.all([
         options.github.getPullRequestReviewSnapshot(validated.value, task.pullRequestNumber, signal),
@@ -154,11 +155,17 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       if (template._tag === 'Err')
         return template
       const checks = failedChecks(snapshot.value)
-      if (snapshot.value.pullRequest.baseSha !== task.pullRequest.baseSha || checks.length === 0)
-        return err('Default branch CI no longer fails at the queued base commit.')
+      // A Baseline repair exists for one red base commit. If that commit moved on,
+      // or its CI went green, there is nothing left to repair.
+      if (snapshot.value.pullRequest.baseSha !== task.pullRequest.baseSha)
+        return ok({ _tag: 'Obsolete', evidence: `The pull request now builds on ${snapshot.value.pullRequest.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
+      if (checks.length === 0)
+        return ok({ _tag: 'Obsolete', evidence: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, signal)
       if (prepared._tag === 'Err')
         return prepared
+      if (prepared.value.headSha !== task.pullRequest.baseSha)
+        return ok({ _tag: 'Obsolete', evidence: `The default branch moved to ${prepared.value.headSha}. This repair targeted ${task.pullRequest.baseSha}.` })
       const ready = progress({ percent: 35, label: 'Git worktree ready' })
       if (ready._tag === 'Err')
         return ready
