@@ -424,8 +424,18 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
   return { gates, reportedChecks: ci.reported }
 }
 
-function outcome(gates: ReviewGates): 'READY' | 'PENDING' | 'BLOCKED' {
+/**
+ * The Review outcome the gates justify.
+ *
+ * BLOCKED claims the review found something. So a review that never ran can
+ * never produce it, whatever the other gates say. A red CI gate used to block
+ * a pull request the agent had answered it did not review, which reads to
+ * everyone as "the agent found defects here".
+ */
+export function reviewOutcome(gates: ReviewGates): 'READY' | 'PENDING' | 'BLOCKED' {
   const states = Object.values(gates).map(gate => gate._tag)
+  if (gates.review._tag === 'Pending')
+    return 'PENDING'
   return states.includes('Failed') ? 'BLOCKED' : states.includes('Pending') ? 'PENDING' : 'READY'
 }
 
@@ -442,7 +452,7 @@ Next: ${progress.percent >= 90 ? 'Post the review comment.' : progress.percent >
 }
 
 function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
-  const result = outcome(gates)
+  const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const reason = result === 'PENDING'
     ? Object.values(gates).find(gate => gate._tag === 'Pending')
@@ -634,11 +644,11 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       if (checked._tag === 'Err')
         return checked
       const { gates, reportedChecks } = reviewGates(frozen.value, response, repairsBaseline)
-      const reviewOutcome = outcome(gates)
+      const outcome = reviewOutcome(gates)
       // A READY review whose every gate passed is a complete result. A missing
       // confidence number is a gap in the report, not a reason to discard the
       // review, so the comment omits the score instead.
-      const confidence = reviewOutcome === 'READY' && response.confidence !== null ? response.confidence : undefined
+      const confidence = outcome === 'READY' && response.confidence !== null ? response.confidence : undefined
       const findings: ReviewFinding[] = response.findings.map(finding => ({ _tag: 'Open', ...finding }))
       const reviewRunId = randomUUID()
       const completedAt = options.now().toISOString()
