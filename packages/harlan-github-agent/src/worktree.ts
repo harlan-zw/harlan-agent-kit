@@ -260,9 +260,38 @@ async function listWtWorktrees(checkout: string, signal: AbortSignal): Promise<R
   return parseWtWorktrees(listed.stdout)
 }
 
-function worktreeBranch(namespace: string): string {
-  const safeNamespace = namespace.replace(/[^\w.-]+/gu, '-').replace(/^[.-]+|[.-]+$/gu, '')
-  return `harlan-agent/${safeNamespace}`
+/** Every branch the agent creates for its own worktrees starts here. */
+export const AGENT_WORKTREE_PREFIX = 'harlan-agent/'
+
+/** One Task lease: the Task and the fence its Lease holder claimed. */
+export interface AgentWorktreeLease {
+  taskId: string
+  fence: number
+}
+
+/**
+ * Names the worktree one Task lease owns.
+ *
+ * The fence changes on every claim, so a fenced out Lease holder can never
+ * share a working directory with the Lease holder that replaced it. Reusing
+ * one worktree across fences would let a stale agent's uncommitted edits join
+ * the next agent's published commit, and no HEAD check can see that, because
+ * agents never commit.
+ */
+export function agentWorktreeLeaseKey(lease: AgentWorktreeLease): string {
+  return createHash('sha256').update(`${lease.taskId}:${lease.fence}`).digest('hex').slice(0, 12)
+}
+
+function agentWorktreeLeaseKeyOf(branch: string): string | null {
+  if (!branch.startsWith(AGENT_WORKTREE_PREFIX))
+    return null
+  const key = branch.slice(branch.lastIndexOf('-') + 1)
+  return /^[0-9a-f]{12}$/u.test(key) ? key : null
+}
+
+export function agentWorktreeBranch(label: string, lease: AgentWorktreeLease): string {
+  const safeLabel = label.replace(/[^\w.-]+/gu, '-').replace(/^[.-]+|[.-]+$/gu, '')
+  return `${AGENT_WORKTREE_PREFIX}${safeLabel}-${agentWorktreeLeaseKey(lease)}`
 }
 
 async function prepareWtWorktree(
@@ -302,6 +331,118 @@ async function prepareWtWorktree(
   if (head.exitCode !== 0 || head.stdout !== baseSha)
     return err('The wt worktree does not match the required head commit.')
   return ok(prepared.path)
+}
+
+export interface AgentWorktreeSweep {
+  removed: string[]
+  failures: Array<{ branch: string, reason: string }>
+}
+
+export interface AgentWorktreeSweepOptions {
+  checkout: string
+  /**
+   * Reads the lease keys that may still write, called after the worktrees are
+   * listed. A lease claimed after the listing owns no worktree yet, so reading
+   * later can only keep more worktrees, never remove a live one.
+   */
+  readLiveLeaseKeys: () => ReadonlySet<string>
+}
+
+/**
+ * Removes one agent worktree with wt, the only tool that owns worktrees here.
+ *
+ * wt refuses a worktree that holds uncommitted or untracked files, and agents
+ * always leave both. The worktree is reset and cleaned first, so removal never
+ * needs a force flag.
+ */
+export async function releaseAgentWorktree(
+  checkout: string,
+  branch: string,
+  signal: AbortSignal,
+): Promise<Result<'Removed' | 'Absent', string>> {
+  if (!isAbsolute(checkout))
+    return err('The repository checkout must be an absolute path.')
+  if (!branch.startsWith(AGENT_WORKTREE_PREFIX))
+    return err('The branch is outside the agent worktree namespace.')
+  if (!isSafeGitRef(branch))
+    return err('The agent worktree branch is unsafe.')
+
+  const listed = await listWtWorktrees(checkout, signal)
+  if (listed._tag === 'Err')
+    return listed
+  const worktree = listed.value.find(entry => entry.branch === branch)
+  if (worktree === undefined)
+    return ok('Absent')
+  if (worktree.path === checkout)
+    return err('The agent worktree branch names the repository checkout.')
+
+  const reset = await runGit(worktree.path, ['reset', '--hard'], signal)
+  if (reset.exitCode !== 0)
+    return err(`Could not reset the agent worktree: ${reset.stderr}`)
+  const cleaned = await runGit(worktree.path, ['clean', '-fdq'], signal)
+  if (cleaned.exitCode !== 0)
+    return err(`Could not clean the agent worktree: ${cleaned.stderr}`)
+  const removed = await runWt(checkout, ['remove', branch, '--yes', '--foreground'], signal)
+  return removed.exitCode === 0
+    ? ok('Removed')
+    : err(`Could not remove the agent worktree with wt: ${removed.stderr || removed.stdout}`)
+}
+
+/**
+ * Names every agent worktree in one checkout that no live Task lease uses.
+ *
+ * A Task keeps one worktree per fence, and only the current fence can still be
+ * written. Every earlier fence was already fenced out of the journal, so
+ * nothing may write its worktree again.
+ */
+export async function listSweepableAgentWorktrees(
+  options: AgentWorktreeSweepOptions,
+  signal: AbortSignal,
+): Promise<Result<string[], string>> {
+  const listed = await listWtWorktrees(options.checkout, signal)
+  if (listed._tag === 'Err')
+    return listed
+  // A branch outside the agent namespace is Harlan's, and the checkout itself
+  // is never a candidate.
+  const candidates = listed.value.filter(worktree =>
+    worktree.branch.startsWith(AGENT_WORKTREE_PREFIX) && worktree.path !== options.checkout)
+  if (candidates.length === 0)
+    return ok([])
+
+  // The live leases are read after the listing. A lease claimed later owns no
+  // worktree yet, so reading later can only keep more worktrees.
+  const live = options.readLiveLeaseKeys()
+  return ok(candidates
+    .filter((worktree) => {
+      const key = agentWorktreeLeaseKeyOf(worktree.branch)
+      return key === null || !live.has(key)
+    })
+    .map(worktree => worktree.branch))
+}
+
+/**
+ * Removes every agent worktree in one checkout that no live Task lease uses.
+ *
+ * Without this sweep every retry left its worktree behind for good.
+ */
+export async function sweepAgentWorktrees(
+  options: AgentWorktreeSweepOptions,
+  signal: AbortSignal,
+): Promise<Result<AgentWorktreeSweep, string>> {
+  const sweepable = await listSweepableAgentWorktrees(options, signal)
+  if (sweepable._tag === 'Err')
+    return sweepable
+
+  const removed: string[] = []
+  const failures: Array<{ branch: string, reason: string }> = []
+  for (const branch of sweepable.value) {
+    const release = await releaseAgentWorktree(options.checkout, branch, signal)
+    if (release._tag === 'Err')
+      failures.push({ branch, reason: release.error })
+    else if (release.value === 'Removed')
+      removed.push(branch)
+  }
+  return ok({ removed, failures })
 }
 
 function isSafeGitRef(ref: string): boolean {
@@ -353,7 +494,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     throw new Error('A Git commit identity is required.')
   const gitIdentity = options.gitIdentity
   async function prepare(task: ClaimedConflictResolutionTask, signal: AbortSignal): Promise<Result<PreparedConflictWorktree, string>> {
-    const namespace = `pull-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}-${task.state.fence}`
+    const branch = agentWorktreeBranch(`pull-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}`, { taskId: task.id, fence: task.state.fence })
     const repository = task.repositoryMapping.checkout
 
     const headRef = `refs/harlan-github-agent/pull/${task.pullRequestNumber}`
@@ -378,7 +519,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     const base = await runGit(repository, ['rev-parse', baseRef], signal)
     if (base.exitCode !== 0)
       return err(`Could not resolve the base branch: ${base.stderr}`)
-    const worktree = await prepareWtWorktree(repository, worktreeBranch(namespace), head.stdout, signal)
+    const worktree = await prepareWtWorktree(repository, branch, head.stdout, signal)
     if (worktree._tag === 'Err')
       return worktree
 
@@ -494,7 +635,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
 export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOptions): AgentWorkspaceManager {
   async function prepareRepository(
     task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask,
-    namespace: string,
+    label: string,
     refs: string[],
     headRef: string,
     signal: AbortSignal,
@@ -512,7 +653,8 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
     const head = await runGit(repository, ['rev-parse', headRef], signal)
     if (head.exitCode !== 0)
       return err(`Could not resolve the Worker head: ${head.stderr}`)
-    const worktree = await prepareWtWorktree(repository, worktreeBranch(namespace), head.stdout, signal)
+    const branch = agentWorktreeBranch(label, { taskId: task.id, fence: task.state.fence })
+    const worktree = await prepareWtWorktree(repository, branch, head.stdout, signal)
     return worktree._tag === 'Err'
       ? worktree
       : ok({ path: worktree.value, baseSha: head.stdout, headSha: head.stdout })
@@ -523,7 +665,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       const baseRef = `refs/harlan-github-agent/baselines/${task.pullRequest.baseSha}`
       const prepared = await prepareRepository(
         task,
-        `baseline-${task.pullRequest.baseSha.slice(0, 12)}-${task.state.fence}`,
+        `baseline-${task.pullRequest.baseSha.slice(0, 12)}`,
         [`+refs/heads/${task.repositoryMapping.defaultBranch}:${baseRef}`],
         baseRef,
         signal,
@@ -539,7 +681,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       const baseRef = `refs/harlan-github-agent/fixes/${task.pullRequestNumber}/base`
       const prepared = await prepareRepository(
         task,
-        `fix-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}-${task.state.fence}`,
+        `fix-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}`,
         [
           `+refs/pull/${task.pullRequestNumber}/head:${headRef}`,
           `+${task.pullRequest.baseSha}:${baseRef}`,
@@ -562,7 +704,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       const baseRef = `refs/harlan-github-agent/issues/${task.issueNumber}/base`
       return prepareRepository(
         task,
-        `issue-${task.issueNumber}-${task.revisionId.slice(0, 12)}-${task.state.fence}`,
+        `issue-${task.issueNumber}-${task.revisionId.slice(0, 12)}`,
         [`+refs/heads/${task.repositoryMapping.defaultBranch}:${baseRef}`],
         baseRef,
         signal,
@@ -574,7 +716,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       const baseRef = `refs/harlan-github-agent/reviews/${task.pullRequestNumber}/base`
       const prepared = await prepareRepository(
         task,
-        `review-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}-${task.state.fence}`,
+        `review-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}`,
         [
           `+refs/pull/${task.pullRequestNumber}/head:${headRef}`,
           `+${task.pullRequest.baseSha}:${baseRef}`,

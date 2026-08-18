@@ -6,8 +6,11 @@ import { consola } from 'consola'
 import { loadConfig, loadGitHubAppPrivateKey, validateRepositoryMappings } from './config.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
+import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { startAgentService } from './service.ts'
 import { stopWithin } from './shutdown.ts'
+import { openJournalStore } from './store.ts'
+import { agentWorktreeLeaseKey, listSweepableAgentWorktrees, sweepAgentWorktrees } from './worktree.ts'
 
 function waitForShutdown(): Promise<void> {
   return new Promise((resolveShutdown) => {
@@ -17,6 +20,70 @@ function waitForShutdown(): Promise<void> {
   })
 }
 
+const configArgument = {
+  type: 'string',
+  alias: 'c',
+  description: 'Configuration file path.',
+  default: 'harlan-github-agent.yml',
+} as const
+
+const sweepWorktrees = defineCommand({
+  meta: {
+    name: 'sweep-worktrees',
+    description: 'Remove agent worktrees that no active task uses.',
+  },
+  args: {
+    'config': configArgument,
+    'dry-run': {
+      type: 'boolean',
+      description: 'Report the worktrees to remove. Remove nothing.',
+      default: false,
+    },
+  },
+  async run({ args }) {
+    const configPath = resolve(args.config)
+    const parsed = await loadConfig(configPath)
+    if (parsed._tag === 'Err')
+      throw new Error(parsed.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+
+    const checkouts = await discoverLocalCheckouts(parsed.value.trustedCheckoutRoots)
+    const store = openJournalStore(parsed.value.storage.path)
+    // The live leases protect a Running or Queued task, so this is safe to run
+    // while the service runs.
+    const readLiveLeaseKeys = (): ReadonlySet<string> => new Set(store.listActiveTaskLeases().map(agentWorktreeLeaseKey))
+    const signal = new AbortController().signal
+    let total = 0
+    try {
+      for (const { checkout } of checkouts) {
+        if (args['dry-run']) {
+          const planned = await listSweepableAgentWorktrees({ checkout, readLiveLeaseKeys }, signal)
+          if (planned._tag === 'Err') {
+            consola.error(`${checkout}: ${planned.error}`)
+            continue
+          }
+          planned.value.forEach(branch => consola.info(`${checkout}: would remove ${branch}`))
+          total += planned.value.length
+          continue
+        }
+        const swept = await sweepAgentWorktrees({ checkout, readLiveLeaseKeys }, signal)
+        if (swept._tag === 'Err') {
+          consola.error(`${checkout}: ${swept.error}`)
+          continue
+        }
+        swept.value.removed.forEach(branch => consola.info(`${checkout}: removed ${branch}`))
+        swept.value.failures.forEach(failure => consola.error(`${checkout}: could not remove ${failure.branch}: ${failure.reason}`))
+        total += swept.value.removed.length
+      }
+    }
+    finally {
+      store.close()
+    }
+    consola.success(args['dry-run']
+      ? `${total} agent worktrees are ready to remove.`
+      : `Removed ${total} agent worktrees.`)
+  },
+})
+
 const command = defineCommand({
   meta: {
     name: 'harlan-github-agent',
@@ -24,12 +91,10 @@ const command = defineCommand({
     description: 'Run the local GitHub maintenance control plane.',
   },
   args: {
-    config: {
-      type: 'string',
-      alias: 'c',
-      description: 'Configuration file path.',
-      default: 'harlan-github-agent.yml',
-    },
+    config: configArgument,
+  },
+  subCommands: {
+    'sweep-worktrees': sweepWorktrees,
   },
   async run({ args }) {
     const configPath = resolve(args.config)

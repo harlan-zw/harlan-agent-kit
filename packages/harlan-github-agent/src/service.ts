@@ -41,7 +41,7 @@ import { openJournalStore } from './store.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
 import { createTerminalSessionLauncher } from './terminal-session.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
-import { createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createReviewFixWorktreeManager } from './worktree.ts'
+import { agentWorktreeLeaseKey, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createReviewFixWorktreeManager, sweepAgentWorktrees } from './worktree.ts'
 
 export interface RunningAgentService {
   server: Server
@@ -494,6 +494,32 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     },
     onError: error => options.logger.error(error),
   })
+  // Every claim of a Task takes a new fence, and each fence owns its own
+  // worktree. Nothing removed the worktree a fenced out claim left behind, so
+  // one retried Task could hold a dozen checkouts on disk for good.
+  const worktreeSweeper = createPoller({
+    intervalMilliseconds: 5 * 60_000,
+    poll: async (signal) => {
+      const checkouts = [...new Set(config.repositories.map(repository => repository.checkout))]
+      for (const checkout of checkouts) {
+        const swept = await sweepAgentWorktrees({
+          checkout,
+          readLiveLeaseKeys: () => new Set(store.listActiveTaskLeases().map(agentWorktreeLeaseKey)),
+        }, signal)
+        if (swept._tag === 'Err') {
+          options.logger.error(`Agent worktree sweep in ${checkout}: ${swept.error}`)
+          recordServiceIncident('agent_worktree_sweep', swept.error)
+          continue
+        }
+        if (swept.value.removed.length > 0)
+          options.logger.info(`${checkout}: removed ${swept.value.removed.length} agent worktrees that no task uses.`)
+        swept.value.failures.forEach((failure) => {
+          options.logger.error(`Could not remove agent worktree ${failure.branch}: ${failure.reason}`)
+        })
+      }
+    },
+    onError: error => options.logger.error(error),
+  })
   const dashboardShutdown = new AbortController()
   const app = createAgentApp({
     activityLog,
@@ -524,6 +550,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   poller.start()
   externalPoller.start()
+  worktreeSweeper.start()
   mutationSchedulers?.tasks.start()
   mutationSchedulers?.baselineRepairs.start()
   mutationSchedulers?.issueWork.start()
@@ -537,6 +564,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       await Promise.all([
         poller.stop(),
         externalPoller.stop(),
+        worktreeSweeper.stop(),
         mutationSchedulers?.tasks.stop() ?? Promise.resolve(),
         mutationSchedulers?.baselineRepairs.stop() ?? Promise.resolve(),
         mutationSchedulers?.issueWork.stop() ?? Promise.resolve(),
