@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createBaselineRepairWorker } from '../src/baseline-repair-worker.ts'
 import { ok } from '../src/result.ts'
-import { pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('baseline repair worker', () => {
   it('lets the agent describe and publish a verified default branch CI fix', async () => {
@@ -19,8 +19,7 @@ describe('baseline repair worker', () => {
       pullRequestBody: `Regenerates declarations so default branch CI passes.\n\n${disclosure}`,
     }
     const worker = createBaselineRepairWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents(response)),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(response))),
       github: {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
@@ -94,8 +93,7 @@ describe('baseline repair worker', () => {
       : [{ id: 1, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed' as const, conclusion: 'failure' }]
     const preparedHead = scenario.moved === true ? 'f'.repeat(40) : pullRequest.baseSha
     const worker = createBaselineRepairWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({})),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({}))),
       github: {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({

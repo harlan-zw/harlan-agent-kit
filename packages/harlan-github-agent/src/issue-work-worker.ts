@@ -1,9 +1,9 @@
 import type { AgentActivityLog } from './agent-activity.ts'
-import type { AgentProvider } from './agent-provider.ts'
+import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubAgentSource, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProfile, AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
+import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { IssueWorktreeManager } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
@@ -43,8 +43,7 @@ export interface IssueWorkWorker {
 export interface IssueWorkWorkerOptions {
   github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'getPullRequestTemplate'>
   now: () => Date
-  profile: AgentProfile
-  provider: AgentProvider
+  runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
   store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>

@@ -62,13 +62,21 @@ Use `http://harlan-github-agent.local/`. Inspect `/health` first, then `/api/sta
 
 Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and authenticated `gh` client.
 
-`agent.provider` selects one Agent provider for every Worker. It defaults to `codex`.
+`agent.provider` names the Agent provider the service starts with. It defaults to `codex`.
+
+The Agent selection overrides it. Harlan switches the Agent provider, model, and Reasoning effort from the dashboard header or the tray, and the switch survives a restart. Read it from `/api/state` as `agentSelection`.
 
 For `codex`, use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for conflict resolution, issue triage, issue work, and Baseline repair.
 
-For `opencode`, use `opencode-go/deepseek-v4-flash` at the `high` reasoning variant for every role.
+For `opencode`, use `opencode-go/deepseek-v4-flash` at the `high` Reasoning effort for every role.
 
 A saved session belongs to the Agent provider that created it. Switching providers starts new sessions.
+
+Switch the Agent selection with an authenticated request. Send the whole selection. A null model or Reasoning effort keeps that provider's own per-role default. A switch starts the next agent turn, and an agent already running keeps the model it started with.
+
+```bash
+curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --header 'Content-Type: application/json' --request POST http://harlan-github-agent.local/api/agents/select --data '{"provider":"opencode","model":null,"reasoningEffort":null}'
+```
 
 The controller creates every agent worktree from its mapped repository checkout with `wt`. The global Worktrunk configuration places it beside the checkout as `<repo>.<branch-slug>`. Workers must not create, enter, or remove worktrees themselves.
 

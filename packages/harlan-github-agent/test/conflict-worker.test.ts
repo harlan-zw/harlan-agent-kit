@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createConflictWorker } from '../src/conflict-worker.ts'
 import { ok } from '../src/result.ts'
-import { pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const resolved = {
   outcome: 'resolved',
@@ -51,8 +51,7 @@ describe('conflict worker', () => {
     const capture: ProviderCapture = { requests: [] }
     const worker = createConflictWorker({
       ...conflictWorkerOptions(repository, current),
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents(resolved), capture),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
     })
 
     const result = await worker.run(conflictTask(repository), new AbortController().signal)
@@ -72,8 +71,7 @@ describe('conflict worker', () => {
     const capture: ProviderCapture = { requests: [] }
     const worker = createConflictWorker({
       ...conflictWorkerOptions(repository, current),
-      profile: OPENCODE_AGENT_PROFILE,
-      provider: stubProvider(turnEvents(resolved), capture, 'opencode'),
+      runtime: agentRuntime(OPENCODE_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture, 'opencode')),
     })
 
     const result = await worker.run(conflictTask(repository), new AbortController().signal)
@@ -95,8 +93,7 @@ describe('conflict worker', () => {
     })
     const worker = createConflictWorker({
       ...conflictWorkerOptions(repository, current),
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents(resolved)),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved))),
     })
 
     const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
@@ -114,8 +111,7 @@ describe('conflict worker', () => {
     })
     const worker = createConflictWorker({
       ...conflictWorkerOptions(repository, current),
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents(resolved)),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved))),
     })
 
     const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
@@ -129,8 +125,7 @@ describe('conflict worker', () => {
     let preparedBaseSha: string | undefined
     const worker = createConflictWorker({
       ...conflictWorkerOptions(repository, current),
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents(resolved)),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved))),
       worktrees: {
         prepare: (task) => {
           preparedBaseSha = task.pullRequest.baseSha

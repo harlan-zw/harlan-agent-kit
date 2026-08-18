@@ -1,9 +1,9 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentProgressWork } from './agent-progress.ts'
-import type { AgentProvider } from './agent-provider.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProfile, AgentProgress, AgentRole } from './types.ts'
+import type { AgentProgress, AgentRole } from './types.ts'
 import { agentActivityFromEvent } from './agent-activity.ts'
 import { roleProfile } from './agent-profile.ts'
 import { agentEventProgress } from './agent-progress.ts'
@@ -12,8 +12,8 @@ import { err, ok } from './result.ts'
 export interface AgentTurnOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
   now: () => Date
-  profile: AgentProfile
-  provider: AgentProvider
+  /** Read when a turn starts, so a switch never disturbs a turn already running. */
+  runtime: AgentRuntimeSource
   store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession'>
 }
 
@@ -74,8 +74,9 @@ export async function runAgentTurn(
 ): Promise<Result<AgentTurnResult, string>> {
   const sessionRole = input.sessionRole ?? input.role
   const sessionId = options.store.getWorkerSession(input.repository, input.number, sessionRole, input.scopeDigest)
-  const profile = roleProfile(options.profile, input.role)
-  const events = options.provider.runTurn({
+  const runtime = options.runtime()
+  const profile = roleProfile(runtime.profile, input.role)
+  const events = runtime.provider.runTurn({
     model: profile.model,
     ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }),
     outputSchema: input.schema,
@@ -133,14 +134,18 @@ export async function runParsedAgentTurn<Value>(
   input: AgentTurnInput,
   signal: AbortSignal,
 ): Promise<Result<{ value: Value, sessionId: string }, string>> {
-  const turn = await runAgentTurn(options, input, signal)
+  // The repair turn quotes the first answer, so both turns use one runtime even
+  // when the Agent selection changes between them.
+  const runtime = options.runtime()
+  const frozen = { ...options, runtime: () => runtime }
+  const turn = await runAgentTurn(frozen, input, signal)
   if (turn._tag === 'Err')
     return turn
   const parsed = await options.parse(turn.value.response)
   if (parsed._tag === 'Ok')
     return ok({ value: parsed.value, sessionId: turn.value.sessionId })
 
-  const repaired = await runAgentTurn(options, {
+  const repaired = await runAgentTurn(frozen, {
     ...input,
     prompt: repairPrompt(input.schema, turn.value.response, parsed.error),
     // The work is done, so this turn reports no progress of its own.

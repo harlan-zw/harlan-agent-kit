@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import type { DropdownMenuItem } from '@nuxt/ui'
 import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type {
   ActiveAgent,
+  AgentSelection,
   AgentTask,
   DashboardSnapshot,
   ItemSummary,
@@ -10,7 +12,7 @@ import type {
   ReviewAgent,
 } from '../../../src/types.ts'
 import { formatTimeAgo, useClipboard, useDocumentVisibility, useEventListener, useEventSource, useLocalStorage, useNow } from '@vueuse/core'
-import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
+import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, REASONING_EFFORTS } from '../../../src/agent-profile.ts'
 import {
   activeAgentProgress,
   activeAgentRole,
@@ -54,6 +56,7 @@ function emptySnapshot(): DashboardSnapshot {
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
     agentProfile: CODEX_AGENT_PROFILE,
+    agentSelection: { provider: 'codex', model: null, reasoningEffort: null },
     agents: [],
     incidents: [],
     queue: [],
@@ -143,6 +146,57 @@ const providerLabels: Record<AgentProviderName, string> = {
 }
 
 const activeProvider = computed(() => snapshot.value.agentProfile.provider)
+const agentSelection = computed(() => snapshot.value.agentSelection)
+
+/**
+ * One control for the Agent provider, its model, and its reasoning effort.
+ *
+ * Switching the provider clears the model and the reasoning effort, because a
+ * model belongs to one provider and the service refuses the other provider's.
+ */
+const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
+  const selection = agentSelection.value
+  return [
+    [{ label: 'Agent provider', type: 'label' }],
+    AGENT_PROVIDER_NAMES.map(provider => ({
+      label: providerLabels[provider],
+      icon: providerIcons[provider],
+      type: 'checkbox' as const,
+      checked: selection.provider === provider,
+      onUpdateChecked: () => switchAgent({ provider, model: null, reasoningEffort: null }),
+    })),
+    [
+      { label: 'Model', type: 'label' },
+      {
+        label: 'Provider default',
+        type: 'checkbox',
+        checked: selection.model === null,
+        onUpdateChecked: () => switchAgent({ ...selection, model: null }),
+      },
+      ...AGENT_MODELS[selection.provider].map(model => ({
+        label: model,
+        type: 'checkbox' as const,
+        checked: selection.model === model,
+        onUpdateChecked: () => switchAgent({ ...selection, model }),
+      })),
+    ],
+    [
+      { label: 'Reasoning effort', type: 'label' },
+      {
+        label: 'Provider default',
+        type: 'checkbox',
+        checked: selection.reasoningEffort === null,
+        onUpdateChecked: () => switchAgent({ ...selection, reasoningEffort: null }),
+      },
+      ...REASONING_EFFORTS.map(reasoningEffort => ({
+        label: reasoningEffort,
+        type: 'checkbox' as const,
+        checked: selection.reasoningEffort === reasoningEffort,
+        onUpdateChecked: () => switchAgent({ ...selection, reasoningEffort }),
+      })),
+    ],
+  ]
+})
 
 const unhealthyRepositories = computed(() => snapshot.value.repositories.filter(repository => repository.lastError !== null).length)
 
@@ -333,6 +387,20 @@ async function setAgentControl(action: 'pause' | 'resume'): Promise<void> {
   controlPending.value = true
   controlError.value = undefined
   return $fetch(`/api/agents/${action}`, { method: 'POST' })
+    .then(() => loadState())
+    .catch((error: unknown) => {
+      controlError.value = error instanceof Error ? error.message : 'The request failed.'
+    })
+    .finally(() => {
+      controlPending.value = false
+    })
+}
+
+/** A switch starts the next agent turn. Work already running keeps its model. */
+async function switchAgent(selection: AgentSelection): Promise<void> {
+  controlPending.value = true
+  controlError.value = undefined
+  return $fetch('/api/agents/select', { method: 'POST', body: selection })
     .then(() => loadState())
     .catch((error: unknown) => {
       controlError.value = error instanceof Error ? error.message : 'The request failed.'
@@ -650,11 +718,6 @@ useHead({
             <span aria-hidden="true" class="text-dimmed">·</span>
             <span>{{ activeAgents.length }}/{{ snapshot.agentProfile.maximumActiveAgents }} agents</span>
             <span aria-hidden="true" class="text-dimmed">·</span>
-            <span class="inline-flex items-center gap-1.5" :title="`Agent provider: ${providerLabels[activeProvider]}`">
-              <UIcon :name="providerIcons[activeProvider]" class="size-4 shrink-0" aria-hidden="true" />
-              <span>{{ providerLabels[activeProvider] }}</span>
-            </span>
-            <span aria-hidden="true" class="text-dimmed">·</span>
             <span :class="snapshot.mutationsEnabled ? statusClass('warning') : undefined">writes {{ snapshot.mutationsEnabled ? 'on' : 'off' }}</span>
             <template v-if="snapshot.mutationsEnabled">
               <span aria-hidden="true" class="text-dimmed">·</span>
@@ -675,6 +738,22 @@ useHead({
           </p>
 
           <div class="flex items-center gap-1">
+            <UDropdownMenu
+              :items="agentSelectionItems"
+              :content="{ align: 'end' }"
+              :ui="{ content: 'w-60' }"
+            >
+              <UButton
+                :icon="providerIcons[activeProvider]"
+                trailing-icon="i-lucide-chevron-down"
+                color="neutral"
+                variant="ghost"
+                :loading="controlPending"
+                title="Switch the Agent provider, model, or reasoning effort. A switch starts the next agent turn."
+              >
+                {{ providerLabels[activeProvider] }}
+              </UButton>
+            </UDropdownMenu>
             <UButton
               v-if="snapshot.mutationsEnabled"
               :icon="snapshot.agentControl._tag === 'Running' ? 'i-lucide-pause' : 'i-lucide-play'"

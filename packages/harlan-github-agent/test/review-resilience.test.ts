@@ -5,7 +5,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { classifyFailure } from '../src/failure.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
-import { pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const passingGate = { state: 'passed' as const, reason: '', evidence: 'checked' }
 
@@ -76,8 +76,7 @@ function harness(input: {
   let read = 0
 
   const options: ReviewWorkerOptions = {
-    profile: CODEX_AGENT_PROFILE,
-    provider: stubProvider(turnEvents(input.response)),
+    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(input.response))),
     github: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),

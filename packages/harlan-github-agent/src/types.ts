@@ -593,6 +593,19 @@ export interface AgentProfile {
   roles: Record<AgentRole, RoleProfile>
 }
 
+/**
+ * One durable choice of Agent provider, model, and reasoning effort.
+ *
+ * A null model or reasoning effort keeps what the provider's own profile gives
+ * each Agent role. A non-null model always belongs to `provider`, because
+ * `parseAgentSelection` is the only way to build one from input.
+ */
+export interface AgentSelection {
+  provider: AgentProviderName
+  model: AgentModel | null
+  reasoningEffort: CodexReasoningEffort | null
+}
+
 export type QueueState
   = | { _tag: 'Active', work: AgentRole }
     | { _tag: 'ActionRequired', reason: string }
@@ -677,6 +690,7 @@ export interface DashboardSnapshot {
   mutationsEnabled: boolean
   agentControl: AgentControl
   agentProfile: AgentProfile
+  agentSelection: AgentSelection
   agents: DashboardAgent[]
   incidents: Incident[]
   queue: QueueEntry[]

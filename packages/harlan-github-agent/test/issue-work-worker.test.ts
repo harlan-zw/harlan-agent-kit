@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createIssueWorkWorker } from '../src/issue-work-worker.ts'
 import { ok } from '../src/result.ts'
-import { issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('issue work worker', () => {
   it('resumes triage, implements the issue, and prepares repository metadata', async () => {
@@ -11,8 +11,7 @@ describe('issue work worker', () => {
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
     const worker = createIssueWorkWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Fixed the parser.',
         checks: ['pnpm test'],
@@ -27,7 +26,7 @@ Fixed the parser.
 ### Linked Issues
 
 Closes #12.`,
-      }), capture),
+      }), capture)),
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
@@ -87,8 +86,7 @@ Closes #12.`,
     const issue = issueItem()
     let workspaceCreated = false
     const worker = createIssueWorkWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider([]),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([])),
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({
           body: 'Changed after triage',

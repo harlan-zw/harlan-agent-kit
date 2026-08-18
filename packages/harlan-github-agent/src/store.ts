@@ -5,6 +5,7 @@ import type {
   AgentProfile,
   AgentProgress,
   AgentRole,
+  AgentSelection,
   AgentTask,
   BaselineRepairTask,
   ClaimedAdversarialReviewTask,
@@ -59,7 +60,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { CODEX_AGENT_PROFILE } from './agent-profile.ts'
+import { CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, resolveAgentProfile } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 
@@ -415,6 +416,10 @@ export interface JournalStore {
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getAgentControl: () => StoredAgentControl
+  /** The Agent selection in force, or the configured one while nothing is stored. */
+  getAgentSelection: () => AgentSelection
+  /** Switches the Agent provider, model, and reasoning effort for the next agent turn. */
+  selectAgent: (selection: AgentSelection, at: string) => AgentSelection
   getWorkerSession: (repository: string, itemNumber: number, role: AgentRole, scopeDigest?: string) => string | null
   heartbeatTask: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   heartbeatWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
@@ -1223,6 +1228,22 @@ const agentControlMigration = `
 const repositoryPauseMigration = `
   ALTER TABLE repositories ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));
   PRAGMA user_version = 17;
+`
+
+/**
+ * One durable Agent selection, so a switch survives a restart.
+ *
+ * No row means the service follows the Agent provider its configuration names.
+ */
+const agentSelectionMigration = `
+  CREATE TABLE agent_selection (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'opencode')),
+    model TEXT,
+    reasoning_effort TEXT,
+    updated_at TEXT NOT NULL
+  );
+  PRAGMA user_version = 25;
 `
 
 const reviewFixStatusMigration = `
@@ -2791,7 +2812,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 24)
+  if (version === 25)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -2888,6 +2909,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 23) {
     applyForeignKeyMigration(database, reviewRunMigration)
+    version = 24
+  }
+  if (version === 24) {
+    applyMigration(database, agentSelectionMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -3117,8 +3142,38 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
 }
 
 export function openJournalStore(path: string, mutationsEnabled = false, profile: AgentProfile = CODEX_AGENT_PROFILE): JournalStore {
-  const provider = profile.provider
   const database = openDatabase(path)
+  const configuredSelection = providerAgentSelection(profile.provider)
+
+  const getAgentSelection = (): AgentSelection => {
+    const row = database.prepare('SELECT provider, model, reasoning_effort FROM agent_selection WHERE singleton = 1').get() as {
+      provider: string
+      model: string | null
+      reasoning_effort: string | null
+    } | undefined
+    if (row === undefined)
+      return configuredSelection
+    const parsed = parseAgentSelection({ provider: row.provider, model: row.model, reasoningEffort: row.reasoning_effort })
+    // A build that drops a model leaves a stored selection nothing can answer.
+    // The configured Agent provider is the safe answer, and the dashboard shows it.
+    return parsed._tag === 'Ok' ? parsed.value : configuredSelection
+  }
+
+  const selectAgent = (selection: AgentSelection, at: string): AgentSelection => {
+    database.prepare(`
+      INSERT INTO agent_selection (singleton, provider, model, reasoning_effort, updated_at)
+      VALUES (1, ?, ?, ?, ?)
+      ON CONFLICT (singleton) DO UPDATE SET
+        provider = excluded.provider,
+        model = excluded.model,
+        reasoning_effort = excluded.reasoning_effort,
+        updated_at = excluded.updated_at
+    `).run(selection.provider, selection.model, selection.reasoningEffort, at)
+    return getAgentSelection()
+  }
+
+  /** Sessions belong to the provider that created them, so every read is scoped. */
+  const provider = (): AgentProviderName => getAgentSelection().provider
 
   const syncRepositories = (repositories: RepositoryMapping[], at: string): void => {
     const statement = database.prepare(`
@@ -5931,7 +5986,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     const items = subjectRows.map(subjectFromRow)
     const tasks = taskRows(database).map(taskFromRow)
     const reviewAgents = dashboardReviewAgents(database)
-    const activeAgents = activeAgentRows(database, provider).map(row => activeAgentFromRow(row, provider))
+    const currentProvider = provider()
+    const activeAgents = activeAgentRows(database, currentProvider).map(row => activeAgentFromRow(row, currentProvider))
     const activeReviewSubjects = new Set(activeAgents.flatMap(agent => agent.role === 'adversarial_review'
       ? [`${agent.repository}:${agent.itemNumber}`]
       : []))
@@ -5951,7 +6007,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       status,
       mutationsEnabled,
       agentControl,
-      agentProfile: profile,
+      agentProfile: resolveAgentProfile(getAgentSelection(), profile.maximumActiveAgents),
+      agentSelection: getAgentSelection(),
       agents,
       incidents: listIncidents(),
       queue: dashboardQueue(items, tasks, reviewAgents, mappings),
@@ -6075,8 +6132,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     const scoped = !publicationRole && scopeDigest !== undefined
     const scopeClause = scoped ? 'AND sessions.scope_digest = ?' : ''
     const parameters = scoped
-      ? [repository, itemNumber, role, provider, scopeDigest]
-      : [repository, itemNumber, role, provider]
+      ? [repository, itemNumber, role, provider(), scopeDigest]
+      : [repository, itemNumber, role, provider()]
     const row = database.prepare(`
       SELECT sessions.session_id
       FROM ${table} AS sessions
@@ -6110,7 +6167,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         ON CONFLICT (subject_id, role, provider) DO UPDATE SET
           session_id = excluded.session_id,
           updated_at = excluded.updated_at
-      `).run(subject.id, role, provider, sessionId, at)
+      `).run(subject.id, role, provider(), sessionId, at)
       return
     }
     database.prepare(`
@@ -6119,7 +6176,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       ON CONFLICT (subject_id, role, provider, scope_digest) DO UPDATE SET
         session_id = excluded.session_id,
         updated_at = excluded.updated_at
-    `).run(subject.id, role, provider, scopeDigest ?? '0'.repeat(64), sessionId, at)
+    `).run(subject.id, role, provider(), scopeDigest ?? '0'.repeat(64), sessionId, at)
   }
 
   const updateAgentProgress: JournalStore['updateAgentProgress'] = (input) => {
@@ -6168,6 +6225,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     failTask,
     failWorkerTask,
     getAgentControl,
+    getAgentSelection,
     getDashboardSnapshot,
     getWorkerSession,
     heartbeatPublication,
@@ -6190,6 +6248,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     recordReviewPublication,
     requestReviewRerun,
     resumeAgents,
+    selectAgent,
     recoverInterruptedAgentTasks,
     retryRecoverableWorkerFailures,
     restoreOutageRecoveryBudget,

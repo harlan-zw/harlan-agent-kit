@@ -11,9 +11,10 @@ import { dirname, extname, join, relative } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createError, createEventStream, H3 } from 'h3'
+import { parseAgentSelection } from './agent-profile.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'setRepositoryPaused'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused'>
   allowedHost: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -248,6 +249,16 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   app.post('/api/agents/pause', () => options.store.pauseAgents(options.now().toISOString()))
 
   app.post('/api/agents/resume', () => options.store.resumeAgents(options.now().toISOString()))
+
+  app.post('/api/agents/select', async (event) => {
+    const selection = parseAgentSelection(await event.req.json().catch(() => {
+      // Selection parsing below reports malformed JSON as a bad request.
+      return undefined
+    }))
+    if (selection._tag === 'Err')
+      throw createError({ status: 400, statusText: 'Bad Request', message: selection.error })
+    return options.store.selectAgent(selection.value, options.now().toISOString())
+  })
 
   app.post('/api/agents/eject', async (event) => {
     const body = cancelTaskRequest(await event.req.json().catch(() => {

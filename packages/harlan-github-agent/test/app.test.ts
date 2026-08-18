@@ -1,3 +1,4 @@
+import type { AgentSelection } from '../src/agent-profile.ts'
 import { Buffer } from 'node:buffer'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +14,7 @@ const dashboardRoot = join(import.meta.dirname, 'fixtures', 'dashboard')
 const agentControls = {
   pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
   resumeAgents: (_at: string) => ({ _tag: 'Running' as const }),
+  selectAgent: (selection: AgentSelection, _at: string) => selection,
   setRepositoryPaused: (_github: string, _paused: boolean) => true,
 }
 
@@ -29,6 +31,62 @@ function createApp(snapshot = dashboardSnapshot()) {
 }
 
 describe('dashboard HTTP app', () => {
+  it('switches the Agent provider, model, and reasoning effort', async () => {
+    const switches: unknown[] = []
+    const app = createAgentApp({
+      allowedHost,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        selectAgent(selection, at) {
+          switches.push({ selection, at })
+          return selection
+        },
+      },
+    })
+    const headers = { authorization, host: allowedHost, origin: `http://${allowedHost}` }
+
+    const switched = await app.request(`http://${allowedHost}/api/agents/select`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' }),
+    })
+    const rejected = await app.request(`http://${allowedHost}/api/agents/select`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ provider: 'opencode', model: 'gpt-5.6-sol' }),
+    })
+
+    expect(switched.status).toBe(200)
+    await expect(switched.json()).resolves.toEqual({ provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' })
+    expect(switches).toEqual([{
+      selection: { provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'medium' },
+      at: now().toISOString(),
+    }])
+    expect(rejected.status).toBe(400)
+    expect(switches).toHaveLength(1)
+  })
+
+  it('refuses an Agent switch from another origin', async () => {
+    const app = createApp()
+
+    const response = await app.request(`http://${allowedHost}/api/agents/select`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: 'http://evil.local' },
+      body: JSON.stringify({ provider: 'codex' }),
+    })
+
+    expect(response.status).toBe(403)
+  })
+
   it('pauses and resumes new agent work', async () => {
     const controls: unknown[] = []
     const app = createAgentApp({

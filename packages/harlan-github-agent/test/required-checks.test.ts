@@ -6,7 +6,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { requiredCheckContexts } from '../src/github-agent-source.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
-import { pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const cleanReview = {
   metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
@@ -58,8 +58,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
     reviews: [],
   }
   const options: ReviewWorkerOptions = {
-    profile: CODEX_AGENT_PROFILE,
-    provider: stubProvider(turnEvents(cleanReview)),
+    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(cleanReview))),
     github: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
