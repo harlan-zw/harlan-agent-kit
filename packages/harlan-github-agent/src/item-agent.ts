@@ -24,7 +24,7 @@ import { runParsedAgentTurn } from './agent-turn.ts'
 import { issueTriageComment } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
-import { cleanLine } from './text.ts'
+import { cleanLine, updatedAtLabel } from './text.ts'
 
 interface GateResponse {
   evidence: string
@@ -444,7 +444,7 @@ function progressComment(headSha: string, progress: AgentProgress, at: string): 
 <!-- reviewed-sha: ${headSha} -->
 ### 🤖 REVIEWING · ${progress.label}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${at}.
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${updatedAtLabel(at)}.
 
 \`${formatProgressBar(progress.percent)}\`
 

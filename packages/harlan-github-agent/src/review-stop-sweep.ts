@@ -5,7 +5,7 @@ import type { RepositoryMapping } from './types.ts'
 import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
-import { cleanLine } from './text.ts'
+import { cleanLine, updatedAtLabel } from './text.ts'
 
 export interface ReviewStopSweepOptions {
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'upsertReviewStatus'>
@@ -19,7 +19,7 @@ export function stoppedReviewComment(review: StoppedReview, at: string): string 
 <!-- reviewed-sha: ${review.headSha} -->
 ### 🤖 STOPPED
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required. Last updated: ${at}.
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required. Last updated: ${updatedAtLabel(at)}.
 
 \`${formatProgressBar(100)}\`
 

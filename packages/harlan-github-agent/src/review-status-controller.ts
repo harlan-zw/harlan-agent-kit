@@ -5,6 +5,7 @@ import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask,
 import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { updatedAtLabel } from './text.ts'
 
 export interface ReviewStatusController {
   publish: (task: ClaimedAdversarialReviewTask, phase: 'snapshot' | 'review' | 'terminal', body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
@@ -33,7 +34,7 @@ function repairProgressComment(headSha: string, progress: AgentProgress, at: str
 <!-- reviewed-sha: ${headSha} -->
 ### 🤖 REPAIR · ${progress.label}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated repair update. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${at}.
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated repair update. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${updatedAtLabel(at)}.
 
 \`${formatProgressBar(progress.percent)}\`
 
