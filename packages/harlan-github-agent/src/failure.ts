@@ -33,15 +33,35 @@ export interface FailureSignal {
 }
 
 /**
+ * Reasons the controller refuses to publish a repair one review already made.
+ *
+ * They live here, beside the taxonomy, so a refusal cannot be worded into the
+ * Transient patterns below. A review repair exists only in the review worktree,
+ * and one refused repair used to requeue the review, spend a whole agent turn
+ * reading the same policy, and refuse again.
+ */
+export const REVIEW_REPAIR_REFUSALS = {
+  approval: 'This pull request needs Approval before the controller publishes a repair.',
+  branch: 'The controller cannot write this pull request branch.',
+  cancelled: 'A person cancelled the repair for this pull request head commit.',
+  closed: 'The pull request closed before the review published its repair.',
+  conflict: 'The pull request has a merge conflict, so the review cannot publish its repair.',
+  draft: 'The pull request is still draft, so the review cannot publish its repair.',
+  owned: 'Another repair Task already owns this pull request head commit.',
+  policy: 'Repository policy does not authorize an automated repair.',
+  published: 'This pull request head commit already has a published repair.',
+} as const
+
+/**
  * Reasons the controller itself produces for a state it refuses to act on.
  *
  * These never change on their own, so retrying one only burns an agent turn.
  */
-const permanentMessages = new Set([
+const permanentMessages = new Set<string>([
+  ...Object.values(REVIEW_REPAIR_REFUSALS),
   'Repository policy does not authorize an automated review comment.',
   'Repository policy does not permit issue work.',
   'This pull request does not require local approval.',
-  'The controller cannot write this pull request branch.',
 ])
 
 /**
@@ -116,9 +136,13 @@ const agentProviderPatterns: RegExp[] = [
   /\bcontext\b.+\blength\b/i,
 ]
 
-/** The controller lost a race with itself. The next pass starts from a clean state. */
+/**
+ * The controller lost a race with itself. The next pass starts from a clean state.
+ *
+ * A race is the only thing that belongs here. "Could not be claimed" used to
+ * match, which made every refusal that borrowed those words retry forever.
+ */
 const controllerPatterns: RegExp[] = [
-  /\bcould not be claimed\b/i,
   /\balready has a different publication command\b/i,
   /\blease changed before completion\b/i,
   /\bno longer assigned\b/i,
@@ -188,6 +212,19 @@ export function classifyFailure(signal: FailureSignal): FailureClass {
 
 export function isTransientFailure(signal: FailureSignal): boolean {
   return classifyFailure(signal)._tag === 'Transient'
+}
+
+/**
+ * Whether another attempt at the same work can change the result.
+ *
+ * A Task the controller refused by policy reads the same policy on every
+ * attempt, and each attempt costs one whole agent turn, so it never runs again.
+ * An unclassified failure keeps its attempts, because "unknown" does not say
+ * that the world stood still.
+ */
+export function mayRetryFailure(signal: FailureSignal): boolean {
+  const failure = classifyFailure(signal)
+  return failure._tag !== 'Permanent' || failure.kind !== 'policy'
 }
 
 /** How many times the controller requeues a Failed Task before it waits for a person. */

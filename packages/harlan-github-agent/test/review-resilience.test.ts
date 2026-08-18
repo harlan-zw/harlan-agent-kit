@@ -1,7 +1,8 @@
 import type { ReviewWorkerOptions } from '../src/item-agent.ts'
-import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput } from '../src/types.ts'
+import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput, ReviewFixClaim } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { classifyFailure } from '../src/failure.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
 import { pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
@@ -41,7 +42,22 @@ interface Harness {
   attempts: RecordReviewRunInput[]
   comments: string[]
   progressFailures: string[]
+  staged: number
   options: ReviewWorkerOptions
+}
+
+function repairTask(pullRequest: GitHubPullRequestItem) {
+  return {
+    id: 'repair-task',
+    kind: 'review_fix' as const,
+    repository: 'harlan-zw/example',
+    pullRequestNumber: 24,
+    revisionId: 'revision-1',
+    state: { _tag: 'Running' as const, workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+    updatedAt: '2026-08-13T01:00:00.000Z',
+    repositoryMapping: repositoryMapping(),
+    pullRequest,
+  }
 }
 
 /** One review worker whose only moving parts are the ones a test names. */
@@ -50,10 +66,12 @@ function harness(input: {
   response: unknown
   snapshots?: Array<ReturnType<typeof reviewSnapshot>>
   publish?: () => ReturnType<ReviewWorkerOptions['status']['publish']>
+  claimRepair?: () => ReviewFixClaim
 }): Harness {
   const attempts: RecordReviewRunInput[] = []
   const comments: string[] = []
   const progressFailures: string[] = []
+  const publications = { staged: 0 }
   const snapshots = input.snapshots ?? [reviewSnapshot(input.pullRequest)]
   let read = 0
 
@@ -76,14 +94,17 @@ function harness(input: {
     now: () => new Date('2026-08-13T01:00:00.000Z'),
     onProgressPublishFailure: (_task, reason) => progressFailures.push(reason),
     store: {
-      claimReviewFixTaskForReview: () => { throw new Error('Unexpected repair claim.') },
+      claimReviewFixTaskForReview: input.claimRepair ?? (() => { throw new Error('Unexpected repair claim.') }),
       failTask: () => { throw new Error('Unexpected repair failure.') },
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
-      stagePublication: () => { throw new Error('Unexpected publication.') },
+      stagePublication: () => {
+        publications.staged += 1
+        return { _tag: 'Staged', commandId: 'publication-1' }
+      },
       updateAgentProgress: () => true,
       recordReviewRun: (attempt) => {
         attempts.push(attempt)
@@ -96,7 +117,7 @@ function harness(input: {
         comments.push(body)
         return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
       }),
-      publishRepair: () => Promise.reject(new Error('Unexpected repair progress.')),
+      publishRepair: () => Promise.resolve(ok(undefined)),
     },
     triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
     workspaces: {
@@ -108,11 +129,25 @@ function harness(input: {
       })),
     },
     repairs: {
-      commit: () => Promise.reject(new Error('Unexpected repair commit.')),
-      verify: () => Promise.reject(new Error('Unexpected repair verification.')),
+      commit: () => Promise.resolve(ok({
+        commitSha: 'repair-commit',
+        baseSha: input.pullRequest.baseSha,
+        artifactRef: 'refs/harlan-github-agent/publications/repair',
+        digest: 'patch-digest',
+        changedFiles: 2,
+      })),
+      verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 2 })),
     },
   }
-  return { attempts, comments, progressFailures, options }
+  return {
+    attempts,
+    comments,
+    progressFailures,
+    get staged() {
+      return publications.staged
+    },
+    options,
+  }
 }
 
 describe('review resilience', () => {
@@ -229,5 +264,51 @@ describe('review resilience', () => {
     expect(test.attempts[0]?.confidence).toBeUndefined()
     expect(test.comments.at(-1)).toContain('### 🤖 READY')
     expect(test.comments.at(-1)).not.toContain('/100')
+  })
+  it('publishes the repair of a review that reported no finding left', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: passingGate,
+        verification: passingGate,
+        findings: [],
+        repair: { outcome: 'repaired', summary: 'Fixed the off by one.', checks: ['pnpm test'], commitMessage: 'fix(core): stop the off by one' },
+        confidence: 90,
+      },
+      claimRepair: () => ({ _tag: 'Claimed', task: repairTask(pullRequest) }),
+    })
+
+    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    // The repair lives only in the review worktree until this publication is
+    // staged, so a lost claim throws the whole agent turn away.
+    expect(result._tag).toBe('Ok')
+    expect(test.staged).toBe(1)
+  })
+
+  it('stops a review whose repair the controller refused', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const refusal = 'The controller cannot write this pull request branch.'
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: passingGate,
+        verification: passingGate,
+        findings: [],
+        repair: { outcome: 'repaired', summary: 'Fixed the off by one.', checks: ['pnpm test'], commitMessage: 'fix(core): stop the off by one' },
+        confidence: 90,
+      },
+      claimRepair: () => ({ _tag: 'Refused', reason: refusal }),
+    })
+
+    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(result).toEqual({ _tag: 'Err', error: refusal })
+    expect(test.staged).toBe(0)
+    // A refusal reads the same policy on every attempt, so it must never requeue.
+    expect(classifyFailure({ message: refusal })._tag).toBe('Permanent')
   })
 })

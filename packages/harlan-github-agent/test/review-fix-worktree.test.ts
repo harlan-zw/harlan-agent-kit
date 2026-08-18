@@ -70,7 +70,6 @@ function fixture(): { remote: string, root: string, task: ClaimedReviewFixTask }
       state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
       repositoryMapping: mapping,
       pullRequest: pullRequestItem({ number: 1, baseSha, headSha, headRef: 'fix/review', mergeState: 'clean' }),
-      findings: [{ _tag: 'Open', summary: 'The value is wrong.', nextAction: 'Set the correct value.' }],
     },
   }
 }

@@ -18,7 +18,6 @@ describe('review status controller', () => {
       updatedAt: '2026-08-13T01:00:00.000Z',
       repositoryMapping: repository,
       pullRequest,
-      findings: [{ _tag: 'Open', summary: 'Broken boundary.', nextAction: 'Parse input.' }],
     }
     let replaced = false
     let body = ''

@@ -680,15 +680,19 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
             return err('The automated review comment could not be saved.')
           return published._tag === 'Err' ? published : ok({ evidence: reviewRunId })
         }
-        const repairTask = options.store.claimReviewFixTaskForReview({
+        const claim = options.store.claimReviewFixTaskForReview({
           taskId: task.id,
           workerId: task.state.workerId,
           fence: task.state.fence,
           at: options.now().toISOString(),
           leaseMilliseconds: 45 * 60_000,
         })
-        if (repairTask === null)
-          return err('The approved review repair could not be claimed by the active review.')
+        // The repair lives in this worktree alone. `Unavailable` says another
+        // review turn can still publish it. `Refused` says none ever will, and
+        // the Task ends rather than repeating this turn against the same policy.
+        if (claim._tag !== 'Claimed')
+          return err(claim.reason)
+        const repairTask = claim.task
         const checking = await options.status.publishRepair(repairTask, { percent: 85, label: 'Checking the repair' }, signal)
         if (checking._tag === 'Err')
           return failRepair(options, repairTask, checking.error)
