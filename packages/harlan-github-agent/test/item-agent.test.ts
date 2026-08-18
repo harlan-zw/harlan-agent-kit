@@ -16,6 +16,7 @@ describe('subject Workers', () => {
       comments: ['Human review comment.'],
       priorAutomatedReview: { _tag: 'None' as const },
       pullRequest,
+      requiredChecks: { _tag: 'None' as const },
       reviews: [],
     }
 
@@ -26,6 +27,10 @@ describe('subject Workers', () => {
     expect(reviewSnapshotDigest({
       ...snapshot,
       checks: { _tag: 'Available' as const, checks: [{ id: 1, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+    })).toBe(reviewSnapshotDigest(snapshot))
+    expect(reviewSnapshotDigest({
+      ...snapshot,
+      requiredChecks: { _tag: 'Declared' as const, contexts: ['ci / test'] },
     })).toBe(reviewSnapshotDigest(snapshot))
     expect(reviewSnapshotDigest({ ...snapshot, comments: ['Different human review comment.'] })).not.toBe(reviewSnapshotDigest(snapshot))
   })
@@ -62,6 +67,7 @@ describe('subject Workers', () => {
             url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-40',
           },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
@@ -151,6 +157,7 @@ describe('subject Workers', () => {
             url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
           },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
@@ -249,6 +256,7 @@ describe('subject Workers', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
@@ -339,6 +347,7 @@ describe('subject Workers', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
@@ -419,6 +428,7 @@ describe('subject Workers', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
@@ -506,6 +516,7 @@ describe('subject Workers', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
@@ -589,6 +600,7 @@ describe('subject Workers', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),

@@ -1,6 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentProvider } from './agent-provider.ts'
-import type { GitHubAgentSource, PullRequestReviewSnapshot } from './github-agent-source.ts'
+import type { GitHubAgentSource, GitHubCheck, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
@@ -182,7 +182,7 @@ const issueTriageSchema = {
  */
 export function reviewSnapshotDigest(snapshot: PullRequestReviewSnapshot): string {
   const { updatedAt: _githubActivityAt, ...pullRequest } = snapshot.pullRequest
-  const { baseChecks: _baseChecks, checks: _checks, ...reviewed } = snapshot
+  const { baseChecks: _baseChecks, checks: _checks, requiredChecks: _requiredChecks, ...reviewed } = snapshot
   return createHash('sha256').update(JSON.stringify({ ...reviewed, pullRequest })).digest('hex')
 }
 
@@ -295,6 +295,16 @@ function gate(response: GateResponse, label: string): ReviewGateState {
     : { _tag: 'Failed', reason: response.reason, evidence: gateEvidence }
 }
 
+const FAILED_CONCLUSIONS = new Set(['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'])
+
+function checkFailed(check: GitHubCheck): boolean {
+  return FAILED_CONCLUSIONS.has(check.conclusion ?? '')
+}
+
+function checkRunning(check: GitHubCheck): boolean {
+  return check.status !== 'completed' || check.conclusion === null || check.conclusion === 'pending'
+}
+
 function checksGate(
   checks: PullRequestReviewSnapshot['checks'],
   label: 'base-ci' | 'required-ci',
@@ -305,27 +315,77 @@ function checksGate(
     return { _tag: 'Pending', reason: cleanLine(checks.reason), evidence: checkEvidence }
   if (checks.checks.length === 0)
     return { _tag: 'Pending', reason: label === 'base-ci' ? 'Base branch CI is unavailable.' : 'Required CI is unavailable.', evidence: checkEvidence }
-  const failed = checks.checks.find(check => ['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'].includes(check.conclusion ?? ''))
+  const failed = checks.checks.find(checkFailed)
   if (failed !== undefined)
     return { _tag: failedTag, reason: `${label === 'base-ci' ? 'Base branch CI: ' : ''}${cleanLine(failed.name)} failed.`, evidence: checkEvidence }
-  const pending = checks.checks.find(check => check.status !== 'completed' || check.conclusion === null || check.conclusion === 'pending')
+  const pending = checks.checks.find(checkRunning)
   return pending === undefined
     ? { _tag: 'Passed', evidence: checkEvidence }
     : { _tag: 'Pending', reason: `${label === 'base-ci' ? 'Base branch CI: ' : ''}${cleanLine(pending.name)} is still running.`, evidence: checkEvidence }
 }
 
 /**
+ * One CI Review gate state and the failing checks that did not decide it.
+ *
+ * A check outside GitHub's required set never changes the Review outcome, so
+ * its failure would otherwise disappear. The review comment prints `reported`
+ * so the reader still sees every red check.
+ */
+interface CiGateResult {
+  state: ReviewGateState
+  reported: string[]
+}
+
+/**
+ * Reads head CI the way GitHub reads it before a merge.
+ *
+ * GitHub blocks a merge on required checks alone, so a failing check outside
+ * that set is not evidence that the change is broken. A CodeQL analysis that
+ * died in a GitHub outage used to send every affected pull request to BLOCKED.
+ *
+ * `Declared` is the only answer that carries information. Verified on
+ * 2026-08-18 against five pull requests: a repository with no branch protection
+ * still reports mergeStateStatus UNSTABLE for any failing check, and reports no
+ * required check, so neither field separates a broken change from a broken
+ * scanner. When GitHub declares nothing, or cannot answer, every failing check
+ * still fails this gate. That keeps the strict rule wherever the repository
+ * gives the controller nothing safer to read.
+ */
+function headChecksGate(checks: PullRequestReviewSnapshot['checks'], required: RequiredChecks): CiGateResult {
+  if (required._tag !== 'Declared')
+    return { state: checksGate(checks, 'required-ci', 'Failed'), reported: [] }
+  const checkEvidence = [evidence('required-ci', JSON.stringify({ checks, required }))]
+  if (checks._tag === 'Unavailable')
+    return { state: { _tag: 'Pending', reason: cleanLine(checks.reason), evidence: checkEvidence }, reported: [] }
+  const isRequired = (check: GitHubCheck): boolean => required.contexts.includes(check.name)
+  const reported = checks.checks
+    .filter(check => checkFailed(check) && !isRequired(check))
+    .map(check => `${cleanLine(check.name)} failed. GitHub does not require this check, so it does not block the merge.`)
+  const requiredChecks = checks.checks.filter(isRequired)
+  const failed = requiredChecks.find(checkFailed)
+  if (failed !== undefined)
+    return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported }
+  const running = requiredChecks.find(checkRunning)
+  if (running !== undefined)
+    return { state: { _tag: 'Pending', reason: `${cleanLine(running.name)} is still running.`, evidence: checkEvidence }, reported }
+  const missing = required.contexts.find(context => !checks.checks.some(check => check.name === context))
+  if (missing !== undefined)
+    return { state: { _tag: 'Pending', reason: `${cleanLine(missing)} has not reported.`, evidence: checkEvidence }, reported }
+  return { state: { _tag: 'Passed', evidence: checkEvidence }, reported }
+}
+
+/**
  * A Baseline repair pull request exists because the default branch CI fails, so
  * its own review reads head CI alone. Every other review waits for a green base.
  */
-function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): ReviewGateState {
+function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): CiGateResult {
   if (repairsBaseline)
-    return checksGate(snapshot.checks, 'required-ci', 'Failed')
+    return headChecksGate(snapshot.checks, snapshot.requiredChecks)
   const base = checksGate(snapshot.baseChecks, 'base-ci', 'Pending')
   if (base._tag !== 'Passed')
-    return base
-  const head = checksGate(snapshot.checks, 'required-ci', 'Failed')
-  return { ...head, evidence: [...base.evidence, ...head.evidence] }
+    return { state: base, reported: [] }
+  const head = headChecksGate(snapshot.checks, snapshot.requiredChecks)
+  return { state: { ...head.state, evidence: [...base.evidence, ...head.state.evidence] }, reported: head.reported }
 }
 
 /**
@@ -346,9 +406,10 @@ function baseChecksFailed(snapshot: PullRequestReviewSnapshot): boolean {
     && snapshot.baseChecks.checks.some(check => ['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'].includes(check.conclusion ?? ''))
 }
 
-function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean): ReviewGates {
+function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean): { gates: ReviewGates, reportedChecks: string[] } {
   const findings = response.findings
-  return {
+  const ci = ciGate(snapshot, repairsBaseline)
+  const gates: ReviewGates = {
     head: { _tag: 'Passed', evidence: [evidence('head', snapshot.pullRequest.headSha)] },
     merge: snapshot.pullRequest.mergeState === 'clean'
       ? { _tag: 'Passed', evidence: [evidence('mergeability', 'clean')] }
@@ -360,8 +421,9 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
       ? { _tag: 'Failed', reason: findings[0]?.summary ?? 'Material findings remain.', evidence: [evidence('review', response.review.evidence)] }
       : gate(response.review, 'review'),
     verification: gate(response.verification, 'verification'),
-    ci: ciGate(snapshot, repairsBaseline),
+    ci: ci.state,
   }
+  return { gates, reportedChecks: ci.reported }
 }
 
 function outcome(gates: ReviewGates): 'READY' | 'PENDING' | 'BLOCKED' {
@@ -381,7 +443,7 @@ function progressComment(headSha: string, progress: AgentProgress, at: string): 
 Next: ${progress.percent >= 90 ? 'Post the review comment.' : progress.percent >= 85 ? 'Check the head commit and CI.' : progress.percent >= 70 ? 'Verify findings or fixes.' : progress.percent >= 55 ? 'Finish checking the changed files and docs.' : progress.percent >= 35 ? 'Review the diff.' : 'Create a Git worktree.'}`
 }
 
-function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined): string {
+function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
   const result = outcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const reason = result === 'PENDING'
@@ -391,7 +453,8 @@ function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFi
   const findingLines = findings.map(finding => finding._tag === 'Fixed'
     ? `- **Fixed:** ${cleanLine(finding.summary)}`
     : `- **Open:** ${cleanLine(finding.summary)}. Next: ${cleanLine(finding.nextAction)}`)
-  return [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, `### 🤖 ${heading}`, '', disclosure, '', `\`${formatProgressBar(100)}\``, ...findingLines.flatMap(line => ['', line])].join('\n')
+  const checkLines = reportedChecks.map(line => `- **Reported:** ${cleanLine(line)}`)
+  return [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, `### 🤖 ${heading}`, '', disclosure, '', `\`${formatProgressBar(100)}\``, ...[...findingLines, ...checkLines].flatMap(line => ['', line])].join('\n')
 }
 
 function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, progress: AgentProgress): Result<void, string> {
@@ -569,7 +632,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const checked = await reportReviewProgress(options, task, 'review', { percent: 90, label: 'Head commit and CI checked' }, signal)
       if (checked._tag === 'Err')
         return checked
-      const gates = reviewGates(frozen.value, response, repairsBaseline)
+      const { gates, reportedChecks } = reviewGates(frozen.value, response, repairsBaseline)
       const reviewOutcome = outcome(gates)
       // A READY review whose every gate passed is a complete result. A missing
       // confidence number is a gap in the report, not a reason to discard the
@@ -602,7 +665,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
 
       if (response.repair.outcome === 'repaired') {
         if (!hasRepairAuthority(task, frozen.value, repairsBaseline)) {
-          const body = terminalComment(task.pullRequest.headSha, gates, findings, undefined)
+          const body = terminalComment(task.pullRequest.headSha, gates, findings, undefined, reportedChecks)
           const published = await options.status.publish(task, 'terminal', body, signal)
           const publication = options.store.recordReviewPublication({
             id: randomUUID(),
@@ -668,7 +731,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         return ok({ evidence: reviewRunId })
       }
 
-      const body = terminalComment(task.pullRequest.headSha, gates, findings, confidence)
+      const body = terminalComment(task.pullRequest.headSha, gates, findings, confidence, reportedChecks)
       const published = await options.status.publish(task, 'terminal', body, signal)
       const publication = options.store.recordReviewPublication({
         id: randomUUID(),
