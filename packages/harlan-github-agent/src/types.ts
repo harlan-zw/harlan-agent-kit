@@ -434,7 +434,15 @@ export interface ClaimedIssueTriageCommentCommand extends IssueTriageCommentComm
   repositoryMapping: RepositoryMapping
 }
 
-export type GitHubRepositoryAccess = 'read' | 'checks_read' | 'contents_write' | 'issues_write' | 'pull_requests_write'
+/**
+ * What one minted credential is allowed to do.
+ *
+ * There is one write level for Item work on purpose. GitHub serves comments and
+ * labels for issues and for pull requests through the same Issues API, so a
+ * token that covers one kind and not the other fails half of those calls. One
+ * level means no caller can pick the wrong one.
+ */
+export type GitHubRepositoryAccess = 'read' | 'checks_read' | 'contents_write' | 'item_write'
 
 export interface GitHubRepositoryToken {
   token: string
@@ -634,6 +642,7 @@ export type IncidentKind
     | 'subject_changed'
     | 'agent_result'
     | 'policy'
+    | 'installation_access'
     | 'unknown'
 
 /** What the controller will do about an Incident without being asked. */

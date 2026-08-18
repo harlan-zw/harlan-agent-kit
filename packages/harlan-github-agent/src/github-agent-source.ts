@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
-import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
+import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
@@ -164,7 +164,7 @@ function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType
 }
 
 export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource {
-  const client = async (repository: string, access: 'read' | 'checks_read' | 'issues_write' | 'pull_requests_write', signal: AbortSignal): Promise<Result<Octokit, string>> => {
+  const client = async (repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> => {
     const token = await options.tokens.getToken(repository, access, signal)
     return token._tag === 'Err'
       ? err(token.error.message)
@@ -179,9 +179,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
   }
 
   return {
-    async consumeApprovalLabel(repository, subjectKind, itemNumber, label, signal) {
-      const access = subjectKind === 'issue' ? 'issues_write' : 'pull_requests_write'
-      const octokit = await client(repository.github, access, signal)
+    async consumeApprovalLabel(repository, _subjectKind, itemNumber, label, signal) {
+      const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
@@ -200,7 +199,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async ensureApprovalLabel(repository, label, signal) {
-      const octokit = await client(repository.github, 'pull_requests_write', signal)
+      const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
@@ -273,7 +272,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     async upsertIssueTriageComment(repository, issueNumber, commentId, body, signal) {
       if (!body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
         return err('The automated issue triage comment is missing its marker.')
-      const octokit = await client(repository.github, 'issues_write', signal)
+      const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
@@ -389,7 +388,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async upsertReviewStatus(repository, pullRequestNumber, commentId, body, replacePriorReview, signal) {
-      const octokit = await client(repository.github, 'pull_requests_write', signal)
+      const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)

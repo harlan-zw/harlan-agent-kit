@@ -314,12 +314,12 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
   return {
     async ensurePullRequest(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
-      const credential = await options.tokens.getToken(input.repository.github, 'pull_requests_write', signal)
+      const credential = await options.tokens.getToken(input.repository.github, 'item_write', signal)
       if (credential._tag === 'Err')
         return credential
       const octokit = options.createClient?.(credential.value.token)
         ?? createAuthenticatedClient({
-          access: 'pull_requests_write',
+          access: 'item_write',
           repository: input.repository.github,
           signal,
           token: credential.value.token,
@@ -418,12 +418,12 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
   return {
     async merge(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
-      const credential = await options.tokens.getToken(input.repository.github, 'pull_requests_write', signal)
+      const credential = await options.tokens.getToken(input.repository.github, 'item_write', signal)
       if (credential._tag === 'Err')
         return credential
       const octokit = options.createClient?.(credential.value.token)
         ?? createAuthenticatedClient({
-          access: 'pull_requests_write',
+          access: 'item_write',
           repository: input.repository.github,
           signal,
           token: credential.value.token,

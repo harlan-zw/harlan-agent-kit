@@ -160,6 +160,7 @@ const incidentKindLabels: Record<IncidentKind, string> = {
   controller: 'Controller',
   github_access: 'GitHub access',
   github_unavailable: 'GitHub unavailable',
+  installation_access: 'Installation access',
   network: 'Network',
   policy: 'Repository policy',
   rate_limit: 'Rate limit',

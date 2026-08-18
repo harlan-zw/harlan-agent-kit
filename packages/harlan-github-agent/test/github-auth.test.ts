@@ -8,15 +8,14 @@ describe('gitHub App authentication', () => {
     ['read', { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }],
     ['checks_read', { checks: 'read', metadata: 'read', statuses: 'read' }],
     ['contents_write', { contents: 'write', metadata: 'read', workflows: 'write' }],
-    ['issues_write', { issues: 'write', metadata: 'read' }],
-    ['pull_requests_write', { contents: 'read', metadata: 'read', pull_requests: 'write' }],
+    ['item_write', { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }],
   ] as const)('mints one repository-scoped %s token', async (access, permissions) => {
     const requests: unknown[] = []
     const provider = createRepositoryTokenProvider({
       getInstallationId: () => Promise.resolve(42),
       mintToken: (input) => {
         requests.push(input)
-        return Promise.resolve({ token: 'installation-token', expiresAt: '2026-08-13T01:00:00.000Z' })
+        return Promise.resolve({ token: 'installation-token', expiresAt: '2026-08-13T01:00:00.000Z', permissions: input.permissions })
       },
     })
 
@@ -34,13 +33,79 @@ describe('gitHub App authentication', () => {
     }])
   })
 
+  it('covers issues and pull requests with the one write access', async () => {
+    const requests: Array<Record<string, string>> = []
+    const provider = createRepositoryTokenProvider({
+      getInstallationId: () => Promise.resolve(42),
+      mintToken: (input) => {
+        requests.push(input.permissions)
+        return Promise.resolve({ token: 'installation-token', expiresAt: '2126-01-01T00:00:00.000Z', permissions: input.permissions })
+      },
+    })
+
+    await provider.getToken('harlan-zw/example', 'item_write')
+
+    // GitHub serves comments and labels for both kinds through the Issues API,
+    // so one write token has to carry both permissions or half the calls fail.
+    expect(requests[0]).toMatchObject({ issues: 'write', pull_requests: 'write' })
+  })
+
+  it('rejects a token GitHub scoped below the request', async () => {
+    const provider = createRepositoryTokenProvider({
+      getInstallationId: () => Promise.resolve(42),
+      mintToken: () => Promise.resolve({
+        token: 'short-token',
+        expiresAt: '2126-01-01T00:00:00.000Z',
+        permissions: { contents: 'read', metadata: 'read', pull_requests: 'write' },
+      }),
+    })
+
+    const result = await provider.getToken('harlan-zw/example', 'item_write')
+
+    expect(result._tag).toBe('Err')
+    expect(result._tag === 'Err' ? result.error.message : '').toBe('GitHub granted less access than this token asked for: issues.')
+  })
+
+  it('never caches a token GitHub scoped below the request', async () => {
+    let issued = 0
+    const provider = createRepositoryTokenProvider({
+      getInstallationId: () => Promise.resolve(42),
+      mintToken: (input) => {
+        issued += 1
+        return Promise.resolve(issued === 1
+          ? { token: 'short-token', expiresAt: '2126-01-01T00:00:00.000Z', permissions: { metadata: 'read' } }
+          : { token: 'full-token', expiresAt: '2126-01-01T00:00:00.000Z', permissions: input.permissions })
+      },
+    })
+
+    expect((await provider.getToken('harlan-zw/example', 'read'))._tag).toBe('Err')
+
+    expect(await provider.getToken('harlan-zw/example', 'read')).toEqual(ok({
+      token: 'full-token',
+      expiresAt: '2126-01-01T00:00:00.000Z',
+    }))
+  })
+
+  it('accepts a grant wider than the request', async () => {
+    const provider = createRepositoryTokenProvider({
+      getInstallationId: () => Promise.resolve(42),
+      mintToken: () => Promise.resolve({
+        token: 'wide-token',
+        expiresAt: '2126-01-01T00:00:00.000Z',
+        permissions: { checks: 'read', contents: 'write', issues: 'write', metadata: 'read', pull_requests: 'write' },
+      }),
+    })
+
+    expect((await provider.getToken('harlan-zw/example', 'read'))._tag).toBe('Ok')
+  })
+
   it('reuses a live repository-scoped token', async () => {
     let mintCount = 0
     const provider = createRepositoryTokenProvider({
       getInstallationId: () => Promise.resolve(42),
-      mintToken: () => {
+      mintToken: (input) => {
         mintCount += 1
-        return Promise.resolve({ token: 'installation-token', expiresAt: '2026-08-13T02:00:00.000Z' })
+        return Promise.resolve({ token: 'installation-token', expiresAt: '2026-08-13T02:00:00.000Z', permissions: input.permissions })
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
     })
@@ -62,7 +127,7 @@ describe('gitHub App authentication', () => {
           installationId = 2
           return Promise.reject(Object.assign(new Error('Not found'), { status: 404 }))
         }
-        return Promise.resolve({ token: `token-${input.installationId}`, expiresAt: '2026-08-13T01:00:00.000Z' })
+        return Promise.resolve({ token: `token-${input.installationId}`, expiresAt: '2026-08-13T01:00:00.000Z', permissions: input.permissions })
       },
     })
 
@@ -84,7 +149,7 @@ describe('rejected credential recovery', () => {
       mintToken: (input) => {
         minted.push({ refresh: input.refresh })
         issued += 1
-        return Promise.resolve({ token: `token-${issued}`, expiresAt: '2126-01-01T00:00:00.000Z' })
+        return Promise.resolve({ token: `token-${issued}`, expiresAt: '2126-01-01T00:00:00.000Z', permissions: input.permissions })
       },
     })
 
@@ -104,17 +169,17 @@ describe('rejected credential recovery', () => {
     let issued = 0
     const provider = createRepositoryTokenProvider({
       getInstallationId: () => Promise.resolve(42),
-      mintToken: () => {
+      mintToken: (input) => {
         issued += 1
-        return Promise.resolve({ token: `token-${issued}`, expiresAt: '2126-01-01T00:00:00.000Z' })
+        return Promise.resolve({ token: `token-${issued}`, expiresAt: '2126-01-01T00:00:00.000Z', permissions: input.permissions })
       },
     })
 
     await provider.getToken('harlan-zw/example', 'read')
-    const write = await provider.getToken('harlan-zw/example', 'issues_write')
+    const write = await provider.getToken('harlan-zw/example', 'item_write')
     provider.invalidate('harlan-zw/example', 'read')
 
-    expect(await provider.getToken('harlan-zw/example', 'issues_write')).toEqual(write)
+    expect(await provider.getToken('harlan-zw/example', 'item_write')).toEqual(write)
     expect(issued).toBe(2)
   })
 })

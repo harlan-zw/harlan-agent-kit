@@ -50,6 +50,36 @@ describe('classifyFailure', () => {
     expect(mayRetryFailure({ message: 'The worker changed a file that was not conflicted: src/main.rs.' })).toBe(true)
   })
 
+  it.each([
+    'The permissions requested are not granted to this installation. - https://docs.github.com/rest',
+    'The level of access for permissions requested are not granted to this installation.',
+  ])('separates %s from a degraded GitHub', (message) => {
+    // Retries while a person can still grant the permission, but never wins its
+    // budget back from a healthy poll, so the retry is bounded.
+    expect(classifyFailure({ message, status: 403 })).toEqual({ _tag: 'Transient', kind: 'installation_access' })
+  })
+
+  it('keeps an integration rejection transient, because a degraded GitHub returns it', () => {
+    expect(classifyFailure({
+      message: 'Resource not accessible by integration - https://docs.github.com/rest/issues/comments#list-issue-comments',
+      status: 403,
+    })).toEqual({ _tag: 'Transient', kind: 'github_access' })
+  })
+
+  it('retries a short grant, because GitHub scopes tokens down while degraded', () => {
+    expect(classifyFailure({ message: 'GitHub granted less access than this token asked for: issues.' }))
+      .toEqual({ _tag: 'Transient', kind: 'github_access' })
+  })
+
+  it('retries the node error GitHub leaks from its own REST layer', () => {
+    // GitHub answers a public repository this way when a request lacks access,
+    // and answers a private one with 403 for the same call.
+    expect(classifyFailure({
+      message: 'Not Found: {"type":"NOT_FOUND","path":["node"],"message":"Could not resolve to a node with the global id of \'PR_kwDOQ3hsQ8\'."} - https://docs.github.com/rest/pulls/reviews',
+      status: 404,
+    })).toEqual({ _tag: 'Transient', kind: 'github_unavailable' })
+  })
+
   it('treats an unrecognised failure as permanent so it surfaces instead of spinning', () => {
     expect(classifyFailure({ message: 'The worker changed a file that was not conflicted: src/main.rs.' }))
       .toEqual({ _tag: 'Permanent', kind: 'unknown' })
