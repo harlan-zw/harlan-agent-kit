@@ -59,7 +59,7 @@ import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { CODEX_AGENT_PROFILE } from './agent-profile.ts'
-import { classifyFailure, MAXIMUM_RECOVERY_ATTEMPTS, nextRecoveryAt } from './failure.ts'
+import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, nextRecoveryAt } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 
 export interface RecordIncidentInput {
@@ -2262,11 +2262,13 @@ function planConflictResolution(
     FROM tasks
     WHERE subject_id = ? AND kind = 'resolve_conflict' AND revision_id = ?
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, cancelled: number } | undefined
+  // Recovery used to match two exact reasons collected from past incidents, so
+  // every new transient failure left the conflict dead until someone added its
+  // wording. The failure taxonomy decides instead: a transient failure can
+  // succeed unchanged, and a permanent one still waits for a person.
   const recoverableFailure = existing?.state_tag === 'Failed'
-    && (
-      existing.reason === 'Fetched base branch no longer matches the claimed base commit SHA.'
-      || existing.reason === 'Could not read the conflict resolution patch: '
-    )
+    && existing.reason !== null
+    && isTransientFailure({ message: existing.reason })
   if ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure) {
     database.prepare(`
       UPDATE tasks
@@ -2278,11 +2280,9 @@ function planConflictResolution(
       taskId: existing.id,
       from: existing.state_tag,
       to: 'Queued',
-      reason: existing.reason === 'Fetched base branch no longer matches the claimed base commit SHA.'
-        ? 'The current base branch will be used.'
-        : recoverableFailure
-          ? 'The controller can now read large conflict patches.'
-          : 'GitHub reports merge conflicts again.',
+      reason: recoverableFailure
+        ? 'The previous conflict resolution failed for a transient reason.'
+        : 'GitHub reports merge conflicts again.',
       fence: existing.fence,
       at: observedAt,
     })

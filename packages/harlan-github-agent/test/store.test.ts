@@ -293,6 +293,37 @@ describe('journal store', () => {
     expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T01:04:00.000Z', 10_000)).toBeNull()
   })
 
+  it.each([
+    ['a transient failure', 'wt list returned an invalid worktree entry.', true],
+    ['a permanent failure', 'The worker changed a file that was not conflicted: src/index.ts.', false],
+  ])('requeues a failed conflict task on the next poll only after %s', (_name, reason, requeued) => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem()
+    store.recordObservation({ externalId: 'conflict-recovery', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
+    const task = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)
+    if (task === null)
+      throw new Error('Expected the conflict Task.')
+    // Fail it until every attempt and every recovery is spent, so it is Failed
+    // for good and only a poll can bring it back.
+    const start = Date.parse('2026-08-13T01:02:00.000Z')
+    const at = (step: number, offsetMs = 0): string => new Date(start + step * 3_600_000 + offsetMs).toISOString()
+    let claimed: typeof task | null = task
+    let step = 0
+    while (claimed !== null && step < 90) {
+      // Fail inside the lease, otherwise the claim simply expires and the
+      // attempt is never counted.
+      store.failTask({ taskId: claimed.id, workerId: claimed.state.workerId, fence: claimed.state.fence, at: at(step, 5_000), reason })
+      step++
+      claimed = store.claimNextConflictTask('worker-1', at(step), 10_000)
+    }
+    expect(claimed).toBeNull()
+
+    store.recordObservation({ externalId: 'conflict-recovery', observedAt: '2026-08-14T00:00:00.000Z', source: 'poll', subject })
+
+    expect(store.claimNextConflictTask('worker-1', '2026-08-14T00:01:00.000Z', 10_000) !== null).toBe(requeued)
+  })
+
   it('cancels a conflict task before its commit is pushed', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
