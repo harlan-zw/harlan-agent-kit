@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { contextBudgetExhaustedReason } from '../src/failure.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -114,6 +115,45 @@ describe('incident log', () => {
       severity: 'error',
       recovery: { _tag: 'ActionRequired' },
     })
+  })
+
+  it('names the pull request whose review spent its whole Context budget', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'runaway-pr',
+      observedAt: '2026-08-18T00:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const task = store.claimNextAdversarialReviewTask('worker-1', '2026-08-18T00:01:01.000Z', 10_000)
+    if (task === null)
+      throw new Error('Expected one review task.')
+
+    const outcome = store.failWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-18T00:01:01.000Z',
+      reason: contextBudgetExhaustedReason({
+        cachedTokensRead: 20_400_128,
+        itemNumber: 24,
+        repository: 'harlan-zw/example',
+      }),
+    })
+
+    // One attempt only. A retry reads the same context and spends the budget again.
+    expect(outcome).toBe('Failed')
+    const incidents = store.listIncidents()
+    expect(incidents).toHaveLength(1)
+    expect(incidents[0]).toMatchObject({
+      scope: { _tag: 'Task', repository: 'harlan-zw/example', itemNumber: 24 },
+      kind: 'context_budget',
+      operation: 'adversarial_review',
+      severity: 'error',
+      recovery: { _tag: 'ActionRequired' },
+    })
+    expect(incidents[0]?.message).toContain('20.4 million')
   })
 
   it('clears a task incident once the task completes', () => {

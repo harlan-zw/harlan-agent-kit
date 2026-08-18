@@ -56,6 +56,15 @@ export function codexAgentEvent(event: ThreadEvent): AgentEvent | undefined {
   return undefined
 }
 
+/**
+ * Codex sessions carry no Context budget.
+ *
+ * The Codex SDK reports usage once, on `turn.completed`, after the whole turn
+ * has been paid for. It reports nothing per model step, so nothing can stop a
+ * runaway Codex turn while it runs. `ContextBudgetExhausted` therefore never
+ * comes from this provider. If the SDK adds per-step usage, meter it here the
+ * way `opencode-provider.ts` meters `step_finish`.
+ */
 export function createCodexProvider(options: CodexProviderOptions = {}): AgentProvider {
   const factory = options.createCodex ?? (codexOptions => new Codex(codexOptions))
   return {

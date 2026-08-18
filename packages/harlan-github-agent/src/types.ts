@@ -716,6 +716,7 @@ export type IncidentKind
     | 'controller'
     | 'subject_changed'
     | 'agent_result'
+    | 'context_budget'
     | 'policy'
     | 'installation_access'
     | 'unknown'

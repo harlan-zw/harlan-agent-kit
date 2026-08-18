@@ -157,6 +157,7 @@ export function reviewOutcomeLabel(agent: ReviewAgent): string {
 const incidentKindLabels: Record<IncidentKind, string> = {
   agent_provider: 'Agent provider',
   agent_result: 'Agent result',
+  context_budget: 'Context budget',
   controller: 'Controller',
   github_access: 'GitHub access',
   github_unavailable: 'GitHub unavailable',

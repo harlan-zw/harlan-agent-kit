@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { createAgentActivityLog } from './agent-activity.ts'
 import { createAgentPermitPool } from './agent-permit-pool.ts'
 import { agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
+import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
@@ -142,7 +143,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const runtime = createAgentRuntimeSource({
     configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
-    providers: { codex: createCodexProvider(), opencode: createOpencodeProvider() },
+    providers: { codex: createCodexProvider(), opencode: createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET }) },
     selection: store.getAgentSelection,
   })
   const profile = runtime().profile

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
 import { extractJsonObject } from '../src/agent-provider.ts'
-import { createOpencodeProvider, opencodeAgentEvent, opencodeArguments } from '../src/opencode-provider.ts'
+import { createOpencodeProvider, opencodeAgentEvent, opencodeArguments, opencodeCachedTokensRead } from '../src/opencode-provider.ts'
 
 function request(overrides: Partial<AgentTurnRequest> = {}): AgentTurnRequest {
   return {
@@ -185,5 +185,64 @@ describe('extractJsonObject', () => {
 
   it('returns the text unchanged when it holds no object', () => {
     expect(extractJsonObject('I could not finish.')).toBe('I could not finish.')
+  })
+})
+
+describe('context budget', () => {
+  const stepFinish = (cacheRead: number, reason = 'tool-calls') => ({
+    type: 'step_finish',
+    sessionID: 'ses_abc12345',
+    part: { type: 'step-finish', reason, tokens: { input: 12, output: 3, reasoning: 0, cache: { read: cacheRead, write: 0 } } },
+  })
+
+  it('reads the cached context tokens one step reports', () => {
+    expect(opencodeCachedTokensRead(stepFinish(160_768))).toBe(160_768)
+  })
+
+  it('reads no cached context tokens from a line that reports none', () => {
+    expect(opencodeCachedTokensRead(bashLine)).toBe(0)
+  })
+
+  it('stops a session that reads more cached context than its budget allows', async () => {
+    const provider = createOpencodeProvider({
+      cachedContextBudget: 300,
+      spawnOpencode: replay([bashLine, stepFinish(200), stepFinish(200), textLine]),
+    })
+
+    expect(await collect(provider.runTurn(request()))).toEqual([
+      { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
+      { _tag: 'CommandCompleted', command: 'pnpm test', output: 'ok\n', exitCode: 0 },
+      { _tag: 'ContextBudgetExhausted', cachedTokensRead: 400 },
+    ])
+  })
+
+  it('lets a session inside its budget finish and answer', async () => {
+    const provider = createOpencodeProvider({
+      cachedContextBudget: 1_000,
+      spawnOpencode: replay([stepFinish(200), stepFinish(200), textLine]),
+    })
+
+    expect(await collect(provider.runTurn(request()))).toEqual([
+      { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
+      { _tag: 'Message', text: '{"outcome":"resolved"}' },
+    ])
+  })
+})
+
+describe('a stopping step over budget', () => {
+  it('keeps the answer a finished session already paid for', async () => {
+    const provider = createOpencodeProvider({
+      cachedContextBudget: 300,
+      spawnOpencode: replay([
+        { type: 'text', sessionID: 'ses_abc12345', part: { type: 'text', text: '{"outcome":"resolved"}' } },
+        { type: 'step_finish', sessionID: 'ses_abc12345', part: { type: 'step-finish', reason: 'stop', tokens: { cache: { read: 500 } } } },
+      ]),
+    })
+
+    expect(await collect(provider.runTurn(request()))).toEqual([
+      { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
+      { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'TurnCompleted' },
+    ])
   })
 })

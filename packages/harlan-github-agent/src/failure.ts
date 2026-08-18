@@ -34,6 +34,8 @@ export type TransientKind
 
 export type PermanentKind
   = | 'policy'
+    /** The agent session read its whole Context budget without an answer. */
+    | 'context_budget'
     | 'unknown'
 
 export interface FailureSignal {
@@ -60,6 +62,39 @@ export const REVIEW_REPAIR_REFUSALS = {
   policy: 'Repository policy does not authorize an automated repair.',
   published: 'This pull request head commit already has a published repair.',
 } as const
+
+/**
+ * The first sentence of every reason an exhausted Context budget reports.
+ *
+ * It lives here, beside the taxonomy, so a budget failure cannot be worded into
+ * the Transient patterns below. `classifyFailure` matches this prefix before it
+ * reads anything else, so the class comes from the constant and not the wording
+ * that follows it.
+ */
+export const CONTEXT_BUDGET_EXHAUSTED = 'The agent read its whole Context budget without an answer.'
+
+export interface ContextBudgetExhaustedInput {
+  cachedTokensRead: number
+  /** Issue or pull request number the session belongs to. */
+  itemNumber: number
+  repository: string
+}
+
+/**
+ * Names the pull request or issue whose session did not converge.
+ *
+ * A retry reads the same context again, so this reason never retries. The
+ * Incident it raises is the only useful outcome: it names the subject a person
+ * must look at, and how much that subject cost.
+ */
+export function contextBudgetExhaustedReason(input: ContextBudgetExhaustedInput): string {
+  const millions = (input.cachedTokensRead / 1_000_000).toFixed(1)
+  return `${CONTEXT_BUDGET_EXHAUSTED} ${input.repository}#${input.itemNumber} read ${millions} million cached context tokens.`
+}
+
+export function isContextBudgetExhausted(message: string): boolean {
+  return message.startsWith(CONTEXT_BUDGET_EXHAUSTED)
+}
 
 /**
  * Reasons the controller itself produces for a state it refuses to act on.
@@ -209,6 +244,11 @@ function matches(patterns: RegExp[], message: string): boolean {
 export function classifyFailure(signal: FailureSignal): FailureClass {
   const message = signal.message
 
+  // Matched first and by prefix. No later pattern can then make a session that
+  // already spent its whole budget spend another one.
+  if (isContextBudgetExhausted(message))
+    return { _tag: 'Permanent', kind: 'context_budget' }
+
   if (permanentMessages.has(message.trim()) || matches(permanentPatterns, message))
     return { _tag: 'Permanent', kind: 'policy' }
 
@@ -249,12 +289,16 @@ export function isTransientFailure(signal: FailureSignal): boolean {
  *
  * A Task the controller refused by policy reads the same policy on every
  * attempt, and each attempt costs one whole agent turn, so it never runs again.
+ * A session that read its whole Context budget reads the same context again, so
+ * a retry doubles the worst spend in the service.
+ *
  * An unclassified failure keeps its attempts, because "unknown" does not say
- * that the world stood still.
+ * that the world stood still. Every named Permanent kind therefore stops, and a
+ * new kind stops by default instead of retrying until someone notices.
  */
 export function mayRetryFailure(signal: FailureSignal): boolean {
   const failure = classifyFailure(signal)
-  return failure._tag !== 'Permanent' || failure.kind !== 'policy'
+  return failure._tag !== 'Permanent' || failure.kind === 'unknown'
 }
 
 /** How many times the controller requeues a Failed Task before it waits for a person. */

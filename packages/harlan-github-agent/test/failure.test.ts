@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
+import { classifyFailure, contextBudgetExhaustedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
   it.each([
@@ -108,5 +108,31 @@ describe('recoveryDelayMilliseconds', () => {
 
   it('names when a failed task may run again', () => {
     expect(nextRecoveryAt('2026-08-18T00:00:00.000Z', 1)).toBe('2026-08-18T00:01:00.000Z')
+  })
+})
+
+describe('contextBudgetExhaustedReason', () => {
+  const reason = contextBudgetExhaustedReason({
+    cachedTokensRead: 20_400_128,
+    itemNumber: 24,
+    repository: 'harlan-zw/example',
+  })
+
+  it('names the pull request that did not converge', () => {
+    expect(reason).toContain('harlan-zw/example#24')
+    expect(reason).toContain('20.4 million')
+  })
+
+  it('never retries a session that already read its whole budget', () => {
+    // A retry reads the same context again, so it doubles the worst spend.
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'context_budget' })
+    expect(mayRetryFailure({ message: reason })).toBe(false)
+  })
+
+  it('classifies by its own prefix, so no later pattern can make it retry', () => {
+    const wordedLikeAnOutage = `${reason} fetch failed: request timed out.`
+
+    expect(classifyFailure({ message: wordedLikeAnOutage })).toEqual({ _tag: 'Permanent', kind: 'context_budget' })
+    expect(mayRetryFailure({ message: wordedLikeAnOutage })).toBe(false)
   })
 })

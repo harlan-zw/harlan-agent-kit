@@ -2,7 +2,8 @@ import type { AgentEvent, AgentProvider } from '../src/agent-provider.ts'
 import type { Result } from '../src/result.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { runParsedAgentTurn } from '../src/agent-turn.ts'
+import { runAgentTurn, runParsedAgentTurn } from '../src/agent-turn.ts'
+import { mayRetryFailure } from '../src/failure.ts'
 import { err, ok } from '../src/result.ts'
 import { agentRuntime, turnEvents } from './fixtures.ts'
 
@@ -76,6 +77,41 @@ describe('runParsedAgentTurn', () => {
     const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
 
     expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1' }))
+    expect(capture.prompts).toHaveLength(1)
+  })
+})
+
+describe('an exhausted Context budget', () => {
+  function exhausts(capture: { prompts: string[] }): AgentProvider {
+    return {
+      name: 'opencode',
+      runTurn: (request) => {
+        capture.prompts.push(request.prompt)
+        return (async function* () {
+          yield { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent
+          yield { _tag: 'ContextBudgetExhausted', cachedTokensRead: 20_400_128 } as AgentEvent
+        })()
+      },
+    }
+  }
+
+  it('fails the turn with a reason naming the pull request', async () => {
+    const capture = { prompts: [] as string[] }
+
+    const result = await runAgentTurn(options(exhausts(capture)), input, new AbortController().signal)
+
+    expect(result._tag).toBe('Err')
+    if (result._tag !== 'Err')
+      return
+    expect(result.error).toContain('harlan-zw/example#24')
+    expect(mayRetryFailure({ message: result.error })).toBe(false)
+  })
+
+  it('never buys a repair turn with a budget that is already spent', async () => {
+    const capture = { prompts: [] as string[] }
+
+    await runParsedAgentTurn(options(exhausts(capture)), input, new AbortController().signal)
+
     expect(capture.prompts).toHaveLength(1)
   })
 })
