@@ -151,6 +151,32 @@ function harness(input: {
 }
 
 describe('review resilience', () => {
+  it('publishes nothing when the agent answers that it did not review', async () => {
+    // An unreliable model answers waiting on its own review gate after its
+    // first answer fails the schema. Publishing that reports a verdict nobody
+    // produced. nuxtseo.com#285 shipped BLOCKED with no findings that way.
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: { state: 'waiting', reason: 'No prior review context was retained from the rejected response.', evidence: '' },
+        review: { state: 'waiting', reason: 'No adversarial review was completed before the previous answer was rejected.', evidence: '' },
+        verification: { state: 'waiting', reason: 'No verification run was performed in this session.', evidence: '' },
+        findings: [],
+        repair: { outcome: 'not_needed', summary: '', checks: [], commitMessage: '' },
+        confidence: null,
+      },
+    })
+
+    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(result._tag).toBe('Err')
+    expect(test.comments.some(comment => comment.includes('BLOCKED') || comment.includes('READY'))).toBe(false)
+    // Attempts bound the retry, and no Recovery extends it.
+    expect(classifyFailure({ message: result._tag === 'Err' ? result.error : '' }))
+      .toEqual({ _tag: 'Permanent', kind: 'unknown' })
+  })
+
   it('keeps a finished review when a human comments while it runs', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({

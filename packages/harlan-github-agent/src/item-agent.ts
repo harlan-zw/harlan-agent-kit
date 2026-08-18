@@ -643,6 +643,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const checked = await reportReviewProgress(options, task, 'review', { percent: 90, label: 'Head commit and CI checked' }, signal)
       if (checked._tag === 'Err')
         return checked
+      // The agent answers waiting on its own review gate when it did not review
+      // the diff, which an unreliable model does after its first answer fails
+      // the schema. Publishing that reports a verdict nobody produced, so the
+      // Task retries instead. Attempts bound it, and no Recovery extends it.
+      if (response.review.state === 'waiting')
+        return err('The agent reported that it did not complete the review.')
       const { gates, reportedChecks } = reviewGates(frozen.value, response, repairsBaseline)
       const outcome = reviewOutcome(gates)
       // A READY review whose every gate passed is a complete result. A missing
