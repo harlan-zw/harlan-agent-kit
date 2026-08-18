@@ -383,6 +383,19 @@ export interface JournalStore {
   }) => { _tag: 'Queued' | 'Existing', taskId: string }
     | { _tag: 'Rejected', reason: string }
     | { _tag: 'NotAuthorized', reason: string }
+  /**
+   * Retires a dead Baseline repair once a review proves the base is healthy.
+   *
+   * A Baseline repair exists for one red base commit. Nothing else ever
+   * retires it, so a failed one used to sit in the dashboard for good once
+   * that commit went green or moved on.
+   */
+  retireBaselineRepairForReview: (input: {
+    taskId: string
+    workerId: string
+    fence: number
+    at: string
+  }) => number
   claimNextPublication: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedPublicationCommand | null
   claimIssueTriageComment: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueTriageCommentCommand | null
   claimReviewStatus: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
@@ -4130,6 +4143,35 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     throw new Error('Review Task crossed the repair claim boundary.')
   }
 
+  const retireBaselineRepairForReview: JournalStore['retireBaselineRepairForReview'] = (input) => {
+    const row = database.prepare(`
+      SELECT worker_tasks.subject_id
+      FROM worker_tasks
+      WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
+        AND worker_tasks.state_tag = 'Running' AND worker_tasks.worker_id = ?
+        AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
+    `).get(input.taskId, input.workerId, input.fence, input.at) as { subject_id: number } | undefined
+    if (row === undefined)
+      return 0
+    // Only Failed repairs. A Queued or Running one still belongs to whichever
+    // base commit is red right now.
+    const dead = database.prepare(`
+      SELECT id, fence FROM tasks
+      WHERE subject_id = ? AND kind = 'baseline_repair' AND state_tag = 'Failed'
+    `).all(row.subject_id) as unknown as Array<{ id: string, fence: number }>
+    const update = database.prepare(`
+      UPDATE tasks SET state_tag = 'Superseded', reason = ?, updated_at = ?
+      WHERE id = ? AND state_tag = 'Failed'
+    `)
+    const reason = 'The default branch no longer fails at this base commit.'
+    return dead.reduce((total, task) => {
+      if (update.run(reason, input.at, task.id).changes !== 1)
+        return total
+      recordTransition(database, { taskId: task.id, from: 'Failed', to: 'Superseded', reason, fence: task.fence, at: input.at })
+      return total + 1
+    }, 0)
+  }
+
   const queueBaselineRepairForReview: JournalStore['queueBaselineRepairForReview'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -6121,6 +6163,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     claimNextReviewFixTask,
     claimReviewFixTaskForReview,
     queueBaselineRepairForReview,
+    retireBaselineRepairForReview,
     claimNextPublication,
     claimIssueTriageComment,
     claimReviewStatus,

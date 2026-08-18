@@ -1185,6 +1185,80 @@ describe('journal store', () => {
     expect(queued._tag).toBe('NotAuthorized')
   })
 
+  it('retires a failed Baseline repair once a review sees a healthy base', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'baseline-retire-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    // The review lease must outlive the repair's whole failure run below.
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 6_000_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
+      throw new Error(queued.reason)
+    // Kill the repair for good.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const claimed = store.claimNextBaselineRepairTask('baseline-agent', `2026-08-13T01:1${attempt}:00.000Z`, 600_000)
+      if (claimed === null)
+        throw new Error('Expected the Baseline repair Task to retry.')
+      store.failTask({ taskId: claimed.id, workerId: claimed.state.workerId, fence: claimed.state.fence, at: `2026-08-13T01:1${attempt}:30.000Z`, reason: 'The worker cannot build this commit.' })
+    }
+
+    const retired = store.retireBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:20:00.000Z',
+    })
+
+    expect(retired).toBe(1)
+    expect(store.getDashboardSnapshot('2026-08-13T01:21:00.000Z').tasks)
+      .toContainEqual(expect.objectContaining({
+        id: queued.taskId,
+        state: { _tag: 'Superseded', reason: 'The default branch no longer fails at this base commit.' },
+      }))
+  })
+
+  it('leaves a live Baseline repair alone when a review sees a healthy base', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'baseline-keep-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+
+    expect(store.retireBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:03:00.000Z',
+    })).toBe(0)
+    expect(store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:04:00.000Z', 600_000)).not.toBeNull()
+  })
+
   it('queues a new Baseline repair after the previous one failed', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

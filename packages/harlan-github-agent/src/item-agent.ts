@@ -81,7 +81,7 @@ export interface ItemAgentOptions {
 export interface ReviewWorkerOptions extends ItemAgentOptions {
   repairs: Pick<ReviewFixWorktreeManager, 'commit' | 'verify'>
   status: Pick<ReviewStatusController, 'publish' | 'publishRepair'>
-  store: Pick<JournalStore, 'claimReviewFixTaskForReview' | 'failTask' | 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'stagePublication' | 'queueBaselineRepairForReview' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'claimReviewFixTaskForReview' | 'failTask' | 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'stagePublication' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
 }
 
 const reviewPolicy = `Work as a normal local agent session inside the prepared Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
@@ -502,6 +502,15 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         // review still runs, and its CI gate reports the red default branch.
         if (baseline._tag !== 'NotAuthorized')
           return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
+      }
+      else if (!repairsBaseline) {
+        // The base is healthy, so any Baseline repair that died for it is done.
+        options.store.retireBaselineRepairForReview({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at: options.now().toISOString(),
+        })
       }
 
       const startedAt = options.now().toISOString()

@@ -74,6 +74,7 @@ describe('subject Workers', () => {
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
         stagePublication: () => { throw new Error('A clean review must not stage a repair.') },
         updateAgentProgress: () => true,
@@ -162,6 +163,7 @@ describe('subject Workers', () => {
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
         stagePublication: () => { throw new Error('A second review must not stage a repair.') },
         updateAgentProgress: () => true,
@@ -261,6 +263,7 @@ describe('subject Workers', () => {
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
         failTask: () => { throw new Error('A verified repair must not fail.') },
         recordReviewRun: (input) => {
           attempt = input
@@ -351,6 +354,7 @@ describe('subject Workers', () => {
           baselineQueued = true
           return { _tag: 'Queued', taskId: 'baseline-task' }
         },
+        retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => { throw new Error('Review must not record an Attempt.') },
         recordReviewPublication: () => { throw new Error('Review must not record a Publication.') },
         saveWorkerSession: () => undefined,
@@ -430,6 +434,7 @@ describe('subject Workers', () => {
           _tag: 'NotAuthorized',
           reason: 'Repository policy does not authorize Baseline repair for this base commit.',
         }),
+        retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
         recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),
         saveWorkerSession: () => undefined,
@@ -513,6 +518,7 @@ describe('subject Workers', () => {
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => true,
         queueBaselineRepairForReview: () => { throw new Error('A Baseline repair must not queue another Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
         recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),
         saveWorkerSession: () => undefined,

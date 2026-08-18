@@ -80,6 +80,7 @@ function harness(input: {
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },
+      retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
       stagePublication: () => { throw new Error('Unexpected publication.') },
       updateAgentProgress: () => true,
