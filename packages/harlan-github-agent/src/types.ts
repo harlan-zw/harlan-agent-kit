@@ -615,17 +615,27 @@ export interface AgentProfile {
 }
 
 /**
- * One durable choice of Agent provider, model, and reasoning effort.
+ * One Agent provider, model, and reasoning effort an Agent selection pins.
  *
  * A null model or reasoning effort keeps what the provider's own profile gives
  * each Agent role. A non-null model always belongs to `provider`, because
  * `parseAgentSelection` is the only way to build one from input.
  */
-export interface AgentSelection {
+export interface PinnedAgentSelection {
   provider: AgentProviderName
   model: AgentModel | null
   reasoningEffort: CodexReasoningEffort | null
 }
+
+/**
+ * One durable Agent selection.
+ *
+ * `FollowsConfiguration` is a value, so returning to the configuration file is
+ * one switch. Absence of a choice is never absence of a row.
+ */
+export type AgentSelection
+  = | { _tag: 'FollowsConfiguration' }
+    | ({ _tag: 'Pinned' } & PinnedAgentSelection)
 
 export type QueueState
   = | { _tag: 'Active', work: AgentRole }

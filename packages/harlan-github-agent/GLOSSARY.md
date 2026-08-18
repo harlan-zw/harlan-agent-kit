@@ -12,6 +12,7 @@ did not cover it.
 | --- | --- | --- | --- | --- |
 | Agent provider | `agent.provider` | Configuration | 1 to N Agents | agent provider |
 | Agent selection | `agent_selection` | Controller | One per service | Agent selection |
+| Follow configuration | `agent_selection.tag` | Configuration | One Agent selection state | Follow configuration |
 | Reasoning effort | `agent_selection.reasoning_effort` | Controller | One per Agent selection | Reasoning effort |
 | Repository mapping | `repositories` | Configuration | 1 to N Items | repository |
 | Item | `subjects` | Journal | 1 to N Revisions, Tasks, Agents | issue or pull request |
@@ -102,7 +103,13 @@ Use Agent provider. Do not use backend, engine, model provider, or vendor.
 
 The Agent provider, model, and Reasoning effort in force right now.
 
-An Agent selection is durable. It survives a restart, and it overrides the Agent provider the configuration names.
+An Agent selection is durable. It survives a restart.
+
+An Agent selection either pins an Agent provider or follows the configuration. A pinned selection overrides the Agent provider the configuration names.
+
+**Follow configuration** is the choice that clears a pin. The service then reads the Agent provider from its configuration file again, at every start. The dashboard and the tray both offer it beside the Agent providers.
+
+Follow configuration is not Provider default. Provider default keeps the pinned provider's own model or Reasoning effort. Follow configuration gives the whole choice back to the configuration file.
 
 A model belongs to one Agent provider. Switching the provider therefore returns the model and the Reasoning effort to that provider's own defaults.
 
@@ -362,6 +369,7 @@ Evidence that a skill, policy, or workflow should change.
 | automerge, self merge, merge tier | auto-merge | GitHub's spelling of its own feature |
 | error, problem, outage, alert | Incident | One concept |
 | agent config, model config, model override | Agent selection | One concept |
+| config default, unset, no override, clear | Follow configuration | One Agent selection state, and one label |
 | reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |
 | risk level, skip review, review waiver, review exemption | Auto merge | Auto merge never affects whether review runs |

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { agentProfile, CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -3130,14 +3130,14 @@ describe('agent selection', () => {
   it('follows the configured Agent provider while nothing is stored', () => {
     const store = createStore()
 
-    expect(store.getAgentSelection()).toEqual({ provider: 'codex', model: null, reasoningEffort: null })
+    expect(store.getAgentSelection()).toEqual({ _tag: 'FollowsConfiguration' })
     expect(store.getDashboardSnapshot('2026-08-18T01:00:00.000Z').agentProfile.roles.issue_work.model).toBe('gpt-5.6-terra')
   })
 
   it('applies a switch to the dashboard profile and keeps agent capacity', () => {
     const store = createStore()
 
-    store.selectAgent({ provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' }, '2026-08-18T01:00:00.000Z')
+    store.selectAgent({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' }, '2026-08-18T01:00:00.000Z')
     const profile = store.getDashboardSnapshot('2026-08-18T01:00:01.000Z').agentProfile
 
     expect(profile.provider).toBe('opencode')
@@ -3151,12 +3151,41 @@ describe('agent selection', () => {
     const path = join(directory, 'state.sqlite')
     const store = openJournalStore(path)
 
-    store.selectAgent({ provider: 'opencode', model: null, reasoningEffort: 'max' }, '2026-08-18T01:00:00.000Z')
+    store.selectAgent({ _tag: 'Pinned', provider: 'opencode', model: null, reasoningEffort: 'max' }, '2026-08-18T01:00:00.000Z')
     store.close()
 
     const reopened = openJournalStore(path)
     stores.push(reopened)
-    expect(reopened.getAgentSelection()).toEqual({ provider: 'opencode', model: null, reasoningEffort: 'max' })
+    expect(reopened.getAgentSelection()).toEqual({ _tag: 'Pinned', provider: 'opencode', model: null, reasoningEffort: 'max' })
+  })
+
+  it('gives the choice back to the configuration when the selection is cleared', () => {
+    const store = createStore()
+
+    store.selectAgent({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' }, '2026-08-18T01:00:00.000Z')
+    const cleared = store.selectAgent({ _tag: 'FollowsConfiguration' }, '2026-08-18T01:01:00.000Z')
+    const profile = store.getDashboardSnapshot('2026-08-18T01:01:01.000Z').agentProfile
+
+    expect(cleared).toEqual({ _tag: 'FollowsConfiguration' })
+    expect(profile.provider).toBe('codex')
+    expect(profile.roles.issue_work).toEqual({ model: 'gpt-5.6-terra', reasoningEffort: 'medium' })
+  })
+
+  it('reads the configured Agent provider again after a restart', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'harlan-agent-selection-'))
+    temporaryDirectories.push(directory)
+    const path = join(directory, 'state.sqlite')
+    const pinned = openJournalStore(path, false, agentProfile('codex'))
+    pinned.selectAgent({ _tag: 'Pinned', provider: 'opencode', model: null, reasoningEffort: 'max' }, '2026-08-18T01:00:00.000Z')
+    pinned.selectAgent({ _tag: 'FollowsConfiguration' }, '2026-08-18T01:01:00.000Z')
+    pinned.close()
+
+    // The configuration file now names opencode, and the service restarted.
+    const restarted = openJournalStore(path, false, agentProfile('opencode'))
+    stores.push(restarted)
+
+    expect(restarted.getAgentSelection()).toEqual({ _tag: 'FollowsConfiguration' })
+    expect(restarted.getDashboardSnapshot('2026-08-18T01:02:00.000Z').agentProfile.provider).toBe('opencode')
   })
 
   it('reads a saved session for the selected Agent provider only', () => {
@@ -3171,7 +3200,7 @@ describe('agent selection', () => {
 
     store.saveWorkerSession('harlan-zw/example', 24, 'conflict_resolution', 'session-codex', '2026-08-18T01:00:00.000Z')
     const beforeSwitch = store.getWorkerSession('harlan-zw/example', 24, 'conflict_resolution')
-    store.selectAgent({ provider: 'opencode', model: null, reasoningEffort: null }, '2026-08-18T01:01:00.000Z')
+    store.selectAgent({ _tag: 'Pinned', provider: 'opencode', model: null, reasoningEffort: null }, '2026-08-18T01:01:00.000Z')
     const afterSwitch = store.getWorkerSession('harlan-zw/example', 24, 'conflict_resolution')
 
     expect(beforeSwitch).toBe('session-codex')

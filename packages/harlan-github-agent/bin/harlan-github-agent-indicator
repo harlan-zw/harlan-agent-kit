@@ -41,6 +41,7 @@ AGENT_MODELS = {
 }
 REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
 PROVIDER_DEFAULT_LABEL = 'Provider default'
+FOLLOW_CONFIGURATION_LABEL = 'Follow configuration'
 AGENT_ROLE_LABELS = {
     'adversarial_review': 'Adversarial review',
     'baseline_repair': 'Baseline repair',
@@ -177,12 +178,18 @@ def agent_provider_label(dashboard):
 
 
 def agent_selection(dashboard):
+    """Reads the Agent selection: a pinned provider, or the configuration."""
     if dashboard is None:
         return None
     selection = dashboard.get('agentSelection')
-    if not isinstance(selection, dict) or not isinstance(selection.get('provider'), str):
+    if not isinstance(selection, dict):
+        return None
+    if selection.get('_tag') == 'FollowsConfiguration':
+        return {'_tag': 'FollowsConfiguration'}
+    if selection.get('_tag') != 'Pinned' or not isinstance(selection.get('provider'), str):
         return None
     return {
+        '_tag': 'Pinned',
         'provider': selection['provider'],
         'model': selection.get('model'),
         'reasoningEffort': selection.get('reasoningEffort'),
@@ -193,54 +200,58 @@ def selection_marker(selected):
     return '●' if selected else '○'
 
 
-def agent_selection_choices(selection):
+def agent_selection_choices(selection, provider):
     """Lists every Agent provider, model, and reasoning effort the menu offers.
 
     Switching the provider clears the model and the reasoning effort, because a
     model belongs to one provider and the service refuses the other provider's.
+    Follow configuration gives the whole choice back to the configuration file.
+
+    `provider` is the Agent provider in force. While the selection follows the
+    configuration, that provider owns the models the menu lists.
     """
-    if selection is None:
+    if selection is None or provider is None:
         return []
+    pinned = selection if selection.get('_tag') == 'Pinned' else None
 
     def choice(label, selected, chosen):
         return {'_tag': 'Choice', 'label': label, 'selected': selected, 'selection': chosen}
 
+    def pin(model, effort):
+        return {'_tag': 'Pinned', 'provider': provider, 'model': model, 'reasoningEffort': effort}
+
+    model = pinned['model'] if pinned else None
+    effort = pinned['reasoningEffort'] if pinned else None
+
     choices = [{'_tag': 'Heading', 'label': 'Agent provider'}]
+    choices.append(choice(FOLLOW_CONFIGURATION_LABEL, pinned is None, {'_tag': 'FollowsConfiguration'}))
     choices.extend(
         choice(
-            PROVIDER_LABELS.get(provider, provider),
-            selection['provider'] == provider,
-            {'provider': provider, 'model': None, 'reasoningEffort': None},
+            PROVIDER_LABELS.get(candidate, candidate),
+            pinned is not None and pinned['provider'] == candidate,
+            {'_tag': 'Pinned', 'provider': candidate, 'model': None, 'reasoningEffort': None},
         )
-        for provider in AGENT_MODELS
+        for candidate in AGENT_MODELS
     )
 
     choices.append({'_tag': 'Separator'})
     choices.append({'_tag': 'Heading', 'label': 'Model'})
     choices.extend(
-        choice(
-            model or PROVIDER_DEFAULT_LABEL,
-            selection['model'] == model,
-            {**selection, 'model': model},
-        )
-        for model in [None, *AGENT_MODELS.get(selection['provider'], [])]
+        choice(candidate or PROVIDER_DEFAULT_LABEL, model == candidate, pin(candidate, effort))
+        for candidate in [None, *AGENT_MODELS.get(provider, [])]
     )
 
     choices.append({'_tag': 'Separator'})
     choices.append({'_tag': 'Heading', 'label': 'Reasoning effort'})
     choices.extend(
-        choice(
-            effort or PROVIDER_DEFAULT_LABEL,
-            selection['reasoningEffort'] == effort,
-            {**selection, 'reasoningEffort': effort},
-        )
-        for effort in [None, *REASONING_EFFORTS]
+        choice(candidate or PROVIDER_DEFAULT_LABEL, effort == candidate, pin(model, candidate))
+        for candidate in [None, *REASONING_EFFORTS]
     )
     return choices
 
 
 def agent_selection_items(dashboard, select_agent):
-    choices = agent_selection_choices(agent_selection(dashboard))
+    choices = agent_selection_choices(agent_selection(dashboard), active_provider(dashboard))
     if not choices:
         return [menu_item('Agent selection unavailable', enabled=False)]
     items = []

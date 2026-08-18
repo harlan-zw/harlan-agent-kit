@@ -3,8 +3,10 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type {
   ActiveAgent,
+  AgentModel,
   AgentSelection,
   AgentTask,
+  CodexReasoningEffort,
   DashboardSnapshot,
   ItemSummary,
   PullRequestApprovalKind,
@@ -56,7 +58,7 @@ function emptySnapshot(): DashboardSnapshot {
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
     agentProfile: CODEX_AGENT_PROFILE,
-    agentSelection: { provider: 'codex', model: null, reasoningEffort: null },
+    agentSelection: { _tag: 'FollowsConfiguration' },
     agents: [],
     incidents: [],
     queue: [],
@@ -153,31 +155,47 @@ const agentSelection = computed(() => snapshot.value.agentSelection)
  *
  * Switching the provider clears the model and the reasoning effort, because a
  * model belongs to one provider and the service refuses the other provider's.
+ * Follow configuration hands the whole choice back to the configuration file.
  */
 const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
   const selection = agentSelection.value
+  const pinned = selection._tag === 'Pinned' ? selection : null
+  // While the selection follows the configuration, the configured provider
+  // decides, so its own models and role defaults are what the menu offers.
+  const provider = pinned?.provider ?? activeProvider.value
+  const pin = (model: AgentModel | null, reasoningEffort: CodexReasoningEffort | null): AgentSelection =>
+    ({ _tag: 'Pinned', provider, model, reasoningEffort })
   return [
-    [{ label: 'Agent provider', type: 'label' }],
-    AGENT_PROVIDER_NAMES.map(provider => ({
-      label: providerLabels[provider],
-      icon: providerIcons[provider],
-      type: 'checkbox' as const,
-      checked: selection.provider === provider,
-      onUpdateChecked: () => switchAgent({ provider, model: null, reasoningEffort: null }),
-    })),
+    [
+      { label: 'Agent provider', type: 'label' },
+      {
+        label: 'Follow configuration',
+        icon: 'i-lucide-file-cog',
+        type: 'checkbox',
+        checked: pinned === null,
+        onUpdateChecked: () => switchAgent({ _tag: 'FollowsConfiguration' }),
+      },
+      ...AGENT_PROVIDER_NAMES.map(candidate => ({
+        label: providerLabels[candidate],
+        icon: providerIcons[candidate],
+        type: 'checkbox' as const,
+        checked: pinned?.provider === candidate,
+        onUpdateChecked: () => switchAgent({ _tag: 'Pinned', provider: candidate, model: null, reasoningEffort: null }),
+      })),
+    ],
     [
       { label: 'Model', type: 'label' },
       {
         label: 'Provider default',
         type: 'checkbox',
-        checked: selection.model === null,
-        onUpdateChecked: () => switchAgent({ ...selection, model: null }),
+        checked: (pinned?.model ?? null) === null,
+        onUpdateChecked: () => switchAgent(pin(null, pinned?.reasoningEffort ?? null)),
       },
-      ...AGENT_MODELS[selection.provider].map(model => ({
+      ...AGENT_MODELS[provider].map(model => ({
         label: model,
         type: 'checkbox' as const,
-        checked: selection.model === model,
-        onUpdateChecked: () => switchAgent({ ...selection, model }),
+        checked: pinned?.model === model,
+        onUpdateChecked: () => switchAgent(pin(model, pinned?.reasoningEffort ?? null)),
       })),
     ],
     [
@@ -185,14 +203,14 @@ const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
       {
         label: 'Provider default',
         type: 'checkbox',
-        checked: selection.reasoningEffort === null,
-        onUpdateChecked: () => switchAgent({ ...selection, reasoningEffort: null }),
+        checked: (pinned?.reasoningEffort ?? null) === null,
+        onUpdateChecked: () => switchAgent(pin(pinned?.model ?? null, null)),
       },
       ...REASONING_EFFORTS.map(reasoningEffort => ({
         label: reasoningEffort,
         type: 'checkbox' as const,
-        checked: selection.reasoningEffort === reasoningEffort,
-        onUpdateChecked: () => switchAgent({ ...selection, reasoningEffort }),
+        checked: pinned?.reasoningEffort === reasoningEffort,
+        onUpdateChecked: () => switchAgent(pin(pinned?.model ?? null, reasoningEffort)),
       })),
     ],
   ]
