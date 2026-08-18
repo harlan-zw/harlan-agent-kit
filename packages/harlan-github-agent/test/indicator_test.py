@@ -147,6 +147,20 @@ class IndicatorDisplayTest(unittest.TestCase):
     def test_keeps_progress_bar_for_active_agents(self):
         self.assertEqual(indicator.progress_bar(57), '▓▓▓░░')
 
+    def test_reads_the_agent_profile_the_dashboard_sends(self):
+        dashboard = {
+            'agentProfile': {
+                'provider': 'opencode',
+                'roles': {'adversarial_review': {'model': 'opencode-go/deepseek-v4-flash', 'reasoningEffort': 'high'}},
+            },
+        }
+
+        self.assertEqual(indicator.active_provider(dashboard), 'opencode')
+        self.assertEqual(
+            indicator.agent_provider_label(dashboard),
+            'Agent provider · opencode · opencode-go/deepseek-v4-flash · high',
+        )
+
     def test_labels_active_agents_with_their_role(self):
         agent = {
             'role': 'issue_triage',
