@@ -32,6 +32,7 @@ describe('review status controller', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
+          requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),
         upsertReviewStatus: (_repository, _number, _commentId, value, replacePriorReview) => {

@@ -38,6 +38,22 @@ export type GitHubChecksSnapshot
   = | { _tag: 'Available', checks: GitHubCheck[] }
     | { _tag: 'Unavailable', reason: string }
 
+/**
+ * Which checks GitHub requires before it allows a merge into the base branch.
+ *
+ * `Declared` means a ruleset names the required checks. `None` means GitHub
+ * answered and named none, so GitHub allows a merge whatever the checks say.
+ * `Unavailable` means the request failed, so the answer is unknown.
+ *
+ * Classic branch protection needs admin access to read, so a repository that
+ * uses it reports `None` here. `None` and `Unavailable` both keep the strict
+ * CI Review gate, so an unreadable requirement never relaxes a review.
+ */
+export type RequiredChecks
+  = | { _tag: 'Declared', contexts: string[] }
+    | { _tag: 'None' }
+    | { _tag: 'Unavailable', reason: string }
+
 export interface PullRequestReviewSnapshot {
   baseChecks: GitHubChecksSnapshot
   body: string
@@ -45,7 +61,29 @@ export interface PullRequestReviewSnapshot {
   comments: string[]
   priorAutomatedReview: PriorAutomatedReview
   pullRequest: GitHubPullRequestItem
+  requiredChecks: RequiredChecks
   reviews: string[]
+}
+
+/**
+ * Reads the required check contexts out of one branch rules response.
+ *
+ * The rules endpoint returns a wide union, so the contexts are parsed once
+ * here and trusted as `string[]` from then on.
+ */
+export function requiredCheckContexts(rules: unknown): string[] {
+  if (!Array.isArray(rules))
+    return []
+  const contexts = rules.flatMap((rule): string[] => {
+    const parameters = (rule as { parameters?: { required_status_checks?: unknown } }).parameters
+    if ((rule as { type?: unknown }).type !== 'required_status_checks' || !Array.isArray(parameters?.required_status_checks))
+      return []
+    return parameters.required_status_checks.flatMap((entry: unknown) => {
+      const context = (entry as { context?: unknown }).context
+      return typeof context === 'string' && context.length > 0 ? [context] : []
+    })
+  })
+  return [...new Set(contexts)]
 }
 
 export interface IssueTriageSnapshot {
@@ -308,7 +346,18 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                 })),
               ]),
             })).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
-        const [checks, baseChecks] = await Promise.all([checksFor(pull.data.head.sha), checksFor(pull.data.base.sha)])
+        const requiredChecksFor = (branch: string): Promise<RequiredChecks> => octokit.value.rest.repos
+          .getBranchRules({ owner, repo, branch, per_page: 100, request: { signal } })
+          .then((rules): RequiredChecks => {
+            const contexts = requiredCheckContexts(rules.data)
+            return contexts.length === 0 ? { _tag: 'None' } : { _tag: 'Declared', contexts }
+          })
+          .catch((error: unknown): RequiredChecks => ({ _tag: 'Unavailable', reason: message(error) }))
+        const [checks, baseChecks, requiredChecks] = await Promise.all([
+          checksFor(pull.data.head.sha),
+          checksFor(pull.data.base.sha),
+          requiredChecksFor(pull.data.base.ref),
+        ])
         return ok({
           baseChecks,
           body: pull.data.body ?? '',
@@ -333,6 +382,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                   url: comment.html_url,
                 }]), pull.data.head.sha, options.actorLogin(repository)),
           pullRequest: pullRequestItem(repository, pull.data),
+          requiredChecks,
           reviews: reviews.flatMap(review => review.body === undefined || review.body === null ? [] : [review.body]),
         })
       }).catch((error: unknown) => err(message(error)))
