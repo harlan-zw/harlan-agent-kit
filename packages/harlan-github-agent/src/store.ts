@@ -2203,6 +2203,39 @@ function recordPublicationEvent(database: DatabaseSync, input: {
   `).run(input.commandId, input.from, input.to, input.reason, input.fence, input.at)
 }
 
+/**
+ * Which Tasks a repository still lets the controller publish.
+ *
+ * Staging a publication, claiming it, and renewing its lease all ask this same
+ * question. They drifted apart once: Baseline repair learned to run on a
+ * repository Harlan maintains, and this clause kept demanding an owned one, so
+ * every repair did its whole agent turn and was refused at staging. One
+ * definition, three uses.
+ *
+ * Expects `tasks`, `subjects` and `repositories` to be in scope.
+ */
+const PUBLICATION_AUTHORITY_SQL = `
+  (
+    (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1)
+    OR (
+      tasks.kind = 'review_fix'
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      AND EXISTS (
+        SELECT 1 FROM pull_request_approvals
+        WHERE pull_request_approvals.subject_id = subjects.id
+          AND pull_request_approvals.revision_id = tasks.revision_id
+          AND pull_request_approvals.kind = 'fixes'
+      )
+    )
+    OR (
+      tasks.kind = 'baseline_repair'
+      AND repositories.ownership != 'external'
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+    )
+    OR (tasks.kind = 'issue_work' AND json_extract(repositories.policy_json, '$.issueWork') = 1)
+  )
+`
+
 function supersedeTasks(
   database: DatabaseSync,
   subjectId: number,
@@ -5337,25 +5370,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
           AND tasks.lease_expires_at > ?
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
-          AND (
-            (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1)
-            OR (
-              tasks.kind = 'review_fix'
-              AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-              AND EXISTS (
-                SELECT 1 FROM pull_request_approvals
-                WHERE pull_request_approvals.subject_id = subjects.id
-                  AND pull_request_approvals.revision_id = tasks.revision_id
-                  AND pull_request_approvals.kind = 'fixes'
-              )
-            )
-            OR (
-              tasks.kind = 'baseline_repair'
-              AND repositories.ownership = 'owned'
-              AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-            )
-            OR (tasks.kind = 'issue_work' AND json_extract(repositories.policy_json, '$.issueWork') = 1)
-          )
+          AND ${PUBLICATION_AUTHORITY_SQL}
       `).get(input.taskId, input.workerId, input.fence, input.at) as { payload: string, kind: AgentTask['kind'] } | undefined
       if (task === undefined) {
         database.exec('COMMIT')
@@ -5499,25 +5514,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
           AND tasks.command_id = publication_commands.id
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
-          AND (
-            (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1)
-            OR (
-              tasks.kind = 'review_fix'
-              AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-              AND EXISTS (
-                SELECT 1 FROM pull_request_approvals
-                WHERE pull_request_approvals.subject_id = subjects.id
-                  AND pull_request_approvals.revision_id = tasks.revision_id
-                  AND pull_request_approvals.kind = 'fixes'
-              )
-            )
-            OR (
-              tasks.kind = 'baseline_repair'
-              AND repositories.ownership = 'owned'
-              AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-            )
-            OR (tasks.kind = 'issue_work' AND json_extract(repositories.policy_json, '$.issueWork') = 1)
-          )
+          AND ${PUBLICATION_AUTHORITY_SQL}
         ORDER BY publication_commands.updated_at, publication_commands.id
         LIMIT 1
       `).get() as PublicationRow | undefined
@@ -5609,25 +5606,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       AND tasks.state_tag = 'Publishing' AND tasks.command_id = publication_commands.id
       AND tasks.revision_id = subjects.current_revision_id
       AND repositories.enabled = 1
-      AND (
-        (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1)
-        OR (
-          tasks.kind = 'review_fix'
-          AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-          AND EXISTS (
-            SELECT 1 FROM pull_request_approvals
-            WHERE pull_request_approvals.subject_id = subjects.id
-              AND pull_request_approvals.revision_id = tasks.revision_id
-              AND pull_request_approvals.kind = 'fixes'
-          )
-        )
-        OR (
-          tasks.kind = 'baseline_repair'
-          AND repositories.ownership = 'owned'
-          AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-        )
-        OR (tasks.kind = 'issue_work' AND json_extract(repositories.policy_json, '$.issueWork') = 1)
-      )
+      AND ${PUBLICATION_AUTHORITY_SQL}
   `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
 
   const heartbeatPublication: JournalStore['heartbeatPublication'] = (input) => {

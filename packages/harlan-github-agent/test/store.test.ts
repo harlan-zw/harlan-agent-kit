@@ -1259,6 +1259,56 @@ describe('journal store', () => {
     expect(store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:04:00.000Z', 600_000)).not.toBeNull()
   })
 
+  it('stages and claims a Baseline repair publication for a repository Harlan maintains', () => {
+    const store = createStore()
+    const mapping = repositoryMapping({ ownership: 'maintained' })
+    store.syncRepositories([mapping], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'clean' })
+    store.recordObservation({ externalId: 'baseline-publish', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
+      throw new Error(queued.reason)
+    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
+    if (repair === null)
+      throw new Error('Expected the Baseline repair Task.')
+
+    const staged = store.stagePublication({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:04:00.000Z',
+      publication: {
+        _tag: 'OpenPullRequest',
+        taskKind: 'baseline_repair',
+        pullRequestNumber: subject.number,
+        pullRequestTitle: 'fix(ci): repair the default branch build',
+        pullRequestBody: 'Repairs the default branch build.',
+        commitSha: 'repair-commit',
+        baseSha: subject.baseSha,
+        expectedHeadSha: subject.baseSha,
+        headRef: 'fix/baseline-ci-abcdef012345',
+        artifactRef: 'artifact-ref',
+        patchDigest: 'patch-digest',
+        changedFiles: 2,
+      },
+    })
+
+    expect(staged._tag).toBe('Staged')
+    if (staged._tag !== 'Staged')
+      throw new Error('Expected the publication to stage.')
+    expect(store.claimNextPublication('publisher-1', '2026-08-13T01:05:00.000Z', 600_000))
+      .toEqual(expect.objectContaining({ taskKind: 'baseline_repair' }))
+  })
+
   it('queues a new Baseline repair after the previous one failed', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
