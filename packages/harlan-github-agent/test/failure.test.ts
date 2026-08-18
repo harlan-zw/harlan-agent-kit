@@ -80,6 +80,15 @@ describe('classifyFailure', () => {
     })).toEqual({ _tag: 'Transient', kind: 'github_unavailable' })
   })
 
+  it.each([
+    'This operation was aborted',
+    'The operation was aborted',
+  ])('retries %s, because a restart aborts work that can run again', (message) => {
+    // A shutdown aborts whatever is in flight. The article in front of
+    // "operation" is not a fact about the world, so it must not decide the class.
+    expect(classifyFailure({ message })).toEqual({ _tag: 'Transient', kind: 'network' })
+  })
+
   it('treats an unrecognised failure as permanent so it surfaces instead of spinning', () => {
     expect(classifyFailure({ message: 'The worker changed a file that was not conflicted: src/main.rs.' }))
       .toEqual({ _tag: 'Permanent', kind: 'unknown' })

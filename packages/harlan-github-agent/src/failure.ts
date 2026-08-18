@@ -145,7 +145,8 @@ const networkPatterns: RegExp[] = [
   /\bfetch failed\b/i,
   /\bnetwork\b.+\berror\b/i,
   /\brequest\b.+\btimed out\b/i,
-  /\bThe operation was aborted\b/i,
+  // The article varies by caller, so it must not decide the class.
+  /\boperation was aborted\b/i,
   /\bAbortError\b/,
 ]
 
