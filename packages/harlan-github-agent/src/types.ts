@@ -597,7 +597,38 @@ export interface ReviewAgent extends ReviewRun {
 export type DashboardAgent = ActiveAgent | ReviewAgent
 
 export type CodexAgentModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna'
-export type OpencodeAgentModel = 'opencode-go/deepseek-v4-flash' | 'opencode-go/deepseek-v4-pro'
+/**
+ * Models opencode can answer with.
+ *
+ * The `opencode/` models are the free tier. They keep answering after the
+ * metered `opencode-go/` subscription reaches its weekly limit.
+ */
+export type OpencodeAgentModel
+  = 'opencode/big-pickle'
+    | 'opencode/deepseek-v4-flash-free'
+    | 'opencode/hy3-free'
+    | 'opencode/laguna-s-2.1-free'
+    | 'opencode/mimo-v2.5-free'
+    | 'opencode/nemotron-3-ultra-free'
+    | 'opencode/nemotron-3.5-lightning-free'
+    | 'opencode-go/deepseek-v4-flash'
+    | 'opencode-go/deepseek-v4-pro'
+    | 'opencode-go/glm-5.1'
+    | 'opencode-go/glm-5.2'
+    | 'opencode-go/glm-5.3'
+    | 'opencode-go/gpt-5.6-luna'
+    | 'opencode-go/grok-4.5'
+    | 'opencode-go/hy3'
+    | 'opencode-go/kimi-k2.6'
+    | 'opencode-go/kimi-k2.7-code'
+    | 'opencode-go/kimi-k3'
+    | 'opencode-go/mimo-v2.5'
+    | 'opencode-go/mimo-v2.5-pro'
+    | 'opencode-go/minimax-m2.7'
+    | 'opencode-go/minimax-m3'
+    | 'opencode-go/qwen3.6-plus'
+    | 'opencode-go/qwen3.7-max'
+    | 'opencode-go/qwen3.7-plus'
 export type AgentModel = CodexAgentModel | OpencodeAgentModel
 export type CodexReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 

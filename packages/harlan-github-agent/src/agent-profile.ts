@@ -51,7 +51,33 @@ export const AGENT_ROLES = [
 /** Every model an Agent provider answers with, in the order the controls list them. */
 export const AGENT_MODELS = {
   codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
-  opencode: ['opencode-go/deepseek-v4-flash', 'opencode-go/deepseek-v4-pro'],
+  opencode: [
+    'opencode/big-pickle',
+    'opencode/deepseek-v4-flash-free',
+    'opencode/hy3-free',
+    'opencode/laguna-s-2.1-free',
+    'opencode/mimo-v2.5-free',
+    'opencode/nemotron-3-ultra-free',
+    'opencode/nemotron-3.5-lightning-free',
+    'opencode-go/deepseek-v4-flash',
+    'opencode-go/deepseek-v4-pro',
+    'opencode-go/glm-5.1',
+    'opencode-go/glm-5.2',
+    'opencode-go/glm-5.3',
+    'opencode-go/gpt-5.6-luna',
+    'opencode-go/grok-4.5',
+    'opencode-go/hy3',
+    'opencode-go/kimi-k2.6',
+    'opencode-go/kimi-k2.7-code',
+    'opencode-go/kimi-k3',
+    'opencode-go/mimo-v2.5',
+    'opencode-go/mimo-v2.5-pro',
+    'opencode-go/minimax-m2.7',
+    'opencode-go/minimax-m3',
+    'opencode-go/qwen3.6-plus',
+    'opencode-go/qwen3.7-max',
+    'opencode-go/qwen3.7-plus',
+  ],
 } as const satisfies Record<AgentProviderName, readonly AgentModel[]>
 
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly CodexReasoningEffort[]
