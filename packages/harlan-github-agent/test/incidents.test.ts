@@ -305,3 +305,147 @@ describe('task incidents from the mutation journal', () => {
     expect(store.listIncidents()).toEqual([])
   })
 })
+
+describe('recovery budget after a GitHub outage', () => {
+  /** Exhausts one review task's whole recovery budget with the given reason. */
+  function exhaust(store: ReturnType<typeof createStore>, reason: string): void {
+    for (let round = 0; round < 12; round += 1) {
+      const at = new Date(Date.parse('2026-08-18T00:00:00.000Z') + round * 60 * 60_000).toISOString()
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const task = store.claimNextAdversarialReviewTask(`worker-${round}-${attempt}`, at, 10_000)
+        if (task === null)
+          break
+        store.failWorkerTask({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at,
+          reason,
+        })
+      }
+      store.retryRecoverableWorkerFailures(at)
+    }
+  }
+
+  function storeWithExhaustedReview(reason: string) {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'outage-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    exhaust(store, reason)
+    return store
+  }
+
+  it('frees a task the outage exhausted once the repository polls again', () => {
+    const store = storeWithExhaustedReview('Resource not accessible by integration')
+    expect(store.listIncidents()[0]?.recovery).toEqual({ _tag: 'Exhausted' })
+
+    // The failing poll, then the poll that recovers.
+    store.recordPollFailure('harlan-zw/example', '2026-08-18T12:00:00.000Z', 'Resource not accessible by integration')
+    store.recordPollSuccess('harlan-zw/example', '2026-08-18T12:01:00.000Z')
+
+    expect(store.listIncidents()).toEqual([])
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T12:02:00.000Z')).toBe(1)
+  })
+
+  it('leaves a task that exhausted itself on a real defect alone', () => {
+    const store = storeWithExhaustedReview('The worker deleted a file it was told to keep.')
+
+    store.recordPollFailure('harlan-zw/example', '2026-08-18T12:00:00.000Z', 'fetch failed')
+    store.recordPollSuccess('harlan-zw/example', '2026-08-18T12:01:00.000Z')
+
+    // The repository incident cleared, but the defect still needs a person.
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T12:02:00.000Z')).toBe(0)
+  })
+
+  it('does not free the budget again on an ordinary healthy poll', () => {
+    const store = storeWithExhaustedReview('Resource not accessible by integration')
+    store.recordPollFailure('harlan-zw/example', '2026-08-18T12:00:00.000Z', 'Resource not accessible by integration')
+    store.recordPollSuccess('harlan-zw/example', '2026-08-18T12:01:00.000Z')
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T12:02:00.000Z')).toBe(1)
+
+    // Exhaust it again, then poll healthily without an intervening failure.
+    exhaust(store, 'Resource not accessible by integration')
+    store.recordPollSuccess('harlan-zw/example', '2026-08-19T00:00:00.000Z')
+    expect(store.retryRecoverableWorkerFailures('2026-08-19T00:01:00.000Z')).toBe(0)
+  })
+
+  it('sweeps every healthy repository at startup', () => {
+    const store = storeWithExhaustedReview('Resource not accessible by integration')
+    store.recordPollSuccess('harlan-zw/example', '2026-08-18T12:00:00.000Z')
+
+    expect(store.restoreOutageRecoveryBudget('2026-08-18T12:01:00.000Z')).toBe(1)
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T12:02:00.000Z')).toBe(1)
+  })
+})
+
+describe('stale task incidents', () => {
+  it('closes an incident once a newer revision supersedes its task', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'superseded-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-18T00:00:0${attempt}.000Z`
+      const task = store.claimNextAdversarialReviewTask(`worker-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected review attempt ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'fetch failed',
+      })
+    }
+    store.retryRecoverableWorkerFailures('2026-08-18T00:00:05.000Z')
+    expect(store.listIncidents()).toHaveLength(1)
+
+    // A new head commit replaces the queued review.
+    store.recordObservation({
+      externalId: 'superseded-pr-2',
+      observedAt: '2026-08-18T00:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean', headSha: 'def456' }),
+    })
+
+    expect(store.listIncidents()).toEqual([])
+  })
+
+  it('sweeps incidents left behind by work that can no longer run', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'stale-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-18T00:00:0${attempt}.000Z`
+      const task = store.claimNextAdversarialReviewTask(`worker-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected review attempt ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'fetch failed',
+      })
+    }
+    expect(store.listIncidents()).toHaveLength(1)
+
+    // Nothing to sweep while the task is still Failed on the current revision.
+    expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:06.000Z')).toBe(0)
+    expect(store.listIncidents()).toHaveLength(1)
+  })
+})

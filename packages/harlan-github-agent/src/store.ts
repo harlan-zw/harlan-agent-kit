@@ -1,4 +1,5 @@
 import type { AgentProviderName } from './agent-provider.ts'
+import type { TransientKind } from './failure.ts'
 import type {
   AdversarialReviewTask,
   AgentProfile,
@@ -189,6 +190,69 @@ function recordTaskIncident(database: DatabaseSync, taskId: string, reason: stri
         : { _tag: 'Retrying', attempt: row.recovery_attempts + 1, nextAttemptAt: nextRecoveryAt(at, row.recovery_attempts) },
     at,
   })
+}
+
+/**
+ * Closes every open Incident for one Task.
+ *
+ * An Incident describes work the controller still intends to do. Once the Task
+ * completes, or a newer Revision supersedes it, that stops being true and the
+ * Incident is only noise in the System pane.
+ */
+function resolveTaskIncidents(database: DatabaseSync, taskId: string, at: string): void {
+  database.prepare(`
+    UPDATE incidents SET resolved_at = ?
+    WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?
+  `).run(at, taskId)
+}
+
+/** Failure kinds an outage causes, and that a healthy GitHub therefore clears. */
+const githubOutageKinds = new Set<TransientKind>(['github_access', 'github_unavailable', 'rate_limit', 'network'])
+
+/**
+ * Gives back the recovery budget an outage spent.
+ *
+ * Only failures GitHub itself caused qualify. A Task that exhausted its budget
+ * on a real defect keeps its `Exhausted` recovery, because a healthy GitHub says
+ * nothing about that defect.
+ *
+ * Returns how many Tasks were given another chance.
+ */
+function restoreRecoveryBudget(database: DatabaseSync, github: string, at: string): number {
+  const candidates = (table: 'tasks' | 'worker_tasks') => database.prepare(`
+    SELECT ${table}.id, ${table}.reason, ${table}.fence
+    FROM ${table}
+    JOIN subjects ON subjects.id = ${table}.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE ${table}.state_tag = 'Failed'
+      AND ${table}.recovery_attempts >= ?
+      AND ${table}.revision_id = subjects.current_revision_id
+      AND repositories.github = ?
+      AND repositories.enabled = 1
+  `).all(MAXIMUM_RECOVERY_ATTEMPTS, github) as unknown as Array<{ id: string, reason: string | null, fence: number }>
+
+  let restored = 0
+  for (const table of ['tasks', 'worker_tasks'] as const) {
+    const reset = database.prepare(`
+      UPDATE ${table}
+      SET recovery_attempts = 0, updated_at = ?
+      WHERE id = ? AND state_tag = 'Failed'
+    `)
+    for (const row of candidates(table)) {
+      if (row.reason === null)
+        continue
+      const failure = classifyFailure({ message: row.reason })
+      if (failure._tag !== 'Transient' || !githubOutageKinds.has(failure.kind))
+        continue
+      if (reset.run(at, row.id).changes !== 1)
+        continue
+      restored += 1
+      // The Task is recoverable again, so its Incident stops saying otherwise.
+      // `retryRecoverableWorkerFailures` requeues it on the next pass.
+      resolveTaskIncidents(database, row.id, at)
+    }
+  }
+  return restored
 }
 
 interface RecoveryCandidateRow {
@@ -386,6 +450,13 @@ export interface JournalStore {
   resumeAgents: (at: string) => StoredAgentControl
   recoverInterruptedAgentTasks: (at: string) => number
   retryRecoverableWorkerFailures: (at: string) => number
+  /**
+   * Gives back the recovery budget a GitHub outage spent, for every repository
+   * GitHub is currently answering. Returns how many Tasks were freed.
+   */
+  restoreOutageRecoveryBudget: (at: string) => number
+  /** Closes Incidents whose Task can no longer run. Returns how many closed. */
+  resolveStaleTaskIncidents: (at: string) => number
   saveWorkerSession: (repository: string, itemNumber: number, role: AgentRole, sessionId: string, at: string, scopeDigest?: string) => void
   updateAgentProgress: (input: { taskId: string, taskKind: AgentTask['kind'], workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
   stageReviewStatus: (input: StageReviewStatusInput) => { _tag: 'Staged' | 'Duplicate', commandId: string } | { _tag: 'Rejected', reason: string }
@@ -2155,6 +2226,7 @@ function supersedeTasks(
         `).run(reason, at, row.id)
       }
       recordTransition(database, { taskId: row.id, from: row.state_tag, to: 'Superseded', reason, fence: row.fence, at })
+      resolveTaskIncidents(database, row.id, at)
     }
   })
 }
@@ -2389,8 +2461,10 @@ function supersedeWorkerTasks(
       SET state_tag = 'Superseded', reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
       WHERE id = ? AND state_tag = ?
     `).run(reason, at, row.id, row.state_tag)
-    if (update.changes === 1)
+    if (update.changes === 1) {
       recordWorkerTransition(database, { taskId: row.id, from: row.state_tag, to: 'Superseded', reason, fence: row.fence, at })
+      resolveTaskIncidents(database, row.id, at)
+    }
   })
 }
 
@@ -3594,10 +3668,46 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
   }
 
   const recordPollSuccess = (github: string, at: string): void => {
+    const recovering = database.prepare(
+      'SELECT last_error FROM repositories WHERE github = ? AND last_error IS NOT NULL',
+    ).get(github) !== undefined
     database.prepare(`
       UPDATE repositories SET last_attempt_at = ?, last_success_at = ?, last_error = NULL WHERE github = ?
     `).run(at, at, github)
     resolveIncidents({ _tag: 'Repository', repository: github }, at)
+    // Edge triggered, on the poll that recovers. A long GitHub outage spends the
+    // whole recovery budget of every Task it touches, and those Tasks would then
+    // stay dead after GitHub came back. Checking `last_error` first keeps this
+    // from firing on every healthy poll, which would retry a genuinely broken
+    // Task forever.
+    if (recovering)
+      restoreRecoveryBudget(database, github, at)
+  }
+
+  const resolveStaleTaskIncidents: JournalStore['resolveStaleTaskIncidents'] = (at) => {
+    // An Incident belongs to work the controller still intends to do. A Task
+    // that completed, was superseded, or belongs to an older Revision is none
+    // of those, so its Incident is only noise in the System pane.
+    const stale = (table: 'tasks' | 'worker_tasks') => `
+      UPDATE incidents SET resolved_at = ?
+      WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id IN (
+        SELECT ${table}.id FROM ${table}
+        JOIN subjects ON subjects.id = ${table}.subject_id
+        WHERE ${table}.state_tag IN ('Completed', 'Superseded')
+          OR ${table}.revision_id != subjects.current_revision_id
+      )
+    `
+    return (['tasks', 'worker_tasks'] as const)
+      .reduce((total, table) => total + Number(database.prepare(stale(table)).run(at).changes), 0)
+  }
+
+  const restoreOutageRecoveryBudget: JournalStore['restoreOutageRecoveryBudget'] = (at) => {
+    // Only repositories GitHub is answering right now. A repository still
+    // failing has said nothing that would justify giving its budget back.
+    const healthy = database.prepare(`
+      SELECT github FROM repositories WHERE enabled = 1 AND last_error IS NULL AND last_success_at IS NOT NULL
+    `).all() as unknown as Array<{ github: string }>
+    return healthy.reduce((total, row) => total + restoreRecoveryBudget(database, row.github, at), 0)
   }
 
   const recordPollFailure = (github: string, at: string, message: string, status?: number): void => {
@@ -4273,10 +4383,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
         recordWorkerTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
-        database.prepare(`
-          UPDATE incidents SET resolved_at = ?
-          WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?
-        `).run(input.at, input.taskId)
+        resolveTaskIncidents(database, input.taskId, input.at)
         const row = database.prepare(`
           SELECT worker_tasks.subject_id, worker_tasks.revision_id, revisions.payload, repositories.policy_json
           FROM worker_tasks
@@ -5062,10 +5169,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
-        database.prepare(`
-          UPDATE incidents SET resolved_at = ?
-          WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?
-        `).run(input.at, input.taskId)
+        resolveTaskIncidents(database, input.taskId, input.at)
       }
       database.exec('COMMIT')
       return result.changes === 1
@@ -6054,6 +6158,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     resumeAgents,
     recoverInterruptedAgentTasks,
     retryRecoverableWorkerFailures,
+    restoreOutageRecoveryBudget,
+    resolveStaleTaskIncidents,
     saveWorkerSession,
     stagePublication,
     stageIssueTriageComment,
