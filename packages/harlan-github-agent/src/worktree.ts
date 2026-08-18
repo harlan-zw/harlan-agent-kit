@@ -3,7 +3,7 @@ import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
 import type { Result } from './result.ts'
-import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask } from './types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, PullRequestBase } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -13,6 +13,7 @@ import process from 'node:process'
 import { StringDecoder } from 'node:string_decoder'
 import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { cleanLine } from './text.ts'
 
 export interface PreparedConflictWorktree {
   path: string
@@ -24,6 +25,11 @@ export interface PreparedConflictWorktree {
 export interface VerifiedConflictPatch {
   digest: string
   changedFiles: number
+}
+
+/** A verified change with the paths it touches, which decide the stack base. */
+export interface VerifiedIssuePatch extends VerifiedConflictPatch {
+  changedPaths: string[]
 }
 
 export interface PreparedConflictPublication extends VerifiedConflictPatch {
@@ -51,10 +57,31 @@ export interface PreparedWorkerWorkspace {
   path: string
 }
 
+/**
+ * An issue workspace with the default branch tip it was prepared against.
+ *
+ * `baseSha` follows the chosen base, which a stack moves off the default branch.
+ * `defaultBranchSha` never moves, so the triage session key stays stable whether
+ * or not the pull request stacks.
+ */
+export interface PreparedIssueWorkspace extends PreparedWorkerWorkspace {
+  defaultBranchSha: string
+}
+
+/**
+ * Whether finished work moved onto a stack base.
+ *
+ * `Unstacked` is an expected outcome, not a failure. The work stays exactly
+ * where it was prepared, so the pull request targets the default branch instead.
+ */
+export type RestackOutcome
+  = | { _tag: 'Restacked', workspace: PreparedWorkerWorkspace, patch: VerifiedIssuePatch }
+    | { _tag: 'Unstacked', reason: string }
+
 export interface AgentWorkspaceManager {
   prepareBaseline: (task: ClaimedBaselineRepairTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   prepareFix: (task: ClaimedReviewFixTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
-  prepareIssue: (task: ClaimedIssueTriageTask | ClaimedIssueWorkTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  prepareIssue: (task: ClaimedIssueTriageTask | ClaimedIssueWorkTask, base: PullRequestBase, signal: AbortSignal) => Promise<Result<PreparedIssueWorkspace, string>>
   prepareReview: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
 }
 
@@ -72,8 +99,10 @@ export interface ReviewFixWorktreeManager {
 
 export interface IssueWorktreeManager {
   commit: (task: ClaimedIssueWorkTask, worktree: PreparedWorkerWorkspace, patch: VerifiedConflictPatch, message: string, signal: AbortSignal) => Promise<Result<PreparedConflictPublication, string>>
-  prepare: (task: ClaimedIssueWorkTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
-  verify: (task: ClaimedIssueWorkTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<VerifiedConflictPatch, string>>
+  prepare: (task: ClaimedIssueWorkTask, base: PullRequestBase, signal: AbortSignal) => Promise<Result<PreparedIssueWorkspace, string>>
+  /** Moves verified, staged work onto one open pull request's head commit. */
+  restack: (task: ClaimedIssueWorkTask, worktree: PreparedWorkerWorkspace, target: { headRef: string, headSha: string }, signal: AbortSignal) => Promise<Result<RestackOutcome, string>>
+  verify: (task: ClaimedIssueWorkTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<VerifiedIssuePatch, string>>
 }
 
 interface CommandResult {
@@ -558,15 +587,30 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       return ok({ ...prepared.value, baseSha: base.stdout })
     },
 
-    async prepareIssue(task, signal) {
-      const baseRef = `refs/harlan-github-agent/issues/${task.issueNumber}/base`
-      return prepareRepository(
+    async prepareIssue(task, base, signal) {
+      const defaultRef = `refs/harlan-github-agent/issues/${task.issueNumber}/base`
+      const stackRef = `refs/harlan-github-agent/issues/${task.issueNumber}/stack`
+      if (!isSafeGitRef(base.ref))
+        return err('The pull request base branch is unsafe.')
+      const stacked = base._tag === 'Stacked'
+      const prepared = await prepareRepository(
         task,
         `issue-${task.issueNumber}-${task.revisionId.slice(0, 12)}-${task.state.fence}`,
-        [`+refs/heads/${task.repositoryMapping.defaultBranch}:${baseRef}`],
-        baseRef,
+        [
+          `+refs/heads/${task.repositoryMapping.defaultBranch}:${defaultRef}`,
+          ...(stacked ? [`+refs/heads/${base.ref}:${stackRef}`] : []),
+        ],
+        stacked ? stackRef : defaultRef,
         signal,
       )
+      if (prepared._tag === 'Err')
+        return prepared
+      const defaultBranch = await runGit(task.repositoryMapping.checkout, ['rev-parse', defaultRef], signal)
+      if (defaultBranch.exitCode !== 0)
+        return err(`Could not resolve the default branch: ${defaultBranch.stderr}`)
+      if (stacked && prepared.value.baseSha !== base.headSha)
+        return err('The stack base branch moved before the worktree was prepared.')
+      return ok({ ...prepared.value, defaultBranchSha: defaultBranch.stdout })
     },
 
     async prepareReview(task, signal) {
@@ -753,10 +797,94 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
       if (changed.exitCode !== 0)
         return err(`Could not inspect changed files: ${changed.stderr}`)
-      const changedFiles = changed.stdout.split('\0').filter(Boolean).length
-      if (changedFiles === 0)
+      const changedPaths = changed.stdout.split('\0').filter(Boolean)
+      if (changedPaths.length === 0)
         return err('The agent completed without changing any files.')
-      return ok({ digest: patch.digest, changedFiles })
+      return ok({ digest: patch.digest, changedFiles: changedPaths.length, changedPaths })
+    },
+
+    /**
+     * Stacking is optional, and the agent turn before it is not. Every failure
+     * before the change is captured returns `Unstacked`, so the pull request
+     * still goes out. Only a failure that could leave the worktree half moved
+     * fails the Task.
+     */
+    async restack(task, worktree, target, signal) {
+      if (!isSafeGitRef(target.headRef))
+        return err('The stack base branch is unsafe.')
+      const token = await options.tokens.getToken(task.repository, 'read', signal)
+      if (token._tag === 'Err')
+        return ok({ _tag: 'Unstacked', reason: `GitHub refused a token for the stack base: ${token.error.message}` })
+      const remoteUrl = options.remoteUrl?.(task.repository) ?? `https://github.com/${task.repository}.git`
+      const stackRef = `refs/harlan-github-agent/issues/${task.issueNumber}/stack`
+      const fetched = await runGit(
+        worktree.path,
+        ['fetch', '--no-tags', remoteUrl, `+refs/heads/${target.headRef}:${stackRef}`],
+        signal,
+        token.value.token,
+        options.remoteUrl !== undefined,
+      )
+      if (fetched.exitCode !== 0)
+        return ok({ _tag: 'Unstacked', reason: `Could not fetch the stack base branch: ${cleanLine(fetched.stderr)}` })
+      const stackHead = await runGit(worktree.path, ['rev-parse', stackRef], signal)
+      if (stackHead.exitCode !== 0)
+        return ok({ _tag: 'Unstacked', reason: `Could not resolve the stack base branch: ${cleanLine(stackHead.stderr)}` })
+      if (stackHead.stdout !== target.headSha)
+        return ok({ _tag: 'Unstacked', reason: 'The stack base branch moved.' })
+
+      // The staged change becomes one commit so it survives the reset below.
+      const captured = await runGit(worktree.path, [
+        '-c',
+        `user.name=${gitIdentity.name}`,
+        '-c',
+        `user.email=${gitIdentity.email}`,
+        'commit',
+        '-m',
+        'chore: capture the verified change before it moves',
+      ], signal)
+      if (captured.exitCode !== 0)
+        return err(`Could not capture the verified change: ${captured.stderr || captured.stdout}`)
+      const capturedSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      if (capturedSha.exitCode !== 0)
+        return err(`Could not resolve the captured change: ${capturedSha.stderr}`)
+
+      /** Puts the worktree back exactly where `verify` left it. */
+      const restore = async (): Promise<Result<void, string>> => {
+        const reset = await runGit(worktree.path, ['reset', '--hard', capturedSha.stdout], signal)
+        if (reset.exitCode !== 0)
+          return err(`Could not restore the verified change: ${reset.stderr}`)
+        const unstage = await runGit(worktree.path, ['reset', '--soft', worktree.baseSha], signal)
+        return unstage.exitCode === 0 ? ok(undefined) : err(`Could not restore the prepared base: ${unstage.stderr}`)
+      }
+
+      const moved = await runGit(worktree.path, ['reset', '--hard', target.headSha], signal)
+      if (moved.exitCode !== 0)
+        return err(`Could not move the worktree onto the stack base: ${moved.stderr}`)
+      const applied = await runGit(worktree.path, ['cherry-pick', '--no-commit', capturedSha.stdout], signal)
+      if (applied.exitCode !== 0) {
+        const reason = `The stack base conflicts with this change: ${cleanLine(applied.stderr || applied.stdout)}`
+        // `cherry-pick --no-commit` leaves no sequencer state to abort when it
+        // fails outright, so a failed abort is not evidence of a broken worktree.
+        await runGit(worktree.path, ['cherry-pick', '--abort'], signal)
+        const restored = await restore()
+        return restored._tag === 'Err' ? restored : ok({ _tag: 'Unstacked', reason })
+      }
+      const patch = await runGitDigest(worktree.path, ['diff', '--cached', '--binary', 'HEAD'], signal)
+      if (patch.exitCode !== 0)
+        return err(`Could not read the restacked change: ${patch.stderr}`)
+      const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
+      if (changed.exitCode !== 0)
+        return err(`Could not inspect restacked files: ${changed.stderr}`)
+      const changedPaths = changed.stdout.split('\0').filter(Boolean)
+      if (changedPaths.length === 0) {
+        const restored = await restore()
+        return restored._tag === 'Err' ? restored : ok({ _tag: 'Unstacked', reason: 'The stack base already carries this change.' })
+      }
+      return ok({
+        _tag: 'Restacked',
+        workspace: { ...worktree, baseSha: target.headSha, headSha: target.headSha },
+        patch: { digest: patch.digest, changedFiles: changedPaths.length, changedPaths },
+      })
     },
 
     async commit(task, worktree, patch, message, signal) {
@@ -825,6 +953,9 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           return err('Repository policy no longer authorizes issue work.')
         if (command.taskKind === 'baseline_repair' && !canRepairBaseline(command.repositoryMapping))
           return err('Repository policy no longer authorizes Baseline repair.')
+        // A Baseline repair exists to fix the default branch, so it always targets it.
+        if (command.taskKind === 'baseline_repair' && command.baseRef !== command.repositoryMapping.defaultBranch)
+          return err('A Baseline repair must target the default branch.')
         // The controller replaces its own branch. A branch already under review belongs to its reviewers.
         const reviewed = await options.github.hasOpenPullRequestForBranch(command.repositoryMapping, command.headRef, signal)
         if (reviewed._tag === 'Err')
@@ -863,16 +994,18 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
             return err('The pull request head branch is protected.')
         }
       }
-      if (!isSafeGitRef(command.repositoryMapping.defaultBranch))
+      if (!isSafeGitRef(command.baseRef) || command.baseRef === command.headRef)
         return err('The pull request base branch is unsafe.')
       const credential = await token(command, signal)
       if (credential._tag === 'Err')
         return credential
+      // A stacked pull request merges into another pull request's head branch, so
+      // the branch this pins is the recorded base, never the default branch.
       const base = await runGit(repositoryGitDirectory(options.root, command.repository), [
         'ls-remote',
         '--heads',
         remoteUrl(command.repository),
-        `refs/heads/${command.repositoryMapping.defaultBranch}`,
+        `refs/heads/${command.baseRef}`,
       ], signal, credential.value, options.remoteUrl !== undefined)
       if (base.exitCode !== 0)
         return err(`Could not read the remote base branch: ${base.stderr}`)
@@ -949,6 +1082,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         return err('Pull request publication is unavailable.')
       const pullRequest = await options.pullRequests.ensurePullRequest({
         repository: command.repositoryMapping,
+        baseRef: command.baseRef,
         headRef: command.headRef,
         expectedHeadSha: command.commitSha,
         title: command.pullRequestTitle,

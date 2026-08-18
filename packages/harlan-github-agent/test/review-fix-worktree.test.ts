@@ -174,6 +174,7 @@ describe('review fix worktree', () => {
       pullRequestNumber: task.pullRequestNumber,
       commitSha: committed.value.commitSha,
       baseSha: committed.value.baseSha,
+      baseRef: 'main',
       expectedHeadSha: task.pullRequest.headSha,
       headRef: task.pullRequest.headRef,
       artifactRef: committed.value.artifactRef,

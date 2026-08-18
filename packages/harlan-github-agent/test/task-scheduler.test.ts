@@ -56,6 +56,7 @@ describe('task scheduler', () => {
             pullRequestNumber: 24,
             commitSha: 'commit123',
             baseSha: 'base123',
+            baseRef: 'main',
             expectedHeadSha: 'abc123',
             headRef: 'fix/broken-thing',
             artifactRef: 'refs/harlan-github-agent/publications/task-1',

@@ -655,6 +655,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
             pullRequestNumber: repairTask.pullRequestNumber,
             commitSha: committed.value.commitSha,
             baseSha: committed.value.baseSha,
+            baseRef: repairTask.pullRequest.baseRef ?? repairTask.repositoryMapping.defaultBranch,
             expectedHeadSha: repairTask.pullRequest.headSha,
             headRef: repairTask.pullRequest.headRef,
             headRepository: repairTask.pullRequest.headRepository,
@@ -696,7 +697,11 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
         return snapshot
       if (snapshot.value.state !== 'open' || snapshot.value.updatedAt !== task.issue.updatedAt)
         return err('The issue changed before triage started.')
-      const workspace = await options.workspaces.prepareIssue(task, signal)
+      const workspace = await options.workspaces.prepareIssue(
+        task,
+        { _tag: 'DefaultBranch', ref: task.repositoryMapping.defaultBranch },
+        signal,
+      )
       if (workspace._tag === 'Err')
         return workspace
       const started = saveAgentProgress(options, task, { percent: 35, label: 'Git worktree ready' })

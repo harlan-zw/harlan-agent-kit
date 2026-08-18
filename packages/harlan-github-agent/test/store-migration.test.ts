@@ -73,6 +73,97 @@ function journalAtVersion22(path: string): void {
   database.close()
 }
 
+/**
+ * Builds a journal with one Published Publication, then removes the base branch
+ * column so the stack migration has a real row to backfill.
+ */
+function journalAtVersion24(path: string): void {
+  const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+  store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+  store.recordObservation({
+    externalId: 'migrated-pr',
+    observedAt: '2026-08-18T00:00:00.000Z',
+    source: 'poll',
+    subject: pullRequestItem({ mergeState: 'clean' }),
+  })
+  const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-18T00:01:00.000Z', 600_000)
+  if (review === null)
+    throw new Error('Expected the review Task.')
+  const queued = store.queueBaselineRepairForReview({
+    taskId: review.id,
+    workerId: review.state.workerId,
+    fence: review.state.fence,
+    baseSha: review.pullRequest.baseSha,
+    at: '2026-08-18T00:02:00.000Z',
+  })
+  if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
+    throw new Error(queued.reason)
+  const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-18T00:03:00.000Z', 600_000)
+  if (repair === null)
+    throw new Error('Expected the Baseline repair Task.')
+  const staged = store.stagePublication({
+    taskId: repair.id,
+    workerId: repair.state.workerId,
+    fence: repair.state.fence,
+    at: '2026-08-18T00:04:00.000Z',
+    publication: {
+      _tag: 'OpenPullRequest',
+      taskKind: 'baseline_repair',
+      pullRequestNumber: repair.pullRequestNumber,
+      pullRequestTitle: 'fix(ci): repair the default branch',
+      pullRequestBody: 'Repairs default branch CI.',
+      commitSha: 'baseline-commit',
+      baseSha: repair.pullRequest.baseSha,
+      baseRef: 'main',
+      expectedHeadSha: repair.pullRequest.baseSha,
+      headRef: 'fix/baseline-ci-abcdef012345',
+      artifactRef: 'refs/harlan-github-agent/publications/baseline',
+      patchDigest: 'patch',
+      changedFiles: 1,
+    },
+  })
+  if (staged._tag !== 'Staged')
+    throw new Error('Expected a staged publication.')
+  store.close()
+
+  const database = new DatabaseSync(path)
+  database.exec('PRAGMA foreign_keys = OFF')
+  const definition = (database.prepare(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'publication_commands'`,
+  ).get() as { sql: string }).sql
+  const columns = (database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>)
+    .map(column => column.name)
+    .filter(name => name !== 'base_ref')
+  database.exec(definition
+    .replace(/CREATE TABLE\s+"?publication_commands"?/, 'CREATE TABLE publication_commands_v24')
+    .replace(/\s*base_ref TEXT NOT NULL CHECK \(base_ref != ''\),/, '')
+    .replace(/\s*-- [^\n]*\n\s*CHECK \(base_ref != head_ref\),/, ''))
+  database.exec(`INSERT INTO publication_commands_v24 (${columns.join(', ')}) SELECT ${columns.join(', ')} FROM publication_commands`)
+  database.exec('DROP TABLE publication_commands')
+  database.exec('ALTER TABLE publication_commands_v24 RENAME TO publication_commands')
+  database.exec('CREATE INDEX publication_commands_state_tag ON publication_commands(state_tag)')
+  database.exec(`CREATE UNIQUE INDEX one_live_publication_command_per_task
+    ON publication_commands(task_id) WHERE state_tag IN ('Pending', 'Running', 'Published')`)
+  const rebuilt = database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>
+  if (rebuilt.some(column => column.name === 'base_ref'))
+    throw new Error('Version 24 stored no base branch, so the rewind must remove that column.')
+  database.exec('PRAGMA user_version = 24')
+  database.close()
+}
+
+describe('stacked pull request migration', () => {
+  it('gives every existing Publication the default branch as its base', () => {
+    const path = join(directory, 'state.sqlite')
+    journalAtVersion24(path)
+
+    const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    const claimed = store.claimNextPublication('publisher', '2026-08-18T00:05:00.000Z', 60_000)
+    store.close()
+
+    expect(claimed).toEqual(expect.objectContaining({ baseRef: 'main', headRef: 'fix/baseline-ci-abcdef012345' }))
+  })
+})
+
 describe('gitHub vocabulary migration', () => {
   it('carries a version 22 journal across without losing a row', () => {
     const path = join(directory, 'state.sqlite')
@@ -90,7 +181,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(24)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(25)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

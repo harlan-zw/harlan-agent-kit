@@ -50,6 +50,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           body: 'Fixes the bug.',
@@ -139,6 +140,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           body: 'Fixes the bug.',
@@ -242,6 +244,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           body: 'Fixes the parser.',
@@ -332,6 +335,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
           body: 'Fixes the parser.',
@@ -412,6 +416,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
           body: 'Fixes the parser.',
@@ -498,6 +503,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           // The parent pull request is red. That is the parent's problem.
           baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
@@ -581,6 +587,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           // The default branch is red. That failure is what this pull request repairs.
           baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
@@ -665,6 +672,7 @@ describe('subject Workers', () => {
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: issue.updatedAt })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.reject(new Error('Unexpected pull request request.')),
         upsertIssueTriageComment: () => Promise.reject(new Error('The controller publishes issue triage.')),
         upsertReviewStatus: () => Promise.reject(new Error('Issue triage must not post a review comment.')),
@@ -686,7 +694,7 @@ describe('subject Workers', () => {
         },
       },
       workspaces: {
-        prepareIssue: () => Promise.resolve(ok({ path: '/tmp/issue-worktree', baseSha: 'base', headSha: 'base' })),
+        prepareIssue: () => Promise.resolve(ok({ path: '/tmp/issue-worktree', baseSha: 'base', headSha: 'base', defaultBranchSha: 'base' })),
         prepareReview: () => Promise.reject(new Error('Unexpected review workspace.')),
       },
     })
