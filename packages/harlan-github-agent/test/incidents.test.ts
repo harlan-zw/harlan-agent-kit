@@ -207,20 +207,20 @@ describe('recoverable failure budget', () => {
       source: 'poll',
       subject: pullRequestItem({ mergeState: 'clean' }),
     })
-    for (const attempt of [1, 2, 3]) {
-      const at = `2026-08-18T00:00:0${attempt}.000Z`
-      const task = store.claimNextAdversarialReviewTask(`worker-${attempt}`, at, 10_000)
-      if (task === null)
-        throw new Error(`Expected review attempt ${attempt}.`)
-      store.failWorkerTask({
-        taskId: task.id,
-        workerId: task.state.workerId,
-        fence: task.state.fence,
-        at,
-        reason: 'Repository policy does not authorize an automated review comment.',
-      })
-    }
+    const task = store.claimNextAdversarialReviewTask('worker-1', '2026-08-18T00:00:01.000Z', 10_000)
+    if (task === null)
+      throw new Error('Expected the review Task.')
 
+    // One attempt settles it. Two more would read the same policy, refuse
+    // again, and spend one whole agent turn each time.
+    expect(store.failWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-18T00:00:02.000Z',
+      reason: 'Repository policy does not authorize an automated review comment.',
+    })).toBe('Failed')
+    expect(store.claimNextAdversarialReviewTask('worker-2', '2026-08-18T00:00:03.000Z', 10_000)).toBeNull()
     expect(store.retryRecoverableWorkerFailures('2026-08-18T01:00:00.000Z')).toBe(0)
   })
 })

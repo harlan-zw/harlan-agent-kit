@@ -1,4 +1,4 @@
-import type { ReviewGates } from '../src/types.ts'
+import type { ReviewFixClaim, ReviewGates } from '../src/types.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +18,13 @@ function createStore() {
   const store = openJournalStore(':memory:')
   stores.push(store)
   return store
+}
+
+/** The repair Task one review claimed, or a readable failure. */
+function claimedRepair(claim: ReviewFixClaim) {
+  if (claim._tag !== 'Claimed')
+    throw new Error(`Expected the repair Task, not ${claim._tag}.`)
+  return claim.task
 }
 
 function passedReviewGates(): ReviewGates {
@@ -936,15 +943,13 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:05:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'ReviewApproved', approvedAt: '2026-08-13T01:02:00.000Z' },
     }))
-    const repair = store.claimReviewFixTaskForReview({
+    const repair = claimedRepair(store.claimReviewFixTaskForReview({
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:06:00.000Z',
       leaseMilliseconds: 60_000,
-    })
-    if (repair === null)
-      throw new Error('Expected the approved repair task.')
+    }))
     const repairCommit = 'd'.repeat(40)
     expect(store.stagePublication({
       taskId: repair.id,
@@ -1479,19 +1484,14 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:03:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'NotRequired' },
     }))
-    const repair = store.claimReviewFixTaskForReview({
+    const repair = claimedRepair(store.claimReviewFixTaskForReview({
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:05:00.000Z',
       leaseMilliseconds: 60_000,
-    })
-    expect(repair).toEqual(expect.objectContaining({
-      kind: 'review_fix',
-      findings: [{ _tag: 'Open', summary: 'Invalid input crosses the boundary.', nextAction: 'Parse the input before use.' }],
     }))
-    if (repair === null)
-      throw new Error('Expected the approved repair task.')
+    expect(repair).toEqual(expect.objectContaining({ kind: 'review_fix' }))
     const dashboard = store.getDashboardSnapshot('2026-08-13T01:05:00.050Z')
     expect(dashboard.agents.filter(agent => agent._tag === 'ActiveAgent')).toEqual([
       expect.objectContaining({ role: 'adversarial_review', itemNumber: 24 }),
@@ -1592,7 +1592,7 @@ describe('journal store', () => {
       fence: firstReview.state.fence,
       at: '2026-08-13T01:00:04.000Z',
       leaseMilliseconds: 60_000,
-    })).not.toBeNull()
+    })._tag).toBe('Claimed')
 
     store.syncRepositories([{ ...mapping, pullRequestReview: false }], '2026-08-13T01:01:00.000Z')
     store.syncRepositories([mapping], '2026-08-13T01:02:00.000Z')
@@ -1618,7 +1618,7 @@ describe('journal store', () => {
       fence: rerun.state.fence,
       at: '2026-08-13T01:02:03.000Z',
       leaseMilliseconds: 60_000,
-    })).toEqual(expect.objectContaining({ kind: 'review_fix', revisionId: first.revisionId }))
+    })).toEqual({ _tag: 'Claimed', task: expect.objectContaining({ kind: 'review_fix', revisionId: first.revisionId }) })
   })
 
   it('does not carry Approval to a new Revision', () => {
@@ -2173,7 +2173,7 @@ describe('journal store', () => {
   })
 
   it.each([
-    ['inline repair claiming is fixed', 'The approved review repair could not be claimed by the active review.'],
+    ['a repair claim race passes', 'The repair Task changed before the review claimed it.'],
     ['stale duplicate CI is classified correctly', 'Repository policy does not authorize Baseline repair for this base commit.'],
   ])('retries a review after %s', (_scenario, reason) => {
     const store = createStore()
@@ -2292,15 +2292,13 @@ describe('journal store', () => {
       gates,
       findings: [{ _tag: 'Open', summary: 'Workflow defect.', nextAction: 'Repair the workflow.' }],
     })
-    const firstRepair = store.claimReviewFixTaskForReview({
+    const firstRepair = claimedRepair(store.claimReviewFixTaskForReview({
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:03.000Z',
       leaseMilliseconds: 10_000,
-    })
-    if (firstRepair === null)
-      throw new Error('Expected review repair work.')
+    }))
     const reason = 'The permissions requested are not granted to this installation.'
     store.failTask({
       taskId: firstRepair.id,
@@ -2369,15 +2367,13 @@ describe('journal store', () => {
       gates,
       findings: [{ _tag: 'Open', summary: 'Repair required.', nextAction: 'Apply the repair.' }],
     })
-    const repair = store.claimReviewFixTaskForReview({
+    const repair = claimedRepair(store.claimReviewFixTaskForReview({
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:02.500Z',
       leaseMilliseconds: 10_000,
-    })
-    if (repair === null)
-      throw new Error('Expected repair work.')
+    }))
     store.failTask({
       taskId: repair.id,
       workerId: repair.state.workerId,
@@ -2616,15 +2612,13 @@ describe('journal store', () => {
       gates,
       findings: [{ _tag: 'Open', summary: 'Unsafe boundary.', nextAction: 'Repair the boundary.' }],
     })
-    const firstRepair = store.claimReviewFixTaskForReview({
+    const firstRepair = claimedRepair(store.claimReviewFixTaskForReview({
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:03.000Z',
       leaseMilliseconds: 10_000,
-    })
-    if (firstRepair === null)
-      throw new Error('Expected the inline repair Task.')
+    }))
     const reason = 'Could not list wt worktrees: spawn wt ENOENT'
     expect(store.failTask({
       taskId: firstRepair.id,

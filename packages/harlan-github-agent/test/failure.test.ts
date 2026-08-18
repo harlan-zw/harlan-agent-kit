@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyFailure, MAXIMUM_RECOVERY_ATTEMPTS, nextRecoveryAt, recoveryDelayMilliseconds } from '../src/failure.ts'
+import { classifyFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
   it.each([
@@ -14,7 +14,8 @@ describe('classifyFailure', () => {
     ['The opencode session stopped sending output.', 'agent_provider'],
     ['The opencode session exited with code 1.', 'agent_provider'],
     ['The agent finished without a result.', 'agent_provider'],
-    ['The approved review repair could not be claimed by the active review.', 'controller'],
+    ['The review Task lease changed before the repair started.', 'subject_changed'],
+    ['The repair Task changed before the review claimed it.', 'subject_changed'],
     ['Could not list wt worktrees: spawn wt ENOENT', 'controller'],
     ['The publication artifact patch digest does not match.', 'controller'],
     ['Repository policy does not authorize Baseline repair for this base commit.', 'controller'],
@@ -36,6 +37,17 @@ describe('classifyFailure', () => {
     'Pull request #12 is still draft.',
   ])('treats %s as permanent', (message) => {
     expect(classifyFailure({ message })._tag).toBe('Permanent')
+  })
+
+  it.each(Object.values(REVIEW_REPAIR_REFUSALS))('never lets the refusal %s retry', (reason) => {
+    // A refused repair reads the same policy on every attempt. One wording that
+    // slipped into a Transient pattern would spend an agent turn per pass.
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'policy' })
+    expect(mayRetryFailure({ message: reason })).toBe(false)
+  })
+
+  it('keeps the attempts of a failure nobody has classified', () => {
+    expect(mayRetryFailure({ message: 'The worker changed a file that was not conflicted: src/main.rs.' })).toBe(true)
   })
 
   it('treats an unrecognised failure as permanent so it surfaces instead of spinning', () => {

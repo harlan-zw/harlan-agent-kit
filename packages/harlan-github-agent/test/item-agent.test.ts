@@ -225,7 +225,6 @@ describe('subject Workers', () => {
       updatedAt: '2026-08-13T01:00:00.000Z',
       repositoryMapping: repository,
       pullRequest,
-      findings: [{ _tag: 'Open' as const, summary: 'The parser drops data.', nextAction: 'Preserve the buffered bytes.' }],
     }
     const worker = createReviewWorker({
       profile: CODEX_AGENT_PROFILE,
@@ -258,7 +257,7 @@ describe('subject Workers', () => {
       store: {
         claimReviewFixTaskForReview: () => {
           claimed = true
-          return repairTask
+          return { _tag: 'Claimed', task: repairTask }
         },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
@@ -315,7 +314,7 @@ describe('subject Workers', () => {
     }, new AbortController().signal)
 
     expect(result).toEqual(ok({ evidence: expect.any(String) }))
-    expect(attempt?.findings).toEqual(repairTask.findings)
+    expect(attempt?.findings).toEqual([{ _tag: 'Open', summary: 'The parser drops data.', nextAction: 'Preserve the buffered bytes.' }])
     expect(claimed).toBe(true)
     expect(staged).toBe(true)
   })

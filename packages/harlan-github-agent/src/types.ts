@@ -304,8 +304,22 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
-  findings: Array<Extract<ReviewFinding, { _tag: 'Open' }>>
 }
+
+/**
+ * What a review may do with the repair it already made.
+ *
+ * The claim used to answer with a Task or `null`, and `null` meant both "a
+ * lease holder moved first" and "policy refuses this repair". The first is
+ * worth another agent turn. The second never is, so the tag, and not the
+ * wording of a reason, decides whether the review runs again.
+ */
+export type ReviewFixClaim
+  = | { _tag: 'Claimed', task: ClaimedReviewFixTask }
+    /** Another attempt can win, because the controller lost a race. */
+    | { _tag: 'Unavailable', reason: string }
+    /** No attempt can win, because a person or a policy has to change first. */
+    | { _tag: 'Refused', reason: string }
 
 export interface BaselineRepairTask {
   id: string
