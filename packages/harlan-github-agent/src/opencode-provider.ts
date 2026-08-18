@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
-import { extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
+import { DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
 const fileTools = new Set(['edit', 'write', 'patch', 'multiedit'])
@@ -18,6 +18,8 @@ export type OpencodeProcess = ChildProcessByStdio<null, Readable, Readable>
 
 export interface OpencodeProviderOptions {
   binaryPath?: string
+  /** Stops a run once its session has read this many cached context tokens. */
+  cachedContextBudget?: number
   /** Kills a run that has printed nothing for this long. */
   idleTimeoutMilliseconds?: number
   /** Injected for tests. Returns the raw NDJSON line stream of one run. */
@@ -68,6 +70,21 @@ function errorMessage(error: unknown): string {
     return 'The opencode session failed.'
   const record = error as { name?: unknown, message?: unknown, data?: { message?: unknown } }
   return text(record.data?.message) || text(record.message) || text(record.name) || 'The opencode session failed.'
+}
+
+/**
+ * Cached context tokens one line reports.
+ *
+ * opencode closes every model step with a `step_finish` line that carries the
+ * usage of that step alone. Those steps sum to the session total the local
+ * opencode database records, so adding them meters the session exactly.
+ */
+export function opencodeCachedTokensRead(line: OpencodeLine): number {
+  if (line.type !== 'step_finish')
+    return 0
+  const tokens = (line.part as { tokens?: { cache?: { read?: unknown } } } | undefined)?.tokens
+  const read = tokens?.cache?.read
+  return typeof read === 'number' && Number.isFinite(read) && read > 0 ? read : 0
 }
 
 /** Maps one `opencode run --format json` line to the provider-neutral event. */
@@ -133,6 +150,7 @@ export function opencodeArguments(request: AgentTurnRequest, prompt: string): st
 export function createOpencodeProvider(options: OpencodeProviderOptions = {}): AgentProvider {
   const binaryPath = options.binaryPath ?? join(homedir(), '.opencode', 'bin', 'opencode')
   const idleTimeoutMilliseconds = options.idleTimeoutMilliseconds ?? 10 * 60_000
+  const cachedContextBudget = options.cachedContextBudget ?? DEFAULT_CACHED_CONTEXT_BUDGET
   const spawnOpencode = options.spawnOpencode ?? ((args, workspace) => spawn(binaryPath, args, {
     cwd: workspace,
     env: process.env,
@@ -167,6 +185,8 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
 
     let sessionId: string | null = null
     let failed = false
+    let cachedTokensRead = 0
+    let overBudget = false
     try {
       for await (const raw of createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY })) {
         const line = raw.trim()
@@ -185,14 +205,28 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
           sessionId = parsed.sessionID
           yield { _tag: 'SessionStarted', sessionId }
         }
+        cachedTokensRead += opencodeCachedTokensRead(parsed)
         const event = opencodeAgentEvent(parsed)
-        if (event === undefined)
-          continue
-        if (event._tag === 'Failed')
-          failed = true
-        yield event
+        if (event !== undefined) {
+          if (event._tag === 'Failed')
+            failed = true
+          yield event
+        }
+        // A stopping step ends the turn by itself, so the budget never discards
+        // an answer the session already paid for. Every other step means one
+        // more full read of the context, so stop paying for it now. SIGKILL,
+        // because a run this deep must not negotiate.
+        if (cachedTokensRead > cachedContextBudget && event?._tag !== 'TurnCompleted') {
+          overBudget = true
+          child.kill('SIGKILL')
+          break
+        }
       }
       const exit = await exited
+      if (overBudget) {
+        yield { _tag: 'ContextBudgetExhausted', cachedTokensRead }
+        return
+      }
       if (silent) {
         yield { _tag: 'Failed', reason: 'The opencode session stopped sending output.' }
         return

@@ -7,6 +7,7 @@ import type { AgentProgress, AgentRole } from './types.ts'
 import { agentActivityFromEvent } from './agent-activity.ts'
 import { roleProfile } from './agent-profile.ts'
 import { agentEventProgress } from './agent-progress.ts'
+import { contextBudgetExhaustedReason } from './failure.ts'
 import { err, ok } from './result.ts'
 
 export interface AgentTurnOptions {
@@ -97,6 +98,15 @@ export async function runAgentTurn(
     }
     if (event._tag === 'Message')
       response = event.text
+    if (event._tag === 'ContextBudgetExhausted') {
+      // The turn names the Item, so the Incident names the pull request a
+      // person must look at. The provider only knows how much it read.
+      failure ??= contextBudgetExhaustedReason({
+        cachedTokensRead: event.cachedTokensRead,
+        itemNumber: input.number,
+        repository: input.repository,
+      })
+    }
     if (event._tag === 'Failed')
       failure ??= event.reason
     const activity = agentActivityFromEvent(event, options.now().toISOString())

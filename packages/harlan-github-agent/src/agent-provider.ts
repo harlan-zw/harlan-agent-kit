@@ -16,6 +16,8 @@ export type AgentEvent
     | { _tag: 'WebSearch' }
     | { _tag: 'Message', text: string }
     | { _tag: 'TurnCompleted' }
+    /** The session read its whole Context budget, so the provider stopped it. */
+    | { _tag: 'ContextBudgetExhausted', cachedTokensRead: number }
     | { _tag: 'Failed', reason: string }
 
 export interface AgentTurnRequest {
@@ -31,6 +33,20 @@ export interface AgentTurnRequest {
   /** Absolute path of the prepared Git worktree. */
   workspace: string
 }
+
+/**
+ * Cached context tokens one agent session may read before its provider stops it.
+ *
+ * Measured over seven days of real sessions. The median session read 898,048
+ * cached tokens and the 95th percentile read 10,838,912. Twenty million is
+ * about 22 times the median, so a thorough review keeps its depth. It stops 7
+ * of 321 sessions and removes 14.8 percent of all cached reads. The worst
+ * session read 60,562,304 cached tokens for one pull request review.
+ *
+ * Cached context reads were 97 percent of all token volume, so this budget
+ * bounds the bill.
+ */
+export const DEFAULT_CACHED_CONTEXT_BUDGET = 20_000_000
 
 export interface AgentProvider {
   name: AgentProviderName
