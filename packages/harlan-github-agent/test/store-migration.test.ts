@@ -69,6 +69,8 @@ function journalAtVersion22(path: string): void {
   database.exec('CREATE INDEX review_publications_attempt_created ON review_publications(attempt_id, created_at)')
 
   database.prepare(`UPDATE worker_tasks SET state_tag = 'NeedsAttention', reason = 'Legacy state.'`).run()
+  // Version 22 stored no Agent selection.
+  database.exec('DROP TABLE IF EXISTS agent_selection')
   database.exec('PRAGMA user_version = 22')
   database.close()
 }
@@ -90,7 +92,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(24)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(25)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

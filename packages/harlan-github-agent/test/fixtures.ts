@@ -1,6 +1,12 @@
+import type { AgentRuntimeSource } from '../src/agent-profile.ts'
 import type { AgentEvent, AgentProvider, AgentProviderName, AgentTurnRequest } from '../src/agent-provider.ts'
-import type { DashboardSnapshot, GitHubIssueItem, GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
+import type { AgentProfile, DashboardSnapshot, GitHubIssueItem, GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+
+/** One fixed Agent runtime, for a worker that never switches mid test. */
+export function agentRuntime(profile: AgentProfile, provider: AgentProvider): AgentRuntimeSource {
+  return () => ({ profile, provider })
+}
 
 export function repositoryMapping(overrides: Partial<RepositoryMapping> = {}): RepositoryMapping {
   return {
@@ -71,6 +77,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
     agentProfile: CODEX_AGENT_PROFILE,
+    agentSelection: { provider: 'codex', model: null, reasoningEffort: null },
     agents: [],
     incidents: [],
     queue: [],

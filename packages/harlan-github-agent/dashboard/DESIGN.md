@@ -94,7 +94,7 @@ Removed, and not to be reintroduced:
 - **The page grid background.** Decoration with no referent.
 - **Copy that restates its own button.** An approval row said "Review and repairs require your approval." next to a button reading "Review and repair". A failure row keeps its reason, because the reason is the only information on the row.
 - **Provenance on the card face.** Session identifier, agent identifier, and commit SHA are debugging aids, not watching aids. They sit behind a "Session and commit" disclosure on running agents and behind "Evidence" in history.
-- **Static configuration in the live status bar.** The worker profile is fixed for the session, so it belongs in the footer.
+- **Static configuration in the live status bar.** The per-role model list does not change while you watch, so it belongs in the footer.
 
 New copy has to answer one question the reader cannot already answer from the screen. If it cannot, it does not ship.
 
@@ -219,5 +219,6 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 - Command output is redacted in the service before it reaches the dashboard. Loopback binding and a dashboard password are not a reason to ship raw stdout that can contain installation tokens.
 - Keyboard: `j` and `k` move through decisions, `a` approves the focused one, `/` focuses the repository filter. Listed in the footer rather than behind a help overlay.
 - Notifications cover both halves of "something happened": a new decision, and work that ended badly. Failures land in History rather than the decisions zone, so without the second trigger an agent that dies overnight is silent.
+- The Agent selection is a control, not configuration, so it sits with Pause in the header. The button carries the current Agent provider and the menu carries the model and the reasoning effort. The footer keeps the resolved per-role model list, because that answers a different question: what each role will run.
 - Pause, global or per repository, stops new claims only. Work already running keeps its lease and finishes. Pause is not cancel, and the two controls stay distinct.
 - Presentation logic lives in `app/utils/dashboard.ts`, not in the page. It is pure, takes its clock and engine state as arguments, and is unit tested. The page keeps only reactive wiring.

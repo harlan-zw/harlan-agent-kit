@@ -19,7 +19,8 @@ Current:
 - safe merge conflict commits and pushes
 - two agent providers: [Codex](https://developers.openai.com/codex/sdk/) and [opencode](https://opencode.ai). Set `agent.provider` to `codex` or `opencode`
 - role-specific Codex profiles: `gpt-5.6-sol` with high reasoning for adversarial review, and `gpt-5.6-terra` with medium reasoning for other work
-- the opencode profile runs `opencode-go/deepseek-v4-flash` at the high reasoning variant for every role
+- the opencode profile runs `opencode-go/deepseek-v4-flash` at the high reasoning effort for every role
+- switch the Agent provider, model, and reasoning effort from the dashboard or the tray, with no restart
 - one global limit of three active agents across reviews, issue work, and pull request fixes
 - durable dashboard cancellation for active and queued tasks
 - read-only public issue watches outside the GitHub App installation
@@ -63,7 +64,9 @@ The review agent repairs its findings before its turn ends. If default branch CI
 
 Each Worker runs like a normal local agent session inside its own Git worktree. The controller creates each worktree from its mapped checkout with `wt`, so the global Worktrunk path template applies. Workers inherit the global agent context, installed skills, environment, provider login, and authenticated `gh` client. They may read past GitHub issues and pull requests. The controller still owns comments and pushes.
 
-Switching `agent.provider` starts new sessions. A saved session belongs to the provider that created it, so no Worker resumes a session from the other provider.
+Switching the Agent provider starts new sessions. A saved session belongs to the provider that created it, so no Worker resumes a session from the other provider.
+
+`agent.provider` names the Agent provider the service starts with. A switch from the dashboard or the tray overrides it and survives a restart.
 
 `external_repositories` watches exact issue numbers or all current issues in a public repository. These watches use public GitHub data. They receive no GitHub App token and never add work to the queue.
 
@@ -72,6 +75,8 @@ Grant read access to metadata, contents, issues, checks, commit statuses, and ad
 A conflict fix also requires an owned repository, an allowed pull request author, an allowed branch prefix, and an unprotected head branch. The service pushes the checked commit from a clean bare Git repository.
 
 Open `http://harlan-github-agent.local/`. Use `agent` as the dashboard username.
+
+Use the Agent provider control in the header to switch the Agent provider, model, or reasoning effort. A switch starts the next agent turn. An agent already running keeps the model it started with. Switching the provider returns the model and the reasoning effort to that provider's defaults.
 
 Select `Pause` before restarting the service. Poll `/api/state` until `agentControl.safeToRestart` is `true`.
 Pause persists across restarts. Select `Resume` after the service returns.

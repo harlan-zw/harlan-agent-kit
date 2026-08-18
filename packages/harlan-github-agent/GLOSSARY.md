@@ -11,6 +11,8 @@ did not cover it.
 | Term | Storage | Owner | Relationship | Customer word |
 | --- | --- | --- | --- | --- |
 | Agent provider | `agent.provider` | Configuration | 1 to N Agents | agent provider |
+| Agent selection | `agent_selection` | Controller | One per service | Agent selection |
+| Reasoning effort | `agent_selection.reasoning_effort` | Controller | One per Agent selection | Reasoning effort |
 | Repository mapping | `repositories` | Configuration | 1 to N Items | repository |
 | Item | `subjects` | Journal | 1 to N Revisions, Tasks, Agents | issue or pull request |
 | Observation | `observations` | Reconciliation | N to 1 Revision | none |
@@ -92,9 +94,29 @@ Collisions
 
 The one local agent runtime that answers every Agent turn: `codex` or `opencode`.
 
-The Agent provider owns its models, reasoning variants, sessions, and Eject command. A saved session belongs to the provider that created it.
+The Agent provider owns its models, reasoning efforts, sessions, and Eject command. A saved session belongs to the provider that created it.
 
 Use Agent provider. Do not use backend, engine, model provider, or vendor.
+
+### Agent selection
+
+The Agent provider, model, and Reasoning effort in force right now.
+
+An Agent selection is durable. It survives a restart, and it overrides the Agent provider the configuration names.
+
+A model belongs to one Agent provider. Switching the provider therefore returns the model and the Reasoning effort to that provider's own defaults.
+
+A switch starts the next agent turn. An agent already running keeps the model it started with.
+
+Use Agent selection for the control and for the stored choice. Do not use agent config, model config, or model override.
+
+### Reasoning effort
+
+How hard a model reasons before it answers: `none`, `low`, `medium`, `high`, `xhigh`, or `max`.
+
+`reasoning effort` is Codex's own name for this setting, so this service uses it for both providers.
+
+Use Reasoning effort. Do not use reasoning variant, thinking level, or effort level.
 
 ### Repository mapping
 
@@ -339,6 +361,8 @@ Evidence that a skill, policy, or workflow should change.
 | merge status, conflict flag | mergeable state | GitHub's word |
 | automerge, self merge, merge tier | auto-merge | GitHub's spelling of its own feature |
 | error, problem, outage, alert | Incident | One concept |
+| agent config, model config, model override | Agent selection | One concept |
+| reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |
 | risk level, skip review, review waiver, review exemption | Auto merge | Auto merge never affects whether review runs |
 | journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | rewrite the sentence | Internal machinery, never user-visible |

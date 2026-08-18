@@ -1,5 +1,7 @@
-# Agent provider that runs every Worker. Codex is the default.
-# opencode runs opencode-go/deepseek-v4-flash at the high reasoning variant.
+# Agent provider the service starts with. Codex is the default.
+# opencode runs opencode-go/deepseek-v4-flash at the high reasoning effort.
+# The dashboard and the tray switch the Agent selection without a restart.
+# A switch overrides this value and survives a restart.
 agent:
   provider: codex
 github:

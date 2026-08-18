@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createAgentActivityLog } from './agent-activity.ts'
 import { createAgentPermitPool } from './agent-permit-pool.ts'
-import { agentProfile } from './agent-profile.ts'
+import { agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
@@ -135,10 +135,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     options.logger.info(`${unmapped.length} granted repositories have no local checkout under a trusted root, so no agent can see them${names}. Clone one to include it.`)
   }
 
-  const profile = agentProfile(config.agent.provider)
-  const provider = config.agent.provider === 'opencode' ? createOpencodeProvider() : createCodexProvider()
+  const configuredProfile = agentProfile(config.agent.provider)
+  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile)
+  // Both provider runtimes are built once. Switching the Agent selection then
+  // costs one journal read, and the service never restarts to answer it.
+  const runtime = createAgentRuntimeSource({
+    maximumActiveAgents: configuredProfile.maximumActiveAgents,
+    providers: { codex: createCodexProvider(), opencode: createOpencodeProvider() },
+    selection: store.getAgentSelection,
+  })
+  const profile = runtime().profile
   options.logger.info(`Agent provider: ${profile.provider} with ${profile.roles.adversarial_review.model}.`)
-  const store = openJournalStore(config.storage.path, config.mutationsEnabled, profile)
   const startedAt = now().toISOString()
   store.syncRepositories(config.repositories, startedAt)
   if (config.mutationsEnabled) {
@@ -209,8 +216,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       activityLog,
       github,
       now,
-      profile,
-      provider,
+      runtime,
       store,
       worktrees,
       validateMapping,
@@ -239,10 +245,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           at: now().toISOString(),
         })
       },
-      profile,
-      provider,
       repairs: fixWorktrees,
       store,
+      runtime,
       status: reviewStatus,
       triageStatus: createIssueTriageCommentController({
         github: workerGithub,
@@ -290,8 +295,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           activityLog,
           github: workerGithub,
           now,
-          profile,
-          provider,
+          runtime,
           store,
           validateMapping,
           worktrees: baselineWorktrees,
@@ -357,8 +361,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           github: workerGithub,
           activityLog,
           now,
-          profile,
-          provider,
+          runtime,
           store,
           validateMapping,
           worktrees: issueWorktrees,
@@ -507,6 +510,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       pauseAgents: store.pauseAgents,
       requestReviewRerun: store.requestReviewRerun,
       resumeAgents: store.resumeAgents,
+      selectAgent: store.selectAgent,
       setRepositoryPaused: store.setRepositoryPaused,
     },
     allowedHost: config.server.allowedHost,

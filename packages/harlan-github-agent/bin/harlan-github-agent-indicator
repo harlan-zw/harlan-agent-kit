@@ -35,6 +35,12 @@ PROVIDER_LABELS = {
     'codex': 'Codex',
     'opencode': 'opencode',
 }
+AGENT_MODELS = {
+    'codex': ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    'opencode': ['opencode-go/deepseek-v4-flash', 'opencode-go/deepseek-v4-pro'],
+}
+REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+PROVIDER_DEFAULT_LABEL = 'Provider default'
 AGENT_ROLE_LABELS = {
     'adversarial_review': 'Adversarial review',
     'baseline_repair': 'Baseline repair',
@@ -66,6 +72,21 @@ def request_agent_control(action):
         method='POST',
         headers={
             'Authorization': dashboard_authorization(),
+            'Origin': DASHBOARD_ORIGIN,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.load(response)
+
+
+def request_agent_select(selection):
+    request = urllib.request.Request(
+        f'{DASHBOARD_URL}api/agents/select',
+        data=json.dumps(selection, separators=(',', ':')).encode(),
+        method='POST',
+        headers={
+            'Authorization': dashboard_authorization(),
+            'Content-Type': 'application/json',
             'Origin': DASHBOARD_ORIGIN,
         },
     )
@@ -153,6 +174,86 @@ def agent_provider_label(dashboard):
     effort = review.get('reasoningEffort')
     name = PROVIDER_LABELS.get(provider, provider)
     return f"Agent provider · {name} · {model}{f' · {effort}' if effort else ''}"
+
+
+def agent_selection(dashboard):
+    if dashboard is None:
+        return None
+    selection = dashboard.get('agentSelection')
+    if not isinstance(selection, dict) or not isinstance(selection.get('provider'), str):
+        return None
+    return {
+        'provider': selection['provider'],
+        'model': selection.get('model'),
+        'reasoningEffort': selection.get('reasoningEffort'),
+    }
+
+
+def selection_marker(selected):
+    return '●' if selected else '○'
+
+
+def agent_selection_choices(selection):
+    """Lists every Agent provider, model, and reasoning effort the menu offers.
+
+    Switching the provider clears the model and the reasoning effort, because a
+    model belongs to one provider and the service refuses the other provider's.
+    """
+    if selection is None:
+        return []
+
+    def choice(label, selected, chosen):
+        return {'_tag': 'Choice', 'label': label, 'selected': selected, 'selection': chosen}
+
+    choices = [{'_tag': 'Heading', 'label': 'Agent provider'}]
+    choices.extend(
+        choice(
+            PROVIDER_LABELS.get(provider, provider),
+            selection['provider'] == provider,
+            {'provider': provider, 'model': None, 'reasoningEffort': None},
+        )
+        for provider in AGENT_MODELS
+    )
+
+    choices.append({'_tag': 'Separator'})
+    choices.append({'_tag': 'Heading', 'label': 'Model'})
+    choices.extend(
+        choice(
+            model or PROVIDER_DEFAULT_LABEL,
+            selection['model'] == model,
+            {**selection, 'model': model},
+        )
+        for model in [None, *AGENT_MODELS.get(selection['provider'], [])]
+    )
+
+    choices.append({'_tag': 'Separator'})
+    choices.append({'_tag': 'Heading', 'label': 'Reasoning effort'})
+    choices.extend(
+        choice(
+            effort or PROVIDER_DEFAULT_LABEL,
+            selection['reasoningEffort'] == effort,
+            {**selection, 'reasoningEffort': effort},
+        )
+        for effort in [None, *REASONING_EFFORTS]
+    )
+    return choices
+
+
+def agent_selection_items(dashboard, select_agent):
+    choices = agent_selection_choices(agent_selection(dashboard))
+    if not choices:
+        return [menu_item('Agent selection unavailable', enabled=False)]
+    items = []
+    for entry in choices:
+        if entry['_tag'] == 'Separator':
+            items.append(separator())
+        elif entry['_tag'] == 'Heading':
+            items.append(menu_item(entry['label'], enabled=False))
+        else:
+            item = menu_item(f"{selection_marker(entry['selected'])} {entry['label']}")
+            item.connect('activate', lambda *_args, value=entry['selection']: select_agent(value))
+            items.append(item)
+    return items
 
 
 def opencode_usage(now=None, database=OPENCODE_DATABASE):
@@ -496,11 +597,11 @@ def usage_label(dashboard, usage):
     return opencode_usage_label(usage) if active_provider(dashboard) == 'opencode' else codex_limit_label(usage)
 
 
-def build_menu(indicator, dashboard, runners, usage, error, action_error, refresh, set_agent_control, eject_agent):
+def build_menu(indicator, dashboard, runners, usage, error, action_error, refresh, set_agent_control, eject_agent, select_agent):
     menu = Gtk.Menu()
     agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
     queue = [] if dashboard is None else dashboard.get('queue', [])
-    menu.append(menu_item(agent_provider_label(dashboard), enabled=False))
+    menu.append(submenu_item(agent_provider_label(dashboard), agent_selection_items(dashboard, select_agent)))
     menu.append(menu_item(usage_label(dashboard, usage), enabled=False))
     menu.append(separator())
     menu.append(menu_item('Open Harlan GitHub Agent', DASHBOARD_URL))
@@ -609,7 +710,7 @@ def main():
         indicator.set_label(label, '🟢 99')
         indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
         indicator.set_title(title)
-        build_menu(indicator, dashboard, runners, usage, error, control_error, refresh, set_agent_control, eject_agent)
+        build_menu(indicator, dashboard, runners, usage, error, control_error, refresh, set_agent_control, eject_agent, select_agent)
         if pending_action['value'] is not None:
             refresh()
         return False
@@ -625,6 +726,8 @@ def main():
             try:
                 if action['_tag'] == 'AgentControl':
                     request_agent_control(action['action'])
+                elif action['_tag'] == 'AgentSelect':
+                    request_agent_select(action['selection'])
                 else:
                     request_agent_eject(action['taskId'])
             except Exception as caught:
@@ -663,6 +766,14 @@ def main():
         }
         return refresh()
 
+    def select_agent(selection):
+        pending_action['value'] = {
+            '_tag': 'AgentSelect',
+            'selection': selection,
+            'label': 'Agent switch',
+        }
+        return refresh()
+
     def eject_agent(task_id):
         pending_action['value'] = {
             '_tag': 'AgentEject',
@@ -671,7 +782,7 @@ def main():
         }
         return refresh()
 
-    build_menu(indicator, None, [], None, None, None, refresh, set_agent_control, eject_agent)
+    build_menu(indicator, None, [], None, None, None, refresh, set_agent_control, eject_agent, select_agent)
     refresh()
     GLib.timeout_add_seconds(5, refresh)
     Gtk.main()

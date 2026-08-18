@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { runParsedAgentTurn } from '../src/agent-turn.ts'
 import { err, ok } from '../src/result.ts'
-import { turnEvents } from './fixtures.ts'
+import { agentRuntime, turnEvents } from './fixtures.ts'
 
 function replies(responses: unknown[], capture: { prompts: string[] }): AgentProvider {
   return {
@@ -22,8 +22,7 @@ function replies(responses: unknown[], capture: { prompts: string[] }): AgentPro
 function options(provider: AgentProvider) {
   return {
     now: () => new Date('2026-08-16T00:00:00.000Z'),
-    profile: CODEX_AGENT_PROFILE,
-    provider,
+    runtime: agentRuntime(CODEX_AGENT_PROFILE, provider),
     store: {
       getWorkerSession: () => null,
       saveWorkerSession: () => undefined,

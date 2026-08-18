@@ -1,12 +1,11 @@
 import type { AgentActivityLog } from './agent-activity.ts'
-import type { AgentProvider } from './agent-provider.ts'
+import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubAgentSource, PullRequestReviewSnapshot } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
 import type {
-  AgentProfile,
   AgentProgress,
   ClaimedAdversarialReviewTask,
   ClaimedAgentTask,
@@ -71,8 +70,7 @@ export interface ItemAgentOptions {
   now: () => Date
   /** Called when a cosmetic status update fails, which never stops the turn. */
   onProgressPublishFailure?: (task: ClaimedAgentTask, reason: string) => void
-  profile: AgentProfile
-  provider: AgentProvider
+  runtime: AgentRuntimeSource
   store: Pick<JournalStore, 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'updateAgentProgress'>
   status: Pick<ReviewStatusController, 'publish'>
   triageStatus: IssueTriageCommentController
@@ -538,7 +536,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       if (reviewing._tag === 'Err')
         return reviewing
 
-      const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse }, {
+      // The Review run records which Agent provider and model answered, so the
+      // runtime is read once and reused for the whole review.
+      const reviewRuntime = options.runtime()
+      const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
         number: task.pullRequestNumber,
         prompt: reviewPrompt(task, snapshot.value, workspace.value.path, repairsBaseline),
         progress: {
@@ -584,9 +585,9 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         pullRequestNumber: task.pullRequestNumber,
         revisionId: task.revisionId,
         headSha: task.pullRequest.headSha,
-        provider: options.provider.name,
+        provider: reviewRuntime.profile.provider,
         sessionId: turn.value.sessionId,
-        model: options.profile.roles.adversarial_review.model,
+        model: reviewRuntime.profile.roles.adversarial_review.model,
         agentVersion: '0.0.0',
         skillDigest,
         startedAt,

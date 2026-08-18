@@ -1,9 +1,9 @@
 import type { AgentActivityLog } from './agent-activity.ts'
-import type { AgentProvider } from './agent-provider.ts'
+import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProfile, AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
+import type { AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { ConflictWorktreeManager } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
@@ -17,8 +17,7 @@ export interface ConflictWorker {
 export interface ConflictWorkerOptions {
   github: Pick<GitHubSource, 'getPullRequest'>
   now: () => Date
-  profile: AgentProfile
-  provider: AgentProvider
+  runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
   store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>

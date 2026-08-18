@@ -307,6 +307,94 @@ class AgentControlRequestTest(unittest.TestCase):
         self.assertEqual(timeout, 10)
 
 
+class AgentSelectionTest(unittest.TestCase):
+    def test_reads_the_selection_the_dashboard_sends(self):
+        dashboard = {'agentSelection': {'provider': 'opencode', 'model': None, 'reasoningEffort': 'high'}}
+
+        self.assertEqual(
+            indicator.agent_selection(dashboard),
+            {'provider': 'opencode', 'model': None, 'reasoningEffort': 'high'},
+        )
+
+    def test_reports_no_selection_when_the_dashboard_is_unavailable(self):
+        self.assertIsNone(indicator.agent_selection(None))
+        self.assertIsNone(indicator.agent_selection({}))
+
+    def test_marks_the_current_provider_model_and_reasoning_effort(self):
+        choices = indicator.agent_selection_choices({
+            'provider': 'opencode',
+            'model': 'opencode-go/deepseek-v4-pro',
+            'reasoningEffort': None,
+        })
+        selected = [entry['label'] for entry in choices if entry['_tag'] == 'Choice' and entry['selected']]
+
+        self.assertEqual(selected, ['opencode', 'opencode-go/deepseek-v4-pro', 'Provider default'])
+
+    def test_offers_only_the_models_of_the_selected_provider(self):
+        choices = indicator.agent_selection_choices({'provider': 'codex', 'model': None, 'reasoningEffort': None})
+        models = [
+            entry['selection']['model']
+            for entry in choices
+            if entry['_tag'] == 'Choice' and 'model' in entry['selection'] and entry['selection']['provider'] == 'codex'
+        ]
+
+        self.assertIn('gpt-5.6-luna', models)
+        self.assertNotIn('opencode-go/deepseek-v4-pro', models)
+
+    def test_switching_provider_clears_the_model_and_reasoning_effort(self):
+        choices = indicator.agent_selection_choices({
+            'provider': 'codex',
+            'model': 'gpt-5.6-luna',
+            'reasoningEffort': 'max',
+        })
+        opencode = next(
+            entry for entry in choices
+            if entry['_tag'] == 'Choice' and entry['label'] == 'opencode'
+        )
+
+        self.assertEqual(opencode['selection'], {'provider': 'opencode', 'model': None, 'reasoningEffort': None})
+
+    def test_lists_nothing_without_a_selection(self):
+        self.assertEqual(indicator.agent_selection_choices(None), [])
+
+    def test_sends_authenticated_agent_switch_request(self):
+        requests = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"provider":"opencode","model":null,"reasoningEffort":null}'
+
+        def open_request(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            password_file = Path(directory) / 'dashboard-password'
+            password_file.write_text('secret\n')
+            with patch.object(indicator, 'PASSWORD_FILE', password_file), patch.object(
+                indicator.urllib.request,
+                'urlopen',
+                side_effect=open_request,
+            ):
+                result = indicator.request_agent_select({'provider': 'opencode', 'model': None, 'reasoningEffort': None})
+
+        request, timeout = requests[0]
+        self.assertEqual(result, {'provider': 'opencode', 'model': None, 'reasoningEffort': None})
+        self.assertEqual(request.full_url, 'http://harlan-github-agent.local/api/agents/select')
+        self.assertEqual(request.get_method(), 'POST')
+        self.assertEqual(request.data, b'{"provider":"opencode","model":null,"reasoningEffort":null}')
+        self.assertEqual(request.get_header('Content-type'), 'application/json')
+        self.assertEqual(request.get_header('Origin'), 'http://harlan-github-agent.local')
+        self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
+        self.assertEqual(timeout, 3)
+
+
 class WatchLogTest(unittest.TestCase):
     def test_formats_agent_commands_results_and_completion(self):
         timestamp = '2026-08-14T08:10:23.321Z'

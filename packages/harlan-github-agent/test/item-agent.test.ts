@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createIssueTriageWorker, createReviewWorker, reviewSnapshotDigest } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
-import { issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('subject Workers', () => {
   it('keeps one review identity while GitHub activity time and CI results move', () => {
@@ -36,15 +36,14 @@ describe('subject Workers', () => {
     const comments: string[] = []
     let attempt: RecordReviewRunInput | undefined
     const worker = createReviewWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
         findings: [],
         repair: { outcome: 'not_needed', summary: 'No repair needed.', checks: [], commitMessage: '' },
         confidence: 96,
-      }), capture),
+      }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -132,8 +131,7 @@ describe('subject Workers', () => {
     let workspaceCreated = false
     const capture: ProviderCapture = { requests: [] }
     const worker = createReviewWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider([], capture),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -228,15 +226,14 @@ describe('subject Workers', () => {
       findings: [{ _tag: 'Open' as const, summary: 'The parser drops data.', nextAction: 'Preserve the buffered bytes.' }],
     }
     const worker = createReviewWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         review: { state: 'failed', reason: 'The parser drops data.', evidence: 'focused reproduction failed before repair' },
         verification: { state: 'passed', reason: '', evidence: 'regression passes after repair' },
         findings: [{ summary: 'The parser drops data.', nextAction: 'Preserve the buffered bytes.' }],
         repair: { outcome: 'repaired', summary: 'Preserved buffered bytes.', checks: ['pnpm vitest run test/parser.test.ts'], commitMessage: 'fix(core): preserve buffered parser bytes' },
         confidence: null,
-      })),
+      }))),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -325,8 +322,7 @@ describe('subject Workers', () => {
     let baselineQueued = false
     const capture: ProviderCapture = { requests: [] }
     const worker = createReviewWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider([], capture),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -398,15 +394,14 @@ describe('subject Workers', () => {
     const capture: ProviderCapture = { requests: [] }
     let published = ''
     const worker = createReviewWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'build passes' },
         findings: [],
         repair: { outcome: 'not_needed', summary: 'No material defect.', checks: ['pnpm build'], commitMessage: '' },
         confidence: 91,
-      }), capture),
+      }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -484,15 +479,14 @@ describe('subject Workers', () => {
     const capture: ProviderCapture = { requests: [] }
     let published = ''
     const worker = createReviewWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'build passes' },
         findings: [],
         repair: { outcome: 'not_needed', summary: 'No material defect.', checks: ['pnpm build'], commitMessage: '' },
         confidence: 90,
-      }), capture),
+      }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -567,15 +561,14 @@ describe('subject Workers', () => {
     const capture: ProviderCapture = { requests: [] }
     let published = ''
     const worker = createReviewWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'build passes with the fix' },
         findings: [],
         repair: { outcome: 'not_needed', summary: 'No material defect.', checks: ['pnpm build'], commitMessage: '' },
         confidence: 88,
-      }), capture),
+      }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -650,8 +643,7 @@ describe('subject Workers', () => {
     const capture: ProviderCapture = { requests: [] }
     let triageBody = ''
     const worker = createIssueTriageWorker({
-      profile: CODEX_AGENT_PROFILE,
-      provider: stubProvider(turnEvents({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         validity: 'valid',
         difficulty: 2,
         impact: 4,
@@ -659,7 +651,7 @@ describe('subject Workers', () => {
         needsCodebaseReview: false,
         summary: 'The parser drops valid input.',
         nextAction: 'Write a regression test and repair the parser.',
-      }), capture),
+      }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),

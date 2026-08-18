@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -3004,5 +3005,58 @@ describe('journal store', () => {
       expectedHeadSha: 'abc123',
       artifactRef: 'refs/harlan-github-agent/publications/task-1',
     }))
+  })
+})
+
+describe('agent selection', () => {
+  it('follows the configured Agent provider while nothing is stored', () => {
+    const store = createStore()
+
+    expect(store.getAgentSelection()).toEqual({ provider: 'codex', model: null, reasoningEffort: null })
+    expect(store.getDashboardSnapshot('2026-08-18T01:00:00.000Z').agentProfile.roles.issue_work.model).toBe('gpt-5.6-terra')
+  })
+
+  it('applies a switch to the dashboard profile and keeps agent capacity', () => {
+    const store = createStore()
+
+    store.selectAgent({ provider: 'opencode', model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' }, '2026-08-18T01:00:00.000Z')
+    const profile = store.getDashboardSnapshot('2026-08-18T01:00:01.000Z').agentProfile
+
+    expect(profile.provider).toBe('opencode')
+    expect(profile.roles.adversarial_review).toEqual({ model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' })
+    expect(profile.maximumActiveAgents).toBe(CODEX_AGENT_PROFILE.maximumActiveAgents)
+  })
+
+  it('keeps a switch across a restart', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'harlan-agent-selection-'))
+    temporaryDirectories.push(directory)
+    const path = join(directory, 'state.sqlite')
+    const store = openJournalStore(path)
+
+    store.selectAgent({ provider: 'opencode', model: null, reasoningEffort: 'max' }, '2026-08-18T01:00:00.000Z')
+    store.close()
+
+    const reopened = openJournalStore(path)
+    stores.push(reopened)
+    expect(reopened.getAgentSelection()).toEqual({ provider: 'opencode', model: null, reasoningEffort: 'max' })
+  })
+
+  it('reads a saved session for the selected Agent provider only', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T01:00:00.000Z')
+    store.recordObservation({
+      externalId: 'pr-1',
+      observedAt: '2026-08-18T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+
+    store.saveWorkerSession('harlan-zw/example', 24, 'conflict_resolution', 'session-codex', '2026-08-18T01:00:00.000Z')
+    const beforeSwitch = store.getWorkerSession('harlan-zw/example', 24, 'conflict_resolution')
+    store.selectAgent({ provider: 'opencode', model: null, reasoningEffort: null }, '2026-08-18T01:01:00.000Z')
+    const afterSwitch = store.getWorkerSession('harlan-zw/example', 24, 'conflict_resolution')
+
+    expect(beforeSwitch).toBe('session-codex')
+    expect(afterSwitch).toBeNull()
   })
 })
