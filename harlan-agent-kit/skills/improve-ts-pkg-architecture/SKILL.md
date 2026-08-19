@@ -27,6 +27,7 @@ Use `wt` only when another agent is actively modifying the same repository. Othe
 - [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) — catalogue of TS-package-native seams (`exports`, conditional exports, `packages/*`, catalogs, `bin`, hookable, unplugin, citty).
 - [PKG-CONVENTIONS.md](PKG-CONVENTIONS.md) — package conventions (factory shape, options + hooks, error modes, CLI shape, treeshake invariants, fixture layout, runtime portability).
 - [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md) — design-it-twice with parallel sub-agents for chosen candidates.
+- [code-comments.md](../../references/code-comments.md) — the comment contract for any code this skill writes.
 
 ## Process
 

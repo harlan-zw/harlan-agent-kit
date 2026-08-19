@@ -25,6 +25,7 @@ Read these files completely before discovery:
 2. `../unit-tests/SKILL.md`, for bug fix tests.
 3. `../pr/SKILL.md`, for worktree, PR, CI, and review rules.
 4. `references/site-agent-contract.md`, for the exact delegated workflow.
+5. `../../references/code-comments.md`, for the code comment contract.
 
 If no inventory exists, stop before spawning agents or editing repositories. Report every path checked.
 
