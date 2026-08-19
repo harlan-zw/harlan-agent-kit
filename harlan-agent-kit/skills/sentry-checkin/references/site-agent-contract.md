@@ -43,12 +43,23 @@ Repeat `--manifest` for sites with several projects. Fill every row. Preserve th
 
 Cluster issues only after stack and release evidence proves one root cause. Keep every issue as its own ledger row.
 
+Read the history report handed to you. It tags each frozen ID `new`, `recurring`, or `unclosed`.
+
+Treat a prior disposition as a lead, never as an answer. It tells you where a past run looked, so you can reach the same evidence faster or find it no longer holds. It never substitutes for this run's evidence, and it never removes a row.
+
+An `unclosed` ID needs care. A past run already proved a commit fixes it, and the issue is open anyway. Do not repeat that proof. Establish which of these is true, and record it as the evidence:
+
+- The fix is deployed and the issue is stale in Sentry. Disposition `already-fixed`, and name the release that carries the fix plus the last-seen time that precedes it.
+- The fix is merged but never deployed. Disposition `blocked`, naming the missing deploy.
+- The fix does not hold. Treat it as a live defect and fix the category, not the instance.
+
 ## Decide each disposition
 
 - Reproduce local defects when practical.
 - For bugs and validation logic, write the failing exported-API test first.
 - Design out the failure category when a type or boundary change can make recurrence impossible.
 - Confirm `already-fixed` against a specific commit and the event's release or last-seen time.
+- Never answer an `unclosed` ID with `already-fixed` on the same commit a past run already cited. Name why it stayed open.
 - Use `expected` only when the behavior is intended. Improve filtering or context when Sentry still reports it as an error.
 - Use `third-party` only after locating the external frame or service boundary. Add a safe local mitigation when one exists.
 - Use `blocked` only after exhausting repository, Sentry, history, and dependency evidence.

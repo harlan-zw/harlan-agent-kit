@@ -14,6 +14,7 @@
     "service:status": "bash scripts/service.sh status",
     "test:worktree-claim": "bash harlan-agent-kit/scripts/worktree-claim.test.sh",
     "test:wt-only": "bash harlan-agent-kit/hooks/wt-only.test.sh",
+    "test:sentry-checkin": "python3 -m unittest discover -s harlan-agent-kit/skills/sentry-checkin/scripts -p 'test_*.py'",
     "release": "node --experimental-strip-types scripts/release.ts"
   },
   "dependencies": {
