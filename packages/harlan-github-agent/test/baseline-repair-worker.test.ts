@@ -23,7 +23,7 @@ describe('baseline repair worker', () => {
       github: {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
           body: '',
           checks: { _tag: 'Available', checks: [] },
           comments: [],
@@ -90,7 +90,7 @@ describe('baseline repair worker', () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const baseChecks = scenario.green === true
       ? []
-      : [{ id: 1, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed' as const, conclusion: 'failure' }]
+      : [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed' as const, conclusion: 'failure' }]
     const preparedHead = scenario.moved === true ? 'f'.repeat(40) : pullRequest.baseSha
     const worker = createBaselineRepairWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({}))),

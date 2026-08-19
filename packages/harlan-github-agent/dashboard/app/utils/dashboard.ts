@@ -165,6 +165,7 @@ const incidentKindLabels: Record<IncidentKind, string> = {
   network: 'Network',
   policy: 'Repository policy',
   rate_limit: 'Rate limit',
+  runner_lost: 'Runner lost',
   subject_changed: 'Item changed',
   unknown: 'Unclassified',
 }

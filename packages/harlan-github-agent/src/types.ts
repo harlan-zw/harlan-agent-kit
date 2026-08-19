@@ -707,6 +707,13 @@ export type IncidentScope
     | { _tag: 'Repository', repository: string }
     | { _tag: 'Task', taskId: string, repository: string, itemNumber: number | null }
 
+/**
+ * What one Incident is about.
+ *
+ * Every kind except `runner_lost` comes from `classifyFailure`, which reads a
+ * failure message. `runner_lost` comes from GitHub's own job steps instead, so
+ * it is raised where the checks snapshot is built.
+ */
 export type IncidentKind
   = | 'github_unavailable'
     | 'github_access'
@@ -719,6 +726,13 @@ export type IncidentKind
     | 'context_budget'
     | 'policy'
     | 'installation_access'
+    /**
+     * A runner stopped while its jobs were running.
+     *
+     * GitHub reports the job as failed, and no step reports failure. The change
+     * under review is not broken, so its check runs read as PENDING.
+     */
+    | 'runner_lost'
     | 'unknown'
 
 /** What the controller will do about an Incident without being asked. */

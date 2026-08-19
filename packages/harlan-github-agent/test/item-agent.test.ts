@@ -26,7 +26,7 @@ describe('subject Workers', () => {
     })).toBe(reviewSnapshotDigest(snapshot))
     expect(reviewSnapshotDigest({
       ...snapshot,
-      checks: { _tag: 'Available' as const, checks: [{ id: 1, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+      checks: { _tag: 'Available' as const, checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
     })).toBe(reviewSnapshotDigest(snapshot))
     expect(reviewSnapshotDigest({
       ...snapshot,
@@ -56,9 +56,9 @@ describe('subject Workers', () => {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           body: 'Fixes the bug.',
-          checks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          checks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           comments: [],
           priorAutomatedReview: {
             _tag: 'Found',
@@ -79,6 +79,7 @@ describe('subject Workers', () => {
         failTask: () => { throw new Error('A clean review must not fail repair work.') },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -146,7 +147,7 @@ describe('subject Workers', () => {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           body: 'Fixes the bug.',
           checks: { _tag: 'Available', checks: [] },
           comments: [],
@@ -169,6 +170,7 @@ describe('subject Workers', () => {
         failTask: () => { throw new Error('A second review must not fail repair work.') },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -249,9 +251,9 @@ describe('subject Workers', () => {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           body: 'Fixes the parser.',
-          checks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          checks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
@@ -269,6 +271,7 @@ describe('subject Workers', () => {
         },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         failTask: () => { throw new Error('A verified repair must not fail.') },
@@ -340,9 +343,9 @@ describe('subject Workers', () => {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
           body: 'Fixes the parser.',
-          checks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
+          checks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
@@ -358,6 +361,7 @@ describe('subject Workers', () => {
         failTask: () => { throw new Error('No repair Task should exist.') },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => {
           baselineQueued = true
           return { _tag: 'Queued', taskId: 'baseline-task' }
@@ -421,9 +425,9 @@ describe('subject Workers', () => {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
           body: 'Fixes the parser.',
-          checks: { _tag: 'Available', checks: [{ id: 2, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
+          checks: { _tag: 'Available', checks: [{ id: 2, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
@@ -439,6 +443,7 @@ describe('subject Workers', () => {
         failTask: () => { throw new Error('No repair Task should exist.') },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => ({
           _tag: 'NotAuthorized',
           reason: 'Repository policy does not authorize Baseline repair for this base commit.',
@@ -509,9 +514,9 @@ describe('subject Workers', () => {
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           // The parent pull request is red. That is the parent's problem.
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
           body: 'Builds on the parent pull request.',
-          checks: { _tag: 'Available', checks: [{ id: 2, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
+          checks: { _tag: 'Available', checks: [{ id: 2, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
@@ -527,6 +532,7 @@ describe('subject Workers', () => {
         failTask: () => { throw new Error('No repair Task should exist.') },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('A stacked pull request must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
@@ -593,9 +599,9 @@ describe('subject Workers', () => {
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           // The default branch is red. That failure is what this pull request repairs.
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
           body: 'Repairs the default branch build.',
-          checks: { _tag: 'Available', checks: [{ id: 2, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
+          checks: { _tag: 'Available', checks: [{ id: 2, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
@@ -611,6 +617,7 @@ describe('subject Workers', () => {
         failTask: () => { throw new Error('No repair Task should exist.') },
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => true,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('A Baseline repair must not queue another Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),

@@ -18,7 +18,7 @@ const cleanReview = {
 }
 
 function check(id: number, name: string, conclusion: string): GitHubCheck {
-  return { id, source: { _tag: 'CheckRun', appId: 15368 }, name, status: 'completed', conclusion }
+  return { id, failure: { _tag: 'NotAsked' }, source: { _tag: 'CheckRun', appId: 15368 }, name, status: 'completed', conclusion }
 }
 
 const passingBaseCheck = check(1, 'ci / test', 'success')
@@ -75,6 +75,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       failTask: () => { throw new Error('Unexpected repair failure.') },
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
+      recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
