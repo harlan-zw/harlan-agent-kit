@@ -5,8 +5,10 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import sys
 from collections import Counter
+from datetime import date
 from pathlib import Path
 
 
@@ -126,6 +128,177 @@ def audit_ledger(args):
     }
 
 
+HISTORY_FIELDS = (
+    "run_id",
+    "run_date",
+    "numeric_id",
+    "short_id",
+    "project",
+    "disposition",
+    "owning_fix",
+    "root_cause",
+)
+# These dispositions claim the issue is closed in code. If a later snapshot
+# still lists the issue, the claim never reached Sentry: either the release
+# never resolved it or the fix does not hold. Re-proving the same commit is
+# wasted work, so the site agent must answer why it stayed open instead.
+CLOSING_DISPOSITIONS = {"fixed", "already-fixed"}
+
+
+def default_history_path():
+    state = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    return Path(state) / "sentry-checkin" / "history.tsv"
+
+
+def history_rows_from_ledger(ledger_rows, run_id, run_date):
+    """Project complete ledger rows into history rows. Raises on an incomplete ledger."""
+    if not run_id:
+        raise ValueError("run_id is required.")
+    date.fromisoformat(run_date)
+    rows = []
+    for row in ledger_rows:
+        disposition = row.get("disposition", "")
+        if disposition not in DISPOSITIONS:
+            raise RuntimeError(
+                f"{row.get('numeric_id')}: cannot record disposition {disposition!r}"
+            )
+        rows.append(
+            {
+                "run_id": run_id,
+                "run_date": run_date,
+                "numeric_id": row["numeric_id"],
+                "short_id": row.get("short_id", ""),
+                "project": row.get("project", ""),
+                "disposition": disposition,
+                "owning_fix": row.get("owning_fix", ""),
+                "root_cause": row.get("root_cause", ""),
+            }
+        )
+    return rows
+
+
+def read_history(path):
+    path = Path(path)
+    if not path.exists():
+        return []
+    with path.open(newline="") as file:
+        reader = csv.DictReader(file, delimiter="\t")
+        if tuple(reader.fieldnames or ()) != HISTORY_FIELDS:
+            raise RuntimeError("History header does not match the contract.")
+        return list(reader)
+
+
+def append_history(path, rows):
+    """Append rows not already recorded for their run. Returns the number written."""
+    path = Path(path)
+    existing = read_history(path)
+    seen = {(row["run_id"], row["numeric_id"]) for row in existing}
+    fresh = [row for row in rows if (row["run_id"], row["numeric_id"]) not in seen]
+    if not fresh:
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=HISTORY_FIELDS, delimiter="\t")
+        if not existing:
+            writer.writeheader()
+        writer.writerows(fresh)
+    return len(fresh)
+
+
+def latest_priors(history_rows):
+    """The most recent history row per numeric ID, with how many runs saw it."""
+    priors = {}
+    for row in sorted(history_rows, key=lambda item: (item["run_date"], item["run_id"])):
+        issue_id = row["numeric_id"]
+        seen = priors[issue_id]["runs_seen"] + 1 if issue_id in priors else 1
+        priors[issue_id] = {"row": row, "runs_seen": seen}
+    return priors
+
+
+def classify_snapshot(numeric_ids, history_rows, exclude_runs=frozenset()):
+    """Tag every frozen ID as new, recurring, or regressed against prior runs.
+
+    Pass the current run in exclude_runs so a re-read after `record` does not
+    compare a run against itself.
+    """
+    priors = latest_priors(
+        [row for row in history_rows if row["run_id"] not in exclude_runs]
+    )
+    classified = {}
+    for issue_id in numeric_ids:
+        prior = priors.get(str(issue_id))
+        if prior is None:
+            classified[str(issue_id)] = {
+                "state": "new",
+                "prior_disposition": None,
+                "prior_run_id": None,
+                "prior_run_date": None,
+                "runs_seen": 0,
+            }
+            continue
+        row = prior["row"]
+        state = (
+            "unclosed"
+            if row["disposition"] in CLOSING_DISPOSITIONS
+            else "recurring"
+        )
+        classified[str(issue_id)] = {
+            "state": state,
+            "prior_disposition": row["disposition"],
+            "prior_run_id": row["run_id"],
+            "prior_run_date": row["run_date"],
+            "runs_seen": prior["runs_seen"],
+        }
+    return classified
+
+
+def snapshot_ids(paths):
+    ids = []
+    for raw_path in paths:
+        snapshot = json.loads(Path(raw_path).read_text())
+        ids.extend(str(issue["id"]) for issue in snapshot.get("issues", []))
+    return ids
+
+
+def record_history(args):
+    history_path = Path(args.history) if args.history else default_history_path()
+    rows = []
+    for raw_path in args.ledger:
+        rows.extend(
+            history_rows_from_ledger(
+                read_ledger(Path(raw_path)), args.run_id, args.run_date
+            )
+        )
+    appended = append_history(history_path, rows)
+    return {
+        "appended": appended,
+        "skipped": len(rows) - appended,
+        "rows_read": len(rows),
+        "history": str(history_path.resolve()),
+    }
+
+
+def history_report(args):
+    history_path = Path(args.history) if args.history else default_history_path()
+    ids = snapshot_ids(args.snapshot)
+    classified = classify_snapshot(
+        ids, read_history(history_path), exclude_runs=set(args.exclude_run or ())
+    )
+    result = {
+        "history": str(history_path.resolve()),
+        "counts": dict(
+            sorted(Counter(item["state"] for item in classified.values()).items())
+        ),
+        "issues": classified,
+    }
+    for state in ("new", "recurring", "unclosed"):
+        result["counts"].setdefault(state, 0)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -135,13 +308,30 @@ def build_parser():
     audit = subparsers.add_parser("audit")
     audit.add_argument("--manifest", action="append", required=True)
     audit.add_argument("--ledger", required=True)
+    record = subparsers.add_parser("record")
+    record.add_argument("--ledger", action="append", required=True)
+    record.add_argument("--run-id", required=True)
+    record.add_argument("--run-date", required=True)
+    record.add_argument("--history")
+    history = subparsers.add_parser("history")
+    history.add_argument("--snapshot", action="append", required=True)
+    history.add_argument("--history")
+    history.add_argument("--exclude-run", action="append")
+    history.add_argument("--output")
     return parser
+
+
+COMMANDS = {
+    "init": init_ledger,
+    "audit": audit_ledger,
+    "record": record_history,
+    "history": history_report,
+}
 
 
 def main():
     args = build_parser().parse_args()
-    result = init_ledger(args) if args.command == "init" else audit_ledger(args)
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(COMMANDS[args.command](args), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

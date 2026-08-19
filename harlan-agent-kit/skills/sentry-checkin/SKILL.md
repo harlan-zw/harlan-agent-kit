@@ -77,6 +77,26 @@ The CLI paginates a live query, so one issue can appear on two pages. The wrappe
 
 The snapshot is the run contract. New issues after discovery belong to the next run. Disappearing issues still need a ledger disposition.
 
+## Read the prior dispositions
+
+Every completed run appends to one append-only history at
+`${XDG_STATE_HOME:-$HOME/.local/state}/sentry-checkin/history.tsv`. Read it before delegating:
+
+```bash
+python3 scripts/ledger.py history --snapshot "$SENTRY_CHECKIN_RUN_DIR/PROJECT.snapshot.json" \
+  --output "$SENTRY_CHECKIN_RUN_DIR/PROJECT.history.json"
+```
+
+Repeat `--snapshot` to cover every project of a site in one report. It tags every frozen ID:
+
+- `new`: no prior run saw this issue.
+- `recurring`: a prior run left it open, accepted, or blocked.
+- `unclosed`: a prior run called it `fixed` or `already-fixed`, yet it is still open.
+
+A high `unclosed` count means fixes are landing but Sentry never hears about it. Report the count with the run.
+
+The history is evidence from a past run, not a verdict. It never shortens the ledger: every frozen ID still needs its own row and its own evidence this run.
+
 ## Delegate one agent per site
 
 Spawn exactly one agent for every mapped inventory site, including sites with zero open issues. Queue agents when concurrency slots are full. Never spawn two agents for one checkout.
@@ -86,6 +106,7 @@ Pass each agent:
 - The site name and absolute main checkout path.
 - The organization and all project slugs for that site.
 - The snapshot paths and frozen numeric and short IDs.
+- The history report path for its projects.
 - A site artifact directory under the run directory.
 - The absolute path to this skill directory.
 - The full contract from `references/site-agent-contract.md`.
@@ -115,6 +136,17 @@ If a complete ledger produces no diff, do not create an empty PR. Confirm the br
 
 Do not resolve or mute Sentry issues when opening a PR. Code is not live yet. Let a verified release resolve issues, unless the user explicitly asks for a Sentry state change after production verification.
 
+## Record the run
+
+After every site returns a complete audited ledger, append the run to the history:
+
+```bash
+python3 scripts/ledger.py record --ledger SITE_ARTIFACTS/ledger.tsv \
+  --run-id "$(basename "$SENTRY_CHECKIN_RUN_DIR")" --run-date YYYY-MM-DD
+```
+
+Repeat `--ledger` for every site. `record` refuses a ledger with any empty disposition, so run it only after each audit passes. It skips rows already recorded for the same run, so a repeat is safe.
+
 ## Return the run
 
-Report each site with its issue count, ledger coverage, PR URL, CI state, and confidence. List zero-issue sites and unmatched projects. Keep blocked rows explicit.
+Report each site with its issue count, ledger coverage, PR URL, CI state, and confidence. List zero-issue sites and unmatched projects. Keep blocked rows explicit. Give the run's `new`, `recurring`, and `unclosed` counts, and name the history path.
