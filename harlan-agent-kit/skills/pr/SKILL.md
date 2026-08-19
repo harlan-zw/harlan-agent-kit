@@ -115,7 +115,7 @@ Resolves #NUMBER
 
 ### 📚 Description
 
-<!-- what was wrong or missing, then what changed -->
+<!-- why this is needed, then 1 to 2 sentences on what changed -->
 
 > 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
 ```
@@ -128,7 +128,9 @@ Add `### ⚠️ Breaking Changes` and `### 📝 Migration` only when the change 
 
 These exist because the generated bodies drift the same way every time.
 
-- **No verification, testing, or QA section. Ever.** Not `✅ Verification`, not `🧪 Testing`, not a checklist of what you ran. CI reports test results and reviewers trust it. Evidence that CI cannot produce belongs in a follow-up comment (Step 5), never the description.
+- **Answer why, not how.** The description exists to say why the change is needed. The fix itself gets 1 to 2 sentences. Never walk through the implementation, name the functions you touched, or explain the mechanism; the diff is right there and the code documents itself. A reviewer who reads the method twice is a reviewer you wasted.
+- **No verification, testing, or QA section. Ever.** Not `✅ Verification`, not `🧪 Testing`, not a checklist of what you ran. Not a passing mention either: "covered by unit tests only" and "added five e2e cases" are testing details and belong nowhere in the body. CI reports test results and reviewers trust it. Evidence that CI cannot produce belongs in a follow-up comment (Step 5), never the description.
+- **Benchmarks when they are relevant and measured.** A performance or caching change earns a real before and after. Never invent, estimate, or infer a figure. If you did not measure it, say nothing, or offer to run it.
 - **No self-ticked checkboxes** beyond the ones the repo's own template asks for. A list of `- [x]` items you wrote and ticked yourself is not evidence, it reads as homework.
 - **Delete empty sections.** Never write "None.", "No linked issue.", or "N/A" under a heading. No linked issue means no Linked issue section.
 - **Length follows risk.** A fix gets 1 to 3 sentences. Spend more only where a reviewer must understand a behaviour change, a data migration, or a non-obvious tradeoff. Never narrate the diff; the diff is right there.
@@ -148,7 +150,7 @@ Modelled on Harlan's hand-written PRs to `nuxt/nuxt`. These are the moves that r
 - **Motivation before mechanism** for a feature: who needs this, what they do today, what is bad about that, then the change.
 - **Do not perform completeness.** Leave the repo template's HTML comments untouched. Tick a checklist box only if it is true. Shipping with boxes unticked is normal and correct.
 
-**Strip AI tells from the title and description** before pushing, run them through `/humanize-writing`. For PRs specifically: no em-dashes, drop the over-explained "this means that..." takeaway, and use specifics (file/function names, issue numbers, real before/after behavior) instead of vague claims like "improves performance". A PR body that reads as AI-generated erodes reviewer trust.
+**Strip AI tells from the title and description** before pushing, run them through `/humanize-writing`. For PRs specifically: no em-dashes, drop the over-explained "this means that..." takeaway, and use specifics (issue numbers, real before/after behaviour, measured figures) instead of vague claims like "improves performance". A PR body that reads as AI-generated erodes reviewer trust.
 
 **Reads-human check.** Before pushing, reread the body and cut anything that exists to show effort rather than to help the reviewer. This is the target shape:
 
@@ -164,9 +166,8 @@ Resolves #658
 ### 📚 Description
 
 DevTools refresh broadcasts used request and response RPC calls, so disconnected
-clients logged a `birpc` timeout for `refreshRouteData` when pages changed. Send
-these one-way notifications with `asEvent()` and cover route refresh behavior
-with a unit test.
+clients logged a `birpc` timeout for `refreshRouteData` every time the pages
+changed. They are notifications now, so a dead client costs nothing.
 
 > 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
 ```
