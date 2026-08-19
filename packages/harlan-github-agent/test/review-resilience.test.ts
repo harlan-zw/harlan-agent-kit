@@ -10,7 +10,7 @@ import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEve
 const passingGate = { state: 'passed' as const, reason: '', evidence: 'checked' }
 
 function reviewSnapshot(pullRequest: GitHubPullRequestItem, comments: string[] = []) {
-  const check = { id: 1, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
+  const check = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
   return {
     baseChecks: { _tag: 'Available' as const, checks: [check] },
     body: 'Fixes the bug.',
@@ -98,6 +98,7 @@ function harness(input: {
       failTask: () => { throw new Error('Unexpected repair failure.') },
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
+      recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,

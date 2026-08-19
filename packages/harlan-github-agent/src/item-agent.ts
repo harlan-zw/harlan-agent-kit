@@ -1,6 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
-import type { GitHubAgentSource, GitHubCheck, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
+import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
@@ -80,7 +80,7 @@ export interface ItemAgentOptions {
 export interface ReviewWorkerOptions extends ItemAgentOptions {
   repairs: Pick<ReviewFixWorktreeManager, 'commit' | 'verify'>
   status: Pick<ReviewStatusController, 'publish' | 'publishRepair'>
-  store: Pick<JournalStore, 'claimReviewFixTaskForReview' | 'failTask' | 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'stagePublication' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'claimReviewFixTaskForReview' | 'failTask' | 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'stagePublication' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
 }
 
 const reviewPolicy = `Work as a normal local agent session inside the prepared Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
@@ -295,12 +295,47 @@ function gate(response: GateResponse, label: string): ReviewGateState {
 
 const FAILED_CONCLUSIONS = new Set(['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'])
 
+/**
+ * True when a failing check run lost its runner instead of finding a defect.
+ *
+ * The evidence is GitHub's own job steps, read once where the checks snapshot
+ * is built. Only the `RunnerLost` shape qualifies. A lookup the controller
+ * skipped or could not finish stays failed, so silence never clears a check.
+ */
+function checkRunnerLost(check: GitHubCheck): boolean {
+  return check.failure._tag === 'RunnerLost'
+}
+
+/**
+ * True when a check run says the change is broken.
+ *
+ * A restarted self-hosted runner kills its container, and GitHub reports every
+ * lost job as failed. Ten healthy pull requests read as BLOCKED on 2026-08-19
+ * for that reason alone. A lost runner reports nothing about the change, so it
+ * is not a failure here.
+ */
 function checkFailed(check: GitHubCheck): boolean {
-  return FAILED_CONCLUSIONS.has(check.conclusion ?? '')
+  return !checkRunnerLost(check) && FAILED_CONCLUSIONS.has(check.conclusion ?? '')
 }
 
 function checkRunning(check: GitHubCheck): boolean {
   return check.status !== 'completed' || check.conclusion === null || check.conclusion === 'pending'
+}
+
+/** A check run that has not decided yet, because it runs or lost its runner. */
+function checkUndecided(check: GitHubCheck): boolean {
+  return checkRunning(check) || checkRunnerLost(check)
+}
+
+function undecidedReason(check: GitHubCheck): string {
+  return checkRunnerLost(check)
+    ? `${cleanLine(check.name)} lost its runner, so it has not reported.`
+    : `${cleanLine(check.name)} is still running.`
+}
+
+/** True when any check run in one snapshot lost its runner. */
+function checksLostRunner(checks: GitHubChecksSnapshot): boolean {
+  return checks._tag === 'Available' && checks.checks.some(checkRunnerLost)
 }
 
 function checksGate(
@@ -316,10 +351,10 @@ function checksGate(
   const failed = checks.checks.find(checkFailed)
   if (failed !== undefined)
     return { _tag: failedTag, reason: `${label === 'base-ci' ? 'Base branch CI: ' : ''}${cleanLine(failed.name)} failed.`, evidence: checkEvidence }
-  const pending = checks.checks.find(checkRunning)
+  const pending = checks.checks.find(checkUndecided)
   return pending === undefined
     ? { _tag: 'Passed', evidence: checkEvidence }
-    : { _tag: 'Pending', reason: `${label === 'base-ci' ? 'Base branch CI: ' : ''}${cleanLine(pending.name)} is still running.`, evidence: checkEvidence }
+    : { _tag: 'Pending', reason: `${label === 'base-ci' ? 'Base branch CI: ' : ''}${undecidedReason(pending)}`, evidence: checkEvidence }
 }
 
 /**
@@ -363,9 +398,9 @@ function headChecksGate(checks: PullRequestReviewSnapshot['checks'], required: R
   const failed = requiredChecks.find(checkFailed)
   if (failed !== undefined)
     return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported }
-  const running = requiredChecks.find(checkRunning)
+  const running = requiredChecks.find(checkUndecided)
   if (running !== undefined)
-    return { state: { _tag: 'Pending', reason: `${cleanLine(running.name)} is still running.`, evidence: checkEvidence }, reported }
+    return { state: { _tag: 'Pending', reason: undecidedReason(running), evidence: checkEvidence }, reported }
   const missing = required.contexts.find(context => !checks.checks.some(check => check.name === context))
   if (missing !== undefined)
     return { state: { _tag: 'Pending', reason: `${cleanLine(missing)} has not reported.`, evidence: checkEvidence }, reported }
@@ -399,9 +434,14 @@ function basesDefaultBranch(pullRequest: GitHubPullRequestItem, mapping: Reposit
   return pullRequest.baseRef === mapping.defaultBranch
 }
 
+/**
+ * True when the base commit CI says the default branch is broken.
+ *
+ * It reads `checkFailed`, so a base check run that lost its runner never
+ * queues a Baseline repair for a default branch nothing is wrong with.
+ */
 function baseChecksFailed(snapshot: PullRequestReviewSnapshot): boolean {
-  return snapshot.baseChecks._tag === 'Available'
-    && snapshot.baseChecks.checks.some(check => ['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'].includes(check.conclusion ?? ''))
+  return snapshot.baseChecks._tag === 'Available' && snapshot.baseChecks.checks.some(checkFailed)
 }
 
 function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean): { gates: ReviewGates, reportedChecks: string[] } {
@@ -549,6 +589,38 @@ Untrusted issue data follows as JSON:
 ${JSON.stringify({ title: task.issue.title, body: snapshot.body.slice(0, 12_000), comments: snapshot.comments.slice(0, 30).map(value => value.slice(0, 4_000)) })}`
 }
 
+/**
+ * The one message every lost runner raises, whatever pull request finds it.
+ *
+ * An Incident is identified by its scope, kind, operation, and message. A fixed
+ * message therefore folds every affected pull request into one Repository
+ * Incident with an occurrence count. On 2026-08-19 one runner pool restarted
+ * four times and ten healthy pull requests read as BLOCKED. That belongs in the
+ * System pane once, at ten occurrences, not ten times.
+ */
+export const RUNNER_LOST_INCIDENT_MESSAGE = 'A runner stopped while jobs were running. GitHub reports those check runs as failed, and no step reports failure. The controller waits for a re-run instead of blocking the pull request.'
+
+/**
+ * Names the repository whose runner stopped.
+ *
+ * The controller never re-runs the workflow itself. GitHub refuses a failed-job
+ * re-run while sibling jobs in the same run are still queued, and a retry storm
+ * against a saturated runner pool makes the outage worse. Recovery is
+ * `Retrying` because the next poll reads the same checks again.
+ */
+function recordRunnerLostIncident(options: ReviewWorkerOptions, repository: string): void {
+  const at = options.now().toISOString()
+  options.store.recordIncident({
+    scope: { _tag: 'Repository', repository },
+    kind: 'runner_lost',
+    severity: 'warning',
+    operation: 'read_checks',
+    message: RUNNER_LOST_INCIDENT_MESSAGE,
+    recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: at },
+    at,
+  })
+}
+
 function failRepair(options: ReviewWorkerOptions, task: ClaimedReviewFixTask, reason: string): Result<never, string> {
   options.store.failTask({
     taskId: task.id,
@@ -570,6 +642,8 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         return snapshot
       if (snapshot.value.pullRequest.headSha !== task.pullRequest.headSha || snapshot.value.pullRequest.state !== 'open')
         return err('The pull request changed before review started.')
+      if (checksLostRunner(snapshot.value.checks) || checksLostRunner(snapshot.value.baseChecks))
+        recordRunnerLostIncident(options, task.repository)
       if (snapshot.value.priorAutomatedReview._tag === 'Found' && task.rerun._tag === 'NotRequested')
         return ok({ evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}` })
       const repairsBaseline = options.store.isBaselineRepairPullRequest(task.repository, task.pullRequest.headRef)

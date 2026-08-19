@@ -9,12 +9,60 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
 
+/**
+ * What the job steps say about a check run GitHub reports as failed.
+ *
+ * A self-hosted runner that restarts kills its container mid-job. GitHub then
+ * reports the job as `failure`, no step reports failure, and every step after
+ * the kill keeps a null conclusion. That shape is `RunnerLost`.
+ *
+ * The controller resolves this only for a failing GitHub Actions check run.
+ * Every other check keeps `NotAsked`. `NotAsked` and `Unknown` both keep the
+ * check failing, so a lookup the controller skipped or could not finish never
+ * reads as a lost runner.
+ */
+export type CheckFailureEvidence
+  = | { _tag: 'NotAsked' }
+    | { _tag: 'Unknown', reason: string }
+    | { _tag: 'StepFailed' }
+    | { _tag: 'RunnerLost', incompleteSteps: number }
+
 export interface GitHubCheck {
   conclusion: string | null
+  /** What the job steps say, for a check run GitHub reports as failed. */
+  failure: CheckFailureEvidence
   id: number
   name: string
   source: { _tag: 'CheckRun', appId: number | null } | { _tag: 'CommitStatus' }
   status: string
+}
+
+/** One GitHub Actions job step, reduced to the field that decides the class. */
+export interface GitHubJobStep {
+  conclusion: string | null
+}
+
+/**
+ * Reads one failing GitHub Actions job as a real failure or a lost runner.
+ *
+ * A killed container leaves no failed step, because the kill lands between
+ * steps. It leaves incomplete steps, because GitHub never gets their result.
+ *
+ * A container killed during a step is a different shape. That step reports
+ * failure, and from here it is identical to a genuine failure. So one failed
+ * step always means a genuine failure. Do not relax this rule: an OOM kill
+ * inside a step was verified to look exactly like a broken build.
+ *
+ * A job with no failed step and no incomplete step is neither shape, so it
+ * stays `Unknown` and keeps failing.
+ */
+export function classifyFailedJob(steps: GitHubJobStep[]): CheckFailureEvidence {
+  if (steps.some(step => step.conclusion === 'failure'))
+    return { _tag: 'StepFailed' }
+  const incompleteSteps = steps.filter(step => step.conclusion === null).length
+  return incompleteSteps === 0
+    ? { _tag: 'Unknown', reason: 'The job reports no failed step and no incomplete step.' }
+    : { _tag: 'RunnerLost', incompleteSteps }
 }
 
 function checkContext(check: GitHubCheck): string {
@@ -131,6 +179,44 @@ function repositoryParts(repository: string): { owner: string, repo: string } {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : 'GitHub request failed.'
+}
+
+/** GitHub's own app slug for Actions. Only its check run id is also a job id. */
+const ACTIONS_APP_SLUG = 'github-actions'
+
+/**
+ * How many failing Actions jobs one checks read resolves.
+ *
+ * Each job costs one request. A runner outage turns every check red at once,
+ * which is the moment the controller sits nearest its rate limit. So the read
+ * is capped. A job past the cap keeps `NotAsked`, so it still reads as failed.
+ */
+const FAILED_JOB_LOOKUP_LIMIT = 12
+
+/**
+ * Asks GitHub what the steps of each failing job say.
+ *
+ * For a GitHub Actions check run, the check run id is also the job id.
+ * Verified on 2026-08-19: check run 96051144474 carries a `details_url` ending
+ * `/job/96051144474`. A third-party check run id is not a job id, so the caller
+ * passes Actions jobs only.
+ *
+ * A lookup that fails returns `Unknown`, which keeps the check failing.
+ */
+async function resolveFailedJobs(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  jobIds: number[],
+  signal: AbortSignal,
+): Promise<Map<number, CheckFailureEvidence>> {
+  const resolved = await Promise.all(jobIds.slice(0, FAILED_JOB_LOOKUP_LIMIT).map(async (jobId): Promise<[number, CheckFailureEvidence]> => {
+    const job = await octokit.rest.actions.getJobForWorkflowRun({ owner, repo, job_id: jobId, request: { signal } })
+      .then(response => ok(response.data.steps ?? []))
+      .catch((error: unknown) => err(message(error)))
+    return [jobId, job._tag === 'Err' ? { _tag: 'Unknown', reason: job.error } : classifyFailedJob(job.value)]
+  }))
+  return new Map(resolved)
 }
 
 function errorStatus(error: unknown): number | undefined {
@@ -344,11 +430,11 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           : Promise.all([
               checksClient.value.paginate(checksClient.value.rest.checks.listForRef, { owner, repo, ref, per_page: 100, request: { signal } }),
               checksClient.value.rest.repos.getCombinedStatusForRef({ owner, repo, ref, per_page: 100, request: { signal } }),
-            ]).then(([runs, statuses]): GitHubChecksSnapshot => ({
-              _tag: 'Available',
-              checks: currentGitHubChecks([
+            ]).then(async ([runs, statuses]): Promise<GitHubChecksSnapshot> => {
+              const current = currentGitHubChecks([
                 ...runs.map(check => ({
                   id: check.id,
+                  failure: { _tag: 'NotAsked' as const },
                   source: { _tag: 'CheckRun' as const, appId: check.app?.id ?? null },
                   name: check.name,
                   status: check.status,
@@ -356,13 +442,31 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                 })),
                 ...statuses.data.statuses.map(status => ({
                   id: status.id,
+                  failure: { _tag: 'NotAsked' as const },
                   source: { _tag: 'CommitStatus' as const },
                   name: status.context,
                   status: status.state === 'pending' ? 'in_progress' : 'completed',
                   conclusion: status.state,
                 })),
-              ]),
-            })).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
+              ])
+              // Only a failing Actions check run can have lost its runner, and
+              // only the `failure` conclusion can. GitHub reports a job a person
+              // cancelled as `cancelled` with no failed step, which is the same
+              // step shape for a different reason. Reading that one here would
+              // report every cancelled job as a lost runner.
+              const currentCheckRunIds = new Set(current.flatMap(check => check.source._tag === 'CheckRun' ? [check.id] : []))
+              const failedActionsJobs = runs.flatMap(check => check.conclusion === 'failure'
+                && check.app?.slug === ACTIONS_APP_SLUG
+                && currentCheckRunIds.has(check.id)
+                ? [check.id]
+                : [])
+              const evidence = await resolveFailedJobs(checksClient.value, owner, repo, failedActionsJobs, signal)
+              // A commit status id and a check run id come from different
+              // sequences, so the evidence is keyed back onto check runs only.
+              return { _tag: 'Available', checks: current.map(check => check.source._tag === 'CheckRun'
+                ? { ...check, failure: evidence.get(check.id) ?? check.failure }
+                : check) }
+            }).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
         const requiredChecksFor = (branch: string): Promise<RequiredChecks> => octokit.value.rest.repos
           .getBranchRules({ owner, repo, branch, per_page: 100, request: { signal } })
           .then((rules): RequiredChecks => {

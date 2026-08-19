@@ -80,6 +80,7 @@ knows GitHub already knows them.
 | merge queue | GitHub's merge queue feature | queue, unqualified |
 | workflow, job, step | GitHub Actions units | pipeline, stage |
 | re-run | GitHub's re-run of a workflow or check | retry, replay |
+| runner | the machine one job runs on | executor, box, build agent |
 
 Collisions
 
@@ -88,6 +89,7 @@ Collisions
 - "approval" means this service's local Approval. A GitHub pull request review is always "review" or "approving review".
 - "check" means a GitHub check run. This service's own conditions are always "Review gate", never bare "check".
 - "job" means a GitHub Actions job. This service's unit of work is a Task.
+- "runner" means GitHub's job machine. The Owner column of the Map above uses "Runner" for the internal owner of agent sessions, which is never user-visible.
 - "worker" sits on two axes. As the thing that answers a turn it is an Agent. As `worker_id`, the scheduler instance holding a Task lease, it is a Lease holder and keeps the word.
 - Storage lags three terms on purpose: Item is stored in `subjects`, Agent in `worker_sessions`, and Lease holder in `worker_id`. Renaming those columns would migrate every foreign key in the journal for a word no user reads.
 
