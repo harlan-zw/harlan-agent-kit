@@ -243,6 +243,21 @@ function runGitDigest(checkout: string, args: string[], signal: AbortSignal): Pr
   })
 }
 
+/**
+ * The `git diff` arguments that identify one change by content alone.
+ *
+ * A change is verified in a checkout and published from the controller mirror,
+ * so its digest must read the same in both. Patch text does not: `git` scales
+ * index line abbreviation with the object count of the repository, so a large
+ * checkout wrote 11 character blob names where the mirror wrote 9, and every
+ * publication of that repository failed on a digest that described the same
+ * commit. Raw lines carry full blob names, the mode, and the path, and no diff
+ * setting, `.gitattributes` driver, or object count can change them.
+ */
+function contentDiffArgs(...args: string[]): string[] {
+  return ['diff', '--raw', '--no-abbrev', '--no-renames', ...args]
+}
+
 function repositoryGitDirectory(root: string, repository: string): string {
   return join(root, 'repositories', `${repository.replace('/', '__')}.git`)
 }
@@ -645,10 +660,10 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     if (unmerged.exitCode !== 0 || unmerged.stdout.length > 0)
       return err(`Merge conflicts remain: ${unmerged.stdout || unmerged.stderr}`)
 
-    const patch = await runGitDigest(worktree.path, ['diff', '--binary', 'HEAD'], signal)
+    const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
     if (patch.exitCode !== 0)
       return err(`Could not read the conflict resolution patch: ${patch.stderr}`)
-    const changed = await runGit(worktree.path, ['diff', '--name-only', 'HEAD'], signal)
+    const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', 'HEAD'], signal)
     const changedPaths = changed.stdout.split('\n').filter(Boolean).sort()
     const changedFiles = changedPaths.length
 
@@ -803,7 +818,7 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
       const add = await runGit(worktree.path, ['add', '--all'], signal)
       if (add.exitCode !== 0)
         return err(`Could not stage the verified repair: ${add.stderr}`)
-      const patch = await runGitDigest(worktree.path, ['diff', '--cached', '--binary', 'HEAD'], signal)
+      const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
       if (patch.exitCode !== 0)
         return err(`Could not read the verified repair: ${patch.stderr}`)
       const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
@@ -873,7 +888,7 @@ export function createBaselineRepairWorktreeManager(options: ConflictWorktreeMan
       const add = await runGit(worktree.path, ['add', '--all'], signal)
       if (add.exitCode !== 0)
         return err(`Could not stage the verified Baseline repair: ${add.stderr}`)
-      const patch = await runGitDigest(worktree.path, ['diff', '--cached', '--binary', 'HEAD'], signal)
+      const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
       if (patch.exitCode !== 0)
         return err(`Could not read the verified Baseline repair: ${patch.stderr}`)
       const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
@@ -933,7 +948,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       const add = await runGit(worktree.path, ['add', '--all'], signal)
       if (add.exitCode !== 0)
         return err(`Could not stage the verified change: ${add.stderr}`)
-      const patch = await runGitDigest(worktree.path, ['diff', '--cached', '--binary', 'HEAD'], signal)
+      const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
       if (patch.exitCode !== 0)
         return err(`Could not read the verified change: ${patch.stderr}`)
       const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
@@ -1011,7 +1026,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
         const restored = await restore()
         return restored._tag === 'Err' ? restored : ok({ _tag: 'Unstacked', reason })
       }
-      const patch = await runGitDigest(worktree.path, ['diff', '--cached', '--binary', 'HEAD'], signal)
+      const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
       if (patch.exitCode !== 0)
         return err(`Could not read the restacked change: ${patch.stderr}`)
       const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
@@ -1186,7 +1201,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         : command.expectedHeadSha
       if (parents.exitCode !== 0 || parents.stdout !== expectedParents)
         return err('The publication artifact has unexpected parents.')
-      const patch = await runGitDigest(repository, ['diff', '--binary', command.expectedHeadSha, command.commitSha], signal)
+      const patch = await runGitDigest(repository, contentDiffArgs(command.expectedHeadSha, command.commitSha), signal)
       if (patch.exitCode !== 0 || patch.digest !== command.patchDigest)
         return err('The publication artifact patch digest does not match.')
       const changed = await runGit(repository, ['diff', '--name-only', command.expectedHeadSha, command.commitSha], signal)
