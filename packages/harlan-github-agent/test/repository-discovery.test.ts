@@ -33,9 +33,7 @@ describe('installedWithoutCheckout', () => {
 })
 
 describe('repository discovery', () => {
-  // Spawns git and wt several times, which passes the five second default under
-  // load often enough to fail the whole suite while passing on its own.
-  it('ignores temporary worktrees beside the canonical checkout', { timeout: 30_000 }, async () => {
+  it('ignores temporary worktrees beside the canonical checkout', async () => {
     const root = mkdtempSync(join(tmpdir(), 'harlan-discovery-'))
     temporaryDirectories.push(root)
     const checkout = join(root, 'example')

@@ -470,6 +470,10 @@ export interface JournalStore {
   needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string }) => boolean
   pauseAgents: (at: string) => StoredAgentControl
   setRepositoryPaused: (github: string, paused: boolean) => boolean
+  /** True when a person has trusted the controller to write to this repository. */
+  mayWriteRepository: (github: string) => boolean
+  /** Trusts, or stops trusting, the controller to write to one repository. */
+  setRepositoryWritesEnabled: (github: string, writesEnabled: boolean) => boolean
   recordObservation: (input: {
     externalId: string
     observedAt: string
@@ -1273,6 +1277,24 @@ const itemDismissalMigration = `
     dismissed_at TEXT NOT NULL
   );
   PRAGMA user_version = 29;
+`
+
+/**
+ * Quarantines a repository the controller has never been trusted to write to.
+ *
+ * Discovery decides what the controller can see. Nothing decided what it could
+ * write to, so widening `allowed_owners` by one organization put four new
+ * repositories in reach and ninety eight automated comments went out under
+ * Harlan's own account before anyone saw a dashboard.
+ *
+ * Repositories already enabled when this ran keep their writes, because they
+ * were already acting. Every repository discovered afterwards has to be turned
+ * on once, by a person.
+ */
+const repositoryWriteQuarantineMigration = `
+  ALTER TABLE repositories ADD COLUMN writes_enabled INTEGER NOT NULL DEFAULT 0 CHECK (writes_enabled IN (0, 1));
+  UPDATE repositories SET writes_enabled = 1 WHERE enabled = 1;
+  PRAGMA user_version = 30;
 `
 
 const repositoryPauseMigration = `
@@ -2988,7 +3010,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 29)
+  if (version === 30)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3105,6 +3127,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 28) {
     applyMigration(database, itemDismissalMigration)
+    version = 29
+  }
+  if (version === 29) {
+    applyMigration(database, repositoryWriteQuarantineMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -6203,6 +6229,28 @@ export function openJournalStore(
     return result.changes > 0
   }
 
+  /**
+   * The last gate before any GitHub write leaves the process.
+   *
+   * A repository the controller has never been trusted to write to answers
+   * false, whatever discovery, policy, or an agent believes. An unknown
+   * repository answers false too, because a write to something the journal
+   * cannot name is the case this exists to stop.
+   */
+  const mayWriteRepository = (github: string): boolean => {
+    const row = database.prepare(`
+      SELECT writes_enabled FROM repositories WHERE github = ?
+    `).get(github) as { writes_enabled: number } | undefined
+    return row?.writes_enabled === 1
+  }
+
+  const setRepositoryWritesEnabled = (github: string, writesEnabled: boolean): boolean => {
+    const result = database.prepare(`
+      UPDATE repositories SET writes_enabled = ? WHERE github = ?
+    `).run(writesEnabled ? 1 : 0, github)
+    return result.changes > 0
+  }
+
   const resumeAgents = (at: string): StoredAgentControl => {
     database.prepare(`
       UPDATE agent_control SET state_tag = 'Running', updated_at = ?
@@ -6597,6 +6645,8 @@ export function openJournalStore(
     setSelectionMode,
     pauseAgents,
     setRepositoryPaused,
+    mayWriteRepository,
+    setRepositoryWritesEnabled,
     recordObservation,
     recordIncident,
     resolveIncidents,

@@ -726,6 +726,22 @@ describe('journal store', () => {
     })).toBe(true)
   })
 
+  it('quarantines a newly discovered repository until a person enables writes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+
+    // Discovery admitted it. Nothing has trusted it to write yet.
+    expect(store.mayWriteRepository('harlan-zw/example')).toBe(false)
+    expect(store.mayWriteRepository('nuxt/nuxt')).toBe(false)
+
+    expect(store.setRepositoryWritesEnabled('harlan-zw/example', true)).toBe(true)
+    expect(store.mayWriteRepository('harlan-zw/example')).toBe(true)
+
+    expect(store.setRepositoryWritesEnabled('harlan-zw/example', false)).toBe(true)
+    expect(store.mayWriteRepository('harlan-zw/example')).toBe(false)
+    expect(store.setRepositoryWritesEnabled('nuxt/nuxt', true)).toBe(false)
+  })
+
   it('stores one durable issue triage comment', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

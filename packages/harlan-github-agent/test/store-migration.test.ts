@@ -21,6 +21,7 @@ afterEach(() => {
 function dropSelectionMode(database: DatabaseSync): void {
   database.exec('ALTER TABLE agent_control DROP COLUMN selection_mode')
   database.exec('DROP TABLE item_dismissals')
+  database.exec('ALTER TABLE repositories DROP COLUMN writes_enabled')
 }
 
 /**
@@ -191,7 +192,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
