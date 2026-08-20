@@ -5265,8 +5265,13 @@ export function openJournalStore(
     UPDATE issue_triage_comment_commands
     SET state_tag = 'Published', github_comment_id = ?, github_url = ?, reason = NULL,
       outcome_unknown = 0, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+    -- No clock here on purpose. GitHub has already accepted this write, and a
+    -- record refused because a lease ran out cannot un-send it: the outcome is
+    -- lost and the next attempt sends it again. The worker and the fence prove
+    -- this is the attempt that was authorized, because every re-claim raises the
+    -- fence. One triage comment posted twelve minutes after a two minute lease,
+    -- and the deadlock that followed took a valid triage to Failed.
     WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      AND lease_expires_at > ?
       AND revision_id = (
         SELECT subjects.current_revision_id
         FROM worker_tasks JOIN subjects ON subjects.id = worker_tasks.subject_id
@@ -5278,9 +5283,8 @@ export function openJournalStore(
           AND worker_tasks.kind = 'issue_triage'
           AND worker_tasks.state_tag = 'Running'
           AND worker_tasks.fence = issue_triage_comment_commands.task_fence
-          AND worker_tasks.lease_expires_at > ?
       )
-  `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence, input.at, input.at).changes === 1
+  `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
 
   const deferIssueTriageComment: JournalStore['deferIssueTriageComment'] = input => database.prepare(`
     UPDATE issue_triage_comment_commands
@@ -5481,8 +5485,13 @@ export function openJournalStore(
     UPDATE review_status_commands
     SET state_tag = 'Published', github_comment_id = ?, github_url = ?, reason = NULL,
       outcome_unknown = 0, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+    -- No clock here on purpose. GitHub has already accepted this write, and a
+    -- record refused because a lease ran out cannot un-send it: the outcome is
+    -- lost and the next attempt sends it again. The worker and the fence prove
+    -- this is the attempt that was authorized, because every re-claim raises the
+    -- fence. One triage comment posted twelve minutes after a two minute lease,
+    -- and the deadlock that followed took a valid triage to Failed.
     WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      AND lease_expires_at > ?
       AND (
         EXISTS (
           SELECT 1
@@ -5493,7 +5502,6 @@ export function openJournalStore(
             AND worker_tasks.kind = 'adversarial_review'
             AND worker_tasks.state_tag = 'Running'
             AND worker_tasks.fence = review_status_commands.task_fence
-            AND worker_tasks.lease_expires_at > ?
             AND worker_tasks.revision_id = subjects.current_revision_id
             AND review_status_commands.revision_id = subjects.current_revision_id
         )
@@ -5506,12 +5514,11 @@ export function openJournalStore(
             AND tasks.kind = 'review_fix'
             AND tasks.state_tag = 'Running'
             AND tasks.fence = review_status_commands.task_fence
-            AND tasks.lease_expires_at > ?
             AND tasks.revision_id = subjects.current_revision_id
             AND review_status_commands.revision_id = subjects.current_revision_id
         )
       )
-  `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence, input.at, input.at, input.at).changes === 1
+  `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
 
   const deferReviewStatus: JournalStore['deferReviewStatus'] = input => database.prepare(`
     UPDATE review_status_commands
@@ -5928,14 +5935,13 @@ export function openJournalStore(
         SET state_tag = 'Published', worker_id = NULL, lease_expires_at = NULL,
           published_at = ?, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-          AND lease_expires_at > ?
           AND task_id IN (
             SELECT tasks.id FROM tasks
             JOIN subjects ON subjects.id = tasks.subject_id
             WHERE tasks.state_tag = 'Publishing' AND tasks.command_id = publication_commands.id
               AND tasks.revision_id = subjects.current_revision_id
           )
-      `).run(input.at, input.at, input.commandId, input.workerId, input.fence, input.at)
+      `).run(input.at, input.at, input.commandId, input.workerId, input.fence)
       if (command.changes !== 1) {
         database.exec('COMMIT')
         return false

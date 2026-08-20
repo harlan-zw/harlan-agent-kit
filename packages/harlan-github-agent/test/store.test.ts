@@ -686,6 +686,46 @@ describe('journal store', () => {
     }))
   })
 
+  it('records a triage comment GitHub accepted after the lease ran out', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'slow-issue-triage-comment',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem(),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new issue Revision.')
+    const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
+    if (task === null)
+      throw new Error('Expected an issue triage Task.')
+    const staged = store.stageIssueTriageComment({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: observed.revisionId,
+      expectedUpdatedAt: task.issue.updatedAt,
+      body: '<!-- harlan-agent-kit:issue-triage -->\nTriage result.',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    // Two minutes of lease, and GitHub answers twelve minutes later.
+    const command = store.claimIssueTriageComment(staged.commandId, 'comment-controller', '2026-08-13T01:02:01.000Z', 120_000)
+    if (command === null)
+      throw new Error('Expected an issue triage comment command.')
+
+    expect(store.completeIssueTriageComment({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:16:00.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/issues/12#issuecomment-42',
+    })).toBe(true)
+  })
+
   it('stores one durable issue triage comment', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
