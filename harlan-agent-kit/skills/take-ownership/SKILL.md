@@ -1,10 +1,6 @@
 ---
 name: take-ownership
-description: >
-  Own current work through its intended delivery result.
-  Use for end-to-end closure, landing, merging, CI monitoring, deployment monitoring, or smoke verification.
-  Resume from local changes, a branch, a pull request, a merged change, or a pushed revision.
-  Repair attributable failures and continue until verified, blocked, or cancelled.
+description: "Own current work through merge, CI, deployment, and smoke verification. Resume from any delivery stage and repair attributable failures until verified, blocked, or cancelled."
 ---
 
 # Take Ownership

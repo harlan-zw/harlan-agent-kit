@@ -1,6 +1,6 @@
 ---
 name: nuxt-improve-codebase-architecture
-description: Architecture review for a project with a `nuxt.config.ts` — Nuxt apps, Nuxt modules, and layer workspaces. Finds deepening opportunities on Nuxt-native seams (hooks, modules, layers, plugins, composables, server routes, nitro, runtime config). Use for improving architecture, finding refactors, consolidating coupled modules, or making a Nuxt codebase more testable. For a package with no `nuxt.config.ts`, use `improve-ts-pkg-architecture` instead.
+description: "Review architecture for a project with nuxt.config.ts. Use for Nuxt-native refactors across modules, layers, plugins, composables, server routes, Nitro, or runtime config."
 effort: high
 ---
 

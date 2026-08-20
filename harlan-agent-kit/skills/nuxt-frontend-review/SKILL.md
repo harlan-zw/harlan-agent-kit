@@ -1,6 +1,6 @@
 ---
 name: nuxt-frontend-review
-description: 'Adversarial frontend review. Trigger on "review", "check my work", "verify", "test the frontend". Evaluates against contract criteria, runs dev server, presents verdict with testing checklist. Accepts job ID for parallel builds.'
+description: "Adversarially review a Nuxt frontend. Run it and verify its contract, UX, and visual behavior. Use for frontend review or testing."
 user_invocable: true
 argument-hint: "[job-id] [inline]"
 model: opus

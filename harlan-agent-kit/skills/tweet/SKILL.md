@@ -1,6 +1,6 @@
 ---
 name: tweet
-description: Draft, iterate, and polish tweets with visuals. Use when user says "tweet this", "draft a tweet", "post about this", "share on twitter", "write a tweet", or provides text to tweet. Generates code cards, stat cards, and screenshot wraps.
+description: "Draft and polish tweets with optional code cards, stat cards, or screenshot wraps. Use when the user wants a tweet or X post."
 user_invocable: true
 ---
 

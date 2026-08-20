@@ -1,6 +1,6 @@
 ---
 name: ripast
-description: AST-aware rename, move, extract, find-usages, and tailwind/CSS class migration across TS/JS/Vue SFCs (incl. `<template>`). Use for any multi-file rename, move, import update, or refactor mechanical step. Prefer over Edit/grep whenever a change spans more than one file.
+description: "Use Ripast for AST-aware renames, moves, extracts, usages, imports, and CSS class migrations across TS, JS, and Vue. Trigger for mechanical changes spanning files."
 user_invocable: true
 ---
 

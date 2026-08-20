@@ -1,6 +1,6 @@
 ---
 name: glossary
-description: Create, enforce, or audit a project's GLOSSARY.md, the canonical vocabulary for product concepts. Use when naming a new feature, writing user-visible strings, renaming a concept, bootstrapping a glossary, or auditing a codebase for vocabulary drift and banned terms. Use before inventing any word for a feature.
+description: "Create or audit GLOSSARY.md. Use before naming product concepts, writing user-visible terms, renaming concepts, or checking vocabulary drift and banned terms."
 user_invocable: true
 argument-hint: "[init | audit | add <term>]"
 ---

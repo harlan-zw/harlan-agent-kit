@@ -1,6 +1,6 @@
 ---
 name: social-presence
-description: Social media content strategy and tweet crafting. Trigger on "what should I tweet", "help me post about", "tweet this release", "social presence", "what to post", "promote this", "launch tweet", "content ideas".
+description: "Plan social content and launch promotion. Use for tweet ideas, content strategy, what to post, or when to post it."
 user_invocable: true
 argument-hint: "[topic, release notes, or 'ideas']"
 ---

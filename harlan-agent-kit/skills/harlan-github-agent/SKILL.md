@@ -1,6 +1,6 @@
 ---
 name: harlan-github-agent
-description: Start, inspect, stop, configure, or diagnose Harlan's local GitHub maintenance service. Use when the user mentions harlan-github-agent, asks to monitor selected repositories, automate issue or pull request work, inspect agent activity, resolve pull request conflicts, or manage the local dashboard.
+description: "Manage or diagnose Harlan's local GitHub maintenance service. Use for repository monitoring, automated issue or PR work, agent activity, conflicts, and its dashboard."
 ---
 
 # Harlan GitHub Agent

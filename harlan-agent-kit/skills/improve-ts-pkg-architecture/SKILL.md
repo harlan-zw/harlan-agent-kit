@@ -1,6 +1,6 @@
 ---
 name: improve-ts-pkg-architecture
-description: Architecture review for a published TypeScript package with no `nuxt.config.ts` — libraries, CLIs, and pnpm monorepos. Finds deepening opportunities on package-native seams (`exports`, subpath/conditional exports, workspace `packages/*`, factories + hooks, plugin shapes, citty/hookable/unbuild conventions). Use for improving architecture, finding refactors, consolidating coupled modules, or making a library more testable. For a Nuxt app or module, use `nuxt-improve-codebase-architecture` instead.
+description: "Review architecture for a TypeScript package without nuxt.config.ts. Use for package-native refactors, exports, workspaces, module boundaries, and testability."
 effort: high
 ---
 

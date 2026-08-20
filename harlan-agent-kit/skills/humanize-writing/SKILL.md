@@ -1,6 +1,6 @@
 ---
 name: humanize-writing
-description: Strip AI tells from prose so it reads as human-written. Use when user says "humanize this", "remove AI tells", "does this sound AI", "make this sound human", "de-slop", "sounds like ChatGPT", or before publishing any prose (blog, release notes, tweet, docs, email).
+description: "Remove AI writing tells from publishable prose. Use for humanizing blogs, docs, release notes, tweets, email, or copy that sounds generated."
 user_invocable: true
 argument-hint: "[text or file path to humanize]"
 ---
