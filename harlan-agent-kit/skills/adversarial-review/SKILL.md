@@ -27,6 +27,7 @@ Read these completely before reviewing:
 
 1. `references/mutation-authority.md` for repository and mutation authority.
 2. `references/review-contract.md` for review gates, confidence, comment format, and idempotent posting.
+3. `../../references/code-comments.md` for the code comment contract.
 
 Read `../pr/SKILL.md` before changing PR metadata. Read `../humanize-writing/SKILL.md` before changing its prose.
 

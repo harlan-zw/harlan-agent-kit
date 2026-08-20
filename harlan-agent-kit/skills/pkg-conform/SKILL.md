@@ -133,6 +133,7 @@ See `references/nuxt-module-structure.md` for directory layout and runtime rules
 ## References
 
 See `references/` for detailed templates:
+- `../../references/code-comments.md` - the comment contract for any code this skill writes
 - `references/pkg-package-json.md` - single repo and monorepo package.json templates
 - `references/catalogs.md` - pnpm workspace catalogs
 - `references/configs.md` - package config file templates (eslint, vitest, tsconfig, obuild)

@@ -70,7 +70,7 @@ When a release resembles a commit SHA, verify it with `git cat-file -e RELEASE^{
 
 ## Implement the complete site fix
 
-Fix every actionable root cause in the same worktree. Keep unrelated user changes out of the branch. Use repository skills and current framework guidance when they match the code touched.
+Fix every actionable root cause in the same worktree. Keep unrelated user changes out of the branch. Use repository skills and current framework guidance when they match the code touched. Follow `../../../references/code-comments.md` for every comment you write.
 
 Run focused tests after each root-cause fix. Then run every check required by repository instructions and CI. Record exact commands and results.
 

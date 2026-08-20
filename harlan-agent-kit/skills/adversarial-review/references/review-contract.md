@@ -15,6 +15,7 @@ Check:
 - Performance regressions on hot or scaling-sensitive paths.
 - Tests that would fail before the change and cover realistic regressions.
 - Documentation for user-visible behavior.
+- Code comments against `../../../references/code-comments.md`.
 - Repository architecture and local instructions.
 
 Treat style-only preferences as non-blocking. Treat correctness, security, data loss, public API breakage, and missing regression coverage as material.

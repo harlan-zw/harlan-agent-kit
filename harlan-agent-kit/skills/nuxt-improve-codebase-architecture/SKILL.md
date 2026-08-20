@@ -42,6 +42,7 @@ This skill is _informed_ by the project's domain model (`CONTEXT.md`, `docs/adr/
 - [VUE-CONVENTIONS.md](VUE-CONVENTIONS.md) — framework-agnostic Vue patterns (service composables as factory + `provide` + `use`, component thinness).
 - [NUXT-APP-CONVENTIONS.md](NUXT-APP-CONVENTIONS.md) — Nuxt-specific app layer (`$fetch` as port, async resource composables, `useState` for SSR-safe app-wide state, client policy mirror).
 - [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md) — design-it-twice with parallel sub-agents for chosen candidates.
+- [code-comments.md](../../references/code-comments.md) — the comment contract for any code this skill writes.
 
 ## Process
 
