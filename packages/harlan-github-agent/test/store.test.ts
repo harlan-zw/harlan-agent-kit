@@ -860,6 +860,67 @@ describe('journal store', () => {
     })).toEqual({ _tag: 'Rejected', reason: { _tag: 'ApprovalNotRequired' } })
   })
 
+  it('allows approved issue work in an explicitly configured maintained repository', () => {
+    const store = createStore()
+    const mapping = repositoryMapping({
+      github: 'nuxt/scripts',
+      ownership: 'maintained',
+      conflictResolution: false,
+    })
+    store.syncRepositories([mapping], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'maintained-issue',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem({ repository: 'nuxt/scripts' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new issue.')
+    const triage = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
+    if (triage === null)
+      throw new Error('Expected issue triage.')
+    store.completeWorkerTask({
+      taskId: triage.id,
+      workerId: triage.state.workerId,
+      fence: triage.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      evidence: JSON.stringify({ validity: 'valid' }),
+    })
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:02:01.000Z').queue).toContainEqual(expect.objectContaining({
+      repository: 'nuxt/scripts',
+      number: 12,
+      state: { _tag: 'AwaitingApproval', kind: 'issue_work' },
+    }))
+    expect(store.approveIssueWork({
+      repository: 'nuxt/scripts',
+      issueNumber: 12,
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:02:02.000Z',
+    })).toEqual({ _tag: 'Approved', taskId: expect.any(String) })
+    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:03.000Z', 600_000)).toEqual(
+      expect.objectContaining({ kind: 'issue_work', issueNumber: 12, repositoryMapping: mapping }),
+    )
+  })
+
+  it('does not plan issue work through Harlan user authentication', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({
+      github: 'nuxt/scripts',
+      authentication: 'user',
+      ownership: 'maintained',
+      conflictResolution: false,
+    })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'user-authenticated-issue',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem({ repository: 'nuxt/scripts' }),
+    })
+
+    expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)).toBeNull()
+  })
+
   it('does not queue issue work when triage needs information', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

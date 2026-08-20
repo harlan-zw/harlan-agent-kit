@@ -7,6 +7,7 @@ import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAg
 import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
+import { canWorkIssues } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { chooseOverlappingStackBase, chooseStackBase } from './stack.ts'
 import { cleanLine } from './text.ts'
@@ -226,7 +227,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (validated._tag === 'Err')
         return validated
       const prefix = validated.value.writablePullRequestHeadPrefixes[0]
-      if (!validated.value.enabled || validated.value.ownership !== 'owned' || !validated.value.issueWork || prefix === undefined)
+      if (!canWorkIssues(validated.value) || prefix === undefined)
         return err('Repository policy no longer authorizes issue work.')
       const [snapshot, template] = await Promise.all([
         options.github.getIssueTriageSnapshot(validated.value, task.issueNumber, signal),

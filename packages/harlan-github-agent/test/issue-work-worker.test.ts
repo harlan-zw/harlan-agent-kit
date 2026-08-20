@@ -9,7 +9,7 @@ import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } 
 
 describe('issue work worker', () => {
   it('resumes triage, implements the issue, and prepares repository metadata', async () => {
-    const repository = repositoryMapping()
+    const repository = repositoryMapping({ ownership: 'maintained', conflictResolution: false })
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
     const worker = createIssueWorkWorker({

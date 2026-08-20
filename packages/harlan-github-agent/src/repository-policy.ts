@@ -46,9 +46,13 @@ export function canWritePullRequestHead(mapping: RepositoryMapping): boolean {
 /**
  * True when the controller may open a pull request for an issue here.
  *
- * Issue work writes new code nobody asked for yet, so it stays on repositories
- * Harlan owns outright.
+ * A maintained repository must opt in. The GitHub App keeps every write under
+ * the repository-scoped identity instead of Harlan's own account.
  */
 export function canWorkIssues(mapping: RepositoryMapping): boolean {
-  return mapping.ownership === 'owned'
+  return mapping.enabled
+    && mapping.authentication === 'app'
+    && canPushBranch(mapping)
+    && mapping.issueWork
+    && mapping.writablePullRequestHeadPrefixes.length > 0
 }

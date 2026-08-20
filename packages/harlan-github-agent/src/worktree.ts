@@ -1127,7 +1127,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         return err('Repository policy does not authorize this pull request branch.')
       }
       if (command._tag === 'OpenPullRequest') {
-        if (command.taskKind === 'issue_work' && (!command.repositoryMapping.issueWork || !canWorkIssues(command.repositoryMapping)))
+        if (command.taskKind === 'issue_work' && !canWorkIssues(command.repositoryMapping))
           return err('Repository policy no longer authorizes issue work.')
         if (command.taskKind === 'baseline_repair' && !canRepairBaseline(command.repositoryMapping))
           return err('Repository policy no longer authorizes Baseline repair.')
