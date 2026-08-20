@@ -1,6 +1,6 @@
 ---
 name: issue-triage
-description: Triage open issues by difficulty and impact. Use when user says "review issues", "triage issues", "what should I work on", "prioritize backlog", "rank issues", "find quick wins", or "what's high priority".
+description: "Prioritize open issues by impact and difficulty. Use for backlog review, quick wins, or deciding what to work on next."
 user_invocable: true
 context: fork
 ---

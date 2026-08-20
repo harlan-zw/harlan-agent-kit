@@ -1,6 +1,6 @@
 ---
 name: adversarial-review
-description: Adversarially review one pull request, repair material defects when policy permits, verify the exact remote head, and create or update the canonical Harlan Agent Kit bot status. Use when the user says "adversarial review", "review this PR", "try to disprove this change", "check this PR before merge", or asks for a rigorous correctness review of one pull request.
+description: "Review one pull request adversarially, repair permitted defects, verify the remote head, and publish the Harlan Agent Kit bot status. Use for rigorous pre-merge PR review."
 ---
 
 # Adversarial Review

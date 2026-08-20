@@ -1,6 +1,6 @@
 ---
 name: pr
-description: Create, make, open, update, submit, or sync a PR / pull request, and land finished work on GitHub. Use whenever the next step is branch + commit + push + PR, however the user phrases it -- "open a PR", "submit PR", "create pull request", "push this up", "send for review", "make a PR", "sync PR", "ship it", "land this", or a bare "fix" / "do it" / "yes" once a fix is ready. These are examples, not a required wording any intent to get work onto a branch and into a PR routes here.
+description: "Create or update a pull request from current work. Use when work should be branched, committed, pushed, submitted, shipped, or landed on an owned repository."
 user_invocable: true
 ---
 

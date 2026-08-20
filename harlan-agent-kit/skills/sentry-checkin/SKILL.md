@@ -1,6 +1,6 @@
 ---
 name: sentry-checkin
-description: Triage and repair every open Sentry issue across Harlan's site inventory. Use when asked to check Sentry, run a Sentry check-in, fix production errors, or clear site error backlogs. Discovers every Sentry project, groups projects by site, delegates one site per agent, requires complete issue coverage, isolates concurrent same-repository work with wt, and opens one PR through $harlan-agent-kit:pr when fixes exist.
+description: "Triage and repair all open Sentry issues across Harlan's sites. Use for Sentry check-ins, production error backlogs, and verified repair PRs."
 ---
 
 # Sentry Check-in

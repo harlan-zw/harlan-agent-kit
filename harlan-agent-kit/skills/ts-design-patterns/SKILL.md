@@ -1,6 +1,6 @@
 ---
 name: ts-design-patterns
-description: Harlan's TypeScript design principles (Effect-inspired, no Effect dependency) for modelling state, errors, and dependencies. Use when designing or reviewing non-trivial TypeScript, choosing how to represent state or failures, structuring a module's boundaries, or when a review needs a taste rubric for TS API design.
+description: "Apply Harlan's Effect-inspired TypeScript design principles. Use for non-trivial state, errors, dependencies, module boundaries, or API design."
 user_invocable: true
 ---
 

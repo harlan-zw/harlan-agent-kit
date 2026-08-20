@@ -1,6 +1,6 @@
 ---
 name: unit-tests
-description: Write or review unit tests that exercise an API instead of fact-checking a file. Use when writing tests, adding test coverage, reviewing a test file, or when a test suite feels brittle, verbose, or expensive to maintain. Also use before writing the failing test for a bug fix.
+description: "Write or review unit tests through exported behavior. Use for new tests, bug-fix regression tests, coverage, or replacing brittle implementation checks."
 user_invocable: true
 argument-hint: "[file or directory to test or review]"
 ---

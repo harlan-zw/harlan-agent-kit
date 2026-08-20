@@ -1,6 +1,6 @@
 ---
 name: pr-triage
-description: Triage all open pull requests in Harlan's owned GitHub repositories. Use when asked to review the PR backlog, refresh open PRs, get PRs merge-ready, repair failing PRs, sign off PRs, rank merge confidence, or decide which pull requests to merge next.
+description: "Triage all open pull requests in Harlan-owned repositories. Use to repair, rank, sign off, or decide merge order across the PR backlog."
 ---
 
 # PR Triage

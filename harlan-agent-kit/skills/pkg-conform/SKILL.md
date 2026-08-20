@@ -1,6 +1,6 @@
 ---
 name: pkg-conform
-description: Use when user asks to "conform package", "check standards", "sync package", "audit project config", "update catalogs", "add github actions", "setup eslint", "configure vitest", "init package", "create npm package", "scaffold project", "init nuxt module", "create nuxt module", "scaffold module", "sync nuxt module", "add playground", "setup test fixtures", "configure @nuxt/test-utils", or needs help with pnpm workspace catalogs, obuild config, standard npm package architecture, Nuxt module architecture, runtime vs build-time code, addImports, addServerHandler, or nuxt-module-builder.
+description: "Conform or scaffold TypeScript packages and Nuxt modules. Use for workspace catalogs, package config, CI, ESLint, Vitest, playgrounds, fixtures, or Nuxt module setup."
 user_invocable: true
 ---
 
