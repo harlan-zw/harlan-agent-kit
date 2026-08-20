@@ -22,6 +22,7 @@ describe('classifyFailure', () => {
     ['The pull request changed before the review completed.', 'subject_changed'],
     ['The agent returned an invalid adversarial review result.', 'agent_result'],
     ['The agent returned malformed adversarial review JSON.', 'agent_result'],
+    ['The agent returned pull request metadata that does not follow the PR skill.', 'agent_result'],
   ])('treats %s as a transient %s failure', (message, kind) => {
     expect(classifyFailure({ message })).toEqual({ _tag: 'Transient', kind })
   })

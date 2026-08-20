@@ -96,6 +96,28 @@ describe('repository discovery', () => {
     expect(mappings[0]?.writablePullRequestAuthors).toEqual(['harlan-zw', 'harlan-github-agent[bot]'])
   })
 
+  it('keeps the discovered credential when explicit policy claims another', () => {
+    // An organization that refuses the App leaves Harlan's own token as the only
+    // way in. Policy that declared an installation sent every write to a token
+    // that does not exist.
+    const override = repositoryMapping({ github: 'nuxt/scripts', ownership: 'owned', issueWork: true })
+    const mappings = buildRepositoryMappings([{
+      github: 'nuxt/scripts',
+      defaultBranch: 'main',
+      archived: false,
+      topics: [],
+      authentication: 'user' as const,
+      owner: { login: 'nuxt', type: 'Organization' },
+    }], [{ github: 'nuxt/scripts', checkout: '/home/harlan/pkg/nuxt-scripts' }], [override], ['nuxt'])
+
+    expect(mappings[0]).toEqual(expect.objectContaining({
+      github: 'nuxt/scripts',
+      authentication: 'user',
+      ownership: 'owned',
+      issueWork: true,
+    }))
+  })
+
   it('applies explicit policy without trusting its stale path or default branch', () => {
     const override = repositoryMapping({
       checkout: '/wrong/path',
