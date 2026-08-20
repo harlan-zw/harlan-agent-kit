@@ -118,7 +118,7 @@ describe('selection mode', () => {
 })
 
 describe('selection mode approval controller', () => {
-  function controllerWith(mode: 'auto' | 'manual', approvalLabels: Array<'review'>, calls: string[]) {
+  function controllerWith(mode: 'auto' | 'manual', approvalLabels: Array<'review'>, calls: string[], author = 'harlan-zw') {
     return createApprovalController({
       github: {
         consumeApprovalLabel: () => {
@@ -147,16 +147,31 @@ describe('selection mode approval controller', () => {
       },
     }).reconcile(
       repositoryMapping(),
-      pullRequestItem({ author: 'harlan-zw', approvalLabels }),
+      pullRequestItem({ author, approvalLabels }),
       'a'.repeat(64),
       new AbortController().signal,
     )
   }
 
-  it('never comments on a pull request Harlan opened in Manual', async () => {
+  it('writes nothing at all for a pull request Harlan opened in Manual', async () => {
     const calls: string[] = []
     expect(await controllerWith('manual', [], calls)).toEqual(ok(undefined))
-    expect(calls).toEqual(['ensure'])
+    expect(calls).toEqual([])
+  })
+
+  it('writes nothing for an outside contributor in Manual either', async () => {
+    // Inviting an Approval used to comment on every open contributor pull
+    // request as soon as a repository was tracked. The dashboard already offers
+    // Review and repair, so Manual says nothing until Harlan selects one.
+    const calls: string[] = []
+    expect(await controllerWith('manual', [], calls, 'outside-contributor')).toEqual(ok(undefined))
+    expect(calls).toEqual([])
+  })
+
+  it('still invites an outside contributor Approval in Auto', async () => {
+    const calls: string[] = []
+    expect(await controllerWith('auto', [], calls, 'outside-contributor')).toEqual(ok(undefined))
+    expect(calls).toEqual(['ensure', 'comment'])
   })
 
   it('takes the label as the selection in Manual', async () => {
@@ -188,6 +203,7 @@ describe('selection mode route', () => {
         resumeAgents: () => ({ _tag: 'Running' as const }),
         selectAgent: selection => selection,
         setRepositoryPaused: () => true,
+        setRepositoryWritesEnabled: () => true,
         dismissItem: () => ({ _tag: 'Dismissed' as const }),
         restoreItem: () => ({ _tag: 'Restored' as const }),
         setSelectionMode: (mode) => {

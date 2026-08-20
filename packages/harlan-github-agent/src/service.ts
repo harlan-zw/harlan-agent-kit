@@ -22,6 +22,7 @@ import { classifyFailure } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
+import { createGitHubWriteGate, repositoryQuarantineReason } from './github-write-gate.ts'
 import { createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker } from './issue-work-worker.ts'
@@ -191,7 +192,23 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   // Ephemeral: what each running agent is doing right now, never persisted.
   const activityLog = createAgentActivityLog()
-  const workerGithub = createGitHubAgentSource({ actorLogin, tokens })
+  // Every GitHub write leaves through this object, so quarantine sits on it
+  // rather than on the callers. Two of them write without staging a command.
+  const workerGithub = createGitHubWriteGate({
+    mayWrite: github => store.mayWriteRepository(github),
+    onRefused: (github) => {
+      store.recordIncident({
+        scope: { _tag: 'Repository', repository: github },
+        kind: 'policy',
+        severity: 'warning',
+        message: repositoryQuarantineReason(github),
+        operation: 'write',
+        recovery: { _tag: 'ActionRequired' },
+        at: now().toISOString(),
+      })
+    },
+    source: createGitHubAgentSource({ actorLogin, tokens }),
+  })
   const mutationSchedulers = await (async () => {
     if (!config.mutationsEnabled)
       return undefined
@@ -543,6 +560,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       resumeAgents: store.resumeAgents,
       selectAgent: store.selectAgent,
       setRepositoryPaused: store.setRepositoryPaused,
+      setRepositoryWritesEnabled: store.setRepositoryWritesEnabled,
       setSelectionMode: store.setSelectionMode,
       dismissItem: store.dismissItem,
       restoreItem: store.restoreItem,

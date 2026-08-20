@@ -59,12 +59,19 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
 
       const label = APPROVAL_LABELS.review
       if (!pullRequest.approvalLabels.includes('review')) {
+        // Manual Selection mode already offers Review and repair on the
+        // dashboard, so the pull request itself needs no invitation. Saying it
+        // out loud put one public comment on every open contributor pull
+        // request the moment a repository became tracked, which is ninety eight
+        // comments across four repositories in the case that taught us this.
+        //
+        // A trusted author never needed the comment either, and the label is a
+        // repository-wide write, so both wait until there is something to say.
+        if (manualSelection || trustedAuthor)
+          return ok(undefined)
         const available = await options.github.ensureApprovalLabel(repository, label, signal)
         if (available._tag === 'Err')
           return available
-        // Manual Selection mode holds Harlan's own pull requests. A comment on each one is noise.
-        if (trustedAuthor)
-          return ok(undefined)
         return options.github.upsertReviewStatus(repository, pullRequest.number, null, approvalPrompt(label, pullRequest.headSha), false, signal).then(result => result._tag === 'Err' ? result : ok(undefined))
       }
 

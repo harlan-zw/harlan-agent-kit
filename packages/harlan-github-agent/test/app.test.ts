@@ -17,6 +17,7 @@ const agentControls = {
   resumeAgents: (_at: string) => ({ _tag: 'Running' as const }),
   selectAgent: (selection: AgentSelection, _at: string) => selection,
   setRepositoryPaused: (_github: string, _paused: boolean) => true,
+  setRepositoryWritesEnabled: (_github: string, _writesEnabled: boolean) => true,
   setSelectionMode: (mode: SelectionMode) => mode,
   dismissItem: () => ({ _tag: 'Dismissed' as const }),
   restoreItem: () => ({ _tag: 'Restored' as const }),

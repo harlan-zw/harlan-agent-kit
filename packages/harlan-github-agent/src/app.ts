@@ -14,7 +14,7 @@ import { createError, createEventStream, H3 } from 'h3'
 import { parseAgentSelection } from './agent-profile.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   allowedHost: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -68,6 +68,16 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
       ? { ...agent, activity: activityLog.read(agent.id) }
       : agent),
   }
+}
+
+async function setRepositoryWrites(options: AgentAppOptions, event: { req: { json: () => Promise<unknown> } }, writesEnabled: boolean): Promise<{ github: string, writesEnabled: boolean }> {
+  const body = await event.req.json().catch(() => undefined)
+  const github = typeof body === 'object' && body !== null && 'repository' in body ? (body as { repository: unknown }).repository : undefined
+  if (typeof github !== 'string' || !/^[^/]+\/[^/]+$/.test(github))
+    throw createError({ status: 400, statusText: 'Bad Request', message: 'A valid repository is required.' })
+  if (!options.store.setRepositoryWritesEnabled(github, writesEnabled))
+    throw createError({ status: 404, statusText: 'Not Found', message: 'That repository is not mapped.' })
+  return { github, writesEnabled }
 }
 
 async function setRepositoryPaused(options: AgentAppOptions, event: { req: { json: () => Promise<unknown> } }, paused: boolean): Promise<{ github: string, paused: boolean }> {
@@ -322,6 +332,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     return { _tag: 'Ejected' }
   })
 
+  app.post('/api/repositories/writes/enable', event => setRepositoryWrites(options, event, true))
+  app.post('/api/repositories/writes/disable', event => setRepositoryWrites(options, event, false))
   app.post('/api/repositories/pause', event => setRepositoryPaused(options, event, true))
 
   app.post('/api/repositories/resume', event => setRepositoryPaused(options, event, false))

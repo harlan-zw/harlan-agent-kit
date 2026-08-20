@@ -117,6 +117,9 @@ const permanentMessages = new Set<string>([
  */
 const permanentPatterns: RegExp[] = [
   /\bis still draft\b/i,
+  // A quarantined repository stays quarantined until a person enables it, so
+  // retrying only spends agent turns on a decision no agent can make.
+  /\bnever been trusted to write\b/i,
 ]
 
 /** GitHub answers a healthy request this way while it is degraded or replicating. */
