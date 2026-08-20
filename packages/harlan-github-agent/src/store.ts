@@ -2178,6 +2178,7 @@ function dashboardQueue(
   tasks: AgentTask[],
   reviewAgents: Array<Extract<DashboardAgent, { _tag: 'ReviewAgent' }>>,
   mappings: Map<string, RepositoryMapping>,
+  rejectedIssueWorkResults: Map<string, number>,
 ): QueueEntry[] {
   const currentTasks = new Map<string, AgentTask>()
   tasks.forEach((task) => {
@@ -2215,7 +2216,13 @@ function dashboardQueue(
           case 'Running':
           case 'Publishing': return [{ ...base, kind: 'issue', state: { _tag: 'Active', work: 'issue_work' } }]
           case 'Queued': return [{ ...base, kind: 'issue', state: { _tag: 'Queued', work: 'issue_work' } }]
-          case 'ActionRequired': return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: work.state.reason } }]
+          case 'ActionRequired': {
+            const rejectedResults = rejectedIssueWorkResults.get(work.id)
+            const reason = rejectedResults === undefined
+              ? work.state.reason
+              : `Issue work stopped after ${rejectedResults} invalid pull request titles or descriptions. Update the issue to start fresh Issue triage.`
+            return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason } }]
+          }
           case 'Failed': return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: work.state.reason } }]
           case 'Completed': return [{ ...base, kind: 'issue', state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the pull request.' } }]
           case 'Superseded': break
@@ -2276,8 +2283,12 @@ function dashboardQueue(
     }
     if (subject.draft)
       return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Draft pull request.' } }]
-    if (subject.mergeState === 'conflicting')
-      return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: 'Merge conflicts require manual resolution.' } }]
+    if (subject.mergeState === 'conflicting') {
+      const reason = mapping.ownership === 'maintained'
+        ? 'Conflict resolution is off for maintained repositories. Resolve the merge conflicts on GitHub.'
+        : 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.'
+      return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason } }]
+    }
     if (subject.mergeState === 'unknown')
       return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for mergeability.' } }]
     if (subject.approval._tag === 'ReviewRequired')
@@ -2317,12 +2328,19 @@ function dashboardQueue(
     if (review?.outcome._tag === 'Ready')
       return []
     if (review?.outcome._tag === 'Blocked') {
-      const finding = review.findings.find(candidate => candidate._tag === 'Open')
+      const findings = review.findings.filter(candidate => candidate._tag === 'Open')
+      const finding = findings[0]
+      const count = findings.length
+      const prefix = count === 1
+        ? 'Automated review found 1 open review issue.'
+        : `Automated review found ${count} open review issues.`
       return [{
         ...pullRequest,
         state: {
           _tag: 'ActionRequired',
-          reason: finding?._tag === 'Open' ? `${finding.summary} Next: ${finding.nextAction}` : 'Review is blocked.',
+          reason: finding?._tag === 'Open'
+            ? `${prefix}${count > 1 ? ' First:' : ''} ${finding.summary} Next: ${finding.nextAction}`
+            : 'Automated review is BLOCKED. Open GitHub for details.',
         },
       }]
     }
@@ -6336,6 +6354,18 @@ export function openJournalStore(
       : repositories.some(repository => repository.lastSuccessAt === null) ? 'starting' : 'ready'
     const items = subjectRows.map(row => subjectFromRow(database, row))
     const tasks = taskRows(database).map(taskFromRow)
+    const rejectedIssueWorkResults = new Map((database.prepare(`
+      SELECT task_transitions.task_id, COUNT(*) AS occurrences
+      FROM task_transitions
+      JOIN tasks ON tasks.id = task_transitions.task_id
+      WHERE tasks.kind = 'issue_work'
+        AND (
+          task_transitions.reason LIKE 'The agent returned pull request metadata that does not follow the PR skill%'
+          OR task_transitions.reason LIKE 'The Agent returned invalid pull request text%'
+        )
+      GROUP BY task_transitions.task_id
+      HAVING COUNT(*) > 1
+    `).all() as unknown as Array<{ task_id: string, occurrences: number }>).map(row => [row.task_id, row.occurrences]))
     const reviewAgents = dashboardReviewAgents(database)
     const currentProvider = provider()
     const activeAgents = activeAgentRows(database, currentProvider).map(row => activeAgentFromRow(row, currentProvider))
@@ -6365,7 +6395,7 @@ export function openJournalStore(
       agentSelection: getAgentSelection(),
       agents,
       incidents: listIncidents(),
-      queue: dashboardQueue(items.filter(item => !item.dismissed), tasks, reviewAgents, mappings),
+      queue: dashboardQueue(items.filter(item => !item.dismissed), tasks, reviewAgents, mappings, rejectedIssueWorkResults),
       repositories,
       items,
       tasks,

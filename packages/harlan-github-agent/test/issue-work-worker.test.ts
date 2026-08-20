@@ -139,7 +139,7 @@ Closes #12.`,
 
     expect(result).toEqual({
       _tag: 'Err',
-      error: 'The agent returned pull request metadata that does not follow the PR skill: the title is not a Conventional Commit subject.',
+      error: 'The Agent returned invalid pull request text: the title is not a Conventional Commit subject.',
     })
   })
 

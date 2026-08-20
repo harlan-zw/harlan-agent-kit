@@ -126,7 +126,7 @@ function parseAgentResponse(text: string, issueNumber: number, template: PullReq
                   ? undefined
                   : 'the body drops part of the repository pull request template'
       if (brokenRule !== undefined)
-        return err(`The agent returned pull request metadata that does not follow the PR skill: ${brokenRule}.`)
+        return err(`The Agent returned invalid pull request text: ${brokenRule}.`)
       return ok({
         outcome: 'implemented',
         summary: value.summary,
