@@ -177,8 +177,8 @@ Then clean in this order:
 3. Release the task's worktree claim.
 4. Run `wt remove <branch>` for each eligible worktree.
 5. Run `git branch -d <branch>` when Git reports the remaining local branch merged.
-6. For a verified squash or rebase, run `git update-ref -d refs/heads/<branch> <expected-head>`.
-7. Recheck the remote head SHA, then delete the eligible branch in an owned repository.
+6. After `wt list` proves no checkout uses it, run `git update-ref -d refs/heads/<branch> <expected-head>`.
+7. Delete the remote with `git push --force-with-lease=refs/heads/<branch>:<expected-head> origin :refs/heads/<branch>`.
 8. Fetch and prune stale tracking references again.
 
 `wt remove` may delete the integrated local branch itself.
