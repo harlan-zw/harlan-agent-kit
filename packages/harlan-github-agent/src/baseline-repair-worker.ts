@@ -118,6 +118,7 @@ function prompt(task: ClaimedBaselineRepairTask, checks: string[], template: Pul
 
 Own the work end to end. Diagnose the actual failure, implement the complete fix, and verify it.
 Work as a normal local agent session. Use the user's global agent context and installed skills.
+This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 Read repository AGENTS.md and contributor instructions. Apply the unit-tests skill for bug fixes.
 Use GitHub read commands to inspect the failed runs and logs. The failing checks are ${JSON.stringify(checks)}.
 Apply the PR skill to draft the pull request title and body. Use this template when useful: ${JSON.stringify(template)}.
