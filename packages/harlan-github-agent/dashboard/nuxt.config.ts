@@ -11,7 +11,18 @@ export default defineNuxtConfig({
   },
   icon: {
     serverBundle: 'local',
-    clientBundle: { scan: true },
+    clientBundle: {
+      scan: true,
+      // WorkChip resolves these names at runtime. Static scanning cannot find them.
+      icons: [
+        'lucide:scan-eye',
+        'lucide:wrench',
+        'lucide:git-merge',
+        'lucide:heart-pulse',
+        'lucide:inbox',
+        'lucide:hammer',
+      ],
+    },
   },
   ui: {
     theme: {

@@ -1106,7 +1106,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           return err('An open pull request already uses this branch.')
       }
       else {
-        // Writing to a branch someone else opened needs a repository Harlan owns.
+        // Approval and the repository policy decide whether this head is writable.
         if (!canWritePullRequestHead(command.repositoryMapping))
           return err('Repository policy does not authorize writing this pull request head.')
         const headRepository = publicationTargetRepository(command)

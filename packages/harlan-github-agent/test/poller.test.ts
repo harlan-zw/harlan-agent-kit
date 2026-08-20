@@ -103,7 +103,9 @@ describe('abandoned pass containment', () => {
       await vi.advanceTimersByTimeAsync(5_000)
       expect(started).toBeGreaterThan(2)
 
-      poller.stop().catch(() => undefined)
+      poller.stop().catch(() => {
+        // This teardown cannot affect the overlap assertions above.
+      })
     }
     finally {
       vi.useRealTimers()

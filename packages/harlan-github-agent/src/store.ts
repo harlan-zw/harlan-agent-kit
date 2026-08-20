@@ -67,7 +67,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
-import { canRepairBaseline } from './repository-policy.ts'
+import { canRepairBaseline, canWritePullRequestHead as canWriteConfiguredPullRequestHead } from './repository-policy.ts'
 
 export interface RecordIncidentInput {
   scope: IncidentScope
@@ -2056,7 +2056,7 @@ function canWritePullRequestHead(mapping: RepositoryMapping, subject: GitHubPull
 }
 
 function canRepairPullRequestHead(mapping: RepositoryMapping, subject: GitHubPullRequestItem): boolean {
-  return mapping.ownership === 'owned'
+  return canWriteConfiguredPullRequestHead(mapping)
     && (subject.headRepository.toLowerCase() === mapping.github.toLowerCase() || subject.maintainerCanModify === true)
     && mapping.writablePullRequestHeadPrefixes.some(prefix => subject.headRef.startsWith(prefix))
     && subject.headRef !== mapping.defaultBranch
