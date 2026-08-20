@@ -33,3 +33,4 @@ issue_cutoff: 2026-07-14
 external_repositories: []
 repositories: []
 # Owned repositories enable issue work and conflict resolution by default.
+# Maintained repositories need an explicit policy and GitHub App installation.

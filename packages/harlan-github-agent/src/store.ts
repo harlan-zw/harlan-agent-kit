@@ -67,7 +67,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
-import { canRepairBaseline, canWritePullRequestHead as canWriteConfiguredPullRequestHead } from './repository-policy.ts'
+import { canRepairBaseline, canWorkIssues, canWritePullRequestHead as canWriteConfiguredPullRequestHead } from './repository-policy.ts'
 
 export interface RecordIncidentInput {
   scope: IncidentScope
@@ -2231,7 +2231,7 @@ function dashboardQueue(
         case 'Failed': return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: task.state.reason } }]
         case 'Completed': {
           const triage = JSON.parse(task.state.evidence) as { validity?: unknown, nextAction?: unknown }
-          if (triage.validity === 'valid' && mapping.ownership === 'owned')
+          if (triage.validity === 'valid' && canWorkIssues(mapping))
             return [{ ...base, kind: 'issue', state: { _tag: 'AwaitingApproval', kind: 'issue_work' } }]
           if (triage.validity === 'needs_information')
             return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: typeof triage.nextAction === 'string' ? triage.nextAction : 'The issue needs more information.' } }]
@@ -2880,7 +2880,7 @@ function planIssueTriage(
   observedAt: string,
   mapping: RepositoryMapping,
 ): void {
-  const eligible = subject.kind === 'issue' && subject.state === 'open' && mapping.enabled && mapping.issueWork
+  const eligible = subject.kind === 'issue' && subject.state === 'open' && canWorkIssues(mapping)
   if (!eligible) {
     supersedeWorkerTasks(database, subjectId, 'issue_triage', observedAt, 'The issue no longer needs triage.')
     supersedeTasks(database, subjectId, observedAt, 'The issue no longer authorizes work.', undefined, 'issue_work')
@@ -2899,7 +2899,7 @@ function planIssueTriage(
       && existing.evidence !== null
       && (JSON.parse(existing.evidence) as { validity?: unknown }).validity === 'valid'
       && subject.kind === 'issue'
-      && mapping.ownership === 'owned'
+      && canWorkIssues(mapping)
       && !requiresIssueApproval(mapping, subject.author)
     ) {
       queueIssueWork(database, subjectId, revisionId, subject, mapping, observedAt)
@@ -3829,7 +3829,7 @@ export function openJournalStore(
     if (issue.kind !== 'issue' || issue.state !== 'open')
       return { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
     const mapping = JSON.parse(row.policy_json) as RepositoryMapping
-    if (!mapping.enabled || !mapping.issueWork || mapping.ownership !== 'owned')
+    if (!canWorkIssues(mapping))
       return { _tag: 'Rejected', reason: { _tag: 'NotAuthorized' } }
     if (!requiresIssueApproval(mapping, issue.author))
       return { _tag: 'Rejected', reason: { _tag: 'ApprovalNotRequired' } }
@@ -3879,9 +3879,7 @@ export function openJournalStore(
     const mapping = JSON.parse(row.policy_json) as RepositoryMapping
     return issue.kind === 'issue'
       && issue.state === 'open'
-      && mapping.enabled
-      && mapping.issueWork
-      && mapping.ownership === 'owned'
+      && canWorkIssues(mapping)
       && requiresIssueApproval(mapping, issue.author)
       && (JSON.parse(row.triage_evidence) as { validity?: unknown }).validity === 'valid'
   }
@@ -4799,9 +4797,7 @@ export function openJournalStore(
           const mapping = JSON.parse(row.policy_json) as RepositoryMapping
           if (
             subject.kind === 'issue'
-            && mapping.enabled
-            && mapping.issueWork
-            && mapping.ownership === 'owned'
+            && canWorkIssues(mapping)
             && !requiresIssueApproval(mapping, subject.author)
             && (JSON.parse(input.evidence) as { validity?: unknown }).validity === 'valid'
           ) {
