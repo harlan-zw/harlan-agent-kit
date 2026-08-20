@@ -291,7 +291,7 @@ describe('task incidents from the mutation journal', () => {
         workerId: task.state.workerId,
         fence: task.state.fence,
         at,
-        reason: 'The worker changed a file that was not conflicted: src/main.rs.',
+        reason: 'The worker changed a file the merge did not touch: src/main.rs.',
       })
     }
 

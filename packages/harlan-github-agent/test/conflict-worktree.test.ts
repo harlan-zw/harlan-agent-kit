@@ -26,7 +26,7 @@ function git(checkout: string, ...args: string[]): string {
   }).trim()
 }
 
-function fixture(): { currentBaseSha: string, remote: string, root: string, task: ClaimedConflictResolutionTask } {
+function fixture(): { checkout: string, currentBaseSha: string, remote: string, root: string, task: ClaimedConflictResolutionTask } {
   const directory = mkdtempSync(join(tmpdir(), 'harlan-conflict-worktree-'))
   temporaryDirectories.push(directory)
   const remote = join(directory, 'remote.git')
@@ -38,7 +38,11 @@ function fixture(): { currentBaseSha: string, remote: string, root: string, task
   git(checkout, 'config', 'user.email', 'agent@example.com')
   git(checkout, 'checkout', '-b', 'main')
   writeFileSync(join(checkout, 'file.txt'), 'original\n')
-  git(checkout, 'add', 'file.txt')
+  // `helper.ts` is what the base branch moves under a resolution. `keep.ts` is
+  // what neither side touches, so nothing may edit it.
+  writeFileSync(join(checkout, 'helper.ts'), 'export const limit = 1\n')
+  writeFileSync(join(checkout, 'keep.ts'), 'export const kept = true\n')
+  git(checkout, 'add', '--all')
   git(checkout, 'commit', '-m', 'initial')
   git(checkout, 'push', 'origin', 'main')
   const staleBaseSha = git(checkout, 'rev-parse', 'HEAD')
@@ -56,6 +60,7 @@ function fixture(): { currentBaseSha: string, remote: string, root: string, task
   const currentBaseSha = git(checkout, 'rev-parse', 'HEAD')
   const mapping = repositoryMapping({ checkout, defaultBranch: 'main' })
   return {
+    checkout,
     currentBaseSha,
     remote,
     root,
@@ -206,5 +211,49 @@ describe('conflict worktree', () => {
 
     expect(pushed).toEqual(ok(undefined))
     expect(git(remote, 'rev-parse', 'refs/heads/fix/conflict')).toBe(committed.value.commitSha)
+  })
+  it('lets a resolution follow the base branch into a file that never conflicted', async () => {
+    const { checkout, remote, root, task } = fixture()
+    // The base branch moves `helper.ts` under the pull request. Reconciling the
+    // conflict means following it, and that file never carried a marker.
+    writeFileSync(join(checkout, 'helper.ts'), 'export const limit = 2\n')
+    git(checkout, 'commit', '-am', 'raise the limit')
+    git(checkout, 'push', 'origin', 'main')
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await manager.prepare(task, new AbortController().signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    expect(prepared.value.conflictedFiles).toEqual(['file.txt'])
+    writeFileSync(join(prepared.value.path, 'file.txt'), 'resolved\n')
+    writeFileSync(join(prepared.value.path, 'helper.ts'), 'export const limit = 3\n')
+
+    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+
+    expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 2 }) }))
+    expect(git(prepared.value.path, 'diff', '--cached', '--name-only', 'HEAD').split('\n').sort()).toEqual(['file.txt', 'helper.ts'])
+  })
+
+  it('refuses a resolution that edits a file the merge never touched', async () => {
+    const { remote, root, task } = fixture()
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await manager.prepare(task, new AbortController().signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    writeFileSync(join(prepared.value.path, 'file.txt'), 'resolved\n')
+    writeFileSync(join(prepared.value.path, 'keep.ts'), 'export const kept = false\n')
+
+    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+
+    expect(verified).toEqual({ _tag: 'Err', error: 'The worker changed a file the merge did not touch: keep.ts.' })
   })
 })

@@ -303,7 +303,7 @@ describe('journal store', () => {
 
   it.each([
     ['a transient failure', 'wt list returned an invalid worktree entry.', true],
-    ['a permanent failure', 'The worker changed a file that was not conflicted: src/index.ts.', false],
+    ['a permanent failure', 'The worker changed a file the merge did not touch: src/index.ts.', false],
   ])('requeues a failed conflict task on the next poll only after %s', (_name, reason, requeued) => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -412,6 +412,34 @@ describe('journal store', () => {
       _tag: 'Queued',
       work: 'conflict_resolution',
     })
+  })
+
+  it('stops requeueing a conflict that keeps failing for the same transient reason', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'conflicting' })
+    let elapsed = 0
+    const at = (): string => new Date(Date.parse('2026-08-13T01:00:00.000Z') + (elapsed += 1000)).toISOString()
+    store.recordObservation({ externalId: 'spinning-conflict', observedAt: at(), source: 'poll', subject })
+    // One round more than the recovery budget. Without a budget the planner
+    // requeued this free of charge and the same failure ran forever.
+    for (let round = 0; round < 6; round += 1) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const task = store.claimNextConflictTask('worker-1', at(), 600_000)
+        if (task === null)
+          break
+        store.failTask({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at: at(),
+          reason: 'Could not list wt worktrees: spawn wt ENOENT',
+        })
+      }
+      store.recordObservation({ externalId: 'spinning-conflict', observedAt: at(), source: 'poll', subject })
+    }
+
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
   })
 
   it('retries an invalid agent review result without asking for attention', () => {
