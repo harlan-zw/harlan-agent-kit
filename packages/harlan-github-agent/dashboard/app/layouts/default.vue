@@ -46,9 +46,10 @@ const pages = computed(() => [
   { to: '/flow', label: 'Flow', icon: 'i-lucide-git-branch', count: 0, tone: 'warning' as const },
 ])
 
+/** Only says something when the engine is not in its default state. */
 const agentControlLabel = computed(() => {
   if (snapshot.value.agentControl._tag === 'Running')
-    return 'agents running'
+    return undefined
   return snapshot.value.agentControl.safeToRestart ? 'paused, safe to restart' : 'paused, finishing active work'
 })
 
@@ -314,11 +315,13 @@ useHead({
         <span>{{ activeAgents.length }}/{{ snapshot.agentProfile.maximumActiveAgents }} agents</span>
         <span aria-hidden="true" class="text-dimmed">·</span>
         <span :class="snapshot.mutationsEnabled ? statusClass('warning') : undefined">writes {{ snapshot.mutationsEnabled ? 'on' : 'off' }}</span>
-        <template v-if="snapshot.mutationsEnabled">
+        <template v-if="agentControlLabel">
           <span aria-hidden="true" class="text-dimmed">·</span>
-          <span :class="snapshot.agentControl._tag === 'Paused' ? statusClass('warning') : undefined">{{ agentControlLabel }}</span>
+          <span :class="statusClass('warning')">{{ agentControlLabel }}</span>
+        </template>
+        <template v-if="snapshot.mutationsEnabled && snapshot.selectionMode === 'manual'">
           <span aria-hidden="true" class="text-dimmed">·</span>
-          <span :class="snapshot.selectionMode === 'manual' ? statusClass('warning') : undefined">{{ snapshot.selectionMode }} selection</span>
+          <span :class="statusClass('warning')">manual: you select each pull request</span>
         </template>
         <span aria-hidden="true" class="text-dimmed">·</span>
         <span class="text-dimmed">updated {{ relativeTime(snapshot.generatedAt) }}</span>

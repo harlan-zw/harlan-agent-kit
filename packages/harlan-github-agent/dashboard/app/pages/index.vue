@@ -14,9 +14,8 @@ import {
   incidentTone,
   incidentUrl,
   isProgressStalled,
+  queuedEntries,
   queueDetail,
-  queueStateLabel,
-  queueStateTone,
   queueWork,
   reviewOutcomeLabel,
   reviewOutcomeTone,
@@ -27,7 +26,7 @@ import {
   taskStateTone,
   taskSubjectUrl,
   taskWork,
-  upNextEntries,
+  waitingEntries,
   workChipEntries,
 } from '../utils/dashboard.ts'
 
@@ -52,6 +51,13 @@ const {
   ejectErrors,
   ejectAgent,
   taskFor,
+  canRunReview,
+  rerunPending,
+  rerunErrors,
+  rerunReview,
+  itemKey,
+  setAgentControl,
+  controlPending,
 } = useDashboard()
 
 const doneOnBoard = 8
@@ -81,7 +87,26 @@ function matchesFilter(work: AgentRole | undefined): boolean {
 const needsYou = computed(() => decisions.value.filter(entry => matchesFilter(queueWork(entry))))
 const running = computed(() => activeAgents.value.filter(agent => matchesFilter(agent.role)))
 const runningWithoutAgent = computed(() => activeEntries(snapshot.value.queue, activeAgents.value).filter(entry => matchesFilter(queueWork(entry))))
-const upNext = computed(() => upNextEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))))
+const queued = computed(() => queuedEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))))
+const waiting = computed(() => waitingEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))))
+
+/**
+ * Why the Up next column is empty, when it is.
+ *
+ * An empty forecast has three different causes and one of them is a control the
+ * reader can act on, so the column has to name which it is.
+ */
+const nothingQueuedReason = computed(() => {
+  if (queued.value.length > 0)
+    return undefined
+  if (snapshot.value.agentControl._tag === 'Paused')
+    return { text: 'Agents are paused, so nothing will start.', resume: true }
+  if (!snapshot.value.mutationsEnabled)
+    return { text: 'GitHub writes are off, so no agent will start.', resume: false }
+  if (snapshot.value.selectionMode === 'manual' && needsYou.value.length > 0)
+    return { text: 'Manual selection. Approve a pull request on the left to queue it.', resume: false }
+  return { text: 'Nothing queued.', resume: false }
+})
 const done = computed(() => buildHistory(reviewAgents.value, snapshot.value.tasks)
   .filter(record => matchesFilter(record._tag === 'Review' ? 'adversarial_review' : taskWork(record.task)))
   .slice(0, doneOnBoard))
@@ -262,6 +287,19 @@ useHead({
               >
                 {{ entry.state.kind === 'issue_work' ? 'Approve' : 'Review and repair' }}
               </UButton>
+              <UButton
+                v-if="entry.state._tag === 'ActionRequired'"
+                size="sm"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-external-link"
+                :to="entry.subjectUrl"
+                target="_blank"
+                rel="noreferrer"
+                :aria-label="`Open ${entrySubject(entry)} on GitHub`"
+              >
+                Open on GitHub
+              </UButton>
               <ConfirmButton
                 v-if="taskFor(entry)"
                 label="Cancel"
@@ -286,19 +324,19 @@ useHead({
         </p>
       </section>
 
-      <!-- Column 2: forecast. -->
+      <!-- Column 2: forecast, then what is blocked behind something else. -->
       <section aria-labelledby="up-next-heading" class="flex min-w-0 flex-col">
         <div class="zone-header">
           <h2 id="up-next-heading" class="field-label">
             Up next
           </h2>
-          <span class="font-mono text-sm text-dimmed">{{ upNext.length }}</span>
+          <span class="font-mono text-sm text-dimmed">{{ queued.length }}</span>
           <hr class="zone-rule">
         </div>
 
-        <ol v-if="upNext.length > 0" class="grid max-h-[42rem] content-start gap-2 overflow-y-auto pr-1">
+        <ol v-if="queued.length > 0" class="grid content-start gap-2">
           <li
-            v-for="entry in upNext"
+            v-for="entry in queued"
             :key="entryKey(entry)"
             class="rounded-md border border-default bg-elevated p-3 transition-colors hover:border-accented"
           >
@@ -317,21 +355,86 @@ useHead({
             <p class="mt-2 line-clamp-2 text-xs text-muted">
               {{ queueDetail(entry, queueContext) }}
             </p>
-            <UBadge
-              v-if="queueStateTone(entry) !== 'primary'"
-              class="mt-2"
-              size="sm"
-              :color="queueStateTone(entry)"
-              :class="queueStateTone(entry) === 'neutral' ? undefined : statusClass(queueStateTone(entry))"
-              variant="subtle"
-            >
-              {{ queueStateLabel(entry, queueContext) }}
-            </UBadge>
           </li>
         </ol>
-        <p v-else class="font-mono text-sm text-dimmed">
-          Nothing queued.
-        </p>
+
+        <div v-else-if="nothingQueuedReason" class="flex flex-wrap items-center gap-2">
+          <p class="font-mono text-sm text-dimmed">
+            {{ nothingQueuedReason.text }}
+          </p>
+          <UButton
+            v-if="nothingQueuedReason.resume"
+            size="xs"
+            icon="i-lucide-play"
+            :loading="controlPending"
+            :disabled="controlPending"
+            @click="setAgentControl('resume')"
+          >
+            Resume agents
+          </UButton>
+        </div>
+
+        <!-- Blocked on something the engine does not control, so it never becomes a forecast. -->
+        <template v-if="waiting.length > 0">
+          <div class="zone-header mt-6">
+            <h3 class="field-label">
+              Waiting
+            </h3>
+            <span class="font-mono text-sm text-dimmed">{{ waiting.length }}</span>
+            <hr class="zone-rule">
+          </div>
+          <ul class="grid content-start gap-2" role="list">
+            <li
+              v-for="entry in waiting"
+              :key="entryKey(entry)"
+              class="rounded-md border border-dashed border-default p-3"
+            >
+              <div class="mb-2 flex items-center justify-between gap-2">
+                <WorkChip v-if="queueWork(entry)" :work="queueWork(entry)!" />
+                <span class="font-mono text-xs text-dimmed">blocked</span>
+              </div>
+              <ItemIdentity
+                :author="entry.author"
+                :title="entry.title"
+                :url="entry.subjectUrl"
+                :repository="entry.repository"
+                :kind="entry.kind"
+                :number="entry.number"
+              />
+              <p class="mt-2 text-xs text-muted">
+                {{ queueDetail(entry, queueContext) }}
+              </p>
+              <div class="mt-2 flex flex-wrap items-center gap-1">
+                <UButton
+                  v-if="canRunReview(entry)"
+                  size="xs"
+                  icon="i-lucide-play"
+                  :loading="rerunPending === itemKey(entry.repository, entry.number, entry.revisionId)"
+                  :disabled="rerunPending !== undefined"
+                  :aria-label="`Run review for ${entrySubject(entry)}`"
+                  @click="rerunReview(entry.repository, entry.number, entry.revisionId)"
+                >
+                  Run review
+                </UButton>
+                <UButton
+                  size="xs"
+                  color="neutral"
+                  variant="ghost"
+                  icon="i-lucide-external-link"
+                  :to="entry.subjectUrl"
+                  target="_blank"
+                  rel="noreferrer"
+                  :aria-label="`Open ${entrySubject(entry)} on GitHub`"
+                >
+                  Open on GitHub
+                </UButton>
+              </div>
+              <p v-if="rerunErrors[itemKey(entry.repository, entry.number, entry.revisionId)]" role="alert" class="status-error mt-2 text-sm">
+                {{ rerunErrors[itemKey(entry.repository, entry.number, entry.revisionId)] }}
+              </p>
+            </li>
+          </ul>
+        </template>
       </section>
 
       <!-- Column 3: what is moving right now. -->

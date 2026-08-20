@@ -73,7 +73,7 @@ right, on one board. The last two are reference, so they are their own pages.
 | Column | Answers | Weight |
 | --- | --- | --- |
 | **Needs you** | Does anything need me? | Amber bordered and tinted cards, solid primary action. A muted line when empty; the column keeps its slot so the board never reflows. |
-| **Up next** | What is coming? | Elevated cards, dimmed position numeral, scroll capped at 42rem. |
+| **Up next** | What is coming? | Elevated cards, dimmed position numeral. A **Waiting** group below it, dashed borders, holds work blocked outside the engine. |
 | **Running** | What is running? | Elevated cards, live dot, progress bar, terminal behind a disclosure. |
 | **Done** | What just happened? | Recessive cards, outcome badge leading, eight at most, then a link to History. |
 
@@ -90,6 +90,9 @@ Rules that follow from this:
 - **Never show the same thing in two columns.** A Queue entry belongs to exactly one column, decided by its state. Work the Queue calls Active with no agent session yet still lands in Running, so a task cannot vanish between starting and reporting.
 - **Done is a terminus, not a second History.** It carries the outcome badge and nothing else. Every piece of evidence lives on the History page.
 - **One filter, all four columns.** Work kind filters the whole board at once. Filtering one column would break the pipeline reading.
+- **Queued and blocked are not the same forecast.** `Queued` work starts on its own, so it carries a position. `Pending` work is blocked on a draft, on mergeability, or on GitHub, so it sits under Waiting with a dashed border and never gets a position. Mixing them promised work that never arrived.
+- **Never offer a control the controller would refuse.** `Run review` appears only when the dashboard can see the pull request is open, not draft, mergeable, and approved, which are the store's own rules. A button that always fails is worse than no button.
+- **An empty column says why it is empty.** Paused, writes off, and manual selection are three different causes with three different next steps, and one of them is a control, so the empty state carries a Resume button.
 - **No summary counter row.** Counts live in the zone headings. A separate tile row is a second navigation system competing with the sections it points at.
 - **Exceptions bubble up, detail stays down.** A repository that fails polling raises a red count on the Watching tab. The table itself stays on that page.
 
@@ -219,6 +222,8 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 - Chrome lives in one layout, not per page. Header, tabs, status bar, banners, and footer are `layouts/default.vue`, so the board, History, Watching, and Flow cannot drift apart.
 - One snapshot and one event stream, shared by every page through `useDashboard`. Changing page must never cost a reconnect.
 - Work kind is a chip, never a column and never a colour. Grouping by kind would break the pipeline reading, and colouring by kind would compete with state.
+- The status bar states only what is not the default. It said "agents running" beside "0/4 agents", which reads as a contradiction. Pause and manual selection speak; running and auto stay quiet.
+- The content security policy allows `github.com` and `avatars.githubusercontent.com` under `img-src`. Without it every avatar falls back to a monogram, which is the one thing the cards are built around.
 - A running card shows work, elapsed time, author, subject, progress sentence, and progress bar. The terminal and the session identifier stay behind a disclosure.
 - Work the Queue calls Active with no agent session yet still lands in Running, so a task cannot vanish between starting and reporting.
 - The status bar carries only live state: connection, agent capacity, whether GitHub writes are enabled, and repository failures. Fixed configuration sits in the footer.

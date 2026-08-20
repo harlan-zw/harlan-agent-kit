@@ -261,6 +261,33 @@ function createDashboard() {
     )
   }
 
+  function pullRequestFor(entry: QueueEntry) {
+    if (entry.kind !== 'pull_request')
+      return undefined
+    return snapshot.value.items.find(subject =>
+      subject.kind === 'pull_request'
+      && subject.repository === entry.repository
+      && subject.number === entry.number
+      && subject.revisionId === entry.revisionId,
+    )
+  }
+
+  /**
+   * Whether the controller would accept a review run for this pull request.
+   *
+   * Mirrors the store's own refusal rules, so the board never offers a control
+   * that is certain to fail.
+   */
+  function canRunReview(entry: QueueEntry): boolean {
+    const pullRequest = pullRequestFor(entry)
+    if (pullRequest === undefined || pullRequest.kind !== 'pull_request')
+      return false
+    return pullRequest.state === 'open'
+      && !pullRequest.draft
+      && pullRequest.mergeState === 'clean'
+      && pullRequest.approval._tag !== 'ReviewRequired'
+  }
+
   /** A review can only be rerun while its pull request is still the current one. */
   function isCurrentRevision(agent: ReviewAgent): boolean {
     return snapshot.value.items.some((subject: ItemSummary) =>
@@ -331,6 +358,8 @@ function createDashboard() {
     approvalKeyFor,
     approvalErrorFor,
     taskFor,
+    pullRequestFor,
+    canRunReview,
     isCurrentRevision,
     itemKey,
   }

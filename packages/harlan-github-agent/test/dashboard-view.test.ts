@@ -11,6 +11,7 @@ import {
   incidentUrl,
   isProgressStalled,
   isSnapshotStale,
+  queuedEntries,
   queueDetail,
   queueStateLabel,
   queueWork,
@@ -19,7 +20,7 @@ import {
   taskKindLabel,
   taskStateTone,
   taskSubjectUrl,
-  upNextEntries,
+  waitingEntries,
 } from '../dashboard/app/utils/dashboard.ts'
 
 const now = new Date('2026-08-14T12:00:00.000Z')
@@ -152,20 +153,37 @@ describe('buildHistory', () => {
   })
 })
 
-describe('upNextEntries', () => {
-  it('keeps queued work', () => {
+describe('queuedEntries', () => {
+  it('keeps work an agent will pick up', () => {
     const entry = queueEntry({ state: { _tag: 'Queued', work: 'adversarial_review' } })
-    expect(upNextEntries([entry])).toHaveLength(1)
+    expect(queuedEntries([entry])).toHaveLength(1)
   })
 
   it('excludes work that already started', () => {
     const entry = queueEntry({ state: { _tag: 'Active', work: 'adversarial_review' } })
-    expect(upNextEntries([entry])).toEqual([])
+    expect(queuedEntries([entry])).toEqual([])
   })
 
   it('excludes anything that needs a decision', () => {
     const entry = queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } })
-    expect(upNextEntries([entry])).toEqual([])
+    expect(queuedEntries([entry])).toEqual([])
+  })
+
+  it('excludes work blocked on something outside the engine', () => {
+    const entry = queueEntry({ state: { _tag: 'Pending', reason: 'Draft pull request.' } })
+    expect(queuedEntries([entry])).toEqual([])
+  })
+})
+
+describe('waitingEntries', () => {
+  it('collects work that is blocked, so a forecast never promises it', () => {
+    const entry = queueEntry({ state: { _tag: 'Pending', reason: 'Draft pull request.' } })
+    expect(waitingEntries([entry])).toHaveLength(1)
+  })
+
+  it('leaves queued work out', () => {
+    const entry = queueEntry({ state: { _tag: 'Queued', work: 'adversarial_review' } })
+    expect(waitingEntries([entry])).toEqual([])
   })
 })
 

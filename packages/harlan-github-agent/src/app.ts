@@ -231,7 +231,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     onResponse(response, event) {
       Object.entries(securityHeaders).forEach(([name, value]) => response.headers.set(name, value))
       const nonce = String(event.context.dashboardNonce)
-      response.headers.set('content-security-policy', `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`)
+      // GitHub avatars come from github.com and redirect to avatars.githubusercontent.com.
+      response.headers.set('content-security-policy', `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`)
     },
   })
 

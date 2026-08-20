@@ -324,9 +324,20 @@ export function decisionEntries(queue: QueueEntry[]): QueueEntry[] {
   return queue.filter(entry => entry.state._tag === 'AwaitingApproval' || entry.state._tag === 'ActionRequired')
 }
 
-/** Queue waiting to start: not a decision, and not already moving. */
-export function upNextEntries(queue: QueueEntry[]): QueueEntry[] {
-  return queue.filter(entry => entry.state._tag === 'Queued' || entry.state._tag === 'Pending')
+/** Work an agent will pick up on its own, in engine order. */
+export function queuedEntries(queue: QueueEntry[]): QueueEntry[] {
+  return queue.filter(entry => entry.state._tag === 'Queued')
+}
+
+/**
+ * Work that is blocked on something outside the engine.
+ *
+ * A draft pull request and a pull request waiting on GitHub both sit here. They
+ * are not queued, so showing them beside queued work reads as a forecast that
+ * never arrives.
+ */
+export function waitingEntries(queue: QueueEntry[]): QueueEntry[] {
+  return queue.filter(entry => entry.state._tag === 'Pending')
 }
 
 /**
