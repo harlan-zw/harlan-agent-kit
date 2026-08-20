@@ -25,6 +25,9 @@ export interface AgentAppOptions {
   ejectAgent?: (input: TerminalSessionInput) => Promise<Result<void, string>>
 }
 
+/** Prerendered dashboard routes below `/`, each with its own payload. */
+const DASHBOARD_PAGES = ['history', 'watching', 'flow'] as const
+
 const securityHeaders = {
   'cache-control': 'no-store',
   'referrer-policy': 'no-referrer',
@@ -412,11 +415,13 @@ export function createAgentApp(options: AgentAppOptions): H3 {
 
   app.get('/favicon.ico', () => new Response(null, { status: 204 }))
   app.get('/_payload.json', () => staticAsset(dashboardRoot, '_payload.json'))
-  app.get('/flow/_payload.json', () => staticAsset(dashboardRoot, 'flow/_payload.json'))
   app.get('/_nuxt/**', event => staticAsset(dashboardRoot, new URL(event.req.url).pathname.slice(1)))
   app.get('/_fonts/**', event => staticAsset(dashboardRoot, new URL(event.req.url).pathname.slice(1)))
   app.get('/', event => dashboardHtml(dashboardRoot, 'index.html', String(event.context.dashboardNonce)))
-  app.get('/flow', event => dashboardHtml(dashboardRoot, 'flow/index.html', String(event.context.dashboardNonce)))
+  DASHBOARD_PAGES.forEach((page) => {
+    app.get(`/${page}`, event => dashboardHtml(dashboardRoot, `${page}/index.html`, String(event.context.dashboardNonce)))
+    app.get(`/${page}/_payload.json`, () => staticAsset(dashboardRoot, `${page}/_payload.json`))
+  })
 
   return app
 }

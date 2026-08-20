@@ -1,6 +1,7 @@
 import type { ActiveAgent, AgentTask, Incident, QueueEntry, ReviewAgent } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import {
+  activeEntries,
   approvalConsequence,
   buildHistory,
   decisionEntries,
@@ -12,6 +13,7 @@ import {
   isSnapshotStale,
   queueDetail,
   queueStateLabel,
+  queueWork,
   repositoryState,
   reviewOutcomeLabel,
   taskKindLabel,
@@ -29,6 +31,7 @@ function activeAgent(overrides: Partial<ActiveAgent> = {}): ActiveAgent {
     provider: 'codex',
     role: 'adversarial_review',
     session: { _tag: 'Starting' },
+    author: 'harlan-zw',
     repository: 'harlan-zw/nuxt-seo',
     repositoryUrl: 'https://github.com/harlan-zw/nuxt-seo',
     subjectKind: 'pull_request',
@@ -150,19 +153,41 @@ describe('buildHistory', () => {
 })
 
 describe('upNextEntries', () => {
-  it('hides work that is already visible as a running agent', () => {
-    const entry = queueEntry({ state: { _tag: 'Active', work: 'adversarial_review' } })
-    expect(upNextEntries([entry], [activeAgent()])).toEqual([])
+  it('keeps queued work', () => {
+    const entry = queueEntry({ state: { _tag: 'Queued', work: 'adversarial_review' } })
+    expect(upNextEntries([entry])).toHaveLength(1)
   })
 
-  it('keeps active work when no agent reports it, so it cannot vanish', () => {
+  it('excludes work that already started', () => {
     const entry = queueEntry({ state: { _tag: 'Active', work: 'adversarial_review' } })
-    expect(upNextEntries([entry], [])).toHaveLength(1)
+    expect(upNextEntries([entry])).toEqual([])
   })
 
   it('excludes anything that needs a decision', () => {
     const entry = queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } })
-    expect(upNextEntries([entry], [])).toEqual([])
+    expect(upNextEntries([entry])).toEqual([])
+  })
+})
+
+describe('activeEntries', () => {
+  it('hides work that is already visible as a running agent', () => {
+    const entry = queueEntry({ state: { _tag: 'Active', work: 'adversarial_review' } })
+    expect(activeEntries([entry], [activeAgent()])).toEqual([])
+  })
+
+  it('keeps active work when no agent reports it, so it cannot vanish', () => {
+    const entry = queueEntry({ state: { _tag: 'Active', work: 'adversarial_review' } })
+    expect(activeEntries([entry], [])).toHaveLength(1)
+  })
+})
+
+describe('queueWork', () => {
+  it('names the work an approval would start', () => {
+    expect(queueWork(queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } }))).toBe('adversarial_review')
+  })
+
+  it('has no work for a condition that names none', () => {
+    expect(queueWork(queueEntry({ state: { _tag: 'Pending', reason: 'Waiting for mergeability.' } }))).toBeUndefined()
   })
 })
 

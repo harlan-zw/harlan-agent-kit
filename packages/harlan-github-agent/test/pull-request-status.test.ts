@@ -42,6 +42,7 @@ describe('pull request status controller', () => {
       findings: [],
       publications: [],
       title: 'Fix the broken thing',
+      author: 'harlan-zw',
       subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
       commitUrl: 'https://github.com/harlan-zw/example/commit/abc123',
       updatedAt: '2026-08-13T10:30:00.000Z',

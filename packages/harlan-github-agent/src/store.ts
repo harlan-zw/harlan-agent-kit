@@ -627,6 +627,7 @@ interface ReviewRunRow {
 
 interface DashboardReviewRunRow extends ReviewRunRow {
   title: string
+  author: string
   subject_url: string
   head_repository: string
 }
@@ -634,6 +635,7 @@ interface DashboardReviewRunRow extends ReviewRunRow {
 interface ActiveAgentRow extends TaskRow {
   subject_kind: 'issue' | 'pull_request'
   title: string
+  author: string
   subject_url: string
   head_sha: string | null
   head_repository: string | null
@@ -1933,6 +1935,7 @@ function reviewAgentFromRow(row: DashboardReviewRunRow, publications: ReviewPubl
     role: 'adversarial_review',
     repositoryUrl: `https://github.com/${row.repository}`,
     title: row.title,
+    author: row.author,
     subjectUrl: row.subject_url,
     commitUrl: `https://github.com/${row.head_repository}/commit/${row.head_sha}`,
     pullRequestStatus: { _tag: 'Unknown' },
@@ -2102,6 +2105,7 @@ function activeAgentFromRow(row: ActiveAgentRow, provider: AgentProviderName): E
     subjectKind: row.subject_kind,
     itemNumber: row.github_number,
     title: row.title,
+    author: row.author,
     subjectUrl: row.subject_url,
     ...head,
     startedAt: row.started_at,
@@ -3162,6 +3166,7 @@ function activeAgentRows(database: DatabaseSync, provider: AgentProviderName): A
       tasks.updated_at,
       subjects.kind AS subject_kind,
       json_extract(revisions.payload, '$.title') AS title,
+      json_extract(revisions.payload, '$.author') AS author,
       json_extract(revisions.payload, '$.url') AS subject_url,
       json_extract(revisions.payload, '$.headSha') AS head_sha,
       json_extract(revisions.payload, '$.headRepository') AS head_repository,
@@ -3210,6 +3215,7 @@ function activeAgentRows(database: DatabaseSync, provider: AgentProviderName): A
       worker_tasks.updated_at,
       subjects.kind AS subject_kind,
       json_extract(revisions.payload, '$.title') AS title,
+      json_extract(revisions.payload, '$.author') AS author,
       json_extract(revisions.payload, '$.url') AS subject_url,
       json_extract(revisions.payload, '$.headSha') AS head_sha,
       json_extract(revisions.payload, '$.headRepository') AS head_repository,
@@ -3260,6 +3266,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       review_runs.confidence,
       review_runs.findings,
       json_extract(revisions.payload, '$.title') AS title,
+      json_extract(revisions.payload, '$.author') AS author,
       json_extract(revisions.payload, '$.url') AS subject_url,
       json_extract(revisions.payload, '$.headRepository') AS head_repository
     FROM review_runs

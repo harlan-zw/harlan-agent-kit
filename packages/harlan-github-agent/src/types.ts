@@ -573,6 +573,8 @@ export interface ActiveAgent {
   subjectKind: ItemKind
   itemNumber: number
   title: string
+  /** GitHub login that opened the item, so the dashboard can show who it is for. */
+  author: string
   subjectUrl: string
   headSha?: string
   commitUrl?: string
@@ -588,6 +590,7 @@ export interface ReviewAgent extends ReviewRun {
   role: 'adversarial_review'
   repositoryUrl: string
   title: string
+  author: string
   subjectUrl: string
   commitUrl: string
   pullRequestStatus: PullRequestStatus

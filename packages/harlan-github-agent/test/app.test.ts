@@ -349,6 +349,7 @@ describe('dashboard HTTP app', () => {
         id: taskId,
         provider: 'codex',
         role: 'adversarial_review',
+        author: 'harlan-zw',
         session: { _tag: 'Connected', id: sessionId },
         repository: 'harlan-zw/example',
         repositoryUrl: 'https://github.com/harlan-zw/example',

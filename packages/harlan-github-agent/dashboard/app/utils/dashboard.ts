@@ -274,17 +274,68 @@ export function buildHistory(reviewAgents: ReviewAgent[], tasks: AgentTask[]): H
   return [...reviews, ...settled].sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
 }
 
+/**
+ * What a card is for, as an icon and a word.
+ *
+ * Work kind never uses semantic colour. Amber, red, and emerald mean state on
+ * this board, so a second colour axis for work kind would make both unreadable.
+ * The icon carries the distinction instead.
+ */
+export interface WorkChip {
+  label: string
+  icon: string
+}
+
+const workChips: Record<AgentRole, WorkChip> = {
+  adversarial_review: { label: 'Review', icon: 'i-lucide-scan-eye' },
+  review_fix: { label: 'Repair', icon: 'i-lucide-wrench' },
+  conflict_resolution: { label: 'Conflict', icon: 'i-lucide-git-merge' },
+  baseline_repair: { label: 'Baseline', icon: 'i-lucide-heart-pulse' },
+  issue_triage: { label: 'Triage', icon: 'i-lucide-inbox' },
+  issue_work: { label: 'Issue work', icon: 'i-lucide-hammer' },
+}
+
+export const workChipEntries: Array<[AgentRole, WorkChip]> = Object.entries(workChips) as Array<[AgentRole, WorkChip]>
+
+export function workChip(work: AgentRole): WorkChip {
+  return workChips[work]
+}
+
+export function taskWork(task: AgentTask): AgentRole {
+  return task.kind === 'resolve_conflict' ? 'conflict_resolution' : task.kind
+}
+
+/**
+ * The work a Queue entry stands for, when the entry names one.
+ *
+ * `ActionRequired` and `Pending` describe a condition rather than a kind of
+ * work, so they have none until a Task exists for them.
+ */
+export function queueWork(entry: QueueEntry): AgentRole | undefined {
+  if (entry.state._tag === 'Active' || entry.state._tag === 'Queued')
+    return entry.state.work
+  if (entry.state._tag === 'AwaitingApproval')
+    return entry.state.kind === 'issue_work' ? 'issue_work' : 'adversarial_review'
+  return undefined
+}
+
 /** Anything the engine cannot resolve without Harlan. This zone outranks everything else. */
 export function decisionEntries(queue: QueueEntry[]): QueueEntry[] {
   return queue.filter(entry => entry.state._tag === 'AwaitingApproval' || entry.state._tag === 'ActionRequired')
 }
 
-/** Queue minus decisions, minus work already visible as a running agent. */
-export function upNextEntries(queue: QueueEntry[], activeAgents: ActiveAgent[]): QueueEntry[] {
+/** Queue waiting to start: not a decision, and not already moving. */
+export function upNextEntries(queue: QueueEntry[]): QueueEntry[] {
+  return queue.filter(entry => entry.state._tag === 'Queued' || entry.state._tag === 'Pending')
+}
+
+/**
+ * Work the Queue calls Active that has no agent card of its own.
+ *
+ * Without this the Running column would drop a task that started before its
+ * agent session reported, and the board would look emptier than the engine is.
+ */
+export function activeEntries(queue: QueueEntry[], activeAgents: ActiveAgent[]): QueueEntry[] {
   const running = new Set(activeAgents.map(agent => `${agent.repository}#${agent.itemNumber}`))
-  return queue.filter((entry) => {
-    if (entry.state._tag === 'AwaitingApproval' || entry.state._tag === 'ActionRequired')
-      return false
-    return !(entry.state._tag === 'Active' && running.has(`${entry.repository}#${entry.number}`))
-  })
+  return queue.filter(entry => entry.state._tag === 'Active' && !running.has(`${entry.repository}#${entry.number}`))
 }

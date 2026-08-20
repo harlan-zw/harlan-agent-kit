@@ -65,24 +65,33 @@ Harlan keeps it open on a second screen to watch a fleet of agents work his repo
 
 Everything else, meaning repository health and the open GitHub items being polled, is reference material. It is not an event, so it does not get event weight.
 
-## The Zone Contract
+## The Board Contract
 
-Five zones, five weights, in reading order. A zone's rank is fixed; only its contents change.
+The first three questions are stages of one pipeline, so they are columns, left to
+right, on one board. The last two are reference, so they are their own pages.
 
-| Zone | Answers | Weight |
+| Column | Answers | Weight |
 | --- | --- | --- |
-| **Needs you** | Does anything need me? | Amber bordered and tinted cards, 1rem title, solid primary action. **Not rendered at all when empty**, so its presence is the signal. |
-| **Running now** | What is running? | Largest cards on the page, 1.125rem title, live dot, progress bar. Falls back to a single muted line. |
-| **Up next** | What is coming? | Dense divided rows, no surface, 0.875rem, dimmed position numeral. |
-| **History** | What happened? | Dense divided rows, outcome badge leading, evidence collapsed behind a toggle. |
-| **Watching** | What is being polled? | Recessive. No panels, hairline rules only, dimmed mono, scroll capped at 26rem. |
+| **Needs you** | Does anything need me? | Amber bordered and tinted cards, solid primary action. A muted line when empty; the column keeps its slot so the board never reflows. |
+| **Up next** | What is coming? | Elevated cards, dimmed position numeral, scroll capped at 42rem. |
+| **Running** | What is running? | Elevated cards, live dot, progress bar, terminal behind a disclosure. |
+| **Done** | What just happened? | Recessive cards, outcome badge leading, eight at most, then a link to History. |
+
+Two pages carry what the board cannot hold:
+
+| Page | Answers | Weight |
+| --- | --- | --- |
+| **History** | What happened, and on what evidence? | Dense divided rows, outcome badge leading, evidence behind a toggle. |
+| **Watching** | What is being polled? | Recessive. Repository table and open items, hairline rules only. |
 
 Rules that follow from this:
 
-- **Zone headings recede so the data can advance.** A heading is a 0.75rem uppercase label, a count, and a hairline rule that runs to the edge. It is a marker, not a title. Six bold `text-lg` headings were what made the earlier layout read as six equal panels.
-- **Never show the same thing in two zones.** Work that is running appears in Running now, so it is filtered out of Up next. Decisions are filtered out of Up next for the same reason.
+- **Column headings recede so the data can advance.** A heading is a 0.75rem uppercase label, a count, and a hairline rule that runs to the edge. It is a marker, not a title. Six bold `text-lg` headings were what made an earlier layout read as six equal panels.
+- **Never show the same thing in two columns.** A Queue entry belongs to exactly one column, decided by its state. Work the Queue calls Active with no agent session yet still lands in Running, so a task cannot vanish between starting and reporting.
+- **Done is a terminus, not a second History.** It carries the outcome badge and nothing else. Every piece of evidence lives on the History page.
+- **One filter, all four columns.** Work kind filters the whole board at once. Filtering one column would break the pipeline reading.
 - **No summary counter row.** Counts live in the zone headings. A separate tile row is a second navigation system competing with the sections it points at.
-- **Exceptions bubble up, detail stays down.** A repository that fails polling raises a red count in the status bar that links to Watching. The table itself stays at the bottom.
+- **Exceptions bubble up, detail stays down.** A repository that fails polling raises a red count on the Watching tab. The table itself stays on that page.
 
 ## Every Element Earns Its Place
 
@@ -141,7 +150,8 @@ New copy has to answer one question the reader cannot already answer from the sc
 - **Dashed borders**: reserved. A dashed border means "documented but not connected" on the workflow map. Nothing decorative may use one.
 - **Buttons**: solid primary for the single most important action in a zone, which in practice means the approval action. Every other control is ghost neutral. Never two solid buttons in one row.
 - **Badges**: subtle variant, always paired with the `.status-*` text ramp, always carrying a word. Never a bare colour dot as the only signal.
-- **Avatars**: the GitHub author of a pull request or issue, from `https://github.com/{login}.png?size=64`, at 20px beside the repository slug. Author identity is what separates "mine, proceed automatically" from "outside contributor, needs approval", so it earns its place on decision, queue, and watching rows. Never on a row where authorship changes nothing.
+- **Avatars**: the GitHub author of a pull request or issue, from `https://github.com/{login}.png?size=64`. The avatar leads the card and links to the author, because identity is what separates "mine, proceed automatically" from "outside contributor, needs approval". Every card and every row that names an item carries one, on the board, in History, and in Watching. The service ships `author` on running agents and review runs for exactly this reason.
+- **Work chips**: an icon and a word saying what a card is for, in neutral only. Amber, red, and emerald mean state on this board, so work kind may never take a second colour axis. The icon carries the distinction: review is an eye, repair a wrench, conflict a merge, baseline a pulse, triage an inbox, issue work a hammer.
 - **Tap targets**: controls run at their natural desktop height. A `pointer: coarse` media query raises buttons, inputs, and summaries to 44px. Inline links inside a sentence are exempt under WCAG 2.5.8; forcing them to 44px inflated every metadata row on mobile.
 - **Focus rings**: 2px primary outline with 2px offset on every interactive element, including `summary`.
 - **Empty states**: one muted mono line inside a zone. A full empty-state card is event weight given to a non-event.
@@ -164,7 +174,7 @@ New copy has to answer one question the reader cannot already answer from the sc
 
 - **Approach**: Mobile first. Dense multi-column layouts unlock at 768px, the widest table layouts at 1280px.
 - **Input method**: `pointer: coarse` raises control heights. Inline entity links become 44px flex targets below 768px.
-- **Navigation adaptation**: The header wraps. Dense rows collapse from grid columns to stacked blocks.
+- **Navigation adaptation**: The header wraps. The board drops from four columns to two at 1280px and to one below 768px, which turns the pipeline into a vertical reading order rather than hiding a stage.
 
 ## Voice and Tone
 
@@ -188,7 +198,7 @@ New copy has to answer one question the reader cannot already answer from the sc
 
 | Class or token | What it does | When to use |
 | --- | --- | --- |
-| `.zone-header` | Lays out a zone marker: label, count, hairline rule to the edge. | The heading of every one of the five zones. |
+| `.zone-header` | Lays out a column or page marker: label, count, hairline rule to the edge. | The heading of every board column and every page section. |
 | `.zone-rule` | The rule that fills the remainder of a zone header. | Inside `.zone-header` only. |
 | `.live-dot` | 2s opacity pulse, disabled under reduced motion. | Connection indicator and running agents. |
 | `.field-label` | 0.75rem uppercase dimmed micro label. | Detail list terms, table headers, zone headings. |
@@ -204,21 +214,24 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 
 ## Design Decisions
 
-- Zone order is fixed: Needs you, Running now, Up next, History, Watching. It matches the order the questions get asked, so the eye learns positions and never hunts.
-- Needs you is absent, not empty, when there is nothing to decide. An empty interrupt zone trains the reader to ignore the interrupt zone.
-- Running now shows role, elapsed time, subject, progress sentence, and progress bar. Nothing else. Everything a watcher does not need while watching moved behind a disclosure.
-- Up next hides anything already visible as a running agent, but only when a matching agent exists, so a running task with no agent still surfaces rather than vanishing.
+- Column order is fixed: Needs you, Up next, Running, Done. It reads as the pipeline, left to right, so the eye learns positions instead of hunting.
+- Needs you keeps its column when empty, unlike the stacked layout that removed the zone. On a board a missing column moves every other column, and a layout that reflows on state is unwatchable. The heading loses its amber instead.
+- Chrome lives in one layout, not per page. Header, tabs, status bar, banners, and footer are `layouts/default.vue`, so the board, History, Watching, and Flow cannot drift apart.
+- One snapshot and one event stream, shared by every page through `useDashboard`. Changing page must never cost a reconnect.
+- Work kind is a chip, never a column and never a colour. Grouping by kind would break the pipeline reading, and colouring by kind would compete with state.
+- A running card shows work, elapsed time, author, subject, progress sentence, and progress bar. The terminal and the session identifier stay behind a disclosure.
+- Work the Queue calls Active with no agent session yet still lands in Running, so a task cannot vanish between starting and reporting.
 - The status bar carries only live state: connection, agent capacity, whether GitHub writes are enabled, and repository failures. Fixed configuration sits in the footer.
 - Queue order reflects engine priority. Position is always visible.
 - Every repository, pull request, issue, commit, automated review, and agent identifier links to its source.
 - Completed reviews are History. They never appear as running agents.
 - The workflow map separates implemented paths, Harlan decisions, and missing service paths. Dashed borders there are load bearing.
-- Skip link, entity link, status ramp, zone header, and live dot live in `main.css`, not in per page scoped blocks, because both pages need them identically.
+- Skip link, entity link, status ramp, zone header, and live dot live in `main.css`, not in per page scoped blocks, because every page needs them identically.
 - The tab title carries the decision count and the favicon carries its colour, because this page is meant to be watched from another window. Notifications are opt in behind the bell, and the first snapshot after load only seeds the baseline so opening the page never fires one.
 - Agent activity is ephemeral and in process. It answers what an agent is doing now, not what it did. Keeping it out of the journal means no schema, no retention policy, and nothing to leak after a restart.
 - Command output is redacted in the service before it reaches the dashboard. Loopback binding and a dashboard password are not a reason to ship raw stdout that can contain installation tokens.
-- Keyboard: `j` and `k` move through decisions, `a` approves the focused one, `/` focuses the repository filter. Listed in the footer rather than behind a help overlay.
-- Notifications cover both halves of "something happened": a new decision, and work that ended badly. Failures land in History rather than the decisions zone, so without the second trigger an agent that dies overnight is silent.
+- Keyboard: `j` and `k` move through the Needs you column and `a` approves the focused card, listed under the board. `/` focuses the repository filter on Watching, where that filter lives.
+- Notifications fire on a new decision. Failures are visible in Done and on History, so they raise a badge rather than a notification.
 - The Agent selection is a control, not configuration, so it sits with Pause in the header. The button carries the current Agent provider and the menu carries the model and the reasoning effort. The menu also offers Follow configuration, so a pin is never a one way door. The footer keeps the resolved per-role model list, because that answers a different question: what each role will run.
 - Pause, global or per repository, stops new claims only. Work already running keeps its lease and finishes. Pause is not cancel, and the two controls stay distinct.
-- Presentation logic lives in `app/utils/dashboard.ts`, not in the page. It is pure, takes its clock and engine state as arguments, and is unit tested. The page keeps only reactive wiring.
+- Presentation logic lives in `app/utils/dashboard.ts`, not in the page. It is pure, takes its clock and engine state as arguments, and is unit tested. Shared state and every write live in `app/composables/useDashboard.ts`. Pages keep only their own layout and filters.
