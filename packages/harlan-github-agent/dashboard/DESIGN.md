@@ -92,6 +92,7 @@ Rules that follow from this:
 - **One filter, all four columns.** Work kind filters the whole board at once. Filtering one column would break the pipeline reading.
 - **Queued and blocked are not the same forecast.** `Queued` work starts on its own, so it carries a position. `Pending` work is blocked on a draft, on mergeability, or on GitHub, so it sits under Waiting with a dashed border and never gets a position. Mixing them promised work that never arrived.
 - **Every card offers a way out.** `Dismiss` arms then confirms, like Cancel, because it is the one control whose effect outlives the current commit. It sits last in the row, never as a primary.
+- **A blocked forecast names its own limit.** Issue work stops above the configured open pull request count, so a queued issue sits in Waiting reading "Issue work stops above 8 open pull requests, and 17 are open." It used to say "will start when an agent is free", which was false while three agents sat idle.
 - **Never offer a control the controller would refuse.** `Run review` appears only when the dashboard can see the pull request is open, not draft, mergeable, and approved, which are the store's own rules. A button that always fails is worse than no button.
 - **An empty column says why it is empty.** Paused, writes off, and manual selection are three different causes with three different next steps, and one of them is a control, so the empty state carries a Resume button.
 - **No summary counter row.** Counts live in the zone headings. A separate tile row is a second navigation system competing with the sections it points at.
@@ -223,6 +224,7 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 - Chrome lives in one layout, not per page. Header, tabs, status bar, banners, and footer are `layouts/default.vue`, so the board, History, Watching, and Flow cannot drift apart.
 - One snapshot and one event stream, shared by every page through `useDashboard`. Changing page must never cost a reconnect.
 - Work kind is a chip, never a column and never a colour. Grouping by kind would break the pipeline reading, and colouring by kind would compete with state.
+- The status bar carries the open pull request count only once it reaches the limit, because below it the number changes nothing.
 - The status bar states only what is not the default. It said "agents running" beside "0/4 agents", which reads as a contradiction. Pause and manual selection speak; running and auto stay quiet.
 - A dismissed item leaves the board entirely and reappears only under `Dismissed` on Watching. A greyed row on the board would keep costing the attention the Dismissal was meant to reclaim, and `Restore` is rare enough to live one page away.
 - The content security policy allows `github.com` and `avatars.githubusercontent.com` under `img-src`. Without it every avatar falls back to a monogram, which is the one thing the cards are built around.

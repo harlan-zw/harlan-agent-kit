@@ -23,6 +23,8 @@ function emptySnapshot(): DashboardSnapshot {
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
     selectionMode: 'auto',
+    openPullRequests: 0,
+    maxOpenPullRequests: 8,
     agentProfile: CODEX_AGENT_PROFILE,
     agentSelection: { _tag: 'FollowsConfiguration' },
     agents: [],
@@ -82,6 +84,8 @@ function createDashboard() {
   const queueContext = computed(() => ({
     agentsCanStart: agentsCanStart.value,
     agentsPaused: snapshot.value.agentControl._tag === 'Paused',
+    openPullRequests: snapshot.value.openPullRequests,
+    maxOpenPullRequests: snapshot.value.maxOpenPullRequests,
   }))
 
   const connectionLabel = computed(() => {

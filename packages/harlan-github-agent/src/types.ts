@@ -779,6 +779,10 @@ export interface DashboardSnapshot {
   mutationsEnabled: boolean
   agentControl: AgentControl
   selectionMode: SelectionMode
+  /** Open pull requests across every enabled repository. */
+  openPullRequests: number
+  /** Issue work stops above this many open pull requests. */
+  maxOpenPullRequests: number
   agentProfile: AgentProfile
   agentSelection: AgentSelection
   agents: DashboardAgent[]

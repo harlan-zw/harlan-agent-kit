@@ -3328,7 +3328,13 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
   return reviewRuns.map(row => reviewAgentFromRow(row, publicationsByRun.get(row.id) ?? []))
 }
 
-export function openJournalStore(path: string, mutationsEnabled = false, profile: AgentProfile = CODEX_AGENT_PROFILE): JournalStore {
+export function openJournalStore(
+  path: string,
+  mutationsEnabled = false,
+  profile: AgentProfile = CODEX_AGENT_PROFILE,
+  /** Issue work stops above this many open pull requests. Matches the configuration default. */
+  maxOpenPullRequests = 8,
+): JournalStore {
   const database = openDatabase(path)
   const configuredSelection = providerAgentSelection(profile.provider)
 
@@ -6275,6 +6281,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       mutationsEnabled,
       agentControl,
       selectionMode: selectionMode(database),
+      openPullRequests: countOpenPullRequests(),
+      maxOpenPullRequests,
       agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents),
       agentSelection: getAgentSelection(),
       agents,

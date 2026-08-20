@@ -319,6 +319,13 @@ useHead({
           <span aria-hidden="true" class="text-dimmed">·</span>
           <span :class="statusClass('warning')">{{ agentControlLabel }}</span>
         </template>
+        <template v-if="snapshot.openPullRequests >= snapshot.maxOpenPullRequests">
+          <span aria-hidden="true" class="text-dimmed">·</span>
+          <span
+            :class="statusClass('warning')"
+            :title="`Issue work stops above ${snapshot.maxOpenPullRequests} open pull requests.`"
+          >{{ snapshot.openPullRequests }}/{{ snapshot.maxOpenPullRequests }} open pull requests</span>
+        </template>
         <template v-if="snapshot.mutationsEnabled && snapshot.selectionMode === 'manual'">
           <span aria-hidden="true" class="text-dimmed">·</span>
           <span :class="statusClass('warning')">manual: you select each pull request</span>

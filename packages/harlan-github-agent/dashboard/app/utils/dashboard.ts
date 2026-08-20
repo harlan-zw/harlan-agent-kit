@@ -96,6 +96,20 @@ export function workLabel(work: AgentRole): string {
 export interface QueueContext {
   agentsCanStart: boolean
   agentsPaused: boolean
+  openPullRequests: number
+  maxOpenPullRequests: number
+}
+
+/**
+ * True while the open pull request count holds issue work back.
+ *
+ * The scheduler refuses to claim issue work above the limit, so a free agent
+ * changes nothing. Without this the Queue promises a start that cannot happen.
+ */
+export function isIssueWorkThrottled(entry: QueueEntry, context: QueueContext): boolean {
+  return entry.state._tag === 'Queued'
+    && entry.state.work === 'issue_work'
+    && context.openPullRequests >= context.maxOpenPullRequests
 }
 
 export function queueStateLabel(entry: QueueEntry, context: QueueContext): string {
@@ -105,7 +119,10 @@ export function queueStateLabel(entry: QueueEntry, context: QueueContext): strin
     case 'AwaitingApproval': return entry.state.kind === 'issue_work'
       ? 'Issue approval'
       : 'Review and repair approval'
-    case 'Queued': return context.agentsCanStart ? 'Queued' : context.agentsPaused ? 'Agents paused' : 'Agents disabled'
+    case 'Queued':
+      if (isIssueWorkThrottled(entry, context))
+        return 'Too many open pull requests'
+      return context.agentsCanStart ? 'Queued' : context.agentsPaused ? 'Agents paused' : 'Agents disabled'
     case 'Pending': return 'Pending'
   }
 }
@@ -127,9 +144,13 @@ export function queueDetail(entry: QueueEntry, context: QueueContext): string {
     case 'AwaitingApproval': return entry.state.kind === 'issue_work'
       ? 'Issue work requires your approval.'
       : 'Review and repairs require your approval.'
-    case 'Queued': return context.agentsCanStart
-      ? `${workLabel(entry.state.work)} will start when an agent is free.`
-      : 'Automatic reviews and fixes are disabled.'
+    case 'Queued':
+      if (isIssueWorkThrottled(entry, context)) {
+        return `Issue work stops above ${context.maxOpenPullRequests} open pull requests, and ${context.openPullRequests} are open. Merge or close some to start it.`
+      }
+      return context.agentsCanStart
+        ? `${workLabel(entry.state.work)} will start when an agent is free.`
+        : 'Automatic reviews and fixes are disabled.'
     case 'Pending': return entry.state.reason
   }
 }

@@ -9,6 +9,7 @@ import {
   incidentRecoveryLabel,
   incidentScopeLabel,
   incidentUrl,
+  isIssueWorkThrottled,
   isProgressStalled,
   isSnapshotStale,
   queuedEntries,
@@ -220,17 +221,41 @@ describe('decisionEntries', () => {
   })
 })
 
+const running = { agentsCanStart: true, agentsPaused: false, openPullRequests: 0, maxOpenPullRequests: 8 }
+
 describe('queue copy', () => {
   it('says agents are paused rather than queued when the engine is paused', () => {
     const entry = queueEntry()
-    expect(queueStateLabel(entry, { agentsCanStart: false, agentsPaused: true })).toBe('Agents paused')
-    expect(queueStateLabel(entry, { agentsCanStart: false, agentsPaused: false })).toBe('Agents disabled')
-    expect(queueStateLabel(entry, { agentsCanStart: true, agentsPaused: false })).toBe('Queued')
+    expect(queueStateLabel(entry, { ...running, agentsCanStart: false, agentsPaused: true })).toBe('Agents paused')
+    expect(queueStateLabel(entry, { ...running, agentsCanStart: false, agentsPaused: false })).toBe('Agents disabled')
+    expect(queueStateLabel(entry, running)).toBe('Queued')
   })
 
   it('reports the reason a subject needs attention', () => {
     const entry = queueEntry({ state: { _tag: 'ActionRequired', reason: 'The fork branch is not writable.' } })
-    expect(queueDetail(entry, { agentsCanStart: true, agentsPaused: false })).toBe('The fork branch is not writable.')
+    expect(queueDetail(entry, running)).toBe('The fork branch is not writable.')
+  })
+})
+
+describe('isIssueWorkThrottled', () => {
+  const issueWork = queueEntry({ state: { _tag: 'Queued', work: 'issue_work' } })
+
+  it('holds issue work at the open pull request limit', () => {
+    expect(isIssueWorkThrottled(issueWork, { ...running, openPullRequests: 17 })).toBe(true)
+  })
+
+  it('lets issue work through below the limit', () => {
+    expect(isIssueWorkThrottled(issueWork, { ...running, openPullRequests: 7 })).toBe(false)
+  })
+
+  it('never holds back work the limit does not cover', () => {
+    const review = queueEntry({ state: { _tag: 'Queued', work: 'adversarial_review' } })
+    expect(isIssueWorkThrottled(review, { ...running, openPullRequests: 17 })).toBe(false)
+  })
+
+  it('names the limit and the count, so the number is actionable', () => {
+    expect(queueDetail(issueWork, { ...running, openPullRequests: 17 }))
+      .toBe('Issue work stops above 8 open pull requests, and 17 are open. Merge or close some to start it.')
   })
 })
 

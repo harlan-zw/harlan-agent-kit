@@ -13,6 +13,7 @@ import {
   incidentScopeLabel,
   incidentTone,
   incidentUrl,
+  isIssueWorkThrottled,
   isProgressStalled,
   queuedEntries,
   queueDetail,
@@ -91,8 +92,15 @@ function matchesFilter(work: AgentRole | undefined): boolean {
 const needsYou = computed(() => decisions.value.filter(entry => matchesFilter(queueWork(entry))))
 const running = computed(() => activeAgents.value.filter(agent => matchesFilter(agent.role)))
 const runningWithoutAgent = computed(() => activeEntries(snapshot.value.queue, activeAgents.value).filter(entry => matchesFilter(queueWork(entry))))
-const queued = computed(() => queuedEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))))
-const waiting = computed(() => waitingEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))))
+const visibleQueued = computed(() => queuedEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))))
+
+const queued = computed(() => visibleQueued.value.filter(entry => !isIssueWorkThrottled(entry, queueContext.value)))
+
+/** Throttled issue work cannot start, so it belongs with the rest of the blocked work. */
+const waiting = computed(() => [
+  ...visibleQueued.value.filter(entry => isIssueWorkThrottled(entry, queueContext.value)),
+  ...waitingEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))),
+])
 
 /**
  * Why the Up next column is empty, when it is.

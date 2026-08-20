@@ -137,7 +137,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
 
   const configuredProfile = agentProfile(config.agent.provider)
-  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile)
+  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests)
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
   const runtime = createAgentRuntimeSource({
