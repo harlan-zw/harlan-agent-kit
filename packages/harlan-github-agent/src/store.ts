@@ -4306,6 +4306,20 @@ export function openJournalStore(
             OR (tasks.kind = 'baseline_repair' AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1)
             OR (tasks.kind = 'issue_work' AND json_extract(repositories.policy_json, '$.issueWork') = 1)
           )
+          -- Approval is a live condition of the claim, not something checked
+          -- after one is picked. A repair whose Approval went away used to be
+          -- selected anyway, throw, roll back, and be selected again on the very
+          -- next pass. One repair spent a day doing that. It becomes claimable
+          -- again by itself if Harlan approves this same head commit again.
+          AND (
+            tasks.kind != 'review_fix'
+            OR EXISTS (
+              SELECT 1 FROM pull_request_approvals
+              WHERE pull_request_approvals.subject_id = subjects.id
+                AND pull_request_approvals.revision_id = tasks.revision_id
+                AND pull_request_approvals.kind = 'fixes'
+            )
+          )
         ORDER BY tasks.updated_at, tasks.id
         LIMIT 1
       `).get(kind, exactTaskId ?? null, exactTaskId ?? null) as ClaimRow | undefined
@@ -4320,13 +4334,19 @@ export function openJournalStore(
       if (kind !== 'issue_work' && subject.kind !== 'pull_request')
         throw new Error(`Pull request Task ${row.id} does not reference a pull request.`)
       const repositoryMapping = JSON.parse(row.policy_json) as RepositoryMapping
+      // The query above cannot return an unapproved repair. This stays as the
+      // second half of the boundary that decides who may write a contributor's
+      // branch, and it declines the claim rather than throwing, so a broken
+      // guard above can never spin the claim path again.
       if (kind === 'review_fix') {
         const approved = database.prepare(`
           SELECT 1 FROM pull_request_approvals
           WHERE subject_id = ? AND revision_id = ? AND kind = 'fixes'
         `).get(row.subject_id, row.revision_id)
-        if (approved === undefined)
-          throw new Error(`Repair Task ${row.id} lost Approval for its pull request head commit.`)
+        if (approved === undefined) {
+          database.exec('COMMIT')
+          return null
+        }
       }
       const fence = row.fence + 1
       const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()

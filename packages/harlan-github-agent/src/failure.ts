@@ -228,6 +228,9 @@ const agentResultPatterns: RegExp[] = [
   /\breturned an invalid\b/i,
   /\breturned malformed\b/i,
   /\bomitted confidence\b/i,
+  // Metadata that ignores the PR skill is the same kind of wrong shape as the
+  // three above. It waited for a person while the work behind it was redoable.
+  /\bdoes not follow the PR skill\b/i,
 ]
 
 function matches(patterns: RegExp[], message: string): boolean {
