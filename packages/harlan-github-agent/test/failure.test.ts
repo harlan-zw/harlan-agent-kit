@@ -47,7 +47,7 @@ describe('classifyFailure', () => {
   })
 
   it('keeps the attempts of a failure nobody has classified', () => {
-    expect(mayRetryFailure({ message: 'The worker changed a file that was not conflicted: src/main.rs.' })).toBe(true)
+    expect(mayRetryFailure({ message: 'The worker changed a file the merge did not touch: src/main.rs.' })).toBe(true)
   })
 
   it.each([
@@ -90,7 +90,7 @@ describe('classifyFailure', () => {
   })
 
   it('treats an unrecognised failure as permanent so it surfaces instead of spinning', () => {
-    expect(classifyFailure({ message: 'The worker changed a file that was not conflicted: src/main.rs.' }))
+    expect(classifyFailure({ message: 'The worker changed a file the merge did not touch: src/main.rs.' }))
       .toEqual({ _tag: 'Permanent', kind: 'unknown' })
   })
 })

@@ -22,15 +22,23 @@ describe('parseWtWorktrees', () => {
     })
   })
 
-  it('rejects an entry that carries neither a branch nor a detached head', () => {
-    const parsed = parseWtWorktrees(JSON.stringify([{ branch: 7, path: '/home/harlan/pkg/repo' }]))
+  it('keeps the claimable worktrees around an entry it cannot use', () => {
+    const parsed = parseWtWorktrees(JSON.stringify([
+      { branch: 7, path: '/home/harlan/pkg/repo' },
+      { path: '/home/harlan/pkg/repo.pruned' },
+      entry('main', 'pkg/repo.relative'),
+      { kind: 'session', name: 'something wt grew later' },
+      entry('harlan-agent/conflict-1', '/home/harlan/pkg/repo.conflict-1'),
+    ]))
 
-    expect(parsed._tag).toBe('Err')
+    expect(parsed).toEqual({
+      _tag: 'Ok',
+      value: [{ branch: 'harlan-agent/conflict-1', path: '/home/harlan/pkg/repo.conflict-1' }],
+    })
   })
 
-  it('rejects a relative worktree path', () => {
-    const parsed = parseWtWorktrees(JSON.stringify([entry('main', 'pkg/repo')]))
-
-    expect(parsed._tag).toBe('Err')
+  it('rejects output that is not a list of worktrees', () => {
+    expect(parseWtWorktrees('{"worktrees":[]}')._tag).toBe('Err')
+    expect(parseWtWorktrees('not json')._tag).toBe('Err')
   })
 })

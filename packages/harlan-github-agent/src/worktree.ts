@@ -269,32 +269,39 @@ function publicationArtifactRef(taskId: string): string {
 /**
  * Reads `wt list --format=json` into the branch worktrees the controller can claim.
  *
- * A detached worktree reports a null branch. That is a normal wt state, not
- * malformed data, so it is dropped rather than failing the whole list. One
- * detached worktree used to strand every agent task in the repository.
+ * An entry only names a claimable worktree when it carries a branch name and an
+ * absolute path. Everything else describes something the controller cannot use:
+ * a detached head, a pruned directory, or a listing field `wt` grew after this
+ * code was written. Those are skipped. A reader that failed the whole list on
+ * one of them stranded every agent task in the repository, and one conflict
+ * task restarted twenty one times behind it.
+ *
+ * Output that is not a list of entries at all is still a broken contract, so it
+ * still fails rather than reporting an empty repository.
  */
 export function parseWtWorktrees(stdout: string): Result<WtWorktree[], string> {
+  let value: unknown
   try {
-    const value: unknown = JSON.parse(stdout)
-    if (!Array.isArray(value))
-      return err('wt list returned an invalid worktree list.')
-    const worktrees: WtWorktree[] = []
-    for (const entry of value) {
-      if (typeof entry !== 'object' || entry === null || !('branch' in entry) || !('path' in entry))
-        return err('wt list returned an invalid worktree entry.')
-      if (typeof entry.path !== 'string' || !isAbsolute(entry.path))
-        return err('wt list returned an invalid worktree entry.')
-      if (entry.branch === null)
-        continue
-      if (typeof entry.branch !== 'string')
-        return err('wt list returned an invalid worktree entry.')
-      worktrees.push({ branch: entry.branch, path: entry.path })
-    }
-    return ok(worktrees)
+    value = JSON.parse(stdout)
   }
   catch {
     return err('wt list returned invalid JSON.')
   }
+  if (!Array.isArray(value))
+    return err('wt list returned an invalid worktree list.')
+  const worktrees: WtWorktree[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null)
+      continue
+    const branch: unknown = 'branch' in entry ? entry.branch : undefined
+    const path: unknown = 'path' in entry ? entry.path : undefined
+    if (typeof branch !== 'string' || branch.length === 0)
+      continue
+    if (typeof path !== 'string' || !isAbsolute(path))
+      continue
+    worktrees.push({ branch, path })
+  }
+  return ok(worktrees)
 }
 
 async function listWtWorktrees(checkout: string, signal: AbortSignal): Promise<Result<WtWorktree[], string>> {
@@ -640,9 +647,21 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     if (workerChanged.exitCode !== 0)
       return err(`Could not inspect the conflict fix: ${workerChanged.stderr}`)
     const workerChangedPaths = workerChanged.stdout.split('\n').filter(Boolean).sort()
-    const unexpectedPath = workerChangedPaths.find(path => !worktree.conflictedFiles.includes(path))
+    // The merge, not the conflict list, bounds what a resolution may touch. A
+    // marker is only where two edits met: reconciling them often means the test
+    // or the call site the base branch moved, and refusing those killed correct
+    // resolutions outright. Anything the merge did not touch is still unrelated
+    // work that has no place in a merge commit.
+    const mergeBase = await runGit(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
+    if (mergeBase.exitCode !== 0)
+      return err(`Could not resolve the merge base: ${mergeBase.stderr}`)
+    const merged = await runGit(worktree.path, ['diff', '--name-only', mergeBase.stdout, worktree.baseSha], signal)
+    if (merged.exitCode !== 0)
+      return err(`Could not inspect what the base branch changed: ${merged.stderr}`)
+    const writablePaths = new Set([...worktree.conflictedFiles, ...merged.stdout.split('\n').filter(Boolean)])
+    const unexpectedPath = workerChangedPaths.find(path => !writablePaths.has(path))
     if (unexpectedPath !== undefined)
-      return err(`The worker changed a file that was not conflicted: ${unexpectedPath}.`)
+      return err(`The worker changed a file the merge did not touch: ${unexpectedPath}.`)
     const untracked = await runGit(worktree.path, ['ls-files', '--others', '--exclude-standard'], signal)
     if (untracked.exitCode !== 0)
       return err(`Could not inspect untracked files: ${untracked.stderr}`)
@@ -653,7 +672,9 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     if (diffCheck.exitCode !== 0)
       return err(`Resolved patch failed git diff check: ${diffCheck.stdout || diffCheck.stderr}`)
 
-    const staged = await runGit(worktree.path, ['add', '--', ...worktree.conflictedFiles], signal)
+    // Conflicted files stage even when the worker left one side untouched, or
+    // the merge stays unresolved. Everything the worker touched stages with them.
+    const staged = await runGit(worktree.path, ['add', '--', ...new Set([...worktree.conflictedFiles, ...workerChangedPaths])], signal)
     if (staged.exitCode !== 0)
       return err(`Could not stage the conflict fix: ${staged.stderr}`)
     const unmerged = await runGit(worktree.path, ['diff', '--name-only', '--diff-filter=U'], signal)

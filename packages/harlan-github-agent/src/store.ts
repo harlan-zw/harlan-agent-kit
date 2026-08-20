@@ -2467,25 +2467,31 @@ function planConflictResolution(
 
   supersedeTasks(database, subjectId, observedAt, 'A newer pull request head commit replaced this task.', revisionId)
   const existing = database.prepare(`
-    SELECT id, state_tag, reason, fence,
+    SELECT id, state_tag, reason, fence, recovery_attempts,
       EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id) AS cancelled
     FROM tasks
     WHERE subject_id = ? AND kind = 'resolve_conflict' AND revision_id = ?
-  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, cancelled: number } | undefined
+  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, cancelled: number } | undefined
   // Recovery used to match two exact reasons collected from past incidents, so
   // every new transient failure left the conflict dead until someone added its
   // wording. The failure taxonomy decides instead: a transient failure can
   // succeed unchanged, and a permanent one still waits for a person.
+  // Spending recovery budget is what stops a repeating transient failure from
+  // spinning. One conflict task started twenty one agent turns on the same
+  // unreadable worktree listing, because this path requeued it free of charge.
+  // A pull request that conflicts again is not a failure and stays unbudgeted.
   const recoverableFailure = existing?.state_tag === 'Failed'
     && existing.reason !== null
+    && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
     && isTransientFailure({ message: existing.reason })
   if ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure) {
     database.prepare(`
       UPDATE tasks
       SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
-        command_id = NULL, lease_expires_at = NULL, updated_at = ?
+        command_id = NULL, lease_expires_at = NULL, updated_at = ?,
+        recovery_attempts = recovery_attempts + ?
       WHERE id = ? AND state_tag = ?
-    `).run(observedAt, existing.id, existing.state_tag)
+    `).run(observedAt, recoverableFailure ? 1 : 0, existing.id, existing.state_tag)
     recordTransition(database, {
       taskId: existing.id,
       from: existing.state_tag,
@@ -2813,19 +2819,21 @@ function planAdversarialReview(
 
   supersedeWorkerTasks(database, subjectId, 'adversarial_review', observedAt, 'A newer pull request head commit replaced this review.', revisionId)
   const existing = database.prepare(`
-    SELECT id, state_tag, reason, fence FROM worker_tasks
+    SELECT id, state_tag, reason, fence, recovery_attempts FROM worker_tasks
     WHERE subject_id = ? AND kind = 'adversarial_review' AND revision_id = ?
-  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number } | undefined
-  const recoverableFailure = existing?.state_tag === 'Failed' && (
-    existing.reason === 'The agent returned an invalid adversarial review result.'
-    || existing.reason === 'The agent returned malformed adversarial review JSON.'
-    || existing.reason === 'Fetched base branch no longer matches the claimed review base commit SHA.'
-  )
+  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number } | undefined
+  // The failure taxonomy decides, never a list of exact wordings. The list this
+  // replaces was collected from past incidents, so rewording any one of those
+  // messages silently left a recoverable review dead until someone noticed.
+  const recoverableFailure = existing?.state_tag === 'Failed'
+    && existing.reason !== null
+    && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
+    && isTransientFailure({ message: existing.reason })
   if (recoverableFailure) {
     database.prepare(`
       UPDATE worker_tasks
       SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
-        lease_expires_at = NULL, updated_at = ?
+        lease_expires_at = NULL, updated_at = ?, recovery_attempts = recovery_attempts + 1
       WHERE id = ? AND state_tag = 'Failed'
     `).run(observedAt, existing.id)
     recordWorkerTransition(database, { taskId: existing.id, from: 'Failed', to: 'Queued', reason: 'Retrying a recoverable review failure.', fence: existing.fence, at: observedAt })
