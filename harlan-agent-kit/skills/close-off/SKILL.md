@@ -161,10 +161,14 @@ Before deleting a task worktree or branch, prove:
 
 1. No live agent or process owns it.
 2. The worktree is clean.
-3. Every intended commit exists on the verified destination.
-4. Its pull request merged, or Git proves the branch fully integrated.
+3. Its tip matches the exact merged pull request head, or it is an ancestor of the destination.
+4. The pull request's merge commit exists on the destination, or Git proves full integration.
 5. No open pull request uses the branch.
 6. It is not a default, protected, shared, or unknown branch.
+
+Squash and rebase merges leave unique source commits.
+
+The exact merged head and destination merge commit prove those branches safe to remove.
 
 Then clean in this order:
 
@@ -172,17 +176,16 @@ Then clean in this order:
 2. Remove only task-owned temporary files.
 3. Release the task's worktree claim.
 4. Run `wt remove <branch>` for each eligible worktree.
-5. Safely delete an eligible local branch when it remains.
-6. Delete the eligible remote head branch in an owned repository when it remains.
-7. Fetch and prune stale tracking references again.
+5. Run `git branch -d <branch>` when Git reports the remaining local branch merged.
+6. For a verified squash or rebase, run `git update-ref -d refs/heads/<branch> <expected-head>`.
+7. Recheck the remote head SHA, then delete the eligible branch in an owned repository.
+8. Fetch and prune stale tracking references again.
 
 `wt remove` may delete the integrated local branch itself.
 
-Never pass `--force`, `--force-delete`, or `--clobber`.
+Use `wt` for worktree mutations, without `--force`, `--force-delete`, or `--clobber`.
 
-Never use raw `git worktree` mutation commands.
-
-Never delete a branch with unique commits.
+Never delete a local ref without its expected old SHA, or when integration proof is missing.
 
 If safe deletion fails, preserve the state and report why.
 
@@ -210,8 +213,6 @@ List only unresolved items requiring the user.
 
 Name any preserved worktree or branch. Report end-to-end confidence.
 
-Do not repeat the work log.
-
 ## Boundaries
 
 Default scope is the current conversation and current repository.
@@ -223,5 +224,3 @@ This skill does not triage the general backlog.
 It does not inspect unrelated worktrees across the machine.
 
 It does not start the next work item.
-
-It does not force cleanup.
