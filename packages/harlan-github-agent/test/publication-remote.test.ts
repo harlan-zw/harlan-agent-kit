@@ -191,7 +191,11 @@ describe('git publication remote', () => {
 
   it('authorizes an approved repair while the pull request remains clean', async () => {
     const { bare, command, root } = fixture()
-    const repair = { ...command, taskKind: 'review_fix' as const }
+    const repair = {
+      ...command,
+      repositoryMapping: { ...command.repositoryMapping, ownership: 'maintained' as const },
+      taskKind: 'review_fix' as const,
+    }
     const remote = createGitPublicationRemote({
       github: {
         getPullRequest: () => Promise.resolve(ok(pullRequestItem({

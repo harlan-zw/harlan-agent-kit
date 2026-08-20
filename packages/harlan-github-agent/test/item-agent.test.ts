@@ -219,7 +219,7 @@ describe('subject Workers', () => {
   })
 
   it('repairs findings during the review turn and stages their publication', async () => {
-    const repository = repositoryMapping()
+    const repository = repositoryMapping({ ownership: 'maintained' })
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let attempt: RecordReviewRunInput | undefined
     let claimed = false

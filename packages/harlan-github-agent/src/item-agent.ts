@@ -22,6 +22,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { formatProgressBar } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { issueTriageComment } from './issue-triage-comment.ts'
+import { canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
@@ -548,7 +549,7 @@ function hasReviewMutationAuthority(mapping: RepositoryMapping): boolean {
 }
 
 function hasRepairAuthority(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): boolean {
-  return task.repositoryMapping.ownership === 'owned'
+  return canWritePullRequestHead(task.repositoryMapping)
     && (repairsBaseline || checksGate(snapshot.baseChecks, 'base-ci', 'Pending')._tag === 'Passed')
     && task.pullRequest.headRef !== task.repositoryMapping.defaultBranch
     && task.repositoryMapping.writablePullRequestHeadPrefixes.some(prefix => task.pullRequest.headRef.startsWith(prefix))

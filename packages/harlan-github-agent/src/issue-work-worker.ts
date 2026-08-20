@@ -67,6 +67,15 @@ const outputSchema = {
 
 const aiDisclosure = '> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
 
+function withAiDisclosure(body: string): string {
+  const content = body
+    .split(/\r?\n/)
+    .filter(line => !/^>\s*🤖 AI disclosure:/.test(line))
+    .join('\n')
+    .trimEnd()
+  return `${content}\n\n${aiDisclosure}`
+}
+
 function templateStructure(body: string): string[] {
   return [
     ...body.matchAll(/<!--.*?-->/gs),
@@ -100,13 +109,13 @@ function parseAgentResponse(text: string, issueNumber: number, template: PullReq
         return ok({ outcome: 'blocked', summary: value.summary, checks: value.checks as string[] })
       if (value.outcome !== 'implemented' || typeof value.commitMessage !== 'string' || value.commitMessage.trim().length === 0 || typeof value.pullRequestTitle !== 'string' || typeof value.pullRequestBody !== 'string')
         return err('The agent returned an invalid issue work result.')
+      const pullRequestBody = withAiDisclosure(value.pullRequestBody)
       if (
         !/^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/.test(value.pullRequestTitle)
         || value.pullRequestTitle.length >= 70
-        || !new RegExp(`(?:closes|fixes|resolves)\\s+#${issueNumber}\\b`, 'i').test(value.pullRequestBody)
-        || !value.pullRequestBody.includes(aiDisclosure)
-        || /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(value.pullRequestBody)
-        || !preservesTemplate(value.pullRequestBody, template)
+        || !new RegExp(`(?:closes|fixes|resolves)\\s+#${issueNumber}\\b`, 'i').test(pullRequestBody)
+        || /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(pullRequestBody)
+        || !preservesTemplate(pullRequestBody, template)
       ) {
         return err('The agent returned pull request metadata that does not follow the PR skill.')
       }
@@ -116,7 +125,7 @@ function parseAgentResponse(text: string, issueNumber: number, template: PullReq
         checks: value.checks as string[],
         commitMessage: value.commitMessage.replaceAll(/[\r\n]/g, ' ').replaceAll(/\s+/g, ' ').trim().slice(0, 240),
         pullRequestTitle: value.pullRequestTitle,
-        pullRequestBody: value.pullRequestBody,
+        pullRequestBody,
       })
     })
     .catch(() => err('The agent returned malformed issue work JSON.'))

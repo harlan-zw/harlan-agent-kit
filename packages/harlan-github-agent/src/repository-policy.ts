@@ -35,11 +35,12 @@ export function canRepairBaseline(mapping: RepositoryMapping): boolean {
 /**
  * True when the controller may write to a pull request head branch here.
  *
- * That branch belongs to whoever opened the pull request, so this needs a
- * repository Harlan owns outright.
+ * Approval and branch checks run before publication.
  */
 export function canWritePullRequestHead(mapping: RepositoryMapping): boolean {
-  return mapping.ownership === 'owned'
+  return mapping.enabled
+    && canPushBranch(mapping)
+    && (mapping.pullRequestReview || mapping.conflictResolution)
 }
 
 /**

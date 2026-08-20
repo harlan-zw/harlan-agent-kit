@@ -23,7 +23,7 @@ describe('issue work worker', () => {
 
 Fixed the parser.
 
-> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
+> 🤖 AI disclosure: [Codex](https://openai.com/codex) modified this description.
 
 ### Linked Issues
 
@@ -84,6 +84,12 @@ Closes #12.`,
         pullRequestBody: expect.stringContaining('Closes #12.'),
       }),
     }))
+    expect(result).toEqual(ok(expect.objectContaining({
+      publication: expect.objectContaining({
+        pullRequestBody: expect.stringContaining('> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'),
+      }),
+    })))
+    expect(JSON.stringify(result)).not.toContain('[Codex]')
   })
 
   /** One worker whose stack decisions the caller controls. */

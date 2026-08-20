@@ -1567,9 +1567,9 @@ describe('journal store', () => {
     }))
   })
 
-  it('claims an owned repair inside its active review', () => {
+  it('claims a maintained repair inside its active review', () => {
     const store = createStore()
-    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.syncRepositories([repositoryMapping({ ownership: 'maintained' })], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
       externalId: 'owned-pr-findings',
       observedAt: '2026-08-13T01:00:00.000Z',
