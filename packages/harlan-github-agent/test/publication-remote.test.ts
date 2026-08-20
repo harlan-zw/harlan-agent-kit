@@ -27,6 +27,11 @@ function git(checkout: string, ...args: string[]): string {
   }).trim()
 }
 
+/** The change identity the controller signs: raw lines, full blob names. */
+function contentDigest(checkout: string, from: string, to: string): string {
+  return createHash('sha256').update(git(checkout, 'diff', '--raw', '--no-abbrev', '--no-renames', from, to)).digest('hex')
+}
+
 function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPublicationCommand, { _tag: 'UpdatePullRequest' }>, expectedHeadSha: string, root: string } {
   const root = mkdtempSync(join(tmpdir(), 'harlan-publication-'))
   temporaryDirectories.push(root)
@@ -56,7 +61,7 @@ function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPu
   mkdirSync(join(root, 'repositories'))
   execFileSync('git', ['clone', '--bare', checkout, controller])
   git(controller, 'update-ref', artifactRef, commitSha)
-  const patchDigest = createHash('sha256').update(git(controller, 'diff', '--binary', expectedHeadSha, commitSha)).digest('hex')
+  const patchDigest = contentDigest(controller, expectedHeadSha, commitSha)
   return {
     bare,
     checkout,
@@ -171,7 +176,7 @@ describe('git publication remote', () => {
       expectedHeadSha: command.baseSha,
       headRef: 'fix/baseline-ci',
       artifactRef,
-      patchDigest: createHash('sha256').update(git(controller, 'diff', '--binary', command.baseSha, repairSha)).digest('hex'),
+      patchDigest: contentDigest(controller, command.baseSha, repairSha),
       changedFiles: 1,
     }
     const remote = createGitPublicationRemote({
