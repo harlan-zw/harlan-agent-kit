@@ -166,7 +166,16 @@ export type ReviewRerunResult
 interface ItemSummaryBase {
   revisionId: string
   observedAt: string
+  /** True while a Dismissal keeps every planner off this Item. */
+  dismissed: boolean
 }
+
+/** Outcome of dismissing or restoring one Item. */
+export type ItemDismissalResult
+  = | { _tag: 'Dismissed' }
+    | { _tag: 'Restored' }
+    | { _tag: 'Duplicate' }
+    | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
 
 export type ItemSummary
   = | GitHubIssueItem & ItemSummaryBase

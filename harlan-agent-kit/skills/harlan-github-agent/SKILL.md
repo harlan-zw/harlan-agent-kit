@@ -95,6 +95,8 @@ Use `Eject` to cancel one active automated Task and open its saved agent session
 
 Set the Selection mode with `Auto` or `Manual` in the dashboard header. `Auto` acts on every eligible pull request. `Manual` acts on a pull request only after Harlan selects it, with `Review and repair` in the dashboard or the `harlan-agent-review` label on GitHub. Use `Manual` when a repository has many open pull requests that need triage first. The Selection mode persists across restart, and covers pull requests only.
 
+Dismiss an Item to stop every planner for it. A Dismissal is durable and belongs to the Item, so a new head commit does not undo it. Dismissing cancels the Item's running and queued Tasks. Restore it from `Dismissed` on the Watching page. Use this for a low quality pull request that must never consume agent budget.
+
 Treat the SQLite journal as service-owned state. Do not edit it manually.
 
 Before restarting, pause new agent work through the authenticated controller API. Keep polling active. Let active agents and controller writes finish. Restart only when `/api/state` reports `agentControl.safeToRestart: true`. Pause persists across restart, so resume explicitly afterward.

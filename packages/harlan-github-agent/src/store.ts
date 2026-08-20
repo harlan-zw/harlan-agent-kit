@@ -29,6 +29,7 @@ import type {
   IssueTriageTask,
   IssueWorkApprovalResult,
   IssueWorkTask,
+  ItemDismissalResult,
   ItemSummary,
   OpenAgentPullRequest,
   PinnedAgentSelection,
@@ -420,6 +421,10 @@ export interface JournalStore {
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getAgentControl: () => StoredAgentControl
+  /** Never act on this Item again. Cancels live work and stops every planner. */
+  dismissItem: (input: { repository: string, itemNumber: number, at: string }) => ItemDismissalResult
+  /** Undoes a Dismissal, so the planners can queue work for the Item again. */
+  restoreItem: (input: { repository: string, itemNumber: number, at: string }) => ItemDismissalResult
   /** The Selection mode in force. Manual waits for Harlan to select each pull request. */
   getSelectionMode: () => SelectionMode
   /** Sets the Selection mode. Active agents finish, matching how Pause behaves. */
@@ -558,6 +563,7 @@ interface SubjectRow {
 interface DashboardSubjectRow extends SubjectRow {
   policy_json: string
   review_approved_at: string | null
+  dismissed: number
 }
 
 interface TaskRow {
@@ -1253,6 +1259,20 @@ const selectionModeMigration = `
   ALTER TABLE agent_control ADD COLUMN selection_mode TEXT NOT NULL DEFAULT 'auto'
     CHECK (selection_mode IN ('auto', 'manual'));
   PRAGMA user_version = 28;
+`
+
+/**
+ * One durable decision to never act on an Item.
+ *
+ * Keyed by subject, not by revision, so a new head commit does not undo it.
+ * The cascade clears the row if the Item itself is ever removed.
+ */
+const itemDismissalMigration = `
+  CREATE TABLE item_dismissals (
+    subject_id INTEGER PRIMARY KEY REFERENCES subjects(id) ON DELETE CASCADE,
+    dismissed_at TEXT NOT NULL
+  );
+  PRAGMA user_version = 29;
 `
 
 const repositoryPauseMigration = `
@@ -2057,12 +2077,14 @@ function pullRequestApprovalState(database: DatabaseSync, input: {
 
 function subjectFromRow(database: DatabaseSync, row: DashboardSubjectRow): ItemSummary {
   const subject = githubSubjectFromRow(row)
+  const dismissed = row.dismissed === 1
   if (subject.kind === 'issue')
-    return { ...subject, revisionId: row.revision_id, observedAt: row.observed_at }
+    return { ...subject, revisionId: row.revision_id, observedAt: row.observed_at, dismissed }
   return {
     ...subject,
     revisionId: row.revision_id,
     observedAt: row.observed_at,
+    dismissed,
     approval: pullRequestApprovalState(database, {
       mapping: JSON.parse(row.policy_json) as RepositoryMapping,
       author: row.author,
@@ -2958,7 +2980,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 28)
+  if (version === 29)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3071,6 +3093,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 27) {
     applyMigration(database, selectionModeMigration)
+    version = 28
+  }
+  if (version === 28) {
+    applyMigration(database, itemDismissalMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -3562,7 +3588,14 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         current_source: 'poll' | 'webhook' | null
       }
       const mapping = JSON.parse(repository.policy_json) as RepositoryMapping
+      const dismissed = (): boolean =>
+        database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(subject.id) !== undefined
       const planCurrentWork = (): void => {
+        // A Dismissal outranks every planner. Nothing is queued, whatever changed.
+        if (dismissed()) {
+          cancelSubjectTasks(database, subject.id, input.observedAt, 'The item is dismissed.')
+          return
+        }
         if (input.subject.state === 'closed') {
           cancelSubjectTasks(
             database,
@@ -6050,6 +6083,56 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     return row.state_tag === 'Running' ? { _tag: 'Running' } : { _tag: 'Paused', pausedAt: row.updated_at }
   }
 
+  /**
+   * A Dismissal is a decision about the Item, not about one head commit.
+   *
+   * Cancelling live work is part of dismissing: leaving an agent running on an
+   * Item that is never going to be acted on spends the budget it saves.
+   */
+  const dismissItem: JournalStore['dismissItem'] = (input) => {
+    const row = database.prepare(`
+      SELECT subjects.id AS subject_id
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ?
+    `).get(input.repository, input.itemNumber) as { subject_id: number } | undefined
+    if (row === undefined)
+      return { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
+
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const inserted = database.prepare(`
+        INSERT OR IGNORE INTO item_dismissals (subject_id, dismissed_at) VALUES (?, ?)
+      `).run(row.subject_id, input.at)
+      cancelSubjectTasks(database, row.subject_id, input.at, 'The item is dismissed.')
+      database.exec('COMMIT')
+      return { _tag: inserted.changes === 1 ? 'Dismissed' : 'Duplicate' }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * Restoring queues nothing by itself.
+   *
+   * The next observation replans the Item from its current state, which is the
+   * one path that decides what it needs. Queueing here would guess.
+   */
+  const restoreItem: JournalStore['restoreItem'] = (input) => {
+    const row = database.prepare(`
+      SELECT subjects.id AS subject_id
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ?
+    `).get(input.repository, input.itemNumber) as { subject_id: number } | undefined
+    if (row === undefined)
+      return { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
+    const removed = database.prepare('DELETE FROM item_dismissals WHERE subject_id = ?').run(row.subject_id)
+    return { _tag: removed.changes === 1 ? 'Restored' : 'Duplicate' }
+  }
+
   const getSelectionMode = (): SelectionMode => selectionMode(database)
 
   /**
@@ -6145,7 +6228,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         (
           SELECT approved_at FROM pull_request_approvals
           WHERE subject_id = subjects.id AND revision_id = revisions.id AND kind = 'review'
-        ) AS review_approved_at
+        ) AS review_approved_at,
+        EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id) AS dismissed
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
       JOIN revisions ON revisions.id = subjects.current_revision_id
@@ -6195,7 +6279,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       agentSelection: getAgentSelection(),
       agents,
       incidents: listIncidents(),
-      queue: dashboardQueue(items, tasks, reviewAgents, mappings),
+      queue: dashboardQueue(items.filter(item => !item.dismissed), tasks, reviewAgents, mappings),
       repositories,
       items,
       tasks,
@@ -6465,6 +6549,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     countOpenPullRequests,
     listReviewRuns,
     needsAttentionTask,
+    dismissItem,
+    restoreItem,
     getSelectionMode,
     setSelectionMode,
     pauseAgents,

@@ -188,6 +188,8 @@ describe('selection mode route', () => {
         resumeAgents: () => ({ _tag: 'Running' as const }),
         selectAgent: selection => selection,
         setRepositoryPaused: () => true,
+        dismissItem: () => ({ _tag: 'Dismissed' as const }),
+        restoreItem: () => ({ _tag: 'Restored' as const }),
         setSelectionMode: (mode) => {
           recorded.push(mode)
           return mode

@@ -56,6 +56,8 @@ function createDashboard() {
   const rerunPending = ref<string>()
   const rerunErrors = ref<Record<string, string>>({})
   const repositoryPending = ref<string>()
+  const dismissPending = ref<string>()
+  const dismissErrors = ref<Record<string, string>>({})
 
   const visibility = useDocumentVisibility()
   const now = useNow({ interval: 1_000 })
@@ -261,6 +263,33 @@ function createDashboard() {
     )
   }
 
+  /**
+   * A Dismissal names the Item, so one call covers every future head commit.
+   */
+  async function changeDismissal(repository: string, itemNumber: number, action: 'dismiss' | 'restore'): Promise<void> {
+    const key = `${repository}#${itemNumber}`
+    dismissPending.value = key
+    dismissErrors.value = without(dismissErrors.value, key)
+    return $fetch(`/api/items/${action}`, { method: 'POST', body: { repository, itemNumber } })
+      .then(() => loadState())
+      .catch((error: unknown) => {
+        dismissErrors.value = { ...dismissErrors.value, [key]: `${failed(error)} Refresh and retry.` }
+      })
+      .finally(() => {
+        dismissPending.value = undefined
+      })
+  }
+
+  const dismissItem = (repository: string, itemNumber: number): Promise<void> =>
+    changeDismissal(repository, itemNumber, 'dismiss')
+
+  const restoreItem = (repository: string, itemNumber: number): Promise<void> =>
+    changeDismissal(repository, itemNumber, 'restore')
+
+  function dismissKey(repository: string, itemNumber: number): string {
+    return `${repository}#${itemNumber}`
+  }
+
   function pullRequestFor(entry: QueueEntry) {
     if (entry.kind !== 'pull_request')
       return undefined
@@ -333,6 +362,11 @@ function createDashboard() {
     rerunPending,
     rerunErrors,
     repositoryPending,
+    dismissPending,
+    dismissErrors,
+    dismissItem,
+    restoreItem,
+    dismissKey,
     now,
     activeAgents,
     reviewAgents,

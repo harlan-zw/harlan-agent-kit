@@ -58,6 +58,10 @@ const {
   itemKey,
   setAgentControl,
   controlPending,
+  dismissItem,
+  dismissPending,
+  dismissErrors,
+  dismissKey,
 } = useDashboard()
 
 const doneOnBoard = 8
@@ -115,6 +119,13 @@ const doneTotal = computed(() => buildHistory(reviewAgents.value, snapshot.value
 
 function entryKey(entry: QueueEntry): string {
   return `${entry.repository}:${entry.kind}:${entry.number}`
+}
+
+function dismissLabels(subject: string) {
+  return {
+    ariaLabel: `Dismiss ${subject}, so no agent ever runs on it`,
+    confirmAriaLabel: `Confirm dismissing ${subject}`,
+  }
 }
 
 function cancelLabels(subject: string) {
@@ -310,7 +321,20 @@ useHead({
                 :disabled="cancelPending !== undefined"
                 @confirm="cancelAgentTask(taskFor(entry)!.id)"
               />
+              <ConfirmButton
+                label="Dismiss"
+                confirm-label="Never run this"
+                v-bind="dismissLabels(entrySubject(entry))"
+                color="neutral"
+                icon="i-lucide-ban"
+                :loading="dismissPending === dismissKey(entry.repository, entry.number)"
+                :disabled="dismissPending !== undefined"
+                @confirm="dismissItem(entry.repository, entry.number)"
+              />
             </div>
+            <p v-if="dismissErrors[dismissKey(entry.repository, entry.number)]" role="alert" class="status-error mt-2 text-sm">
+              {{ dismissErrors[dismissKey(entry.repository, entry.number)] }}
+            </p>
             <p v-if="approvalErrorFor(entry)" role="alert" class="status-error mt-2 text-sm">
               {{ approvalErrorFor(entry) }}
             </p>
@@ -428,7 +452,21 @@ useHead({
                 >
                   Open on GitHub
                 </UButton>
+                <ConfirmButton
+                  label="Dismiss"
+                  confirm-label="Never run this"
+                  v-bind="dismissLabels(entrySubject(entry))"
+                  color="neutral"
+                  size="xs"
+                  icon="i-lucide-ban"
+                  :loading="dismissPending === dismissKey(entry.repository, entry.number)"
+                  :disabled="dismissPending !== undefined"
+                  @confirm="dismissItem(entry.repository, entry.number)"
+                />
               </div>
+              <p v-if="dismissErrors[dismissKey(entry.repository, entry.number)]" role="alert" class="status-error mt-2 text-sm">
+                {{ dismissErrors[dismissKey(entry.repository, entry.number)] }}
+              </p>
               <p v-if="rerunErrors[itemKey(entry.repository, entry.number, entry.revisionId)]" role="alert" class="status-error mt-2 text-sm">
                 {{ rerunErrors[itemKey(entry.repository, entry.number, entry.revisionId)] }}
               </p>

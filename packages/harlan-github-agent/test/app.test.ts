@@ -18,6 +18,8 @@ const agentControls = {
   selectAgent: (selection: AgentSelection, _at: string) => selection,
   setRepositoryPaused: (_github: string, _paused: boolean) => true,
   setSelectionMode: (mode: SelectionMode) => mode,
+  dismissItem: () => ({ _tag: 'Dismissed' as const }),
+  restoreItem: () => ({ _tag: 'Restored' as const }),
 }
 
 afterEach(() => vi.useRealTimers())
@@ -156,6 +158,7 @@ describe('dashboard HTTP app', () => {
       items: [{
         kind: 'issue',
         approvalLabels: [],
+        dismissed: false,
         repository: 'harlan-zw/example',
         number: 12,
         state: 'open',

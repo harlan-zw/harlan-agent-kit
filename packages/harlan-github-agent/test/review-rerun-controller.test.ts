@@ -6,7 +6,7 @@ import { dashboardSnapshot, pullRequestItem, repositoryMapping } from './fixture
 describe('review rerun controller', () => {
   it('requests the current pull request head once for a GitHub command', async () => {
     const requests: unknown[] = []
-    const subject = { ...pullRequestItem({ mergeState: 'clean' }), revisionId: 'a'.repeat(64), observedAt: '2026-08-13T01:00:00.000Z', approval: { _tag: 'NotRequired' as const } }
+    const subject = { ...pullRequestItem({ mergeState: 'clean' }), revisionId: 'a'.repeat(64), observedAt: '2026-08-13T01:00:00.000Z', dismissed: false, approval: { _tag: 'NotRequired' as const } }
     const result = await syncReviewRerunRequests(repositoryMapping(), {
       allowedAuthors: ['harlan-zw'],
       github: {

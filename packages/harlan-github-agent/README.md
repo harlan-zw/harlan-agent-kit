@@ -93,6 +93,8 @@ The dashboard shows `Review and repair` for outside contributors, and for every 
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
 Use `Watch logs` from the system pane to open a read-only live event stream while automation continues.
 The system pane shows the `Weekly Codex limit` first, including the remaining percentage and reset countdown.
+Use `Dismiss` on a board card to never act on that pull request or issue again. A new commit does not undo it. Dismissing cancels the item's running and queued tasks. Restore it from `Dismissed` on the Watching page.
+
 Use `Cancel` to stop an active or queued task. The task stays cancelled for that pull request commit. Closing the pull request uses the same path.
 
 Enable `mutations_enabled` only after the selected repository policy and GitHub App permissions are correct.

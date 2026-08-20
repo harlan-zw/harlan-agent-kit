@@ -135,7 +135,8 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
           .map((issue) => {
             const subject = issueItem(watch.github, issue)
             const revisionId = createHash('sha256').update(JSON.stringify(subject)).digest('hex')
-            return { ...subject, revisionId, observedAt: at }
+            // An external watch never queues work, so it is never dismissible.
+            return { ...subject, revisionId, observedAt: at, dismissed: false }
           })
         current.items = subjects
         current.repository = {

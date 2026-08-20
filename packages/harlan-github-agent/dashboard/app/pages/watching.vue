@@ -7,6 +7,10 @@ const {
   relativeTime,
   repositoryPending,
   setRepositoryPaused,
+  restoreItem,
+  dismissPending,
+  dismissErrors,
+  dismissKey,
 } = useDashboard()
 
 const repositoryQuery = ref('')
@@ -19,9 +23,14 @@ const filteredRepositories = computed(() => {
     : snapshot.value.repositories.filter(repository => repository.github.toLowerCase().includes(query))
 })
 
+/** Dismissed items have their own list below, so they never pad this one. */
+const openSubjects = computed(() => snapshot.value.items.filter(subject => !subject.dismissed))
+
 const filteredSubjects = computed(() => subjectFilter.value === 'all'
-  ? snapshot.value.items
-  : snapshot.value.items.filter(subject => subject.kind === subjectFilter.value))
+  ? openSubjects.value
+  : openSubjects.value.filter(subject => subject.kind === subjectFilter.value))
+
+const dismissedSubjects = computed(() => snapshot.value.items.filter(subject => subject.dismissed))
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement))
@@ -185,6 +194,53 @@ useHead({
       <p v-else class="font-mono text-sm text-dimmed">
         No open pull requests or issues. The agent is waiting for a human issue or pull request.
       </p>
+
+      <!-- The only place a Dismissal can be undone, so it has to be findable. -->
+      <template v-if="dismissedSubjects.length > 0">
+        <div class="zone-header mt-8">
+          <h2 class="field-label">
+            Dismissed
+          </h2>
+          <span class="font-mono text-sm text-dimmed">{{ dismissedSubjects.length }}</span>
+          <hr class="zone-rule">
+        </div>
+        <p class="mb-3 text-sm text-muted">
+          No agent runs on these, whatever changes. Restoring lets the next poll queue work again.
+        </p>
+        <ul class="divide-y divide-default border-y border-default" role="list">
+          <li
+            v-for="subject in dismissedSubjects"
+            :key="`${subject.repository}:${subject.kind}:${subject.number}`"
+            class="flex items-start justify-between gap-4 py-2.5"
+          >
+            <ItemIdentity
+              :author="subject.author"
+              :title="subject.title"
+              :url="subject.url"
+              :repository="subject.repository"
+              :kind="subject.kind"
+              :number="subject.number"
+            />
+            <div class="shrink-0">
+              <UButton
+                size="xs"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-undo-2"
+                :loading="dismissPending === dismissKey(subject.repository, subject.number)"
+                :disabled="dismissPending !== undefined"
+                :aria-label="`Restore ${subject.repository} ${subject.kind === 'issue' ? 'issue' : 'pull request'} ${subject.number}`"
+                @click="restoreItem(subject.repository, subject.number)"
+              >
+                Restore
+              </UButton>
+              <p v-if="dismissErrors[dismissKey(subject.repository, subject.number)]" role="alert" class="status-error mt-1 text-sm">
+                {{ dismissErrors[dismissKey(subject.repository, subject.number)] }}
+              </p>
+            </div>
+          </li>
+        </ul>
+      </template>
     </section>
   </div>
 </template>

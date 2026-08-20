@@ -24,6 +24,7 @@ did not cover it.
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
 | Selection mode | `agent_control.selection_mode` | Controller | One per service | Selection mode |
+| Dismissal | `item_dismissals` | Controller | One per Item | Dismiss |
 | Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
 | Watch logs | System pane action | Observer | Opens one read-only live Task event stream | Watch logs |
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
@@ -88,6 +89,7 @@ Collisions
 - "issue" means a GitHub Item alone. "Review issue" means a Review finding in review copy.
 - "queue" unqualified means this service's dashboard Queue. GitHub's feature is always "merge queue".
 - "Auto" names a Selection mode. GitHub's merge feature is always written "auto-merge", hyphenated.
+- "Dismiss" is this service's Dismissal. GitHub's own Dismiss applies to alerts, which this service does not touch, so the two never appear together.
 - "approval" means this service's local Approval. A GitHub pull request review is always "review" or "approving review".
 - "check" means a GitHub check run. This service's own conditions are always "Review gate", never bare "check".
 - "job" means a GitHub Actions job. This service's unit of work is a Task.
@@ -212,6 +214,22 @@ In `Manual`, every open pull request requires Approval, whoever opened it. Selec
 Switching to `Manual` leaves a running agent alone. A queued review without Approval stops at the next observation, as Pause behaves.
 
 Use Selection mode for the control and for the stored choice. Do not use opt-in, allowlist, gating, or triage mode.
+
+### Dismissal
+
+One durable decision to never act on an Item.
+
+A Dismissal belongs to the Item, not to a head commit. A new commit does not undo it. It ends when Harlan restores the Item, or when GitHub closes the Item.
+
+Dismissing cancels the Item's running and queued Tasks. Leaving an agent running on an Item nobody will act on spends the budget the Dismissal saves.
+
+A dismissed Item leaves the Queue. It stays visible under `Dismissed` in the Watching page, which is the only place `Restore` appears.
+
+Restoring queues nothing by itself. The next observation replans the Item from its current state.
+
+`Dismiss` is GitHub's own word, used for a Dependabot alert and a code scanning alert, where it means the same thing: stop raising this, without fixing it.
+
+Use Dismissal for the record and `Dismiss` for the control. Do not use skip, ignore, delete, mute, or snooze.
 
 ### Eject
 
@@ -394,6 +412,7 @@ Evidence that a skill, policy, or workflow should change.
 | error, problem, outage, alert | Incident | One concept |
 | agent config, model config, model override | Agent selection | One concept |
 | opt-in, allowlist, gating, triage mode | Selection mode | One concept |
+| skip, ignore, mute, snooze, delete | Dismissal | GitHub's own word for the same decision |
 | config default, unset, no override, clear | Follow configuration | One Agent selection state, and one label |
 | reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |

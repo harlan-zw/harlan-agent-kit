@@ -14,7 +14,7 @@ import { createError, createEventStream, H3 } from 'h3'
 import { parseAgentSelection } from './agent-profile.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem'>
   allowedHost: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -210,6 +210,25 @@ function approvalRejectionMessage(reason: ReturnType<JournalStore['approvePullRe
   }
 }
 
+/**
+ * A Dismissal names an Item, never a Task, so a new head commit cannot undo it.
+ */
+async function changeDismissal(options: AgentAppOptions, event: { req: Request }, action: 'dismiss' | 'restore') {
+  const body = await event.req.json().catch(() => {
+    // Validation below reports malformed JSON as a bad request.
+    return undefined
+  }) as { repository?: unknown, itemNumber?: unknown } | undefined
+  if (typeof body?.repository !== 'string' || !/^[^/]+\/[^/]+$/.test(body.repository)
+    || !Number.isSafeInteger(body.itemNumber) || (body.itemNumber as number) < 1) {
+    throw createError({ status: 400, statusText: 'Bad Request', message: 'A valid repository and item number are required.' })
+  }
+  const input = { repository: body.repository, itemNumber: body.itemNumber as number, at: options.now().toISOString() }
+  const result = action === 'dismiss' ? options.store.dismissItem(input) : options.store.restoreItem(input)
+  if (result._tag === 'Rejected')
+    throw createError({ status: 404, statusText: 'Not Found', message: 'The item is no longer tracked.' })
+  return result
+}
+
 export function createAgentApp(options: AgentAppOptions): H3 {
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot()
   const app = new H3({
@@ -347,6 +366,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       case 'NotAuthorized': throw createError({ status: 409, statusText: 'Conflict', message: 'Repository policy does not permit issue work.' })
     }
   })
+
+  app.post('/api/items/dismiss', event => changeDismissal(options, event, 'dismiss'))
+
+  app.post('/api/items/restore', event => changeDismissal(options, event, 'restore'))
 
   app.post('/api/tasks/cancel', async (event) => {
     const body = cancelTaskRequest(await event.req.json().catch(() => {

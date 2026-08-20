@@ -541,6 +541,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       selectAgent: store.selectAgent,
       setRepositoryPaused: store.setRepositoryPaused,
       setSelectionMode: store.setSelectionMode,
+      dismissItem: store.dismissItem,
+      restoreItem: store.restoreItem,
     },
     allowedHost: config.server.allowedHost,
     dashboardPassword: options.dashboardPassword,
