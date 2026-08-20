@@ -292,8 +292,10 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     : undefined
   if (allowedOwners === undefined)
     issues.push({ path: '$.github.allowed_owners', message: 'Expected at least one GitHub owner.' })
-  if (allowedOwners?.some(owner => !/^[\w-]+$/.test(owner)))
-    issues.push({ path: '$.github.allowed_owners', message: 'Expected GitHub owner names.' })
+  // An entry is a whole owner or one repository. Anything else is rejected at
+  // startup, because a typo here decides how much of GitHub the controller acts on.
+  if (allowedOwners?.some(owner => !/^[\w-]+(?:\/[\w.-]+)?$/.test(owner)))
+    issues.push({ path: '$.github.allowed_owners', message: 'Expected a GitHub owner or one owner/repository.' })
   if (allowedOwners !== undefined && new Set(allowedOwners.map(owner => owner.toLowerCase())).size !== allowedOwners.length)
     issues.push({ path: '$.github.allowed_owners', message: 'Expected unique GitHub owners.' })
 
