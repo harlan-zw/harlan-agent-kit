@@ -1,9 +1,10 @@
+import type { InstalledRepository } from '../src/repository-discovery.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildRepositoryMappings, discoverLocalCheckouts, installedWithoutCheckout } from '../src/repository-discovery.ts'
+import { buildRepositoryMappings, discoverLocalCheckouts, installedWithoutCheckout, isAllowedRepository } from '../src/repository-discovery.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
@@ -32,7 +33,9 @@ describe('installedWithoutCheckout', () => {
 })
 
 describe('repository discovery', () => {
-  it('ignores temporary worktrees beside the canonical checkout', async () => {
+  // Spawns git and wt several times, which passes the five second default under
+  // load often enough to fail the whole suite while passing on its own.
+  it('ignores temporary worktrees beside the canonical checkout', { timeout: 30_000 }, async () => {
     const root = mkdtempSync(join(tmpdir(), 'harlan-discovery-'))
     temporaryDirectories.push(root)
     const checkout = join(root, 'example')
@@ -94,6 +97,38 @@ describe('repository discovery', () => {
       }),
     ])
     expect(mappings[0]?.writablePullRequestAuthors).toEqual(['harlan-zw', 'harlan-github-agent[bot]'])
+  })
+
+  it('admits one repository without admitting its owner', () => {
+    const allowed = ['harlan-zw', 'nuxt/scripts']
+
+    expect(isAllowedRepository('nuxt/scripts', allowed)).toBe(true)
+    expect(isAllowedRepository('NUXT/Scripts', allowed)).toBe(true)
+    expect(isAllowedRepository('harlan-zw/mdream', allowed)).toBe(true)
+    expect(isAllowedRepository('nuxt/nuxt', allowed)).toBe(false)
+    expect(isAllowedRepository('nuxt/nuxt.com', allowed)).toBe(false)
+    expect(isAllowedRepository('nuxt/scripts-other', allowed)).toBe(false)
+  })
+
+  it('maps one allowed repository and none of its neighbours', () => {
+    // Naming the owner used to admit every repository in it that had a local
+    // checkout, which is how four Nuxt repositories were commented on at once.
+    const nuxtRepository = (name: string): InstalledRepository => ({
+      github: `nuxt/${name}`,
+      defaultBranch: 'main',
+      archived: false,
+      topics: [],
+      authentication: 'user',
+      owner: { login: 'nuxt', type: 'Organization' },
+    })
+    const mappings = buildRepositoryMappings(
+      ['scripts', 'nuxt', 'nuxt.com', 'cli'].map(nuxtRepository),
+      ['scripts', 'nuxt', 'nuxt.com', 'cli'].map(name => ({ github: `nuxt/${name}`, checkout: `/home/harlan/pkg/${name}` })),
+      [],
+      ['nuxt/scripts'],
+    )
+
+    expect(mappings.map(mapping => mapping.github)).toEqual(['nuxt/scripts'])
   })
 
   it('keeps the discovered credential when explicit policy claims another', () => {

@@ -78,12 +78,11 @@ export async function discoverGitHubAppRepositories(options: GitHubAppRepository
     Octokit: Octokit.defaults({ userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0' }),
   })
   const repositories: InstalledRepository[] = []
-  const allowedOwners = new Set(options.allowedOwners.map(owner => owner.toLowerCase()))
   for await (const { repository } of app.eachRepository.iterator()) {
     const ownerType = repository.owner.type
     if (ownerType !== 'User' && ownerType !== 'Organization')
       continue
-    if (!allowedOwners.has(repository.owner.login.toLowerCase()))
+    if (!isAllowedRepository(repository.full_name, options.allowedOwners))
       continue
     repositories.push({
       github: repository.full_name,
@@ -125,6 +124,26 @@ export interface UserRepositoryDiscoveryOptions {
 }
 
 /**
+ * Decides whether the allowlist admits one repository.
+ *
+ * An entry is either a whole owner, `harlan-zw`, or a single repository,
+ * `nuxt/scripts`. Owner-wide was once the only choice, and reaching one
+ * repository in an organization meant admitting every repository in it that
+ * had a local checkout. That posted ninety eight automated comments across
+ * four Nuxt repositories under Harlan's own account in half an hour.
+ *
+ * Matching is case insensitive, because GitHub logins are.
+ */
+export function isAllowedRepository(github: string, allowedOwners: string[]): boolean {
+  const full = github.toLowerCase()
+  const owner = full.split('/')[0]
+  return allowedOwners.some((entry) => {
+    const allowed = entry.trim().toLowerCase()
+    return allowed.includes('/') ? allowed === full : allowed === owner
+  })
+}
+
+/**
  * Repositories Harlan maintains that the App cannot reach.
  *
  * An organization can refuse the App, so the controller falls back to his own
@@ -132,11 +151,8 @@ export interface UserRepositoryDiscoveryOptions {
  */
 export async function discoverUserRepositories(options: UserRepositoryDiscoveryOptions): Promise<InstalledRepository[]> {
   const installed = new Set(options.installed.map(repository => repository.github.toLowerCase()))
-  const allowedOwners = new Set(options.allowedOwners.map(owner => owner.toLowerCase()))
-  const candidates = options.checkouts.filter((checkout) => {
-    const owner = checkout.github.split('/')[0]?.toLowerCase()
-    return owner !== undefined && allowedOwners.has(owner) && !installed.has(checkout.github.toLowerCase())
-  })
+  const candidates = options.checkouts.filter(checkout =>
+    isAllowedRepository(checkout.github, options.allowedOwners) && !installed.has(checkout.github.toLowerCase()))
   const unique = [...new Map(candidates.map(checkout => [checkout.github.toLowerCase(), checkout])).values()]
   const repositories = await Promise.all(unique.map(checkout => options.readRepository(checkout.github)
     .then((repository) => {
@@ -167,10 +183,9 @@ export function installedWithoutCheckout(
   allowedOwners: string[],
 ): string[] {
   const checkoutByRepository = new Set(checkouts.map(checkout => checkout.github.toLowerCase()))
-  const allowedOwnerSet = new Set(allowedOwners.map(owner => owner.toLowerCase()))
   return repositories
     .filter(repository => !repository.archived
-      && allowedOwnerSet.has(repository.owner.login.toLowerCase())
+      && isAllowedRepository(repository.github, allowedOwners)
       && !checkoutByRepository.has(repository.github.toLowerCase()))
     .map(repository => repository.github)
     .sort((left, right) => left.localeCompare(right))
@@ -184,10 +199,9 @@ export function buildRepositoryMappings(
 ): RepositoryMapping[] {
   const checkoutByRepository = new Map(checkouts.map(checkout => [checkout.github.toLowerCase(), checkout.checkout]))
   const overrideByRepository = new Map(overrides.map(mapping => [mapping.github.toLowerCase(), mapping]))
-  const allowedOwnerSet = new Set(allowedOwners.map(owner => owner.toLowerCase()))
 
   return repositories.flatMap((repository) => {
-    if (!allowedOwnerSet.has(repository.owner.login.toLowerCase()))
+    if (!isAllowedRepository(repository.github, allowedOwners))
       return []
     const checkout = checkoutByRepository.get(repository.github.toLowerCase())
     if (checkout === undefined)
