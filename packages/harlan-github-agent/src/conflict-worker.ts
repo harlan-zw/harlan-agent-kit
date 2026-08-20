@@ -47,6 +47,7 @@ function workerPrompt(task: ClaimedConflictResolutionTask): string {
   return `Resolve the existing merge conflicts for ${task.repository}#${task.pullRequestNumber}.
 
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
+This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 Select every installed skill whose trigger matches the work. Apply the unit-tests skill before regression repair.
 The controller already merged the current base into this worktree. Only resolve the conflicted files.
 Follow repository AGENTS.md and contributor instructions. Preserve the pull request intent.

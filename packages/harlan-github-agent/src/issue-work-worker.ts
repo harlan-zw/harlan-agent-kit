@@ -110,15 +110,22 @@ function parseAgentResponse(text: string, issueNumber: number, template: PullReq
       if (value.outcome !== 'implemented' || typeof value.commitMessage !== 'string' || value.commitMessage.trim().length === 0 || typeof value.pullRequestTitle !== 'string' || typeof value.pullRequestBody !== 'string')
         return err('The agent returned an invalid issue work result.')
       const pullRequestBody = withAiDisclosure(value.pullRequestBody)
-      if (
-        !/^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/.test(value.pullRequestTitle)
-        || value.pullRequestTitle.length >= 70
-        || !new RegExp(`(?:closes|fixes|resolves)\\s+#${issueNumber}\\b`, 'i').test(pullRequestBody)
-        || /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(pullRequestBody)
-        || !preservesTemplate(pullRequestBody, template)
-      ) {
-        return err('The agent returned pull request metadata that does not follow the PR skill.')
-      }
+      // Each rule names itself. One shared refusal told nobody which of five
+      // rules the metadata broke, so the Incident a person read said only that
+      // something was wrong, and a retry had nothing to correct.
+      const brokenRule = !/^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/.test(value.pullRequestTitle)
+        ? 'the title is not a Conventional Commit subject'
+        : value.pullRequestTitle.length >= 70
+          ? 'the title is 70 characters or longer'
+          : !new RegExp(`(?:closes|fixes|resolves)\\s+#${issueNumber}\\b`, 'i').test(pullRequestBody)
+              ? `the body does not close #${issueNumber}`
+              : /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(pullRequestBody)
+                ? 'the body adds a checks heading'
+                : preservesTemplate(pullRequestBody, template)
+                  ? undefined
+                  : 'the body drops part of the repository pull request template'
+      if (brokenRule !== undefined)
+        return err(`The agent returned pull request metadata that does not follow the PR skill: ${brokenRule}.`)
       return ok({
         outcome: 'implemented',
         summary: value.summary,
@@ -136,6 +143,7 @@ function workerPrompt(task: ClaimedIssueWorkTask, body: string, comments: string
 
 Use the existing triage and your own judgment to plan, implement, and verify the complete fix.
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context and installed skills.
+This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 Read repository AGENTS.md and contributor instructions. Select every installed skill whose trigger matches the work.
 Apply the unit-tests skill before fixing a bug or validation rule.
 Apply the PR skill to draft the pull request title and body. Apply the humanize-writing skill before returning that metadata.
