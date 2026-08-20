@@ -201,6 +201,71 @@ describe('journal store', () => {
     ])
   })
 
+  it('names the policy that leaves maintained merge conflicts for Harlan', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ ownership: 'maintained', conflictResolution: false })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'maintained-conflict',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'Conflict resolution is off for maintained repositories. Resolve the merge conflicts on GitHub.',
+    })
+  })
+
+  it('counts open review issues before showing the first next action', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'review-findings',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request revision.')
+    const task = store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:00:01.000Z', 10_000)
+    if (task === null)
+      throw new Error('Expected a review Task.')
+    const gates = passedReviewGates()
+    gates.review = { _tag: 'Failed', reason: 'Two review issues remain.', evidence: [] }
+    store.recordReviewRun({
+      id: 'review-findings-run',
+      repository: task.repository,
+      pullRequestNumber: task.pullRequestNumber,
+      revisionId: task.revisionId,
+      headSha: task.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'review-findings-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:00:01.000Z',
+      completedAt: '2026-08-13T01:00:02.000Z',
+      gates,
+      findings: [
+        { _tag: 'Open', summary: 'First unsafe path.', nextAction: 'Reject the first path.' },
+        { _tag: 'Open', summary: 'Second unsafe path.', nextAction: 'Reject the second path.' },
+      ],
+    })
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:00:03.000Z',
+      evidence: 'review-findings-run',
+    })
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:04.000Z').queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'Automated review found 2 open review issues. First: First unsafe path. Next: Reject the first path.',
+    })
+  })
+
   it('requeues conflict resolution when GitHub reports conflicts again', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -2847,6 +2912,72 @@ describe('journal store', () => {
       kind: 'issue_work',
       issueNumber: 12,
     }))
+  })
+
+  it('shows repeated pull request description failures instead of the Agent fallback', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'issue-description-retry',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem({ author: 'harlan-zw' }),
+    })
+    const triage = store.claimNextIssueTriageTask('triage-worker', '2026-08-13T01:00:01.000Z', 10_000)
+    if (triage === null)
+      throw new Error('Expected Issue triage.')
+    store.completeWorkerTask({
+      taskId: triage.id,
+      workerId: triage.state.workerId,
+      fence: triage.state.fence,
+      at: '2026-08-13T01:00:02.000Z',
+      evidence: JSON.stringify({ validity: 'valid' }),
+    })
+    const rejected = 'The Agent returned invalid pull request text.'
+    let taskId = ''
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextIssueWorkTask(`issue-worker-${attempt}`, `2026-08-13T01:00:0${attempt + 2}.000Z`, 10_000)
+      if (task === null)
+        throw new Error(`Expected Issue work attempt ${attempt}.`)
+      taskId = task.id
+      store.failTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-13T01:00:0${attempt + 2}.000Z`,
+        reason: rejected,
+      })
+    }
+    expect(store.retryRecoverableWorkerFailures('2026-08-14T01:00:00.000Z')).toBe(1)
+    for (const attempt of [4, 5]) {
+      const task = store.claimNextIssueWorkTask(`issue-worker-${attempt}`, `2026-08-14T01:00:0${attempt}.000Z`, 10_000)
+      if (task === null)
+        throw new Error(`Expected Issue work attempt ${attempt}.`)
+      store.failTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-14T01:00:0${attempt}.000Z`,
+        reason: rejected,
+      })
+    }
+    const final = store.claimNextIssueWorkTask('issue-worker-6', '2026-08-14T01:00:06.000Z', 10_000)
+    if (final === null)
+      throw new Error('Expected the final Issue work attempt.')
+    expect(final.id).toBe(taskId)
+    store.needsAttentionTask({
+      taskId: final.id,
+      workerId: final.state.workerId,
+      fence: final.state.fence,
+      at: '2026-08-14T01:00:07.000Z',
+      reason: 'The prepared worktree keeps changing.',
+      evidence: 'Agent fallback.',
+    })
+
+    expect(store.getDashboardSnapshot('2026-08-14T01:00:08.000Z').queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'Issue work stopped after 5 invalid pull request titles or descriptions. Update the issue to start fresh Issue triage.',
+    })
   })
 
   it('retries a failed review repair after Worktrunk becomes available', () => {

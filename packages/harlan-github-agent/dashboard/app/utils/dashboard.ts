@@ -153,9 +153,11 @@ export function queueDetail(entry: QueueEntry, context: QueueContext): string {
       if (isIssueWorkThrottled(entry, context)) {
         return `Issue work stops above ${context.maxOpenPullRequests} open pull requests, and ${context.openPullRequests} are open. Merge or close some to start it.`
       }
-      return context.agentsCanStart
-        ? `${workLabel(entry.state.work)} will start when an agent is free.`
-        : 'Automatic reviews and fixes are disabled.'
+      if (context.agentsCanStart)
+        return `${workLabel(entry.state.work)} will start when an agent is free.`
+      return context.agentsPaused
+        ? 'Pause is on. Select Resume to start this Task.'
+        : 'GitHub writes are off. Enable them in the configuration, then restart the service.'
     case 'Pending': return entry.state.reason
   }
 }
