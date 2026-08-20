@@ -105,6 +105,7 @@ the skills only; the Claude hook config is not portable to Codex as-is.
 | Skill | Description |
 |-------|-------------|
 | `adversarial-review` | Review and repair one PR, then post its bot status |
+| `close-off` | Finish loose ends, verify delivery, and clean task-owned Git state |
 | `email-triage` | Triage inbox email with himalaya |
 | `humanize-writing` | Strip AI tells from prose before publishing |
 | `improve-ts-pkg-architecture` | Find architecture improvements in TS packages and monorepos |

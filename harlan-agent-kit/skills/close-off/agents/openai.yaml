@@ -1,0 +1,4 @@
+interface:
+  display_name: Close Off
+  short_description: Finish loose ends and clean completed task state
+  default_prompt: Use $close-off to finish remaining task work, verify delivery, and clean task-owned Git state.
