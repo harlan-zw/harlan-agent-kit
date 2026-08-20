@@ -221,7 +221,7 @@ describe('decisionEntries', () => {
   })
 })
 
-const running = { agentsCanStart: true, agentsPaused: false, openPullRequests: 0, maxOpenPullRequests: 8 }
+const running = { agentsCanStart: true, agentsPaused: false, openPullRequests: 0, maxOpenPullRequests: 8, selectionMode: 'auto' as const }
 
 describe('queue copy', () => {
   it('says agents are paused rather than queued when the engine is paused', () => {
@@ -246,6 +246,10 @@ describe('isIssueWorkThrottled', () => {
 
   it('lets issue work through below the limit', () => {
     expect(isIssueWorkThrottled(issueWork, { ...running, openPullRequests: 7 })).toBe(false)
+  })
+
+  it('ignores the limit in Manual, where Harlan is already the throttle', () => {
+    expect(isIssueWorkThrottled(issueWork, { ...running, openPullRequests: 17, selectionMode: 'manual' })).toBe(false)
   })
 
   it('never holds back work the limit does not cover', () => {

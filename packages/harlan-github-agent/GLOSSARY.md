@@ -211,6 +211,8 @@ In `Manual`, every open pull request requires Approval, whoever opened it. Selec
 
 `Manual` covers pull requests only. Issue triage and Issue work keep their own rules.
 
+`Manual` also lifts the open pull request limit on Issue work. That limit exists to stop the service opening more pull requests than Harlan can read. In `Manual` he already selects every one, so counting them twice only blocks work he asked for.
+
 Switching to `Manual` leaves a running agent alone. A queued review without Approval stops at the next observation, as Pause behaves.
 
 Use Selection mode for the control and for the stored choice. Do not use opt-in, allowlist, gating, or triage mode.

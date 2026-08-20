@@ -8,6 +8,7 @@ import type {
   RepositoryStatus,
   ReviewAgent,
   ReviewGateState,
+  SelectionMode,
 } from '../../../src/types.ts'
 
 /** A progress label older than this means the agent may be wedged, not working. */
@@ -98,6 +99,7 @@ export interface QueueContext {
   agentsPaused: boolean
   openPullRequests: number
   maxOpenPullRequests: number
+  selectionMode: SelectionMode
 }
 
 /**
@@ -107,6 +109,9 @@ export interface QueueContext {
  * changes nothing. Without this the Queue promises a start that cannot happen.
  */
 export function isIssueWorkThrottled(entry: QueueEntry, context: QueueContext): boolean {
+  // Manual Selection mode makes Harlan the throttle, so the limit does not apply.
+  if (context.selectionMode === 'manual')
+    return false
   return entry.state._tag === 'Queued'
     && entry.state.work === 'issue_work'
     && context.openPullRequests >= context.maxOpenPullRequests

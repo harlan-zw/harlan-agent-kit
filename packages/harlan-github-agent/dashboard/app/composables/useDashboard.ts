@@ -86,6 +86,7 @@ function createDashboard() {
     agentsPaused: snapshot.value.agentControl._tag === 'Paused',
     openPullRequests: snapshot.value.openPullRequests,
     maxOpenPullRequests: snapshot.value.maxOpenPullRequests,
+    selectionMode: snapshot.value.selectionMode,
   }))
 
   const connectionLabel = computed(() => {

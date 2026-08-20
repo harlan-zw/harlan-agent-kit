@@ -319,7 +319,7 @@ useHead({
           <span aria-hidden="true" class="text-dimmed">·</span>
           <span :class="statusClass('warning')">{{ agentControlLabel }}</span>
         </template>
-        <template v-if="snapshot.openPullRequests >= snapshot.maxOpenPullRequests">
+        <template v-if="snapshot.selectionMode === 'auto' && snapshot.openPullRequests >= snapshot.maxOpenPullRequests">
           <span aria-hidden="true" class="text-dimmed">·</span>
           <span
             :class="statusClass('warning')"

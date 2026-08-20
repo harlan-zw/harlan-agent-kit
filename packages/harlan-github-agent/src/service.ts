@@ -350,7 +350,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })),
       issueWork: createTaskScheduler({
         // New work waits while the open pull requests already need Harlan.
-        canClaim: () => canClaim() && store.countOpenPullRequests() < config.maxOpenPullRequests,
+        // Manual Selection mode makes Harlan the throttle, so the count stops
+        // counting: every pull request the agent opens was already selected.
+        canClaim: () => canClaim()
+          && (store.getSelectionMode() === 'manual' || store.countOpenPullRequests() < config.maxOpenPullRequests),
         claim: store.claimNextIssueWorkTask,
         intervalMilliseconds: 5_000,
         leaseMilliseconds: 45 * 60_000,
