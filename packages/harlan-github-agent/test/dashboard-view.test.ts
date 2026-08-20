@@ -231,6 +231,18 @@ describe('queue copy', () => {
     expect(queueStateLabel(entry, running)).toBe('Queued')
   })
 
+  it('explains how to start work when Pause is on', () => {
+    const entry = queueEntry()
+    expect(queueDetail(entry, { ...running, agentsCanStart: false, agentsPaused: true }))
+      .toBe('Pause is on. Select Resume to start this Task.')
+  })
+
+  it('explains how to enable work when GitHub writes are off', () => {
+    const entry = queueEntry()
+    expect(queueDetail(entry, { ...running, agentsCanStart: false, agentsPaused: false }))
+      .toBe('GitHub writes are off. Enable them in the configuration, then restart the service.')
+  })
+
   it('reports the reason a subject needs attention', () => {
     const entry = queueEntry({ state: { _tag: 'ActionRequired', reason: 'The fork branch is not writable.' } })
     expect(queueDetail(entry, running)).toBe('The fork branch is not writable.')
