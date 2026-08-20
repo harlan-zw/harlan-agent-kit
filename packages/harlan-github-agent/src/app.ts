@@ -14,7 +14,7 @@ import { createError, createEventStream, H3 } from 'h3'
 import { parseAgentSelection } from './agent-profile.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode'>
   allowedHost: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -249,6 +249,16 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   app.post('/api/agents/pause', () => options.store.pauseAgents(options.now().toISOString()))
 
   app.post('/api/agents/resume', () => options.store.resumeAgents(options.now().toISOString()))
+
+  app.post('/api/agents/selection-mode', async (event) => {
+    const body = await event.req.json().catch(() => {
+      // Validation below reports malformed JSON as a bad request.
+      return undefined
+    }) as { mode?: unknown } | undefined
+    if (body?.mode !== 'auto' && body?.mode !== 'manual')
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Selection mode must be auto or manual.' })
+    return { selectionMode: options.store.setSelectionMode(body.mode) }
+  })
 
   app.post('/api/agents/select', async (event) => {
     const selection = parseAgentSelection(await event.req.json().catch(() => {

@@ -29,6 +29,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         approvePullRequest: () => {
           calls.push('approve')
@@ -53,7 +54,7 @@ describe('approval controller', () => {
         },
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
-      store: { ...unusedIssueApproval, hasPullRequestApproval: () => false, approvePullRequest: () => { throw new Error('Unexpected Approval.') } },
+      store: { ...unusedIssueApproval, getSelectionMode: () => 'auto' as const, hasPullRequestApproval: () => false, approvePullRequest: () => { throw new Error('Unexpected Approval.') } },
     })
 
     expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
@@ -78,6 +79,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         approvePullRequest(input) {
           calls.push('approve')
@@ -108,6 +110,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: (_repository, _number, revisionId) => approvals.has(revisionId),
         approvePullRequest(input) {
           calls.push('approve')
@@ -136,6 +139,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         approvePullRequest: () => {
           approved = true
@@ -158,6 +162,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => true,
         approvePullRequest: () => { throw new Error('Unexpected Approval.') },
       },
@@ -182,6 +187,7 @@ describe('approval controller', () => {
       },
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         isIssueWorkApprovalReady: () => false,
         approveIssueWork: () => { throw new Error('Unexpected Approval.') },
@@ -207,6 +213,7 @@ describe('approval controller', () => {
       },
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         isIssueWorkApprovalReady: () => true,
         approveIssueWork: () => { throw new Error('Unexpected Approval.') },
@@ -234,6 +241,7 @@ describe('approval controller', () => {
       },
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
+        getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         isIssueWorkApprovalReady: () => true,
         approveIssueWork(input) {

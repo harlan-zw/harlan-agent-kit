@@ -766,6 +766,7 @@ export interface DashboardSnapshot {
   status: 'starting' | 'ready' | 'degraded'
   mutationsEnabled: boolean
   agentControl: AgentControl
+  selectionMode: SelectionMode
   agentProfile: AgentProfile
   agentSelection: AgentSelection
   agents: DashboardAgent[]
@@ -779,6 +780,12 @@ export interface DashboardSnapshot {
 export type StoredAgentControl
   = | { _tag: 'Running' }
     | { _tag: 'Paused', pausedAt: string }
+
+/**
+ * Whether the service picks pull requests to act on by itself, or waits for
+ * Harlan to select each one.
+ */
+export type SelectionMode = 'auto' | 'manual'
 
 export type AgentControl
   = | { _tag: 'Running' }

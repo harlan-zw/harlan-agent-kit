@@ -87,7 +87,9 @@ Read one pull request's local review history from:
 /api/reviews?repository=OWNER%2FREPOSITORY&pull_request=NUMBER
 ```
 
-The dashboard shows `Review and repair` for outside contributors. One Approval covers review and verified repairs for that head commit.
+Use the `Auto` and `Manual` control in the header to set the Selection mode. `Auto` reviews every eligible pull request. `Manual` waits for you to select each one, whoever opened it. Select a pull request with `Review and repair` in the dashboard, or with the `harlan-agent-review` label on GitHub. The Selection mode persists across restarts, and covers pull requests only.
+
+The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers review and verified repairs for that head commit.
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
 Use `Watch logs` from the system pane to open a read-only live event stream while automation continues.
 The system pane shows the `Weekly Codex limit` first, including the remaining percentage and reset countdown.

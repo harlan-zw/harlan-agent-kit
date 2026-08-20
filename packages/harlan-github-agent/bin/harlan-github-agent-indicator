@@ -521,6 +521,13 @@ def agent_control_action(agent_control):
     return ('⏸ Pause agents', 'pause')
 
 
+def selection_mode_label(dashboard):
+    """Manual Selection mode holds every pull request, so the tray has to say so."""
+    if dashboard.get('selectionMode') == 'manual':
+        return '🟠 Manual selection · select a pull request in the dashboard'
+    return None
+
+
 def counted(count, singular, plural=None):
     return f'{count} {singular if count == 1 else plural or f"{singular}s"}'
 
@@ -626,6 +633,9 @@ def build_menu(indicator, dashboard, runners, usage, error, action_error, refres
     else:
         agent_control = dashboard.get('agentControl', {'_tag': 'Running'})
         menu.append(menu_item(agent_status_label(agent_control, agents), enabled=False))
+        selection_label = selection_mode_label(dashboard)
+        if selection_label is not None:
+            menu.append(menu_item(selection_label, enabled=False))
         if not agents:
             menu.append(menu_item('No active pull requests or issues', enabled=False))
         for agent in agents:

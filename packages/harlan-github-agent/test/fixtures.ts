@@ -76,6 +76,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     status: 'ready',
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
+    selectionMode: 'auto',
     agentProfile: CODEX_AGENT_PROFILE,
     agentSelection: { _tag: 'FollowsConfiguration' },
     agents: [],

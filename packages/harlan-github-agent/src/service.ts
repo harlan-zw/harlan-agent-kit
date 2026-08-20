@@ -540,6 +540,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       resumeAgents: store.resumeAgents,
       selectAgent: store.selectAgent,
       setRepositoryPaused: store.setRepositoryPaused,
+      setSelectionMode: store.setSelectionMode,
     },
     allowedHost: config.server.allowedHost,
     dashboardPassword: options.dashboardPassword,

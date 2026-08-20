@@ -93,6 +93,8 @@ Inspect one pull request's review Attempts and Publications through
 
 Use `Eject` to cancel one active automated Task and open its saved agent session in Ghostty. The terminal resumes after the active turn stops.
 
+Set the Selection mode with `Auto` or `Manual` in the dashboard header. `Auto` acts on every eligible pull request. `Manual` acts on a pull request only after Harlan selects it, with `Review and repair` in the dashboard or the `harlan-agent-review` label on GitHub. Use `Manual` when a repository has many open pull requests that need triage first. The Selection mode persists across restart, and covers pull requests only.
+
 Treat the SQLite journal as service-owned state. Do not edit it manually.
 
 Before restarting, pause new agent work through the authenticated controller API. Keep polling active. Let active agents and controller writes finish. Restart only when `/api/state` reports `agentControl.safeToRestart: true`. Pause persists across restart, so resume explicitly afterward.

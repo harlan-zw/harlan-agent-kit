@@ -23,6 +23,7 @@ did not cover it.
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
+| Selection mode | `agent_control.selection_mode` | Controller | One per service | Selection mode |
 | Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
 | Watch logs | System pane action | Observer | Opens one read-only live Task event stream | Watch logs |
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
@@ -86,6 +87,7 @@ Collisions
 
 - "issue" means a GitHub Item alone. "Review issue" means a Review finding in review copy.
 - "queue" unqualified means this service's dashboard Queue. GitHub's feature is always "merge queue".
+- "Auto" names a Selection mode. GitHub's merge feature is always written "auto-merge", hyphenated.
 - "approval" means this service's local Approval. A GitHub pull request review is always "review" or "approving review".
 - "check" means a GitHub check run. This service's own conditions are always "Review gate", never bare "check".
 - "job" means a GitHub Actions job. This service's unit of work is a Task.
@@ -195,6 +197,22 @@ A durable service control that stops new agent Tasks from starting. Active agent
 
 Use `Pause` in controls and procedures. Never use drain or maintenance mode for this control.
 
+### Selection mode
+
+Whether the service picks pull requests to act on by itself, or waits for Harlan to select each one.
+
+One of `Auto` or `Manual`. A Selection mode is durable. It survives a restart.
+
+In `Manual`, every open pull request requires Approval, whoever opened it. Select one with the `harlan-agent-review` label on GitHub, or `Review and repair` in the dashboard.
+
+`Manual` never comments on a pull request from an author who can write to the repository. It holds the pull request in the Queue and waits.
+
+`Manual` covers pull requests only. Issue triage and Issue work keep their own rules.
+
+Switching to `Manual` leaves a running agent alone. A queued review without Approval stops at the next observation, as Pause behaves.
+
+Use Selection mode for the control and for the stored choice. Do not use opt-in, allowlist, gating, or triage mode.
+
 ### Eject
 
 Stop one active automated Task, then open its saved agent session in Harlan's terminal for interactive control.
@@ -301,6 +319,8 @@ One local decision for one exact issue or pull request Revision.
 
 This is Harlan authorizing the service to act. It is not a GitHub pull request review, and it never posts one. When you mean GitHub's, write "approving review".
 
+In `Manual` Selection mode, every pull request requires Approval. In `Auto`, only a pull request from an author who cannot write to the repository does.
+
 For an outside contributor's issue, Approval permits Issue work. Use `harlan-agent-review` on GitHub or `Approve` in the dashboard. Harlan's issues do not require Approval.
 
 For a pull request, Approval permits review and verified repairs in one workflow. Use `Review and repair` for the dashboard action.
@@ -373,6 +393,7 @@ Evidence that a skill, policy, or workflow should change.
 | automerge, self merge, merge tier | auto-merge | GitHub's spelling of its own feature |
 | error, problem, outage, alert | Incident | One concept |
 | agent config, model config, model override | Agent selection | One concept |
+| opt-in, allowlist, gating, triage mode | Selection mode | One concept |
 | config default, unset, no override, clear | Follow configuration | One Agent selection state, and one label |
 | reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |

@@ -200,6 +200,10 @@ class IndicatorDisplayTest(unittest.TestCase):
         self.assertEqual(indicator.agent_status_label({'_tag': 'Running'}, [{}]), '🟢 1 agent running')
         self.assertEqual(indicator.agent_status_label({'_tag': 'Paused'}, []), '🟡 Agents paused')
 
+    def test_selection_mode_label(self):
+        self.assertIsNone(indicator.selection_mode_label({'selectionMode': 'auto'}))
+        self.assertIn('Manual selection', indicator.selection_mode_label({'selectionMode': 'manual'}))
+
     def test_summarises_loading_running_paused_and_unavailable_states(self):
         self.assertEqual(indicator.indicator_summary(None, [], [], None), ('🟡', 'Loading Harlan GitHub Agent'))
         self.assertEqual(

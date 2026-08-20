@@ -13,7 +13,7 @@ export interface ApprovalController {
 export interface ApprovalControllerOptions {
   github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
   now: () => Date
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'hasPullRequestApproval' | 'isIssueWorkApprovalReady'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'getSelectionMode' | 'hasPullRequestApproval' | 'isIssueWorkApprovalReady'>
 }
 
 function approvalPrompt(label: string, headSha: string): string {
@@ -51,7 +51,8 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
       }
 
       const pullRequest: GitHubPullRequestItem = subject
-      if (!repository.enabled || !repository.pullRequestReview || trustedAuthor)
+      const manualSelection = options.store.getSelectionMode() === 'manual'
+      if (!repository.enabled || !repository.pullRequestReview || (trustedAuthor && !manualSelection))
         return ok(undefined)
       if (options.store.hasPullRequestApproval(repository.github, pullRequest.number, revisionId, 'review'))
         return ok(undefined)
@@ -61,6 +62,9 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
         const available = await options.github.ensureApprovalLabel(repository, label, signal)
         if (available._tag === 'Err')
           return available
+        // Manual Selection mode holds Harlan's own pull requests. A comment on each one is noise.
+        if (trustedAuthor)
+          return ok(undefined)
         return options.github.upsertReviewStatus(repository, pullRequest.number, null, approvalPrompt(label, pullRequest.headSha), false, signal).then(result => result._tag === 'Err' ? result : ok(undefined))
       }
 

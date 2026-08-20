@@ -55,6 +55,7 @@ import type {
   ReviewRerunSource,
   ReviewRun,
   ReviewStatusTaskPhase,
+  SelectionMode,
   StoredAgentControl,
   TaskState,
 } from './types.ts'
@@ -419,6 +420,10 @@ export interface JournalStore {
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getAgentControl: () => StoredAgentControl
+  /** The Selection mode in force. Manual waits for Harlan to select each pull request. */
+  getSelectionMode: () => SelectionMode
+  /** Sets the Selection mode. Active agents finish, matching how Pause behaves. */
+  setSelectionMode: (mode: SelectionMode) => SelectionMode
   /** The Agent selection in force. It follows the configuration until pinned. */
   getAgentSelection: () => AgentSelection
   /** Pins the Agent provider, model, and reasoning effort, or follows the configuration. */
@@ -1242,6 +1247,12 @@ const agentControlMigration = `
   PRAGMA user_version = 16;
 `
 
+const selectionModeMigration = `
+  ALTER TABLE agent_control ADD COLUMN selection_mode TEXT NOT NULL DEFAULT 'auto'
+    CHECK (selection_mode IN ('auto', 'manual'));
+  PRAGMA user_version = 28;
+`
+
 const repositoryPauseMigration = `
   ALTER TABLE repositories ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));
   PRAGMA user_version = 17;
@@ -1995,9 +2006,18 @@ function githubSubjectFromRow(row: SubjectRow): GitHubItem {
   }
 }
 
-function requiresPullRequestApproval(mapping: RepositoryMapping, author: string): boolean {
+function selectionMode(database: DatabaseSync): SelectionMode {
+  const row = database.prepare('SELECT selection_mode FROM agent_control WHERE singleton = 1').get() as { selection_mode: SelectionMode }
+  return row.selection_mode
+}
+
+/**
+ * Manual Selection mode requires Approval for every pull request, whoever
+ * opened it. Auto requires it only from an author who cannot write here.
+ */
+function requiresPullRequestApproval(database: DatabaseSync, mapping: RepositoryMapping, author: string): boolean {
   return mapping.pullRequestReview
-    && requiresIssueApproval(mapping, author)
+    && (selectionMode(database) === 'manual' || requiresIssueApproval(mapping, author))
 }
 
 function requiresIssueApproval(mapping: RepositoryMapping, author: string): boolean {
@@ -2019,12 +2039,12 @@ function canRepairPullRequestHead(mapping: RepositoryMapping, subject: GitHubPul
     && subject.headRef !== mapping.defaultBranch
 }
 
-function pullRequestApprovalState(input: {
+function pullRequestApprovalState(database: DatabaseSync, input: {
   mapping: RepositoryMapping
   author: string
   reviewApprovedAt: string | null
 }): PullRequestApprovalState {
-  const reviewRequired = requiresPullRequestApproval(input.mapping, input.author)
+  const reviewRequired = requiresPullRequestApproval(database, input.mapping, input.author)
   if (reviewRequired && input.reviewApprovedAt === null)
     return { _tag: 'ReviewRequired' }
   return reviewRequired
@@ -2032,7 +2052,7 @@ function pullRequestApprovalState(input: {
     : { _tag: 'NotRequired' }
 }
 
-function subjectFromRow(row: DashboardSubjectRow): ItemSummary {
+function subjectFromRow(database: DatabaseSync, row: DashboardSubjectRow): ItemSummary {
   const subject = githubSubjectFromRow(row)
   if (subject.kind === 'issue')
     return { ...subject, revisionId: row.revision_id, observedAt: row.observed_at }
@@ -2040,7 +2060,7 @@ function subjectFromRow(row: DashboardSubjectRow): ItemSummary {
     ...subject,
     revisionId: row.revision_id,
     observedAt: row.observed_at,
-    approval: pullRequestApprovalState({
+    approval: pullRequestApprovalState(database, {
       mapping: JSON.parse(row.policy_json) as RepositoryMapping,
       author: row.author,
       reviewApprovedAt: row.review_approved_at,
@@ -2554,7 +2574,7 @@ function planReviewFix(
     return refuse(REVIEW_REPAIR_REFUSALS.conflict)
   if (!canRepairPullRequestHead(mapping, subject))
     return refuse(REVIEW_REPAIR_REFUSALS.branch)
-  const reviewAuthorized = !requiresPullRequestApproval(mapping, subject.author) || database.prepare(`
+  const reviewAuthorized = !requiresPullRequestApproval(database, mapping, subject.author) || database.prepare(`
     SELECT 1 FROM pull_request_approvals
     WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
   `).get(subjectId, revisionId) !== undefined
@@ -2726,7 +2746,7 @@ function planAdversarialReview(
   mapping: RepositoryMapping,
   reviewApproved: boolean,
 ): void {
-  const approvalRequired = subject.kind === 'pull_request' && requiresPullRequestApproval(mapping, subject.author)
+  const approvalRequired = subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, subject.author)
   const rerunRequested = database.prepare(`
     SELECT 1 FROM review_rerun_requests
     JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
@@ -2934,7 +2954,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 27)
+  if (version === 28)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3043,6 +3063,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 26) {
     applyMigration(database, followsConfigurationSelectionMigration)
+    version = 27
+  }
+  if (version === 27) {
+    applyMigration(database, selectionModeMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -3439,7 +3463,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: { _tag: 'AuthorNotAllowed' } }
       }
-      const reviewApproved = !requiresPullRequestApproval(mapping, pullRequest.author)
+      const reviewApproved = !requiresPullRequestApproval(database, mapping, pullRequest.author)
         || database.prepare(`
           SELECT 1 FROM pull_request_approvals
           WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
@@ -3541,7 +3565,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
           )
           return
         }
-        if (input.subject.kind === 'pull_request' && requiresPullRequestApproval(mapping, input.subject.author)) {
+        if (input.subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, input.subject.author)) {
           const approvedRepair = database.prepare(`
             SELECT 1
             FROM publication_commands
@@ -3644,7 +3668,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       FROM pull_request_approvals
       WHERE subject_id = ? AND revision_id = ?
     `).get(input.subjectId, input.revisionId) as { review_approved_at: string | null }
-    return pullRequestApprovalState({
+    return pullRequestApprovalState(database, {
       mapping: input.mapping,
       author: input.author,
       reviewApprovedAt: approvals.review_approved_at,
@@ -3673,7 +3697,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     if (pullRequest.kind !== 'pull_request' || pullRequest.state !== 'open')
       return { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
     const mapping = JSON.parse(row.policy_json) as RepositoryMapping
-    if (input.kind === 'review' && !requiresPullRequestApproval(mapping, pullRequest.author))
+    if (input.kind === 'review' && !requiresPullRequestApproval(database, mapping, pullRequest.author))
       return { _tag: 'Rejected', reason: { _tag: 'ApprovalNotRequired' } }
 
     database.exec('BEGIN IMMEDIATE')
@@ -3985,7 +4009,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     if (revision === undefined || pullRequest?.kind !== 'pull_request' || pullRequest.headSha !== input.headSha)
       return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
     const mapping = JSON.parse(revision.policy_json) as RepositoryMapping
-    if (requiresPullRequestApproval(mapping, pullRequest.author) && revision.review_approved !== 1)
+    if (requiresPullRequestApproval(database, mapping, pullRequest.author) && revision.review_approved !== 1)
       return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
 
     const gates = JSON.stringify(input.gates)
@@ -4563,7 +4587,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
         throw new Error(`Review Task ${row.id} does not reference a pull request.`)
       if (kind === 'issue_triage' && subject.kind !== 'issue')
         throw new Error(`Issue triage Task ${row.id} does not reference an issue.`)
-      if (subject.kind === 'pull_request' && requiresPullRequestApproval(repositoryMapping, subject.author)) {
+      if (subject.kind === 'pull_request' && requiresPullRequestApproval(database, repositoryMapping, subject.author)) {
         const approved = database.prepare(`
           SELECT 1 FROM pull_request_approvals
           JOIN subjects ON subjects.id = pull_request_approvals.subject_id
@@ -6019,6 +6043,17 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     return row.state_tag === 'Running' ? { _tag: 'Running' } : { _tag: 'Paused', pausedAt: row.updated_at }
   }
 
+  const getSelectionMode = (): SelectionMode => selectionMode(database)
+
+  /**
+   * Switching to Manual leaves running work alone. Queued reviews without
+   * Approval are superseded on the next observation, as Pause does.
+   */
+  const setSelectionMode = (mode: SelectionMode): SelectionMode => {
+    database.prepare('UPDATE agent_control SET selection_mode = ? WHERE singleton = 1').run(mode)
+    return getSelectionMode()
+  }
+
   const pauseAgents = (at: string): StoredAgentControl => {
     database.prepare(`
       UPDATE agent_control SET state_tag = 'Paused', updated_at = ?
@@ -6124,7 +6159,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     const status = repositories.some(repository => repository.lastError !== null)
       ? 'degraded'
       : repositories.some(repository => repository.lastSuccessAt === null) ? 'starting' : 'ready'
-    const items = subjectRows.map(subjectFromRow)
+    const items = subjectRows.map(row => subjectFromRow(database, row))
     const tasks = taskRows(database).map(taskFromRow)
     const reviewAgents = dashboardReviewAgents(database)
     const currentProvider = provider()
@@ -6148,6 +6183,7 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
       status,
       mutationsEnabled,
       agentControl,
+      selectionMode: selectionMode(database),
       agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents),
       agentSelection: getAgentSelection(),
       agents,
@@ -6422,6 +6458,8 @@ export function openJournalStore(path: string, mutationsEnabled = false, profile
     countOpenPullRequests,
     listReviewRuns,
     needsAttentionTask,
+    getSelectionMode,
+    setSelectionMode,
     pauseAgents,
     setRepositoryPaused,
     recordObservation,

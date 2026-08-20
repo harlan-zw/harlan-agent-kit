@@ -17,6 +17,11 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+/** Every rewind here predates the Selection mode column, so it has to go too. */
+function dropSelectionMode(database: DatabaseSync): void {
+  database.exec('ALTER TABLE agent_control DROP COLUMN selection_mode')
+}
+
 /**
  * Builds a journal that still speaks the pre-GitHub vocabulary.
  *
@@ -71,6 +76,7 @@ function journalAtVersion22(path: string): void {
   database.prepare(`UPDATE worker_tasks SET state_tag = 'NeedsAttention', reason = 'Legacy state.'`).run()
   // Version 22 stored no Agent selection.
   database.exec('DROP TABLE IF EXISTS agent_selection')
+  dropSelectionMode(database)
   database.exec('PRAGMA user_version = 22')
   database.close()
 }
@@ -149,6 +155,7 @@ function journalAtVersion25(path: string): void {
   const rebuilt = database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>
   if (rebuilt.some(column => column.name === 'base_ref'))
     throw new Error('Version 25 stored no base branch, so the rewind must remove that column.')
+  dropSelectionMode(database)
   database.exec('PRAGMA user_version = 25')
   database.close()
 }
@@ -183,7 +190,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(27)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(28)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
@@ -225,6 +232,7 @@ function pinnedSelectionAtVersion26(path: string): void {
   store.close()
 
   const database = new DatabaseSync(path)
+  dropSelectionMode(database)
   database.exec('DROP TABLE agent_selection')
   database.exec(`
     CREATE TABLE agent_selection (

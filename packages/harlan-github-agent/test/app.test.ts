@@ -1,4 +1,5 @@
 import type { AgentSelection } from '../src/agent-profile.ts'
+import type { SelectionMode } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +17,7 @@ const agentControls = {
   resumeAgents: (_at: string) => ({ _tag: 'Running' as const }),
   selectAgent: (selection: AgentSelection, _at: string) => selection,
   setRepositoryPaused: (_github: string, _paused: boolean) => true,
+  setSelectionMode: (mode: SelectionMode) => mode,
 }
 
 afterEach(() => vi.useRealTimers())

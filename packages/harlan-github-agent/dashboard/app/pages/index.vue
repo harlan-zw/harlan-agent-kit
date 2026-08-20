@@ -12,6 +12,7 @@ import type {
   PullRequestApprovalKind,
   QueueEntry,
   ReviewAgent,
+  SelectionMode,
 } from '../../../src/types.ts'
 import { formatTimeAgo, useClipboard, useDocumentVisibility, useEventListener, useEventSource, useLocalStorage, useNow } from '@vueuse/core'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, REASONING_EFFORTS } from '../../../src/agent-profile.ts'
@@ -57,6 +58,7 @@ function emptySnapshot(): DashboardSnapshot {
     status: 'starting',
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
+    selectionMode: 'auto',
     agentProfile: CODEX_AGENT_PROFILE,
     agentSelection: { _tag: 'FollowsConfiguration' },
     agents: [],
@@ -128,6 +130,10 @@ const agentControlLabel = computed(() => {
     return 'agents running'
   return snapshot.value.agentControl.safeToRestart ? 'paused, safe to restart' : 'paused, finishing active work'
 })
+
+const selectionModeHint = computed(() => snapshot.value.selectionMode === 'auto'
+  ? 'The service reviews every eligible pull request. Switch to Manual to select each one.'
+  : 'The service waits for you. Select a pull request with Review and repair, or the harlan-agent-review label.')
 
 const decisions = computed(() => decisionEntries(snapshot.value.queue))
 const upNext = computed(() => upNextEntries(snapshot.value.queue, activeAgents.value))
@@ -398,6 +404,19 @@ async function setRepositoryPaused(repository: string, paused: boolean): Promise
     })
     .finally(() => {
       repositoryPending.value = undefined
+    })
+}
+
+async function setSelectionMode(mode: SelectionMode): Promise<void> {
+  controlPending.value = true
+  controlError.value = undefined
+  return $fetch('/api/agents/selection-mode', { method: 'POST', body: { mode } })
+    .then(() => loadState())
+    .catch((error: unknown) => {
+      controlError.value = error instanceof Error ? error.message : 'The request failed.'
+    })
+    .finally(() => {
+      controlPending.value = false
     })
 }
 
@@ -740,6 +759,8 @@ useHead({
             <template v-if="snapshot.mutationsEnabled">
               <span aria-hidden="true" class="text-dimmed">·</span>
               <span :class="snapshot.agentControl._tag === 'Paused' ? statusClass('warning') : undefined">{{ agentControlLabel }}</span>
+              <span aria-hidden="true" class="text-dimmed">·</span>
+              <span :class="snapshot.selectionMode === 'manual' ? statusClass('warning') : undefined">{{ snapshot.selectionMode }} selection</span>
             </template>
             <template v-if="incidents.length > 0">
               <span aria-hidden="true" class="text-dimmed">·</span>
@@ -772,6 +793,18 @@ useHead({
                 {{ providerLabels[activeProvider] }}
               </UButton>
             </UDropdownMenu>
+            <UButton
+              v-if="snapshot.mutationsEnabled"
+              :icon="snapshot.selectionMode === 'auto' ? 'i-lucide-zap' : 'i-lucide-hand'"
+              :color="snapshot.selectionMode === 'auto' ? 'neutral' : 'warning'"
+              :variant="snapshot.selectionMode === 'auto' ? 'ghost' : 'soft'"
+              :loading="controlPending"
+              :disabled="controlPending"
+              :title="selectionModeHint"
+              @click="setSelectionMode(snapshot.selectionMode === 'auto' ? 'manual' : 'auto')"
+            >
+              {{ snapshot.selectionMode === 'auto' ? 'Auto' : 'Manual' }}
+            </UButton>
             <UButton
               v-if="snapshot.mutationsEnabled"
               :icon="snapshot.agentControl._tag === 'Running' ? 'i-lucide-pause' : 'i-lucide-play'"
