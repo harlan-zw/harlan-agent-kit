@@ -10,6 +10,7 @@ import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEve
 
 const cleanReview = {
   metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+  premise: { verdict: 'sound', reason: 'The change can remain intact.' },
   review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
   verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
   findings: [],

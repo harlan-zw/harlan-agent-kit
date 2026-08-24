@@ -10,17 +10,17 @@ import { err, ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const passingGate = { state: 'passed' as const, reason: '', evidence: 'checked' }
+const soundPremise = { verdict: 'sound' as const, reason: 'The change can be repaired without replacing its intent.' }
 
-function materialFinding(resolution: 'repair' | 'dismiss' = 'repair') {
+function materialFinding() {
   return {
     identity: 'unsafe-parser-boundary',
     path: 'src/parser.ts',
     line: 42,
     proof: 'Malformed input reaches the unsafe parser branch.',
-    regressionTest: resolution === 'dismiss' ? null : 'Pass malformed input and assert a tagged rejection.',
-    resolution,
+    regressionTest: 'Pass malformed input and assert a tagged rejection.',
     summary: 'Malformed input crosses the parser boundary.',
-    nextAction: resolution === 'dismiss' ? 'Dismiss this pull request.' : 'Parse input before use.',
+    nextAction: 'Parse input before use.',
   }
 }
 
@@ -80,7 +80,11 @@ function harness(input: {
   let read = 0
 
   const options: ReviewWorkerOptions = {
-    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(input.response), provider)),
+    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(
+      typeof input.response === 'object' && input.response !== null
+        ? { premise: soundPremise, ...input.response }
+        : input.response,
+    ), provider)),
     github: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -493,15 +497,37 @@ describe('review resilience', () => {
     expect(test.comments.at(-1)).toContain(refusal)
   })
 
+  it('rejects a wrong premise that still asks for Repair', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const test = harness({
+      pullRequest,
+      response: {
+        premise: { verdict: 'wrong', reason: 'Safe repair would reverse the pull request intent.' },
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'The pull request premise is wrong.', evidence: 'architecture trace' },
+        verification: passingGate,
+        findings: [materialFinding()],
+        confidence: null,
+      },
+    })
+
+    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
+    expect(test.queued).toBe(0)
+    expect(test.attempts).toEqual([])
+  })
+
   it('recommends Dismissal instead of repairing a wrong premise', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
       response: {
+        premise: { verdict: 'wrong', reason: 'Safe repair would restore the architecture this pull request removes.' },
         metadata: passingGate,
         review: { state: 'failed', reason: 'The pull request premise is wrong.', evidence: 'architecture trace' },
         verification: passingGate,
-        findings: [materialFinding('dismiss')],
+        findings: [{ ...materialFinding(), regressionTest: null }],
         confidence: null,
       },
     })

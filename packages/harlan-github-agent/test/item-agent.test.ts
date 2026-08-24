@@ -43,6 +43,7 @@ describe('subject Workers', () => {
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
         findings: [],
@@ -216,6 +217,7 @@ describe('subject Workers', () => {
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         review: { state: 'failed', reason: 'The parser drops data.', evidence: 'focused reproduction proves the defect' },
         verification: { state: 'passed', reason: '', evidence: 'the regression test is specified' },
         findings: [{
@@ -224,7 +226,6 @@ describe('subject Workers', () => {
           line: 42,
           proof: 'A split UTF-8 sequence loses its first byte.',
           regressionTest: 'Split one UTF-8 sequence across two chunks and assert the original string.',
-          resolution: 'repair',
           summary: 'The parser drops data.',
           nextAction: 'Preserve the buffered bytes.',
         }],
@@ -310,6 +311,103 @@ describe('subject Workers', () => {
     expect(worktreeVerified).toBe(true)
   })
 
+  it('stamps a wrong premise for Dismissal without queuing Repair', async () => {
+    const repository = repositoryMapping({ ownership: 'maintained' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const comments: string[] = []
+    let attempt: RecordReviewRunInput | undefined
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        review: { state: 'failed', reason: 'The premise removes required durability.', evidence: 'cross-process cleanup reads the persisted lease journal' },
+        verification: { state: 'passed', reason: '', evidence: 'the persistence boundary proves the premise is unsafe' },
+        premise: {
+          verdict: 'wrong',
+          reason: 'Safe worktree cleanup requires controller state shared across processes and restarts.',
+        },
+        findings: [{
+          identity: 'persisted-controller-state-removal',
+          path: 'src/store.ts',
+          line: 42,
+          proof: 'A second process sees no active leases when the journal uses private memory.',
+          regressionTest: null,
+          summary: 'The pull request removes state required for safe worktree cleanup.',
+          nextAction: 'Restore persistent journal storage.',
+        }],
+        confidence: null,
+      }))),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [] },
+          body: 'Remove persisted controller state.',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        queueReviewFixTaskForReview: () => { throw new Error('A wrong premise must not queue Repair work.') },
+        getRepairedHeadFindings: () => [],
+        getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
+        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        recordReviewRun: (input) => {
+          attempt = input
+          return { _tag: 'Inserted', reviewRunId: input.id }
+        },
+        recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      status: {
+        publish: (_task, _phase, body) => {
+          comments.push(body)
+          return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verifyReview: () => Promise.resolve(ok(undefined)),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-wrong-premise',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(attempt?.findings).toEqual([expect.objectContaining({
+      _tag: 'Open',
+      resolution: 'Dismissal',
+      nextAction: 'Dismiss this pull request.',
+    })])
+    expect(comments.at(-1)).toContain('Dismissal recommended')
+  })
+
   it('gives a fresh Review the identities its repaired head already reported', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const capture: ProviderCapture = { requests: [] }
@@ -317,6 +415,7 @@ describe('subject Workers', () => {
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         review: { state: 'failed', reason: 'The parser drops data.', evidence: 'focused reproduction proves the defect' },
         verification: { state: 'passed', reason: '', evidence: 'the regression test is specified' },
         findings: [{
@@ -325,7 +424,6 @@ describe('subject Workers', () => {
           line: 42,
           proof: 'A split UTF-8 sequence loses its first byte.',
           regressionTest: 'Split one UTF-8 sequence across two chunks and assert the original string.',
-          resolution: 'repair',
           summary: 'The parser still drops data on split UTF-8 sequences.',
           nextAction: 'Preserve the buffered bytes.',
         }],
@@ -492,6 +590,7 @@ describe('subject Workers', () => {
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'build passes' },
         findings: [],
@@ -574,6 +673,7 @@ describe('subject Workers', () => {
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'build passes' },
         findings: [],
@@ -653,6 +753,7 @@ describe('subject Workers', () => {
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
         verification: { state: 'passed', reason: '', evidence: 'build passes with the fix' },
         findings: [],
