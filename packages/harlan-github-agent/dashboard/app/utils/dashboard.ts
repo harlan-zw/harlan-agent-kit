@@ -1,7 +1,9 @@
 import type {
   ActiveAgent,
+  AgentProfile,
   AgentRole,
   AgentTask,
+  DashboardSnapshot,
   Incident,
   IncidentKind,
   QueueEntry,
@@ -17,6 +19,18 @@ export const stalledProgressSeconds = 120
 export const staleSnapshotSeconds = 90
 
 export type StatusTone = 'error' | 'warning' | 'primary' | 'success'
+
+export type AgentProfileState
+  = | { _tag: 'Loading' }
+    | { _tag: 'Unavailable' }
+    | { _tag: 'Available', profile: AgentProfile }
+
+/** A placeholder snapshot must never look like a real Agent provider. */
+export function agentProfileState(snapshot: DashboardSnapshot, loading: boolean): AgentProfileState {
+  if (snapshot.generatedAt.length > 0)
+    return { _tag: 'Available', profile: snapshot.agentProfile }
+  return loading ? { _tag: 'Loading' } : { _tag: 'Unavailable' }
+}
 
 export const agentRoleLabels: Array<[AgentRole, string]> = [
   ['adversarial_review', 'Review'],

@@ -4,10 +4,11 @@ import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type { AgentModel, AgentSelection, CodexReasoningEffort, QueueEntry } from '../../../src/types.ts'
 import { useLocalStorage } from '@vueuse/core'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, REASONING_EFFORTS } from '../../../src/agent-profile.ts'
-import { agentRoleLabels, decisionKey, incidentEntries, statusClass } from '../utils/dashboard.ts'
+import { agentProfileState, agentRoleLabels, decisionKey, incidentEntries, statusClass } from '../utils/dashboard.ts'
 
 const {
   snapshot,
+  loading,
   decisions,
   activeAgents,
   unhealthyRepositories,
@@ -68,7 +69,7 @@ const providerLabels: Record<AgentProviderName, string> = {
   opencode: 'opencode',
 }
 
-const activeProvider = computed(() => snapshot.value.agentProfile.provider)
+const profileState = computed(() => agentProfileState(snapshot.value, loading.value))
 
 /**
  * One control for the Agent provider, its model, and its reasoning effort.
@@ -78,11 +79,13 @@ const activeProvider = computed(() => snapshot.value.agentProfile.provider)
  * Follow configuration hands the whole choice back to the configuration file.
  */
 const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
+  if (profileState.value._tag !== 'Available')
+    return []
   const selection = snapshot.value.agentSelection
   const pinned = selection._tag === 'Pinned' ? selection : null
   // While the selection follows the configuration, the configured provider
   // decides, so its own models and role defaults are what the menu offers.
-  const provider = pinned?.provider ?? activeProvider.value
+  const provider = pinned?.provider ?? profileState.value.profile.provider
   const pin = (model: AgentModel | null, reasoningEffort: CodexReasoningEffort | null): AgentSelection =>
     ({ _tag: 'Pinned', provider, model, reasoningEffort })
   return [
@@ -249,18 +252,29 @@ useHead({
         </div>
 
         <div class="flex items-center gap-1">
-          <UDropdownMenu :items="agentSelectionItems" :content="{ align: 'end' }" :ui="{ content: 'w-60' }">
+          <UDropdownMenu v-if="profileState._tag === 'Available'" :items="agentSelectionItems" :content="{ align: 'end' }" :ui="{ content: 'w-60' }">
             <UButton
-              :icon="providerIcons[activeProvider]"
+              :icon="providerIcons[profileState.profile.provider]"
               trailing-icon="i-lucide-chevron-down"
               color="neutral"
               variant="ghost"
               :loading="controlPending"
               title="Switch the Agent provider, model, or reasoning effort. A switch starts the next agent turn."
             >
-              <span class="hidden lg:inline">{{ providerLabels[activeProvider] }}</span>
+              <span class="hidden lg:inline">{{ providerLabels[profileState.profile.provider] }}</span>
             </UButton>
           </UDropdownMenu>
+          <UButton
+            v-else
+            :icon="profileState._tag === 'Unavailable' ? 'i-lucide-circle-slash-2' : undefined"
+            :loading="profileState._tag === 'Loading'"
+            color="neutral"
+            variant="ghost"
+            disabled
+            :aria-label="profileState._tag === 'Loading' ? 'Agent provider loading' : 'Agent provider unavailable'"
+          >
+            <span class="hidden lg:inline">{{ profileState._tag === 'Loading' ? 'Loading' : 'Unavailable' }}</span>
+          </UButton>
           <UButton
             v-if="snapshot.mutationsEnabled"
             :icon="snapshot.selectionMode === 'auto' ? 'i-lucide-zap' : 'i-lucide-hand'"
@@ -313,8 +327,10 @@ useHead({
           aria-hidden="true"
         />
         <span>{{ connectionLabel }}</span>
-        <span aria-hidden="true" class="text-dimmed">·</span>
-        <span>{{ activeAgents.length }}/{{ snapshot.agentProfile.maximumActiveAgents }} agents</span>
+        <template v-if="profileState._tag === 'Available'">
+          <span aria-hidden="true" class="text-dimmed">·</span>
+          <span>{{ activeAgents.length }}/{{ profileState.profile.maximumActiveAgents }} agents</span>
+        </template>
         <span aria-hidden="true" class="text-dimmed">·</span>
         <span :class="snapshot.mutationsEnabled ? statusClass('warning') : undefined">writes {{ snapshot.mutationsEnabled ? 'on' : 'off' }}</span>
         <template v-if="agentControlLabel">
@@ -375,13 +391,16 @@ useHead({
     </main>
 
     <footer class="mx-auto flex max-w-[100rem] flex-wrap gap-x-6 gap-y-1 px-4 pb-10 pt-12 font-mono text-xs text-dimmed sm:px-6 lg:px-8">
-      <span v-for="[role, label] in agentRoleLabels" :key="role">
-        {{ label }}: {{ snapshot.agentProfile.roles[role].model }}<template v-if="snapshot.agentProfile.roles[role].reasoningEffort"> · {{ snapshot.agentProfile.roles[role].reasoningEffort }}</template>
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <UIcon :name="providerIcons[activeProvider]" class="size-4 shrink-0" aria-hidden="true" />
-        {{ providerLabels[activeProvider] }} · {{ snapshot.agentProfile.maximumActiveAgents }} agents max
-      </span>
+      <template v-if="profileState._tag === 'Available'">
+        <span v-for="[role, label] in agentRoleLabels" :key="role">
+          {{ label }}: {{ profileState.profile.roles[role].model }}<template v-if="profileState.profile.roles[role].reasoningEffort"> · {{ profileState.profile.roles[role].reasoningEffort }}</template>
+        </span>
+        <span class="inline-flex items-center gap-1.5">
+          <UIcon :name="providerIcons[profileState.profile.provider]" class="size-4 shrink-0" aria-hidden="true" />
+          {{ providerLabels[profileState.profile.provider] }} · {{ profileState.profile.maximumActiveAgents }} agents max
+        </span>
+      </template>
+      <span v-else>Agent provider: {{ profileState._tag === 'Loading' ? 'Loading' : 'Unavailable' }}</span>
       <span>Loopback only · GitHub App scoped · Repository tokens isolated</span>
     </footer>
   </div>
