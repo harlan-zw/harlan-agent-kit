@@ -6477,12 +6477,25 @@ export function openJournalStore(
     JOIN subjects ON subjects.id = stopped.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = stopped.revision_id
-    JOIN review_status_commands AS published ON published.id = (
-      SELECT candidate.id FROM review_status_commands AS candidate
-      WHERE candidate.task_kind = stopped.task_kind AND candidate.task_id = stopped.id
-        AND candidate.state_tag = 'Published'
-      ORDER BY candidate.updated_at DESC, candidate.id DESC
-      LIMIT 1
+    JOIN review_status_commands AS published ON published.id = COALESCE(
+      (
+        SELECT candidate.id FROM review_status_commands AS candidate
+        WHERE candidate.task_kind = stopped.task_kind AND candidate.task_id = stopped.id
+          AND candidate.state_tag = 'Published'
+        ORDER BY candidate.updated_at DESC, candidate.id DESC
+        LIMIT 1
+      ),
+      -- A Repair that stops before publishing any progress inherits the
+      -- canonical comment of its sibling Review for the same revision.
+      (
+        SELECT candidate.id FROM review_status_commands AS candidate
+        JOIN worker_tasks AS sibling ON sibling.id = candidate.task_id
+        WHERE candidate.task_kind = 'adversarial_review' AND candidate.state_tag = 'Published'
+          AND sibling.subject_id = stopped.subject_id
+          AND candidate.revision_id = stopped.revision_id
+        ORDER BY candidate.updated_at DESC, candidate.id DESC
+        LIMIT 1
+      )
     )
     WHERE stopped.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
       AND stopped.revision_id = subjects.current_revision_id

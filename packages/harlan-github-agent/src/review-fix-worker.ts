@@ -68,6 +68,7 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
       if (
         (value.outcome !== 'repaired' && value.outcome !== 'blocked')
         || typeof value.summary !== 'string'
+        || cleanLine(value.summary).length === 0
         || !Array.isArray(value.checks)
         || !value.checks.every(check => typeof check === 'string')
         || typeof value.commitMessage !== 'string'
