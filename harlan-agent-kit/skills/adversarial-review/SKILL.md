@@ -1,11 +1,11 @@
 ---
 name: adversarial-review
-description: "Review one pull request adversarially, repair permitted defects, verify the remote head, and publish the Harlan Agent Kit bot status. Use for rigorous pre-merge PR review."
+description: "Review one pull request adversarially, hand permitted defects to Repair, verify the remote head, and publish the Harlan Agent Kit bot status. Use for rigorous pre-merge PR review."
 ---
 
 # Adversarial Review
 
-Review exactly one pull request. Disprove correctness where possible, repair what is safe, then post the canonical bot status.
+Review exactly one pull request. Disprove correctness where possible, hand off safe Repair, then post the canonical bot status.
 
 Returning findings without posting and confirming the status comment is incomplete.
 
@@ -19,7 +19,7 @@ An existing worktree alone does not prove another agent is active.
 
 Use `wt` only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
 
-Keep the review read only until mutation authority exists. Apply this rule before any repair or branch alignment edit.
+Keep Review read only. A separate fresh Repair Agent owns every permitted edit.
 
 ## Load contracts
 
@@ -75,6 +75,8 @@ Record the initial head SHA. Never review only the latest commit.
 
 Apply the ownership contract before every code, metadata, branch, or comment mutation.
 
+Preflight Repair authority before Review starts. Record the exact boundary with the Review run.
+
 Continue read only when code cannot be changed. Record the exact permission boundary for the status.
 
 Never approve, merge, dismiss a review, force push, amend published commits, or push the base branch.
@@ -97,23 +99,35 @@ Use required CI as the source for broad test, lint, typecheck, and build results
 
 Ignore style-only preferences. Treat correctness, security, data loss, public API breakage, and missing regression coverage as material.
 
-### 7. Repair and restart
+Record every material finding. Never cap the finding count.
 
-For an outside contributor, use the existing Approval to repair verified findings. A new external Revision invalidates Approval. The exact commit published by the approved repair continues the same workflow.
+Give each finding a stable identity, exact location, proof, next action, and resolution.
 
-When mutation is allowed, add the failing test first, fix the defect, then run the focused tests that cover the edit. Let CI run broad repository checks. A service worker writes only its worktree. The controller verifies and publishes the artifact.
+Use resolution `Repair` when the pull request premise is sound. Name the regression test Repair must write first.
 
-After every push, discard prior review evidence. Snapshot and review the new remote head from the start.
+Use resolution `Dismissal` when the premise is wrong and Repair would replace the pull request intent. Recommend Dismissal for an unrelated root architecture rewrite. Never Dismiss or close the pull request.
 
-Stop automatic repair after three failed attempts for one finding. Preserve work and use `BLOCKED`.
+### 7. Hand off Repair and restart
 
-If required CI fails identically on the current base branch, treat it as baseline repair work. For an owned repository, start a separate worktree from the current base. Repair the failure, verify it, and open a focused pull request through `../pr/SKILL.md`. Set the reviewed PR to `WAITING`, link the repair pull request as its next action, then resume after that repair merges.
+When every finding uses resolution `Repair`, queue one fresh Repair Agent with all exact findings. Never reuse the Review session.
 
-Never blame a pull request for a confirmed baseline failure. For a maintained or external repository, report the exact permission boundary. Use `BLOCKED` only when the pull request caused the failure, the repair failed three times, or no safe repair path exists.
+For an outside contributor, use the existing Approval. A new external Revision invalidates Approval. The exact controller repair commit continues the workflow.
+
+The Repair Agent writes each failing regression test first. It fixes every finding, then runs focused checks. The controller verifies and publishes the artifact.
+
+After every push, discard prior Review evidence. Start a fresh Review session against the new remote head SHA.
+
+If the fresh Review records the same finding fingerprint, stop Repair and use `BLOCKED`. Do not rewrite root architecture to rescue a wrong premise.
+
+Use `BLOCKED` with Action required when scope is unsafe, Repair authority is missing, or Review recommends Dismissal.
+
+If required CI fails identically on the current base branch, treat it as baseline repair work. For an owned repository, start a separate worktree from the current base. Repair the failure, verify it, and open a focused pull request through `../pr/SKILL.md`. Set the reviewed pull request to `PENDING`, link the repair pull request as its next action, then resume after that repair merges.
+
+Never blame a pull request for a confirmed baseline failure. For a maintained or external repository, report the exact permission boundary.
 
 ### 8. Freeze the outcome
 
-Apply the exact `READY`, `WAITING`, or `BLOCKED` gates from the review contract. Calculate confidence only for `READY`.
+Apply the exact `READY`, `PENDING`, or `BLOCKED` gates from the review contract. Calculate confidence only for `READY`.
 
 Refetch the PR immediately before posting. If the head SHA changed, restart the review.
 
@@ -121,7 +135,7 @@ Refetch the PR immediately before posting. If the head SHA changed, restart the 
 
 Create or update the marked `harlan-agent-kit:pr-triage` issue comment using the review contract.
 
-Post one status for every terminal outcome, including `WAITING` and `BLOCKED`. Never use a GitHub approval review.
+Post one status for every terminal outcome, including `PENDING` and `BLOCKED`. Never use a GitHub approval review.
 
 Treat the GitHub response as part of the operation. Refetch the comment and confirm its author, marker, hidden reviewed SHA, outcome, single robot emoji, and disclosure.
 

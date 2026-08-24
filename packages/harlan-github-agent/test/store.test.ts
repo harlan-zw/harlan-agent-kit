@@ -1,4 +1,4 @@
-import type { ReviewFixClaim, ReviewGates } from '../src/types.ts'
+import type { ReviewGates } from '../src/types.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,11 +21,20 @@ function createStore() {
   return store
 }
 
-/** The repair Task one review claimed, or a readable failure. */
-function claimedRepair(claim: ReviewFixClaim) {
-  if (claim._tag !== 'Claimed')
-    throw new Error(`Expected the repair Task, not ${claim._tag}.`)
-  return claim.task
+/** Queue one Review handoff, then claim its fresh Repair Task. */
+function queuedRepair(store: ReturnType<typeof openJournalStore>, input: {
+  taskId: string
+  workerId: string
+  fence: number
+  at: string
+}) {
+  const queued = store.queueReviewFixTaskForReview(input)
+  if (queued._tag !== 'Queued')
+    throw new Error(`Expected the Repair Task, not ${queued._tag}.`)
+  const task = store.claimNextReviewFixTask(`repair-agent-${input.taskId}`, input.at, 60_000)
+  if (task === null)
+    throw new Error('Expected the queued Repair Task.')
+  return task
 }
 
 function passedReviewGates(): ReviewGates {
@@ -1156,13 +1165,12 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:05:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'ReviewApproved', approvedAt: '2026-08-13T01:02:00.000Z' },
     }))
-    const repair = claimedRepair(store.claimReviewFixTaskForReview({
+    const repair = queuedRepair(store, {
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:06:00.000Z',
-      leaseMilliseconds: 60_000,
-    }))
+    })
     const repairCommit = 'd'.repeat(40)
     expect(store.stagePublication({
       taskId: repair.id,
@@ -1777,7 +1785,7 @@ describe('journal store', () => {
     }))
   })
 
-  it('claims a maintained repair inside its active review', () => {
+  it('shows separately claimed Review and Repair agents', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({ ownership: 'maintained' })], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
@@ -1813,21 +1821,21 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:03:00.000Z').items[0]).toEqual(expect.objectContaining({
       approval: { _tag: 'NotRequired' },
     }))
-    const repair = claimedRepair(store.claimReviewFixTaskForReview({
+    const repair = queuedRepair(store, {
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:05:00.000Z',
-      leaseMilliseconds: 60_000,
-    }))
+    })
     expect(repair).toEqual(expect.objectContaining({ kind: 'review_fix' }))
     const dashboard = store.getDashboardSnapshot('2026-08-13T01:05:00.050Z')
-    expect(dashboard.agents.filter(agent => agent._tag === 'ActiveAgent')).toEqual([
+    expect(dashboard.agents.filter(agent => agent._tag === 'ActiveAgent')).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'adversarial_review', itemNumber: 24 }),
-    ])
+      expect.objectContaining({ role: 'review_fix', itemNumber: 24 }),
+    ]))
     expect(dashboard.queue).toContainEqual(expect.objectContaining({
       number: 24,
-      state: { _tag: 'Active', work: 'adversarial_review' },
+      state: { _tag: 'Active', work: 'review_fix' },
     }))
     const stagedStatus = store.stageReviewStatus({
       taskKind: 'review_fix',
@@ -1916,13 +1924,12 @@ describe('journal store', () => {
       gates,
       findings: [{ _tag: 'Open', summary: 'Invalid input crosses the boundary.', nextAction: 'Parse the input before use.' }],
     })
-    expect(store.claimReviewFixTaskForReview({
+    expect(store.queueReviewFixTaskForReview({
       taskId: firstReview.id,
       workerId: firstReview.state.workerId,
       fence: firstReview.state.fence,
       at: '2026-08-13T01:00:04.000Z',
-      leaseMilliseconds: 60_000,
-    })._tag).toBe('Claimed')
+    })._tag).toBe('Queued')
 
     store.syncRepositories([{ ...mapping, pullRequestReview: false }], '2026-08-13T01:01:00.000Z')
     store.syncRepositories([mapping], '2026-08-13T01:02:00.000Z')
@@ -1942,13 +1949,12 @@ describe('journal store', () => {
       expect.objectContaining({ kind: 'review_fix', revisionId: first.revisionId, state: { _tag: 'Superseded', reason: 'Repository policy no longer permits this change.' } }),
     ]))
 
-    expect(store.claimReviewFixTaskForReview({
+    expect(store.queueReviewFixTaskForReview({
       taskId: rerun.id,
       workerId: rerun.state.workerId,
       fence: rerun.state.fence,
       at: '2026-08-13T01:02:03.000Z',
-      leaseMilliseconds: 60_000,
-    })).toEqual({ _tag: 'Claimed', task: expect.objectContaining({ kind: 'review_fix', revisionId: first.revisionId }) })
+    })).toEqual({ _tag: 'Queued', taskId: expect.any(String) })
   })
 
   it('does not carry Approval to a new Revision', () => {
@@ -2592,7 +2598,7 @@ describe('journal store', () => {
     expect(store.claimNextConflictTask('worker-4', '2026-08-13T01:00:05.000Z', 10_000)?.state.fence).toBe(4)
   })
 
-  it('requeues the combined reviewer when its repair recovers', () => {
+  it('requeues Repair without restarting its completed Review', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
@@ -2624,13 +2630,12 @@ describe('journal store', () => {
       gates,
       findings: [{ _tag: 'Open', summary: 'Workflow defect.', nextAction: 'Repair the workflow.' }],
     })
-    const firstRepair = claimedRepair(store.claimReviewFixTaskForReview({
+    const firstRepair = queuedRepair(store, {
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:03.000Z',
-      leaseMilliseconds: 10_000,
-    }))
+    })
     const reason = 'The permissions requested are not granted to this installation.'
     store.failTask({
       taskId: firstRepair.id,
@@ -2661,13 +2666,14 @@ describe('journal store', () => {
     })
 
     expect(store.retryRecoverableWorkerFailures('2026-08-13T01:00:08.000Z')).toBe(1)
-    expect(store.claimNextAdversarialReviewTask('review-worker-2', '2026-08-13T01:00:09.000Z', 10_000)).toEqual(expect.objectContaining({
-      id: review.id,
-      state: expect.objectContaining({ fence: 2 }),
+    expect(store.claimNextReviewFixTask('repair-worker-4', '2026-08-13T01:00:09.000Z', 10_000)).toEqual(expect.objectContaining({
+      id: firstRepair.id,
+      state: expect.objectContaining({ fence: 4 }),
     }))
+    expect(store.claimNextAdversarialReviewTask('review-worker-2', '2026-08-13T01:00:09.000Z', 10_000)).toBeNull()
   })
 
-  it('requeues a completed reviewer with orphaned queued repair work', () => {
+  it('leaves a completed Review stopped while queued Repair work continues', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
@@ -2699,13 +2705,12 @@ describe('journal store', () => {
       gates,
       findings: [{ _tag: 'Open', summary: 'Repair required.', nextAction: 'Apply the repair.' }],
     })
-    const repair = claimedRepair(store.claimReviewFixTaskForReview({
+    const repair = queuedRepair(store, {
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:02.500Z',
-      leaseMilliseconds: 10_000,
-    }))
+    })
     store.failTask({
       taskId: repair.id,
       workerId: repair.state.workerId,
@@ -2722,11 +2727,12 @@ describe('journal store', () => {
     })
     expect(store.getDashboardSnapshot('2026-08-13T01:00:03.500Z').tasks.find(task => task.kind === 'review_fix')?.state).toEqual({ _tag: 'Queued' })
 
-    expect(store.retryRecoverableWorkerFailures('2026-08-13T01:00:04.000Z')).toBe(1)
-    expect(store.claimNextAdversarialReviewTask('review-worker-2', '2026-08-13T01:00:05.000Z', 10_000)).toEqual(expect.objectContaining({
-      id: review.id,
+    expect(store.retryRecoverableWorkerFailures('2026-08-13T01:00:04.000Z')).toBe(0)
+    expect(store.claimNextReviewFixTask('repair-worker-2', '2026-08-13T01:00:05.000Z', 10_000)).toEqual(expect.objectContaining({
+      id: repair.id,
       state: expect.objectContaining({ fence: 2 }),
     }))
+    expect(store.claimNextAdversarialReviewTask('review-worker-2', '2026-08-13T01:00:05.000Z', 10_000)).toBeNull()
   })
 
   it('retries a Baseline repair after its pull request token gains ref access', () => {
@@ -3012,13 +3018,12 @@ describe('journal store', () => {
       gates,
       findings: [{ _tag: 'Open', summary: 'Unsafe boundary.', nextAction: 'Repair the boundary.' }],
     })
-    const firstRepair = claimedRepair(store.claimReviewFixTaskForReview({
+    const firstRepair = queuedRepair(store, {
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:03.000Z',
-      leaseMilliseconds: 10_000,
-    }))
+    })
     const reason = 'Could not list wt worktrees: spawn wt ENOENT'
     expect(store.failTask({
       taskId: firstRepair.id,

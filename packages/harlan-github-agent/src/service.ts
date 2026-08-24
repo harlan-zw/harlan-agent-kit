@@ -35,6 +35,7 @@ import { reconcileAllRepositories } from './reconcile.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
 import { err, ok } from './result.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
+import { createReviewFixWorker } from './review-fix-worker.ts'
 import { syncReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
@@ -264,7 +265,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           at: now().toISOString(),
         })
       },
-      repairs: fixWorktrees,
       store,
       runtime,
       status: reviewStatus,
@@ -350,6 +350,29 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
         workerId: randomUUID(),
       }),
+      repairs: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
+        canClaim,
+        claim: store.claimNextReviewFixTask,
+        intervalMilliseconds: 5_000,
+        leaseMilliseconds: 45 * 60_000,
+        now,
+        onError: error => options.logger.error(error),
+        onTaskSettled: activityLog.clear,
+        permits,
+        store,
+        worker: createReviewFixWorker({
+          activityLog,
+          github: workerGithub,
+          now,
+          onProgressPublishFailure: subjectWorkerOptions.onProgressPublishFailure,
+          runtime,
+          status: reviewStatus,
+          store,
+          validateMapping,
+          worktrees: fixWorktrees,
+        }),
+        workerId: randomUUID(),
+      })),
       reviews: Array.from({ length: profile.maximumActiveAgents }, () => createWorkerTaskScheduler({
         canClaim,
         claim: store.claimNextAdversarialReviewTask,
@@ -585,6 +608,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   mutationSchedulers?.baselineRepairs.start()
   mutationSchedulers?.issueWork.start()
   mutationSchedulers?.publications.start()
+  mutationSchedulers?.repairs.forEach(scheduler => scheduler.start())
   mutationSchedulers?.reviews.forEach(scheduler => scheduler.start())
   mutationSchedulers?.issues.start()
 
@@ -599,6 +623,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         mutationSchedulers?.baselineRepairs.stop() ?? Promise.resolve(),
         mutationSchedulers?.issueWork.stop() ?? Promise.resolve(),
         mutationSchedulers?.publications.stop() ?? Promise.resolve(),
+        ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.reviews.map(scheduler => scheduler.stop()) ?? []),
         mutationSchedulers?.issues.stop() ?? Promise.resolve(),
       ])

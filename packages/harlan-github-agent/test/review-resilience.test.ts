@@ -1,5 +1,5 @@
 import type { ReviewWorkerOptions } from '../src/item-agent.ts'
-import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput, ReviewFixClaim } from '../src/types.ts'
+import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput, ReviewFixQueueResult } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { classifyFailure } from '../src/failure.ts'
@@ -8,6 +8,19 @@ import { err, ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const passingGate = { state: 'passed' as const, reason: '', evidence: 'checked' }
+
+function materialFinding(resolution: 'repair' | 'dismiss' = 'repair') {
+  return {
+    identity: 'unsafe-parser-boundary',
+    path: 'src/parser.ts',
+    line: 42,
+    proof: 'Malformed input reaches the unsafe parser branch.',
+    regressionTest: resolution === 'dismiss' ? null : 'Pass malformed input and assert a tagged rejection.',
+    resolution,
+    summary: 'Malformed input crosses the parser boundary.',
+    nextAction: resolution === 'dismiss' ? 'Dismiss this pull request.' : 'Parse input before use.',
+  }
+}
 
 function reviewSnapshot(pullRequest: GitHubPullRequestItem, comments: string[] = []) {
   const check = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
@@ -42,22 +55,8 @@ interface Harness {
   attempts: RecordReviewRunInput[]
   comments: string[]
   progressFailures: string[]
-  staged: number
+  queued: number
   options: ReviewWorkerOptions
-}
-
-function repairTask(pullRequest: GitHubPullRequestItem) {
-  return {
-    id: 'repair-task',
-    kind: 'review_fix' as const,
-    repository: 'harlan-zw/example',
-    pullRequestNumber: 24,
-    revisionId: 'revision-1',
-    state: { _tag: 'Running' as const, workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
-    updatedAt: '2026-08-13T01:00:00.000Z',
-    repositoryMapping: repositoryMapping(),
-    pullRequest,
-  }
 }
 
 /** One review worker whose only moving parts are the ones a test names. */
@@ -66,12 +65,13 @@ function harness(input: {
   response: unknown
   snapshots?: Array<ReturnType<typeof reviewSnapshot>>
   publish?: () => ReturnType<ReviewWorkerOptions['status']['publish']>
-  claimRepair?: () => ReviewFixClaim
+  queueRepair?: () => ReviewFixQueueResult
+  verifyReview?: () => ReturnType<ReviewWorkerOptions['workspaces']['verifyReview']>
 }): Harness {
   const attempts: RecordReviewRunInput[] = []
   const comments: string[] = []
   const progressFailures: string[] = []
-  const publications = { staged: 0 }
+  const repairs = { queued: 0 }
   const snapshots = input.snapshots ?? [reviewSnapshot(input.pullRequest)]
   let read = 0
 
@@ -94,18 +94,16 @@ function harness(input: {
     now: () => new Date('2026-08-13T01:00:00.000Z'),
     onProgressPublishFailure: (_task, reason) => progressFailures.push(reason),
     store: {
-      claimReviewFixTaskForReview: input.claimRepair ?? (() => { throw new Error('Unexpected repair claim.') }),
-      failTask: () => { throw new Error('Unexpected repair failure.') },
+      queueReviewFixTaskForReview: input.queueRepair ?? (() => {
+        repairs.queued += 1
+        return { _tag: 'Queued', taskId: 'repair-task' }
+      }),
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
-      stagePublication: () => {
-        publications.staged += 1
-        return { _tag: 'Staged', commandId: 'publication-1' }
-      },
       updateAgentProgress: () => true,
       recordReviewRun: (attempt) => {
         attempts.push(attempt)
@@ -118,7 +116,6 @@ function harness(input: {
         comments.push(body)
         return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
       }),
-      publishRepair: () => Promise.resolve(ok(undefined)),
     },
     triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
     workspaces: {
@@ -128,24 +125,15 @@ function harness(input: {
         baseSha: input.pullRequest.baseSha,
         headSha: input.pullRequest.headSha,
       })),
-    },
-    repairs: {
-      commit: () => Promise.resolve(ok({
-        commitSha: 'repair-commit',
-        baseSha: input.pullRequest.baseSha,
-        artifactRef: 'refs/harlan-github-agent/publications/repair',
-        digest: 'patch-digest',
-        changedFiles: 2,
-      })),
-      verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 2 })),
+      verifyReview: input.verifyReview ?? (() => Promise.resolve(ok(undefined))),
     },
   }
   return {
     attempts,
     comments,
     progressFailures,
-    get staged() {
-      return publications.staged
+    get queued() {
+      return repairs.queued
     },
     options,
   }
@@ -164,7 +152,6 @@ describe('review resilience', () => {
         review: { state: 'waiting', reason: 'No adversarial review was completed before the previous answer was rejected.', evidence: '' },
         verification: { state: 'waiting', reason: 'No verification run was performed in this session.', evidence: '' },
         findings: [],
-        repair: { outcome: 'not_needed', summary: '', checks: [], commitMessage: '' },
         confidence: null,
       },
     })
@@ -187,7 +174,6 @@ describe('review resilience', () => {
         review: passingGate,
         verification: passingGate,
         findings: [],
-        repair: { outcome: 'not_needed', summary: 'Nothing to fix.', checks: [], commitMessage: '' },
         confidence: 91,
       },
       snapshots: [
@@ -212,7 +198,6 @@ describe('review resilience', () => {
         review: passingGate,
         verification: passingGate,
         findings: [],
-        repair: { outcome: 'not_needed', summary: 'Nothing to fix.', checks: [], commitMessage: '' },
         confidence: 91,
       },
       snapshots: [
@@ -236,7 +221,6 @@ describe('review resilience', () => {
         review: passingGate,
         verification: passingGate,
         findings: [],
-        repair: { outcome: 'not_needed', summary: 'Nothing to fix.', checks: [], commitMessage: '' },
         confidence: 88,
       },
       publish: () => Promise.resolve(err('Resource not accessible by integration')),
@@ -251,7 +235,7 @@ describe('review resilience', () => {
     expect(result).toEqual({ _tag: 'Err', error: 'Resource not accessible by integration' })
   })
 
-  it('accepts a review that fixed every defect and reported none left', async () => {
+  it('rejects a Review Agent that changed the worktree', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
@@ -260,15 +244,15 @@ describe('review resilience', () => {
         review: passingGate,
         verification: passingGate,
         findings: [],
-        repair: { outcome: 'blocked', summary: 'Fixed the off by one.', checks: ['pnpm test'], commitMessage: '' },
         confidence: 84,
       },
+      verifyReview: () => Promise.resolve(err('The Review Agent changed files. Review must stay read only.')),
     })
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    expect(result._tag).toBe('Ok')
-    expect(test.attempts).toHaveLength(1)
+    expect(result).toEqual(err('The Review Agent changed files. Review must stay read only.'))
+    expect(test.attempts).toHaveLength(0)
   })
 
   it('publishes a passing review that named no confidence', async () => {
@@ -280,7 +264,6 @@ describe('review resilience', () => {
         review: passingGate,
         verification: passingGate,
         findings: [],
-        repair: { outcome: 'not_needed', summary: 'Nothing to fix.', checks: [], commitMessage: '' },
         confidence: null,
       },
     })
@@ -292,50 +275,91 @@ describe('review resilience', () => {
     expect(test.comments.at(-1)).toContain('### 🤖 READY')
     expect(test.comments.at(-1)).not.toContain('/100')
   })
-  it('publishes the repair of a review that reported no finding left', async () => {
+  it('queues exact findings for a fresh Repair Agent', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
       response: {
         metadata: passingGate,
-        review: passingGate,
+        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'reproduction' },
         verification: passingGate,
-        findings: [],
-        repair: { outcome: 'repaired', summary: 'Fixed the off by one.', checks: ['pnpm test'], commitMessage: 'fix(core): stop the off by one' },
-        confidence: 90,
+        findings: [materialFinding()],
+        confidence: null,
       },
-      claimRepair: () => ({ _tag: 'Claimed', task: repairTask(pullRequest) }),
     })
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    // The repair lives only in the review worktree until this publication is
-    // staged, so a lost claim throws the whole agent turn away.
     expect(result._tag).toBe('Ok')
-    expect(test.staged).toBe(1)
+    expect(test.queued).toBe(1)
+    expect(test.comments.at(-1)).toContain('REVIEWING · Repair queued')
   })
 
-  it('stops a review whose repair the controller refused', async () => {
+  it('hands every material finding to Repair without a count cap', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const findings = Array.from({ length: 6 }, (_, index) => ({
+      ...materialFinding(),
+      identity: `material-finding-${index + 1}`,
+      line: index + 1,
+      summary: `Material finding ${index + 1}.`,
+    }))
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'Material findings remain.', evidence: 'reproductions' },
+        verification: passingGate,
+        findings,
+        confidence: null,
+      },
+    })
+
+    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    expect(test.attempts[0]?.findings).toHaveLength(6)
+    expect(test.queued).toBe(1)
+  })
+
+  it('publishes Action required when the controller refuses Repair', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const refusal = 'The controller cannot write this pull request branch.'
     const test = harness({
       pullRequest,
       response: {
         metadata: passingGate,
-        review: passingGate,
+        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'reproduction' },
         verification: passingGate,
-        findings: [],
-        repair: { outcome: 'repaired', summary: 'Fixed the off by one.', checks: ['pnpm test'], commitMessage: 'fix(core): stop the off by one' },
-        confidence: 90,
+        findings: [materialFinding()],
+        confidence: null,
       },
-      claimRepair: () => ({ _tag: 'Refused', reason: refusal }),
+      queueRepair: () => ({ _tag: 'ActionRequired', reason: refusal }),
     })
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    expect(result).toEqual({ _tag: 'Err', error: refusal })
-    expect(test.staged).toBe(0)
-    // A refusal reads the same policy on every attempt, so it must never requeue.
-    expect(classifyFailure({ message: refusal })._tag).toBe('Permanent')
+    expect(result._tag).toBe('Ok')
+    expect(test.queued).toBe(0)
+    expect(test.comments.at(-1)).toContain(refusal)
+  })
+
+  it('recommends Dismissal instead of repairing a wrong premise', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'The pull request premise is wrong.', evidence: 'architecture trace' },
+        verification: passingGate,
+        findings: [materialFinding('dismiss')],
+        confidence: null,
+      },
+    })
+
+    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    expect(test.queued).toBe(0)
+    expect(test.comments.at(-1)).toContain('Dismissal recommended')
   })
 })

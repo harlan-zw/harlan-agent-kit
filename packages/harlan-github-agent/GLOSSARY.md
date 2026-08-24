@@ -28,6 +28,7 @@ did not cover it.
 | Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
 | Watch logs | System pane action | Observer | Opens one read-only live Task event stream | Watch logs |
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
+| Self-hosted runner | Docker container labels | GitHub Actions | N per repository, independent of this service | self-hosted runner |
 | Conflict resolution | `tasks.kind` | Scheduler | One Task kind | conflict resolution |
 | Baseline repair | `tasks.kind` | Scheduler | One Task for one failing default branch commit | Baseline repair |
 | Repair | `tasks.kind` | Scheduler | One Task for the findings of one Review run | repair |
@@ -227,6 +228,10 @@ Dismissing cancels the Item's running and queued Tasks. Leaving an agent running
 
 A dismissed Item leaves the Queue. It stays visible under `Dismissed` in the Watching page, which is the only place `Restore` appears.
 
+A Review Agent may write **Dismissal recommended** when the pull request premise is wrong. Use it when Repair would replace the pull request intent or require an unrelated root architecture rewrite.
+
+A recommendation never creates a Dismissal. Harlan decides whether to use `Dismiss`.
+
 Restoring queues nothing by itself. The next observation replans the Item from its current state.
 
 `Dismiss` is GitHub's own word, used for a Dependabot alert and a code scanning alert, where it means the same thing: stop raising this, without fixing it.
@@ -250,6 +255,14 @@ Use Watch logs for this view. Do not use Monitor or attach.
 The remaining Codex allowance in the current seven-day usage window, with its reset countdown.
 
 Use Weekly Codex limit for this System pane status. Do not use weekly usage or quota.
+
+### Self-hosted runner
+
+One local GitHub Actions runner that executes workflow jobs.
+
+A self-hosted runner is independent of Harlan GitHub Agent. Its availability never changes Harlan GitHub Agent status.
+
+Use self-hosted runner. Do not use Agent, worker, executor, box, or build agent.
 
 ### Conflict resolution
 
@@ -343,7 +356,7 @@ In `Manual` Selection mode, every pull request requires Approval. In `Auto`, onl
 
 For an outside contributor's issue, Approval permits Issue work. Use `harlan-agent-review` on GitHub or `Approve` in the dashboard. Harlan's issues do not require Approval.
 
-For a pull request, Approval permits review and verified repairs in one workflow. Use `Review and repair` for the dashboard action.
+For a pull request, Approval permits read only Review and separate scoped Repair in one workflow. Use `Review and repair` for the dashboard action.
 
 A new external Revision requires new Approval. A controller-published repair commit continues the approved workflow.
 

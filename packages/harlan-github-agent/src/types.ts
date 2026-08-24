@@ -202,7 +202,25 @@ export interface ReviewGates {
 
 export type ReviewFinding
   = | { _tag: 'Fixed', summary: string }
-    | { _tag: 'Open', summary: string, nextAction: string }
+    | {
+      _tag: 'Open'
+      summary: string
+      nextAction: string
+      /** Current Reviews choose Repair or recommend a person Dismiss the Item. */
+      resolution?: 'Repair' | 'Dismissal'
+      /**
+       * Exact repair input added by current Review Agents.
+       *
+       * Optional because the journal can contain Review runs written before
+       * structured repair handoff existed.
+       */
+      details?: {
+        fingerprint: string
+        location: { path: string, line: number | null }
+        proof: string
+        regressionTest: string | null
+      }
+    }
 
 export type ReviewOutcome
   /** `confidence` is absent when the agent passed every gate but named no score. */
@@ -323,12 +341,9 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
  * worth another agent turn. The second never is, so the tag, and not the
  * wording of a reason, decides whether the review runs again.
  */
-export type ReviewFixClaim
-  = | { _tag: 'Claimed', task: ClaimedReviewFixTask }
-    /** Another attempt can win, because the controller lost a race. */
-    | { _tag: 'Unavailable', reason: string }
-    /** No attempt can win, because a person or a policy has to change first. */
-    | { _tag: 'Refused', reason: string }
+export type ReviewFixQueueResult
+  = | { _tag: 'Queued', taskId: string }
+    | { _tag: 'ActionRequired', reason: string }
 
 export interface BaselineRepairTask {
   id: string

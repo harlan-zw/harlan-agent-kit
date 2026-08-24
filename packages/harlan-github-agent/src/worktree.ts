@@ -83,6 +83,7 @@ export interface AgentWorkspaceManager {
   prepareFix: (task: ClaimedReviewFixTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   prepareIssue: (task: ClaimedIssueTriageTask | ClaimedIssueWorkTask, base: PullRequestBase, signal: AbortSignal) => Promise<Result<PreparedIssueWorkspace, string>>
   prepareReview: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
 export interface BaselineRepairWorktreeManager {
@@ -813,6 +814,18 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       if (base.exitCode !== 0 || base.stdout !== task.pullRequest.baseSha)
         return err('Fetched base branch no longer matches the claimed review base commit SHA.')
       return ok({ ...prepared.value, baseSha: base.stdout })
+    },
+
+    async verifyReview(task, worktree, signal) {
+      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
+        return err('The Review Agent changed HEAD. Review must stay read only.')
+      const tracked = await runGit(worktree.path, ['status', '--porcelain=v1', '--untracked-files=all'], signal)
+      if (tracked.exitCode !== 0)
+        return err(`Could not verify the read only Review worktree: ${tracked.stderr}`)
+      return tracked.stdout.length === 0
+        ? ok(undefined)
+        : err('The Review Agent changed files. Review must stay read only.')
     },
   }
 }

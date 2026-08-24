@@ -1,11 +1,11 @@
-import type { ClaimedReviewFixTask } from '../src/types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedReviewFixTask } from '../src/types.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
-import { createGitPublicationRemote, createReviewFixWorktreeManager } from '../src/worktree.ts'
+import { createAgentWorkspaceManager, createGitPublicationRemote, createReviewFixWorktreeManager } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
@@ -75,6 +75,30 @@ function fixture(): { remote: string, root: string, task: ClaimedReviewFixTask }
 }
 
 describe('review fix worktree', () => {
+  it('rejects any file change made during read only Review', async () => {
+    const { remote, root, task } = fixture()
+    const reviewTask: ClaimedAdversarialReviewTask = {
+      ...task,
+      kind: 'adversarial_review',
+      rerun: { _tag: 'NotRequested' },
+    }
+    const manager = createAgentWorkspaceManager({
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await manager.prepareReview(reviewTask, new AbortController().signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    expect(await manager.verifyReview(reviewTask, prepared.value, new AbortController().signal)).toEqual(ok(undefined))
+    writeFileSync(join(prepared.value.path, 'file.ts'), 'export const value = 3\n')
+
+    expect(await manager.verifyReview(reviewTask, prepared.value, new AbortController().signal)).toEqual({
+      _tag: 'Err',
+      error: 'The Review Agent changed files. Review must stay read only.',
+    })
+  })
+
   it('rejects workflow edits that the controller cannot publish to a contributor fork', async () => {
     const { remote, root, task } = fixture()
     task.pullRequest = pullRequestItem({

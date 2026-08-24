@@ -44,7 +44,14 @@ function runningReview(store: ReturnType<typeof openJournalStore>, headRef: stri
   return { review, revisionId: observed.revisionId }
 }
 
-function recordRepairedReview(store: ReturnType<typeof openJournalStore>, revisionId: string, headSha: string): void {
+function recordOpenFinding(
+  store: ReturnType<typeof openJournalStore>,
+  revisionId: string,
+  headSha: string,
+  resolution: 'Repair' | 'Dismissal' = 'Repair',
+): void {
+  const gates = passedReviewGates()
+  gates.review = { _tag: 'Failed', reason: 'A material finding remains.', evidence: [] }
   store.recordReviewRun({
     id: `review-run-${revisionId}`,
     repository: 'harlan-zw/example',
@@ -58,46 +65,57 @@ function recordRepairedReview(store: ReturnType<typeof openJournalStore>, revisi
     skillDigest: 'f'.repeat(64),
     startedAt: '2026-08-13T01:00:02.000Z',
     completedAt: '2026-08-13T01:00:03.000Z',
-    gates: passedReviewGates(),
-    // The agent repaired every defect in this turn, so it reports none left.
-    findings: [],
+    gates,
+    findings: [{
+      _tag: 'Open',
+      summary: 'Unsafe parser input.',
+      nextAction: resolution === 'Dismissal' ? 'Dismiss this pull request.' : 'Parse input before use.',
+      resolution,
+      details: {
+        fingerprint: 'f'.repeat(64),
+        location: { path: 'src/parser.ts', line: 42 },
+        proof: 'Malformed input reaches the unsafe parser branch.',
+        regressionTest: resolution === 'Dismissal' ? null : 'Pass malformed input and assert a tagged rejection.',
+      },
+    }],
   })
 }
 
-describe('review repair claim', () => {
-  it('claims the repair a review made after it fixed every finding', () => {
+describe('review Repair queue', () => {
+  it('queues exact findings for a separate Repair Agent', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'fix/broken-thing')
-    recordRepairedReview(store, revisionId, review.pullRequest.headSha)
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
 
-    const claim = store.claimReviewFixTaskForReview({
+    const queued = store.queueReviewFixTaskForReview({
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:04.000Z',
-      leaseMilliseconds: 60_000,
     })
 
-    expect(claim._tag).toBe('Claimed')
-    if (claim._tag !== 'Claimed')
-      throw new Error('Expected the repair Task.')
-    expect(claim.task.kind).toBe('review_fix')
-    // The repair only exists in the review worktree until its publication is
-    // staged, so a claim that fails here throws the agent's work away.
+    expect(queued._tag).toBe('Queued')
+    expect(store.getReviewFixFindings(review.repository, review.pullRequestNumber, revisionId)).toEqual([
+      expect.objectContaining({ _tag: 'Open', resolution: 'Repair', summary: 'Unsafe parser input.' }),
+    ])
+    const task = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:04.500Z', 60_000)
+    if (task === null)
+      throw new Error('Expected the Repair Task.')
+    expect(task.kind).toBe('review_fix')
     expect(store.stagePublication({
-      taskId: claim.task.id,
-      workerId: claim.task.state.workerId,
-      fence: claim.task.state.fence,
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
       at: '2026-08-13T01:00:05.000Z',
       publication: {
         _tag: 'UpdatePullRequest',
         taskKind: 'review_fix',
         baseRef: 'main',
-        pullRequestNumber: claim.task.pullRequestNumber,
+        pullRequestNumber: task.pullRequestNumber,
         commitSha: 'repair-commit',
         baseSha: 'base123',
-        expectedHeadSha: claim.task.pullRequest.headSha,
-        headRef: claim.task.pullRequest.headRef,
+        expectedHeadSha: task.pullRequest.headSha,
+        headRef: task.pullRequest.headRef,
         artifactRef: 'refs/harlan-github-agent/publications/repair',
         patchDigest: 'repair-patch',
         changedFiles: 2,
@@ -108,20 +126,19 @@ describe('review repair claim', () => {
   it('ends a review whose repair the controller may never publish', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'wip/unwritable-branch')
-    recordRepairedReview(store, revisionId, review.pullRequest.headSha)
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
 
-    const claim = store.claimReviewFixTaskForReview({
+    const queued = store.queueReviewFixTaskForReview({
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:04.000Z',
-      leaseMilliseconds: 60_000,
     })
 
-    expect(claim).toEqual({ _tag: 'Refused', reason: 'The controller cannot write this pull request branch.' })
-    if (claim._tag !== 'Refused')
+    expect(queued).toEqual({ _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.' })
+    if (queued._tag !== 'ActionRequired')
       throw new Error('Expected a refused repair.')
-    expect(classifyFailure({ message: claim.reason })._tag).toBe('Permanent')
+    expect(classifyFailure({ message: queued.reason })._tag).toBe('Permanent')
     // One refusal ends the review. Another agent turn would read the same
     // policy, refuse again, and spend seven more minutes doing it.
     expect(store.failWorkerTask({
@@ -129,9 +146,95 @@ describe('review repair claim', () => {
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:00:05.000Z',
-      reason: claim.reason,
+      reason: queued.reason,
     })).toBe('Failed')
     expect(store.retryRecoverableWorkerFailures('2026-08-13T02:00:00.000Z')).toBe(0)
     expect(store.claimNextAdversarialReviewTask('review-agent-2', '2026-08-13T02:00:01.000Z', 600_000)).toBeNull()
+  })
+
+  it('never queues Repair when Review recommends Dismissal', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/wrong-premise')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha, 'Dismissal')
+
+    expect(store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })).toEqual({ _tag: 'ActionRequired', reason: 'Review recommends Dismissal: Unsafe parser input.' })
+    expect(store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)).toBeNull()
+  })
+
+  it('stops when a published Repair leaves the same finding', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/repeated-finding')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
+    const queued = store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })
+    if (queued._tag !== 'Queued')
+      throw new Error(queued.reason)
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    const repairCommit = 'd'.repeat(40)
+    expect(store.stagePublication({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:00:06.000Z',
+      publication: {
+        _tag: 'UpdatePullRequest',
+        taskKind: 'review_fix',
+        baseRef: 'main',
+        pullRequestNumber: repair.pullRequestNumber,
+        commitSha: repairCommit,
+        baseSha: 'base123',
+        expectedHeadSha: repair.pullRequest.headSha,
+        headRef: repair.pullRequest.headRef,
+        artifactRef: 'refs/harlan-github-agent/publications/repeated-finding',
+        patchDigest: 'repair-patch',
+        changedFiles: 2,
+      },
+    })._tag).toBe('Staged')
+    const publication = store.claimNextPublication('publisher', '2026-08-13T01:00:07.000Z', 60_000)
+    if (publication === null)
+      throw new Error('Expected the Repair Publication.')
+    expect(store.completePublication({
+      commandId: publication.id,
+      workerId: publication.workerId,
+      fence: publication.fence,
+      at: '2026-08-13T01:00:08.000Z',
+      evidence: 'Published Repair commit.',
+    })).toBe(true)
+
+    const repaired = store.recordObservation({
+      externalId: 'repeated-finding-repaired-head',
+      observedAt: '2026-08-13T01:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        headRef: 'fix/repeated-finding',
+        headSha: repairCommit,
+        mergeState: 'clean',
+        updatedAt: '2026-08-13T01:01:00.000Z',
+      }),
+    })
+    if (repaired._tag !== 'Inserted')
+      throw new Error('Expected a new repaired Revision.')
+    const freshReview = store.claimNextAdversarialReviewTask('fresh-review-agent', '2026-08-13T01:01:01.000Z', 60_000)
+    if (freshReview === null)
+      throw new Error('Expected a fresh Review Task.')
+    recordOpenFinding(store, repaired.revisionId, repairCommit)
+
+    expect(store.queueReviewFixTaskForReview({
+      taskId: freshReview.id,
+      workerId: freshReview.state.workerId,
+      fence: freshReview.state.fence,
+      at: '2026-08-13T01:01:02.000Z',
+    })).toEqual({ _tag: 'ActionRequired', reason: 'A repaired head still has the same Review finding: Unsafe parser input.' })
   })
 })

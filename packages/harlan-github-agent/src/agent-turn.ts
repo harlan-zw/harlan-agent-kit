@@ -19,6 +19,8 @@ export interface AgentTurnOptions {
 }
 
 export interface AgentTurnInput {
+  /** Start without prior session context, while still saving the new session for Eject. */
+  freshSession?: boolean
   /** Issue or pull request number the session belongs to. */
   number: number
   progress?: {
@@ -74,7 +76,9 @@ export async function runAgentTurn(
   signal: AbortSignal,
 ): Promise<Result<AgentTurnResult, string>> {
   const sessionRole = input.sessionRole ?? input.role
-  const sessionId = options.store.getWorkerSession(input.repository, input.number, sessionRole, input.scopeDigest)
+  const sessionId = input.freshSession === true
+    ? null
+    : options.store.getWorkerSession(input.repository, input.number, sessionRole, input.scopeDigest)
   const runtime = options.runtime()
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({

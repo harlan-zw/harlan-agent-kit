@@ -46,7 +46,7 @@ import type {
   RepositoryMapping,
   RepositoryStatus,
   ReviewFinding,
-  ReviewFixClaim,
+  ReviewFixQueueResult,
   ReviewFixTask,
   ReviewGates,
   ReviewOutcome,
@@ -67,7 +67,8 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
-import { canRepairBaseline, canWorkIssues, canWritePullRequestHead as canWriteConfiguredPullRequestHead } from './repository-policy.ts'
+import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
+import { cleanLine } from './text.ts'
 
 export interface RecordIncidentInput {
   scope: IncidentScope
@@ -374,13 +375,12 @@ export interface JournalStore {
   claimNextIssueTriageTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueTriageTask | null
   claimNextIssueWorkTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueWorkTask | null
   claimNextReviewFixTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewFixTask | null
-  claimReviewFixTaskForReview: (input: {
+  queueReviewFixTaskForReview: (input: {
     taskId: string
     workerId: string
     fence: number
     at: string
-    leaseMilliseconds: number
-  }) => ReviewFixClaim
+  }) => ReviewFixQueueResult
   queueBaselineRepairForReview: (input: {
     taskId: string
     workerId: string
@@ -465,6 +465,8 @@ export interface JournalStore {
     url: string
   }) => boolean
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
+  /** Exact open findings the current Review handed to its Repair Task. */
+  getReviewFixFindings: (repository: string, pullRequestNumber: number, revisionId: string) => ReviewFinding[]
   /** Open pull requests across enabled repositories, which is the work waiting on Harlan. */
   countOpenPullRequests: () => number
   needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string }) => boolean
@@ -2077,13 +2079,6 @@ function canWritePullRequestHead(mapping: RepositoryMapping, subject: GitHubPull
     && subject.headRef !== mapping.defaultBranch
 }
 
-function canRepairPullRequestHead(mapping: RepositoryMapping, subject: GitHubPullRequestItem): boolean {
-  return canWriteConfiguredPullRequestHead(mapping)
-    && (subject.headRepository.toLowerCase() === mapping.github.toLowerCase() || subject.maintainerCanModify === true)
-    && mapping.writablePullRequestHeadPrefixes.some(prefix => subject.headRef.startsWith(prefix))
-    && subject.headRef !== mapping.defaultBranch
-}
-
 function pullRequestApprovalState(database: DatabaseSync, input: {
   mapping: RepositoryMapping
   author: string
@@ -2296,15 +2291,6 @@ function dashboardQueue(
 
     const reviewTask = currentTasks.get(`${key}:adversarial_review`)
     const fixTask = currentTasks.get(`${key}:review_fix`)
-    const nestedRepair = reviewTask?.kind === 'adversarial_review'
-      && (reviewTask.state._tag === 'Running' || reviewTask.state._tag === 'Queued')
-      && fixTask?.kind === 'review_fix'
-      && (fixTask.state._tag === 'Running' || fixTask.state._tag === 'Publishing' || fixTask.state._tag === 'Queued')
-    if (nestedRepair) {
-      return reviewTask.state._tag === 'Running'
-        ? [{ ...pullRequest, state: { _tag: 'Active', work: 'adversarial_review' } }]
-        : [{ ...pullRequest, state: { _tag: 'Queued', work: 'adversarial_review' } }]
-    }
     if (fixTask?.kind === 'review_fix') {
       switch (fixTask.state._tag) {
         case 'Running':
@@ -2582,15 +2568,56 @@ function planConflictResolution(
 }
 
 /**
- * What the controller may do with the repair one review already made.
- *
- * The repair exists only in the review worktree until its Task is claimed, so a
- * plan that refuses it throws real work away. The refusal reason therefore
- * travels with the plan instead of reading as a lost race.
+ * What the controller may do with the exact findings one Review recorded.
  */
 type ReviewFixPlan
   = | { _tag: 'Planned', taskId: string }
     | { _tag: 'Refused', reason: string }
+
+function openReviewFindings(database: DatabaseSync, subjectId: number, revisionId: string): Array<Extract<ReviewFinding, { _tag: 'Open' }>> {
+  const row = database.prepare(`
+    SELECT findings FROM review_runs
+    WHERE subject_id = ? AND revision_id = ?
+    ORDER BY completed_at DESC, id DESC
+    LIMIT 1
+  `).get(subjectId, revisionId) as { findings: string } | undefined
+  return row === undefined
+    ? []
+    : (JSON.parse(row.findings) as ReviewFinding[]).filter((finding): finding is Extract<ReviewFinding, { _tag: 'Open' }> => finding._tag === 'Open')
+}
+
+function findingIdentity(finding: Extract<ReviewFinding, { _tag: 'Open' }>): string {
+  return finding.details?.fingerprint
+    ?? cleanLine(finding.summary).toLocaleLowerCase('en-US')
+}
+
+/**
+ * Finds a defect that survived the repair which created the current head SHA.
+ *
+ * Comparing only the direct repair parent avoids treating a later contributor
+ * edit as a failed controller repair.
+ */
+function repeatedReviewFinding(
+  database: DatabaseSync,
+  subject: GitHubPullRequestItem,
+  subjectId: number,
+  revisionId: string,
+): Extract<ReviewFinding, { _tag: 'Open' }> | undefined {
+  const repaired = database.prepare(`
+    SELECT tasks.revision_id
+    FROM publication_commands
+    JOIN tasks ON tasks.id = publication_commands.task_id
+    WHERE tasks.subject_id = ? AND tasks.kind = 'review_fix'
+      AND publication_commands.state_tag = 'Published'
+      AND publication_commands.commit_sha = ?
+    ORDER BY publication_commands.published_at DESC, publication_commands.id DESC
+    LIMIT 1
+  `).get(subjectId, subject.headSha) as { revision_id: string } | undefined
+  if (repaired === undefined)
+    return undefined
+  const previous = new Set(openReviewFindings(database, subjectId, repaired.revision_id).map(findingIdentity))
+  return openReviewFindings(database, subjectId, revisionId).find(finding => previous.has(findingIdentity(finding)))
+}
 
 function requeueReviewFix(
   database: DatabaseSync,
@@ -2617,12 +2644,7 @@ function requeueReviewFix(
 }
 
 /**
- * Plans the Task that publishes one repair a review made inside its own turn.
- *
- * Eligibility used to require an open Review finding, which contradicted the
- * agent it served: an agent that repairs every defect reports none left. The
- * repair the review reports is now the only source of truth for whether a
- * repair exists, so the two can no longer disagree.
+ * Plans a fresh Repair Agent from one Review's exact open findings.
  */
 function planReviewFix(
   database: DatabaseSync,
@@ -2652,6 +2674,15 @@ function planReviewFix(
   `).get(subjectId, revisionId) !== undefined
   if (!reviewAuthorized)
     return refuse(REVIEW_REPAIR_REFUSALS.approval)
+  const openFindings = openReviewFindings(database, subjectId, revisionId)
+  const dismissal = openFindings.find(finding => finding.resolution === 'Dismissal')
+  if (dismissal !== undefined)
+    return refuse(`Review recommends Dismissal: ${cleanLine(dismissal.summary)}`)
+  const repeated = repeatedReviewFinding(database, subject, subjectId, revisionId)
+  if (repeated !== undefined)
+    return refuse(`A repaired head still has the same Review finding: ${cleanLine(repeated.summary)}`)
+  if (openFindings.length === 0)
+    return refuse('The Review recorded no open finding to repair.')
 
   database.prepare(`
     INSERT OR IGNORE INTO pull_request_approvals (subject_id, revision_id, kind, approved_at)
@@ -2678,8 +2709,7 @@ function planReviewFix(
     return { _tag: 'Refused', reason: REVIEW_REPAIR_REFUSALS.cancelled }
   if (existing.state_tag === 'Queued')
     return { _tag: 'Planned', taskId: existing.id }
-  // The review just made a newer repair for this exact head commit, so an
-  // earlier attempt that failed or lost its policy has nothing left to protect.
+  // A newer Review recorded exact findings for this same head commit.
   if (existing.state_tag === 'Superseded')
     return requeueReviewFix(database, existing, 'The exact pull request head commit is active again.', observedAt)
   if (existing.state_tag === 'Failed' || existing.state_tag === 'ActionRequired')
@@ -4284,6 +4314,23 @@ export function openJournalStore(
     return reviewRuns.map(row => reviewRunFromRow(row, publicationsByRun.get(row.id) ?? []))
   }
 
+  const getReviewFixFindings: JournalStore['getReviewFixFindings'] = (repository, pullRequestNumber, revisionId) => {
+    const row = database.prepare(`
+      SELECT review_runs.findings
+      FROM review_runs
+      JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ?
+        AND subjects.kind = 'pull_request' AND review_runs.revision_id = ?
+        AND review_runs.kind = 'adversarial_review'
+      ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, revisionId) as { findings: string } | undefined
+    return row === undefined
+      ? []
+      : (JSON.parse(row.findings) as ReviewFinding[]).filter(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
+  }
+
   const recoverExpiredTasks = (now: string): void => {
     const expired = database.prepare(`
       SELECT id, state_tag, fence FROM tasks
@@ -4451,9 +4498,8 @@ export function openJournalStore(
     throw new Error('Pull request Task crossed the Baseline repair claim boundary.')
   }
 
-  const claimReviewFixTaskForReview: JournalStore['claimReviewFixTaskForReview'] = (input) => {
+  const queueReviewFixTaskForReview: JournalStore['queueReviewFixTaskForReview'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
-    let plan: ReviewFixPlan
     try {
       const row = database.prepare(`
         SELECT worker_tasks.subject_id, worker_tasks.revision_id, revisions.payload,
@@ -4477,29 +4523,22 @@ export function openJournalStore(
       } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
-        return { _tag: 'Unavailable', reason: 'The review Task lease changed before the repair started.' }
+        return { _tag: 'ActionRequired', reason: 'The Review Task changed before Repair was queued.' }
       }
       const subject = JSON.parse(row.payload) as GitHubItem
       if (subject.kind !== 'pull_request')
         throw new Error(`Review Task ${input.taskId} does not reference a pull request.`)
       const mapping = JSON.parse(row.policy_json) as RepositoryMapping
-      plan = planReviewFix(database, subject, row.subject_id, row.revision_id, input.at, mapping)
+      const plan = planReviewFix(database, subject, row.subject_id, row.revision_id, input.at, mapping)
       database.exec('COMMIT')
+      return plan._tag === 'Planned'
+        ? { _tag: 'Queued', taskId: plan.taskId }
+        : { _tag: 'ActionRequired', reason: plan.reason }
     }
     catch (error) {
       database.exec('ROLLBACK')
       throw error
     }
-    if (plan._tag === 'Refused')
-      return plan
-    const task = claimMutationTask('review_fix', input.workerId, input.at, input.leaseMilliseconds, plan.taskId)
-    // Pause and a lease another holder took both land here. Both pass on their
-    // own, and the review that holds the repair is requeued rather than failed.
-    if (task === null)
-      return { _tag: 'Unavailable', reason: 'The repair Task changed before the review claimed it.' }
-    if (task.kind !== 'review_fix')
-      throw new Error('Review Task crossed the repair claim boundary.')
-    return { _tag: 'Claimed', task }
   }
 
   const retireBaselineRepairForReview: JournalStore['retireBaselineRepairForReview'] = (input) => {
@@ -4888,8 +4927,7 @@ export function openJournalStore(
           )
       `).all() as unknown as RecoveryCandidateRow[]).filter(row => isRecoverable(row, at))
       const taskRows = (database.prepare(`
-        SELECT tasks.id, tasks.fence, tasks.kind, tasks.subject_id, tasks.revision_id,
-          tasks.reason, tasks.recovery_attempts, tasks.updated_at,
+        SELECT tasks.id, tasks.fence, tasks.reason, tasks.recovery_attempts, tasks.updated_at,
           repositories.github AS repository, subjects.github_number
         FROM tasks
         JOIN subjects ON subjects.id = tasks.subject_id
@@ -4901,11 +4939,7 @@ export function openJournalStore(
           -- runs again, which the issue scope pass below arranges. A plain
           -- requeue here would skip that and work against the old approval.
           AND NOT (tasks.kind = 'issue_work' AND tasks.reason = 'The issue changed before work started.')
-      `).all() as unknown as Array<RecoveryCandidateRow & {
-        kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work'
-        subject_id: number
-        revision_id: string
-      }>).filter(row => isRecoverable(row, at))
+      `).all() as unknown as RecoveryCandidateRow[]).filter(row => isRecoverable(row, at))
       const issueScopeRows = database.prepare(`
         SELECT tasks.id AS task_id, tasks.fence AS task_fence,
           worker_tasks.id AS triage_id, worker_tasks.fence AS triage_fence
@@ -4928,26 +4962,6 @@ export function openJournalStore(
         task_fence: number
         triage_id: string
         triage_fence: number
-      }>
-      const orphanedReviewRows = database.prepare(`
-        SELECT worker_tasks.id, worker_tasks.state_tag, worker_tasks.fence
-        FROM tasks
-        JOIN subjects ON subjects.id = tasks.subject_id
-        JOIN repositories ON repositories.id = subjects.repository_id
-        JOIN worker_tasks ON worker_tasks.subject_id = tasks.subject_id
-          AND worker_tasks.revision_id = tasks.revision_id
-          AND worker_tasks.kind = 'adversarial_review'
-        WHERE tasks.kind = 'review_fix' AND tasks.state_tag = 'Queued'
-          AND tasks.revision_id = subjects.current_revision_id
-          AND worker_tasks.state_tag IN ('Completed', 'Failed')
-          AND repositories.enabled = 1
-          AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-          AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id)
-          AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = worker_tasks.id)
-      `).all() as unknown as Array<{
-        id: string
-        state_tag: 'Completed' | 'Failed'
-        fence: number
       }>
       const retry = database.prepare(`
         UPDATE worker_tasks
@@ -5003,35 +5017,6 @@ export function openJournalStore(
           fence: row.fence,
           at,
         })
-        if (row.kind === 'review_fix') {
-          const reviewer = database.prepare(`
-            SELECT id, state_tag, fence FROM worker_tasks
-            WHERE subject_id = ? AND revision_id = ? AND kind = 'adversarial_review'
-              AND state_tag IN ('Completed', 'Failed')
-              AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = worker_tasks.id)
-          `).get(row.subject_id, row.revision_id) as {
-            id: string
-            state_tag: 'Completed' | 'Failed'
-            fence: number
-          } | undefined
-          if (reviewer !== undefined) {
-            database.prepare(`
-              UPDATE worker_tasks
-              SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
-                worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
-                progress_label = 'Starting', updated_at = ?
-              WHERE id = ? AND state_tag = ?
-            `).run(at, reviewer.id, reviewer.state_tag)
-            recordWorkerTransition(database, {
-              taskId: reviewer.id,
-              from: reviewer.state_tag,
-              to: 'Queued',
-              reason: 'The combined review repair became recoverable.',
-              fence: reviewer.fence,
-              at,
-            })
-          }
-        }
       })
       issueScopeRows.forEach((row) => {
         if (awaitFreshTriage.run(freshIssueTriageReason, at, row.task_id).changes !== 1)
@@ -5053,26 +5038,6 @@ export function openJournalStore(
           to: 'Queued',
           reason: 'The approved issue work requires fresh triage.',
           fence: row.triage_fence,
-          at,
-        })
-      })
-      orphanedReviewRows.forEach((row) => {
-        const reset = database.prepare(`
-          UPDATE worker_tasks
-          SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
-            worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
-            progress_label = 'Starting', updated_at = ?
-          WHERE id = ? AND state_tag = ?
-        `).run(at, row.id, row.state_tag)
-        if (reset.changes !== 1)
-          return
-        retried += 1
-        recordWorkerTransition(database, {
-          taskId: row.id,
-          from: row.state_tag,
-          to: 'Queued',
-          reason: 'Orphaned repair work returned to its combined reviewer.',
-          fence: row.fence,
           at,
         })
       })
@@ -6369,11 +6334,8 @@ export function openJournalStore(
     const reviewAgents = dashboardReviewAgents(database)
     const currentProvider = provider()
     const activeAgents = activeAgentRows(database, currentProvider).map(row => activeAgentFromRow(row, currentProvider))
-    const activeReviewSubjects = new Set(activeAgents.flatMap(agent => agent.role === 'adversarial_review'
-      ? [`${agent.repository}:${agent.itemNumber}`]
-      : []))
     const agents: DashboardAgent[] = [
-      ...activeAgents.filter(agent => agent.role !== 'review_fix' || !activeReviewSubjects.has(`${agent.repository}:${agent.itemNumber}`)),
+      ...activeAgents,
       ...reviewAgents,
     ]
     const mappings = new Map(subjectRows.map(row => [row.repository, JSON.parse(row.policy_json) as RepositoryMapping]))
@@ -6635,7 +6597,7 @@ export function openJournalStore(
     claimNextIssueTriageTask,
     claimNextIssueWorkTask,
     claimNextReviewFixTask,
-    claimReviewFixTaskForReview,
+    queueReviewFixTaskForReview,
     queueBaselineRepairForReview,
     retireBaselineRepairForReview,
     claimNextPublication,
@@ -6663,6 +6625,7 @@ export function openJournalStore(
     heartbeatTask,
     heartbeatWorkerTask,
     countOpenPullRequests,
+    getReviewFixFindings,
     listReviewRuns,
     needsAttentionTask,
     dismissItem,

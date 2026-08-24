@@ -13,7 +13,6 @@ const cleanReview = {
   review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
   verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
   findings: [],
-  repair: { outcome: 'not_needed', summary: 'No repair needed.', checks: [], commitMessage: '' },
   confidence: 96,
 }
 
@@ -71,15 +70,13 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
     },
     now: () => new Date('2026-08-13T01:00:00.000Z'),
     store: {
-      claimReviewFixTaskForReview: () => { throw new Error('Unexpected repair claim.') },
-      failTask: () => { throw new Error('Unexpected repair failure.') },
+      queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
-      stagePublication: () => { throw new Error('Unexpected publication.') },
       updateAgentProgress: () => true,
       recordReviewRun: (run) => {
         runs.push(run)
@@ -92,16 +89,12 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
         comments.push(body)
         return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
       },
-      publishRepair: () => Promise.reject(new Error('Unexpected repair progress.')),
     },
     triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
     workspaces: {
       prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
       prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
-    },
-    repairs: {
-      commit: () => Promise.reject(new Error('Unexpected repair commit.')),
-      verify: () => Promise.reject(new Error('Unexpected repair verification.')),
+      verifyReview: () => Promise.resolve(ok(undefined)),
     },
   }
   const worker = createReviewWorker(options)
