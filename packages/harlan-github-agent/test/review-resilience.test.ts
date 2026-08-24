@@ -1,9 +1,11 @@
+import type { PullRequestReviewSnapshot } from '../src/github-agent-source.ts'
 import type { ReviewWorkerOptions } from '../src/item-agent.ts'
 import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput, ReviewFixQueueResult } from '../src/types.ts'
+import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { classifyFailure } from '../src/failure.ts'
-import { createReviewWorker } from '../src/item-agent.ts'
+import { createReviewWorker, REVIEW_CONVERSATION_CHARACTER_BUDGET, reviewConversationContext, reviewFindingFingerprint } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
@@ -22,7 +24,7 @@ function materialFinding(resolution: 'repair' | 'dismiss' = 'repair') {
   }
 }
 
-function reviewSnapshot(pullRequest: GitHubPullRequestItem, comments: string[] = []) {
+function reviewSnapshot(pullRequest: GitHubPullRequestItem, comments: string[] = []): PullRequestReviewSnapshot {
   const check = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
   return {
     baseChecks: { _tag: 'Available' as const, checks: [check] },
@@ -55,6 +57,7 @@ interface Harness {
   attempts: RecordReviewRunInput[]
   comments: string[]
   progressFailures: string[]
+  provider: ProviderCapture
   queued: number
   options: ReviewWorkerOptions
 }
@@ -71,12 +74,13 @@ function harness(input: {
   const attempts: RecordReviewRunInput[] = []
   const comments: string[] = []
   const progressFailures: string[] = []
+  const provider: ProviderCapture = { requests: [] }
   const repairs = { queued: 0 }
   const snapshots = input.snapshots ?? [reviewSnapshot(input.pullRequest)]
   let read = 0
 
   const options: ReviewWorkerOptions = {
-    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(input.response))),
+    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(input.response), provider)),
     github: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -132,6 +136,7 @@ function harness(input: {
     attempts,
     comments,
     progressFailures,
+    provider,
     get queued() {
       return repairs.queued
     },
@@ -140,6 +145,74 @@ function harness(input: {
 }
 
 describe('review resilience', () => {
+  it('keeps the newest discussion inside one bounded Review context', () => {
+    const oldComment = `old-comment-${'a'.repeat(8_000)}`
+    const newComment = `new-comment-${'b'.repeat(8_000)}`
+    const oldReview = `old-review-${'c'.repeat(8_000)}`
+    const newReview = `new-review-${'d'.repeat(8_000)}`
+
+    const context = reviewConversationContext({
+      body: `body-${'b'.repeat(12_000)}`,
+      comments: [oldComment, ...Array.from({ length: 10 }, (_, index) => `middle-comment-${index}-${'m'.repeat(4_000)}`), newComment],
+      reviews: [oldReview, ...Array.from({ length: 10 }, (_, index) => `middle-review-${index}-${'n'.repeat(4_000)}`), newReview],
+    })
+
+    expect(context.comments.join('\n')).toContain('new-comment')
+    expect(context.reviews.join('\n')).toContain('new-review')
+    expect(context.comments.join('\n')).not.toContain('old-comment')
+    expect(context.reviews.join('\n')).not.toContain('old-review')
+    expect(context.body).toContain('[... content omitted ...]')
+    expect([...context.comments, ...context.reviews].join('\n')).toContain('[... content omitted ...]')
+    expect([context.body, ...context.comments, ...context.reviews].reduce((total, value) => total + value.length, 0))
+      .toBeLessThanOrEqual(REVIEW_CONVERSATION_CHARACTER_BUDGET)
+    expect(context).toEqual(expect.objectContaining({ totalComments: 12, totalReviews: 12, truncated: true }))
+  })
+
+  it('dispatches only the compact disproof contract', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const test = harness({
+      pullRequest,
+      response: { metadata: passingGate, review: passingGate, verification: passingGate, findings: [], confidence: 91 },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.provider.requests[0]?.prompt).toContain('The controller already applied the review workflow')
+    expect(test.provider.requests[0]?.prompt).toContain('Fetch the full GitHub conversation only if omitted history matters')
+    expect(test.provider.requests[0]?.prompt).not.toContain('Apply the adversarial-review skill completely')
+  })
+
+  it('keeps distinct long finding identities distinct', () => {
+    const shared = 'same-boundary-'.repeat(20)
+
+    expect(reviewFindingFingerprint(`${shared}first`)).not.toBe(reviewFindingFingerprint(`${shared}second`))
+  })
+
+  it('does not truncate finding identity before repeat detection', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const shared = 'same-boundary-'.repeat(20)
+    const first = materialFinding()
+    const second = materialFinding()
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: passingGate,
+        verification: passingGate,
+        findings: [
+          { ...first, identity: `${shared}first` },
+          { ...second, identity: `${shared}second` },
+        ],
+        confidence: 91,
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    const fingerprints = test.attempts[0]?.findings.flatMap(finding => finding._tag === 'Open' ? [finding.details?.fingerprint] : [])
+    expect(new Set(fingerprints).size).toBe(2)
+  })
+
   it('publishes nothing when the agent answers that it did not review', async () => {
     // An unreliable model answers waiting on its own review gate after its
     // first answer fails the schema. Publishing that reports a verdict nobody
@@ -186,6 +259,7 @@ describe('review resilience', () => {
 
     expect(result._tag).toBe('Ok')
     expect(test.attempts).toHaveLength(1)
+    expect(test.attempts[0]?.usage).toEqual({ _tag: 'Unavailable' })
     expect(test.comments.at(-1)).toContain('READY · 91/100')
   })
 
@@ -293,6 +367,81 @@ describe('review resilience', () => {
     expect(result._tag).toBe('Ok')
     expect(test.queued).toBe(1)
     expect(test.comments.at(-1)).toContain('REVIEWING · Repair queued')
+  })
+
+  it('keeps a stable finding identity when its code moves', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const first = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'first proof' },
+        verification: passingGate,
+        findings: [materialFinding()],
+        confidence: null,
+      },
+    })
+    const moved = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'second proof' },
+        verification: passingGate,
+        findings: [{ ...materialFinding(), path: 'src/new/parser.ts', line: 9 }],
+        confidence: null,
+      },
+    })
+
+    await createReviewWorker(first.options).run(reviewTask(pullRequest), new AbortController().signal)
+    await createReviewWorker(moved.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    const firstFinding = first.attempts[0]?.findings[0]
+    const movedFinding = moved.attempts[0]?.findings[0]
+    expect(firstFinding?._tag === 'Open' ? firstFinding.details?.fingerprint : undefined)
+      .toBe(movedFinding?._tag === 'Open' ? movedFinding.details?.fingerprint : undefined)
+  })
+
+  it('queues Repair when the base branch has no CI', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const snapshot = reviewSnapshot(pullRequest)
+    snapshot.baseChecks = { _tag: 'Available', checks: [] }
+    const test = harness({
+      pullRequest,
+      snapshots: [snapshot],
+      response: {
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'proof' },
+        verification: passingGate,
+        findings: [materialFinding()],
+        confidence: null,
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.queued).toBe(1)
+  })
+
+  it('does not queue Repair when base CI could not be read', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const snapshot = reviewSnapshot(pullRequest)
+    snapshot.baseChecks = { _tag: 'Unavailable', reason: 'GitHub checks timed out.' }
+    const test = harness({
+      pullRequest,
+      snapshots: [snapshot],
+      response: {
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'proof' },
+        verification: passingGate,
+        findings: [materialFinding()],
+        confidence: null,
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.queued).toBe(0)
+    expect(test.comments.at(-1)).toContain('The base branch must pass CI before Repair starts.')
   })
 
   it('hands every material finding to Repair without a count cap', async () => {

@@ -166,6 +166,91 @@ describe('review Repair queue', () => {
     expect(store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)).toBeNull()
   })
 
+  it('closes Repair progress after the Task needs action', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/blocked-repair')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
+    const queued = store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })
+    if (queued._tag !== 'Queued')
+      throw new Error(queued.reason)
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'review_fix',
+      phase: 'repair',
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:00:06.000Z',
+      revisionId: repair.revisionId,
+      expectedHeadSha: repair.pullRequest.headSha,
+      body: '### 🤖 REPAIR · Repairing review findings',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const status = store.claimReviewStatus(staged.commandId, 'status-agent', '2026-08-13T01:00:07.000Z', 60_000)
+    if (status === null)
+      throw new Error('Expected the Repair status command.')
+    expect(store.completeReviewStatus({
+      commandId: status.id,
+      workerId: status.workerId,
+      fence: status.fence,
+      at: '2026-08-13T01:00:08.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.needsAttentionTask({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:00:09.000Z',
+      reason: 'The Repair Agent found unsafe scope.',
+      evidence: 'blocked',
+    })).toBe(true)
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:09.100Z',
+      evidence: 'Queued Repair.',
+    })).toBe(true)
+
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
+      taskId: repair.id,
+      taskKind: 'review_fix',
+      reason: 'The Repair Agent found unsafe scope.',
+      findings: [expect.objectContaining({ summary: 'Unsafe parser input.' })],
+    })])
+    expect(store.requestReviewRerun({
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId,
+      requestId: 'blocked-repair-rerun',
+      source: 'dashboard',
+      requestedBy: 'harlan-zw',
+      at: '2026-08-13T01:00:09.500Z',
+    })._tag).toBe('Queued')
+    expect(store.claimNextAdversarialReviewTask('new-review-agent', '2026-08-13T01:00:09.600Z', 60_000)).not.toBeNull()
+    expect(store.listStoppedReviews()).toEqual([])
+    expect(store.recordStoppedReviewStatus({
+      taskId: repair.id,
+      taskKind: 'review_fix',
+      revisionId: repair.revisionId,
+      expectedHeadSha: repair.pullRequest.headSha,
+      body: '### 🤖 BLOCKED',
+      at: '2026-08-13T01:00:10.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([])
+  })
+
   it('stops when a published Repair leaves the same finding', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'fix/repeated-finding')

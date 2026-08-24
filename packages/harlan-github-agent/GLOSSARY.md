@@ -39,10 +39,11 @@ did not cover it.
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
 | Take Ownership | `repositories.take_ownership` | Controller | One policy per Repository mapping | Take Ownership |
 | Publication command | `publication_commands` | Controller | One to one Task | none |
-| Review run | `attempts` | Runner | N to 1 Revision, 1 to N Publications | review |
-| Review gate | `attempts.gates` | Adversarial review | Six per Review run | gate |
-| Review outcome | `attempts.outcome_tag` | Adversarial review | One per Review run | READY, PENDING, or BLOCKED |
-| Review finding | `attempts.findings` | Adversarial review | N per Review run | issue |
+| Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
+| Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
+| Review gate | `review_runs.gates` | Adversarial review | Six per Review run | gate |
+| Review outcome | `review_runs.outcome_tag` | Adversarial review | One per Review run | READY, PENDING, or BLOCKED |
+| Review finding | `review_runs.findings` | Adversarial review | N per Review run | issue |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
 | Publication | `review_publications` | Journal | N to 1 Review run | automated review |
 | Approval | `pull_request_approvals` or `tasks.kind = issue_work` | Controller | N to 1 Revision | approval |
@@ -315,6 +316,12 @@ One agent turn that produces one automated review.
 A Review run stores its Revision, gate evidence, Review findings, Review outcome, agent version, and timestamps.
 
 Named after GitHub's `check run`, which has the same shape: one execution against one commit that reports a conclusion. Do not use attempt, pass, or session.
+
+### Review usage
+
+The total input, cached input, cache write, output, and reasoning tokens one Review run used.
+
+Use `Unavailable` when the Agent provider reports no usage. Never infer usage from text length.
 
 ### Review gate
 

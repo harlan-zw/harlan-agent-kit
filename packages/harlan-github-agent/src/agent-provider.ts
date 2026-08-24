@@ -7,6 +7,30 @@
 
 export type AgentProviderName = 'codex' | 'opencode'
 
+export type AgentTokenUsage
+  = | { _tag: 'Unavailable' }
+    | {
+      _tag: 'Available'
+      input: number
+      cachedInput: number
+      cacheWrite: number
+      output: number
+      reasoning: number
+    }
+
+export function addAgentTokenUsage(left: AgentTokenUsage, right: AgentTokenUsage): AgentTokenUsage {
+  if (left._tag === 'Unavailable' || right._tag === 'Unavailable')
+    return { _tag: 'Unavailable' }
+  return {
+    _tag: 'Available',
+    input: left.input + right.input,
+    cachedInput: left.cachedInput + right.cachedInput,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    output: left.output + right.output,
+    reasoning: left.reasoning + right.reasoning,
+  }
+}
+
 export type AgentEvent
   = | { _tag: 'SessionStarted', sessionId: string }
     | { _tag: 'CommandStarted', command: string }
@@ -15,6 +39,7 @@ export type AgentEvent
     | { _tag: 'Reasoning', text: string }
     | { _tag: 'WebSearch' }
     | { _tag: 'Message', text: string }
+    | { _tag: 'Usage', usage: Extract<AgentTokenUsage, { _tag: 'Available' }> }
     | { _tag: 'TurnCompleted' }
     /** The session read its whole Context budget, so the provider stopped it. */
     | { _tag: 'ContextBudgetExhausted', cachedTokensRead: number }

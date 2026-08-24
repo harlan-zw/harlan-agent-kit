@@ -91,6 +91,8 @@ Refetch and restart when either action changes the remote head or metadata snaps
 
 ### 6. Disprove the change
 
+When a controller already applied this workflow, dispatch a compact Review Agent contract for this phase alone. Do not make that Agent reload authority, gates, status, publication, or Repair instructions.
+
 Apply every adversarial check in the review contract to the complete diff and surrounding implementation.
 
 Trace changed inputs through public boundaries, failures, cleanup, concurrency, persistence, and tests.
@@ -120,6 +122,8 @@ After every push, discard prior Review evidence. Start a fresh Review session ag
 If the fresh Review records the same finding fingerprint, stop Repair and use `BLOCKED`. Do not rewrite root architecture to rescue a wrong premise.
 
 Use `BLOCKED` with Action required when scope is unsafe, Repair authority is missing, or Review recommends Dismissal.
+
+If Repair stops or exhausts its retries, replace the canonical progress comment with `BLOCKED`. Include every stored finding and its exact next action.
 
 If required CI fails identically on the current base branch, treat it as baseline repair work. For an owned repository, start a separate worktree from the current base. Repair the failure, verify it, and open a focused pull request through `../pr/SKILL.md`. Set the reviewed pull request to `PENDING`, link the repair pull request as its next action, then resume after that repair merges.
 

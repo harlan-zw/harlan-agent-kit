@@ -1290,6 +1290,7 @@ describe('journal store', () => {
 
     expect(store.recordStoppedReviewStatus({
       taskId: review.id,
+      taskKind: 'adversarial_review',
       revisionId: review.revisionId,
       expectedHeadSha: pullRequest.headSha,
       body: '### 🤖 STOPPED',
@@ -2315,6 +2316,7 @@ describe('journal store', () => {
       skillDigest: 'f'.repeat(64),
       startedAt: '2026-08-13T01:01:00.000Z',
       completedAt: '2026-08-13T01:02:00.000Z',
+      usage: { _tag: 'Available' as const, input: 12_000, cachedInput: 90_000, cacheWrite: 0, output: 4_000, reasoning: 1_500 },
       gates: passedReviewGates(),
       confidence: 95,
       findings: [],
@@ -3116,6 +3118,7 @@ describe('journal store', () => {
       skillDigest: 'f'.repeat(64),
       startedAt: '2026-08-13T01:01:00.000Z',
       completedAt: '2026-08-13T01:02:00.000Z',
+      usage: { _tag: 'Available' as const, input: 12_000, cachedInput: 90_000, cacheWrite: 0, output: 4_000, reasoning: 1_500 },
       gates: passedReviewGates(),
       confidence: 96,
       findings: [{ _tag: 'Fixed', summary: 'Rejected an unsafe path.' }],
@@ -3264,6 +3267,7 @@ describe('journal store', () => {
       skillDigest: 'f'.repeat(64),
       startedAt: '2026-08-13T01:01:00.000Z',
       completedAt: '2026-08-13T01:02:00.000Z',
+      usage: { _tag: 'Available' as const, input: 12_000, cachedInput: 90_000, cacheWrite: 0, output: 4_000, reasoning: 1_500 },
       gates: passedReviewGates(),
       confidence: 96,
       findings: [],
@@ -3276,6 +3280,7 @@ describe('journal store', () => {
       reviewRunId: input.id,
     })
     expect(store.listReviewRuns(input.repository, input.pullRequestNumber)[0]?.model).toBe('gpt-5.6')
+    expect(store.listReviewRuns(input.repository, input.pullRequestNumber)[0]?.usage).toEqual(input.usage)
   })
 
   it('records comment publication failures for later analysis', () => {

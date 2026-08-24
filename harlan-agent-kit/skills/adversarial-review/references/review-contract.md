@@ -167,7 +167,9 @@ Build `payload.json` from the final body with `jq`; do not interpolate JSON manu
 When `harlan-github-agent` dispatches Review, record one immutable Review run
 against the exact Revision before publication. Store the six gates, evidence
 digests, Review findings, derived outcome, agent version, skill digest, and
-timestamps. Store confidence only for `READY`.
+timestamps. Store duration and Agent provider token usage. Use an explicit
+unavailable state when the provider reports no usage. Store confidence only for
+`READY`.
 
 For an outside contributor, reject the Review run unless the same Revision has Review and repair Approval. Queue verified repairs under that Approval.
 

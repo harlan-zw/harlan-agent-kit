@@ -6,6 +6,7 @@ import {
   gateTone,
   reviewOutcomeLabel,
   reviewOutcomeTone,
+  reviewUsageLabel,
   statusClass,
   taskIsIssue,
   taskKindLabel,
@@ -91,6 +92,7 @@ useHead({
           size="xs"
           :color="outcomeFilter === filter.value ? 'primary' : 'neutral'"
           :variant="outcomeFilter === filter.value ? 'soft' : 'ghost'"
+          :class="outcomeFilter === filter.value ? statusClass('primary') : undefined"
           :aria-pressed="outcomeFilter === filter.value"
           @click="outcomeFilter = filter.value"
         >
@@ -232,6 +234,14 @@ useHead({
                 </dt>
                 <dd class="mt-1 font-mono text-sm">
                   {{ record.agent.provider }} · {{ record.agent.model }} · {{ record.agent.agentVersion }}
+                </dd>
+              </div>
+              <div>
+                <dt class="field-label">
+                  Review usage
+                </dt>
+                <dd class="mt-1 font-mono text-sm text-muted">
+                  {{ reviewUsageLabel(record.agent.usage) }}
                 </dd>
               </div>
               <div>

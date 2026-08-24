@@ -246,6 +246,16 @@ export function reviewOutcomeTone(agent: ReviewAgent): 'error' | 'warning' | 'su
   return agent.outcome._tag === 'Blocked' ? 'error' : 'warning'
 }
 
+function compactCount(value: number): string {
+  return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value).toLowerCase()
+}
+
+export function reviewUsageLabel(usage: ReviewAgent['usage']): string {
+  if (usage._tag === 'Unavailable')
+    return 'Usage unavailable'
+  return `${compactCount(usage.input)} input · ${compactCount(usage.cachedInput)} cached · ${compactCount(usage.output)} output · ${compactCount(usage.reasoning)} reasoning · ${compactCount(usage.cacheWrite)} cache write`
+}
+
 export function gateTone(gate: ReviewGateState): 'error' | 'warning' | 'success' {
   if (gate._tag === 'Passed')
     return 'success'

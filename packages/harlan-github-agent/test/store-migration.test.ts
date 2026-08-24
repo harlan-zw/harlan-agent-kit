@@ -57,6 +57,7 @@ function journalAtVersion22(path: string): void {
     database.exec(`DROP TABLE ${table}`)
     database.exec(`ALTER TABLE ${table}_v22 RENAME TO ${table}`)
   }
+  database.exec('ALTER TABLE review_runs DROP COLUMN usage')
   database.exec(`ALTER TABLE review_runs RENAME TO attempts`)
   database.exec(`ALTER TABLE review_publications RENAME COLUMN review_run_id TO attempt_id`)
   const attempts = (database.prepare(
@@ -157,8 +158,53 @@ function journalAtVersion25(path: string): void {
   const rebuilt = database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>
   if (rebuilt.some(column => column.name === 'base_ref'))
     throw new Error('Version 25 stored no base branch, so the rewind must remove that column.')
+  database.exec('ALTER TABLE review_runs DROP COLUMN usage')
   dropSelectionMode(database)
   database.exec('PRAGMA user_version = 25')
+  database.close()
+}
+
+function journalAtVersion30(path: string): void {
+  const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+  store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+  const observed = store.recordObservation({
+    externalId: 'review-usage-migration',
+    observedAt: '2026-08-18T00:00:00.000Z',
+    source: 'poll',
+    subject: pullRequestItem({ mergeState: 'clean' }),
+  })
+  store.close()
+  if (observed._tag !== 'Inserted')
+    throw new Error('Expected the Review migration pull request.')
+
+  const database = new DatabaseSync(path)
+  database.exec('ALTER TABLE review_runs DROP COLUMN usage')
+  const subject = database.prepare(`SELECT id FROM subjects WHERE github_number = 24`).get() as { id: number }
+  database.prepare(`
+    INSERT INTO review_runs (
+      id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
+      skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
+      confidence, findings, content_digest
+    ) VALUES (?, ?, ?, 'adversarial_review', 'codex', 'session-legacy', 'gpt-5.6-sol',
+      '1.0.0', ?, 'abc123', ?, ?, ?, 'Ready', 95, '[]', ?)
+  `).run(
+    'legacy-review-run',
+    subject.id,
+    observed.revisionId,
+    'f'.repeat(64),
+    '2026-08-18T00:01:00.000Z',
+    '2026-08-18T00:02:00.000Z',
+    JSON.stringify({
+      head: { _tag: 'Passed', evidence: [] },
+      merge: { _tag: 'Passed', evidence: [] },
+      metadata: { _tag: 'Passed', evidence: [] },
+      review: { _tag: 'Passed', evidence: [] },
+      verification: { _tag: 'Passed', evidence: [] },
+      ci: { _tag: 'Passed', evidence: [] },
+    }),
+    'a'.repeat(64),
+  )
+  database.exec('PRAGMA user_version = 30')
   database.close()
 }
 
@@ -172,6 +218,21 @@ describe('stacked pull request migration', () => {
     store.close()
 
     expect(claimed).toEqual(expect.objectContaining({ baseRef: 'main', headRef: 'fix/baseline-ci-abcdef012345' }))
+  })
+})
+
+describe('review usage migration', () => {
+  it('marks older Review runs as unavailable', () => {
+    const path = join(directory, 'state.sqlite')
+    journalAtVersion30(path)
+
+    const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    try {
+      expect(store.listReviewRuns('harlan-zw/example', 24)[0]?.usage).toEqual({ _tag: 'Unavailable' })
+    }
+    finally {
+      store.close()
+    }
   })
 })
 
@@ -192,7 +253,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(31)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
@@ -234,6 +295,7 @@ function pinnedSelectionAtVersion26(path: string): void {
   store.close()
 
   const database = new DatabaseSync(path)
+  database.exec('ALTER TABLE review_runs DROP COLUMN usage')
   dropSelectionMode(database)
   database.exec('DROP TABLE agent_selection')
   database.exec(`

@@ -1,4 +1,4 @@
-import type { AgentProviderName } from './agent-provider.ts'
+import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 
@@ -254,14 +254,17 @@ export interface ReviewRun {
   skillDigest: string
   startedAt: string
   completedAt: string
+  usage: AgentTokenUsage
   gates: ReviewGates
   outcome: ReviewOutcome
   findings: ReviewFinding[]
   publications: ReviewPublication[]
 }
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'outcome' | 'publications'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'outcome' | 'publications' | 'usage'> {
   confidence?: number
+  /** Omitted callers are stored explicitly as unavailable. */
+  usage?: AgentTokenUsage
 }
 
 export interface RecordReviewPublicationInput {
@@ -428,7 +431,7 @@ interface ReviewStatusCommandBase {
 
 export type ReviewStatusTaskPhase
   = | { taskKind: 'adversarial_review', phase: 'snapshot' | 'review' | 'terminal' }
-    | { taskKind: 'review_fix', phase: 'repair' }
+    | { taskKind: 'review_fix', phase: 'repair' | 'terminal' }
 
 export type ReviewStatusCommand = ReviewStatusCommandBase & ReviewStatusTaskPhase
 

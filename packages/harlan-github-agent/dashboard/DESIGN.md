@@ -127,7 +127,7 @@ New copy has to answer one question the reader cannot already answer from the sc
 
 ### Contrast and Accessibility
 
-- **Body text contrast**: Text targets WCAG AA in both modes. Muted text sits at `oklch(52%)` in light and `oklch(66%)` in dark, both above 4.5:1 on their own ground.
+- **Body text contrast**: Text targets WCAG AA in both modes. Muted and dimmed text stay above 4.5:1 on their own ground.
 - **Dark mode adjustments**: Ground is `oklch(14.5%)`, never pure black. Panels lift by lightness, never by shadow.
 - **Known risks**: Nuxt UI subtle badges fall short of AA on small text, so state text uses the `.status-*` ramp instead of the badge default.
 
@@ -235,6 +235,7 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 - Queue order reflects engine priority. Position is always visible.
 - Every repository, pull request, issue, commit, automated review, and agent identifier links to its source.
 - Completed reviews are History. They never appear as running agents.
+- Review duration stays on the History row. Review usage stays inside Evidence.
 - The workflow map separates implemented paths, Harlan decisions, and missing service paths. Dashed borders there are load bearing.
 - Skip link, entity link, status ramp, zone header, and live dot live in `main.css`, not in per page scoped blocks, because every page needs them identically.
 - The tab title carries the decision count and the favicon carries its colour, because this page is meant to be watched from another window. Notifications are opt in behind the bell, and the first snapshot after load only seeds the baseline so opening the page never fires one.

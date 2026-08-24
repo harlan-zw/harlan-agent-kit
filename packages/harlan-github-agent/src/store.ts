@@ -1,4 +1,4 @@
-import type { AgentProviderName } from './agent-provider.ts'
+import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { TransientKind } from './failure.ts'
 import type {
   AdversarialReviewTask,
@@ -304,22 +304,26 @@ function incidentId(input: Pick<RecordIncidentInput, 'scope' | 'kind' | 'operati
 
 interface StoppedReviewRow {
   task_id: string
+  task_kind: 'adversarial_review' | 'review_fix'
   repository: string
   github_number: number
   revision_id: string
   head_sha: string
   reason: string
   github_comment_id: number
+  findings: string
 }
 
 export interface StoppedReview {
   taskId: string
+  taskKind: 'adversarial_review' | 'review_fix'
   repository: string
   pullRequestNumber: number
   revisionId: string
   headSha: string
   reason: string
   commentId: number
+  findings: ReviewFinding[]
 }
 
 export type RecordObservationResult
@@ -457,6 +461,7 @@ export interface JournalStore {
   listStoppedReviews: () => StoppedReview[]
   recordStoppedReviewStatus: (input: {
     taskId: string
+    taskKind: 'adversarial_review' | 'review_fix'
     revisionId: string
     expectedHeadSha: string
     body: string
@@ -624,13 +629,14 @@ interface ReviewRunRow {
   github_number: number
   revision_id: string
   head_sha: string
-  provider: 'codex' | 'claude'
+  provider: 'codex' | 'opencode' | 'claude'
   session_id: string
   model: string
   agent_version: string
   skill_digest: string
   started_at: string
   completed_at: string
+  usage: string
   gates: string
   outcome_tag: 'Ready' | 'Pending' | 'Blocked'
   confidence: number | null
@@ -1947,12 +1953,29 @@ function reviewPublicationFromRow(row: ReviewPublicationRow): ReviewPublication 
   }
 }
 
+function agentTokenUsageFromJson(value: string): AgentTokenUsage {
+  const usage = JSON.parse(value) as Record<string, unknown>
+  if (usage._tag === 'Unavailable')
+    return { _tag: 'Unavailable' }
+  const counts = [usage.input, usage.cachedInput, usage.cacheWrite, usage.output, usage.reasoning]
+  if (usage._tag !== 'Available' || counts.some(count => typeof count !== 'number' || !Number.isInteger(count) || count < 0))
+    throw new Error('A Review run has invalid token usage.')
+  return {
+    _tag: 'Available',
+    input: usage.input as number,
+    cachedInput: usage.cachedInput as number,
+    cacheWrite: usage.cacheWrite as number,
+    output: usage.output as number,
+    reasoning: usage.reasoning as number,
+  }
+}
+
 function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]): ReviewRun {
   const outcome: ReviewOutcome = row.outcome_tag === 'Ready'
     ? row.confidence === null ? { _tag: 'Ready' } : { _tag: 'Ready', confidence: row.confidence }
     : { _tag: row.outcome_tag }
   if (outcome._tag !== 'Ready' && row.confidence !== null)
-    throw new Error(`Review attempt ${row.id} has invalid confidence state.`)
+    throw new Error(`Review run ${row.id} has invalid confidence state.`)
   return {
     id: row.id,
     repository: row.repository,
@@ -1966,6 +1989,7 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     skillDigest: row.skill_digest,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+    usage: agentTokenUsageFromJson(row.usage),
     gates: JSON.parse(row.gates) as ReviewGates,
     outcome,
     findings: JSON.parse(row.findings) as ReviewFinding[],
@@ -3033,6 +3057,51 @@ const followsConfigurationSelectionMigration = `
   PRAGMA user_version = 27;
 `
 
+const reviewUsageMigration = `
+  ALTER TABLE review_runs ADD COLUMN usage TEXT NOT NULL DEFAULT '{"_tag":"Unavailable"}' CHECK (json_valid(usage));
+
+  DROP INDEX IF EXISTS review_status_commands_state;
+  CREATE TABLE review_status_commands_v31 (
+    id TEXT PRIMARY KEY,
+    task_kind TEXT NOT NULL CHECK (task_kind IN ('adversarial_review', 'review_fix')),
+    task_id TEXT NOT NULL,
+    task_fence INTEGER NOT NULL,
+    revision_id TEXT NOT NULL REFERENCES revisions(id),
+    expected_head_sha TEXT NOT NULL,
+    phase TEXT NOT NULL CHECK (phase IN ('snapshot', 'review', 'repair', 'terminal')),
+    body TEXT NOT NULL,
+    body_sha256 TEXT NOT NULL CHECK (length(body_sha256) = 64),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Superseded')),
+    outcome_unknown INTEGER NOT NULL DEFAULT 0 CHECK (outcome_unknown IN (0, 1)),
+    reason TEXT,
+    github_comment_id INTEGER,
+    github_url TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (task_kind, task_id, task_fence, phase, body_sha256),
+    CHECK (
+      (task_kind = 'adversarial_review' AND phase IN ('snapshot', 'review', 'terminal'))
+      OR (task_kind = 'review_fix' AND phase IN ('repair', 'terminal'))
+    ),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (
+      (state_tag = 'Published' AND github_comment_id IS NOT NULL AND github_url IS NOT NULL)
+      OR state_tag != 'Published'
+    )
+  );
+  INSERT INTO review_status_commands_v31 SELECT * FROM review_status_commands;
+  DROP TABLE review_status_commands;
+  ALTER TABLE review_status_commands_v31 RENAME TO review_status_commands;
+  CREATE INDEX review_status_commands_state ON review_status_commands(state_tag, updated_at);
+  PRAGMA user_version = 31;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3058,7 +3127,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 30)
+  if (version === 31)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3179,6 +3248,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 29) {
     applyMigration(database, repositoryWriteQuarantineMigration)
+    version = 30
+  }
+  if (version === 30) {
+    applyForeignKeyMigration(database, reviewUsageMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -3369,6 +3442,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       review_runs.skill_digest,
       review_runs.started_at,
       review_runs.completed_at,
+      review_runs.usage,
       review_runs.gates,
       review_runs.outcome_tag,
       review_runs.confidence,
@@ -4138,8 +4212,10 @@ export function openJournalStore(
     if (requiresPullRequestApproval(database, mapping, pullRequest.author) && revision.review_approved !== 1)
       return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
 
+    const runUsage: AgentTokenUsage = input.usage ?? { _tag: 'Unavailable' }
     const gates = JSON.stringify(input.gates)
     const findings = JSON.stringify(input.findings)
+    const usage = JSON.stringify(runUsage)
     const contentDigest = digest(JSON.stringify({
       repository: input.repository,
       pullRequestNumber: input.pullRequestNumber,
@@ -4152,6 +4228,7 @@ export function openJournalStore(
       skillDigest: input.skillDigest,
       startedAt: input.startedAt,
       completedAt: input.completedAt,
+      usage: runUsage,
       gates: input.gates,
       outcome,
       findings: input.findings,
@@ -4170,8 +4247,8 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -4189,6 +4266,7 @@ export function openJournalStore(
         outcome._tag === 'Ready' ? outcome.confidence ?? null : null,
         findings,
         contentDigest,
+        usage,
       )
       database.exec('COMMIT')
       return { _tag: 'Inserted', reviewRunId: input.id }
@@ -4279,6 +4357,7 @@ export function openJournalStore(
         review_runs.skill_digest,
         review_runs.started_at,
         review_runs.completed_at,
+        review_runs.usage,
         review_runs.gates,
         review_runs.outcome_tag,
         review_runs.confidence,
@@ -5461,7 +5540,7 @@ export function openJournalStore(
         throw new Error(`Review status claim lost for ${row.id}.`)
       database.exec('COMMIT')
       const taskPhase: ReviewStatusTaskPhase = row.task_kind === 'review_fix'
-        ? { taskKind: 'review_fix', phase: 'repair' }
+        ? { taskKind: 'review_fix', phase: row.phase as 'repair' | 'terminal' }
         : { taskKind: 'adversarial_review', phase: row.phase as 'snapshot' | 'review' | 'terminal' }
       return {
         id: row.id,
@@ -6371,28 +6450,42 @@ export function openJournalStore(
   `).all() as unknown as AgentWorktreeLease[]
 
   const listStoppedReviews: JournalStore['listStoppedReviews'] = () => (database.prepare(`
+    WITH stopped AS (
+      SELECT id, subject_id, revision_id, kind AS task_kind, state_tag, reason
+      FROM worker_tasks WHERE kind = 'adversarial_review'
+      UNION ALL
+      SELECT id, subject_id, revision_id, kind AS task_kind, state_tag, reason
+      FROM tasks WHERE kind = 'review_fix'
+    )
     SELECT
-      worker_tasks.id AS task_id,
+      stopped.id AS task_id,
+      stopped.task_kind,
       repositories.github AS repository,
       subjects.github_number,
-      worker_tasks.revision_id,
+      stopped.revision_id,
       json_extract(revisions.payload, '$.headSha') AS head_sha,
-      COALESCE(worker_tasks.reason, 'The automated review stopped.') AS reason,
-      published.github_comment_id
-    FROM worker_tasks
-    JOIN subjects ON subjects.id = worker_tasks.subject_id
+      COALESCE(stopped.reason, 'The automated review stopped.') AS reason,
+      published.github_comment_id,
+      COALESCE((
+        SELECT review_runs.findings FROM review_runs
+        WHERE review_runs.subject_id = stopped.subject_id
+          AND review_runs.revision_id = stopped.revision_id
+        ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+        LIMIT 1
+      ), '[]') AS findings
+    FROM stopped
+    JOIN subjects ON subjects.id = stopped.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
-    JOIN revisions ON revisions.id = worker_tasks.revision_id
+    JOIN revisions ON revisions.id = stopped.revision_id
     JOIN review_status_commands AS published ON published.id = (
       SELECT candidate.id FROM review_status_commands AS candidate
-      WHERE candidate.task_kind = 'adversarial_review' AND candidate.task_id = worker_tasks.id
+      WHERE candidate.task_kind = stopped.task_kind AND candidate.task_id = stopped.id
         AND candidate.state_tag = 'Published'
       ORDER BY candidate.updated_at DESC, candidate.id DESC
       LIMIT 1
     )
-    WHERE worker_tasks.kind = 'adversarial_review'
-      AND worker_tasks.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
-      AND worker_tasks.revision_id = subjects.current_revision_id
+    WHERE stopped.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
+      AND stopped.revision_id = subjects.current_revision_id
       AND json_extract(revisions.payload, '$.state') = 'open'
       AND published.phase != 'terminal'
       AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
@@ -6401,40 +6494,42 @@ export function openJournalStore(
       -- A live review posts its own comment, so leave the pull request to it.
       AND NOT EXISTS (
         SELECT 1 FROM worker_tasks AS live
-        WHERE live.subject_id = worker_tasks.subject_id AND live.kind = 'adversarial_review'
+        WHERE live.subject_id = stopped.subject_id AND live.kind = 'adversarial_review'
           AND live.state_tag IN ('Queued', 'Running')
       )
-      -- Another Task for this exact head already published a final comment.
+      -- Any final status for this exact head already closed the canonical comment.
       AND NOT EXISTS (
         SELECT 1 FROM review_status_commands AS final
-        JOIN worker_tasks AS other ON other.id = final.task_id
-        WHERE final.task_kind = 'adversarial_review' AND final.phase = 'terminal'
-          AND final.state_tag = 'Published' AND other.subject_id = worker_tasks.subject_id
-          AND other.revision_id = worker_tasks.revision_id
+        WHERE final.phase = 'terminal' AND final.state_tag = 'Published'
+          AND final.revision_id = stopped.revision_id
+          AND final.expected_head_sha = json_extract(revisions.payload, '$.headSha')
       )
   `).all() as unknown as StoppedReviewRow[]).map(row => ({
     taskId: row.task_id,
+    taskKind: row.task_kind,
     repository: row.repository,
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,
     headSha: row.head_sha,
     reason: row.reason,
     commentId: row.github_comment_id,
+    findings: JSON.parse(row.findings) as ReviewFinding[],
   }))
 
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
-    const commandId = digest(`adversarial_review:${input.taskId}:stopped:${bodySha256}`)
+    const commandId = digest(`${input.taskKind}:${input.taskId}:stopped:${bodySha256}`)
+    const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
     database.exec('BEGIN IMMEDIATE')
     try {
       const authorized = database.prepare(`
-        SELECT worker_tasks.fence
-        FROM worker_tasks
-        JOIN subjects ON subjects.id = worker_tasks.subject_id
-        WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
-          AND worker_tasks.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
-          AND worker_tasks.revision_id = ? AND subjects.current_revision_id = ?
-      `).get(input.taskId, input.revisionId, input.revisionId) as { fence: number } | undefined
+        SELECT ${taskTable}.fence
+        FROM ${taskTable}
+        JOIN subjects ON subjects.id = ${taskTable}.subject_id
+        WHERE ${taskTable}.id = ? AND ${taskTable}.kind = ?
+          AND ${taskTable}.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
+          AND ${taskTable}.revision_id = ? AND subjects.current_revision_id = ?
+      `).get(input.taskId, input.taskKind, input.revisionId, input.revisionId) as { fence: number } | undefined
       if (authorized === undefined) {
         database.exec('COMMIT')
         return false
@@ -6443,10 +6538,11 @@ export function openJournalStore(
         INSERT INTO review_status_commands (
           id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase, body, body_sha256,
           state_tag, github_comment_id, github_url, created_at, updated_at
-        ) VALUES (?, 'adversarial_review', ?, ?, ?, ?, 'terminal', ?, ?, 'Published', ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'terminal', ?, ?, 'Published', ?, ?, ?, ?)
         ON CONFLICT (id) DO NOTHING
       `).run(
         commandId,
+        input.taskKind,
         input.taskId,
         authorized.fence,
         input.revisionId,

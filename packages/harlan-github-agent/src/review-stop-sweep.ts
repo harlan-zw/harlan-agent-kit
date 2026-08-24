@@ -15,6 +15,22 @@ export interface ReviewStopSweepOptions {
 }
 
 export function stoppedReviewComment(review: StoppedReview, at: string): string {
+  if (review.taskKind === 'review_fix') {
+    const findings = review.findings.map(finding => finding._tag === 'Fixed'
+      ? `- **Fixed:** ${cleanLine(finding.summary)}`
+      : `- **Open:** ${cleanLine(finding.summary)}${/[.!?]$/.test(cleanLine(finding.summary)) ? '' : '.'} Next: ${cleanLine(finding.nextAction)}`)
+    return `${AUTOMATED_REVIEW_MARKER}
+<!-- reviewed-sha: ${review.headSha} -->
+### 🤖 BLOCKED
+
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required. Last updated: ${updatedAtLabel(at)}.
+
+\`${formatProgressBar(100)}\`
+
+Repair stopped: ${cleanLine(review.reason)}
+
+${findings.join('\n')}`
+  }
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${review.headSha} -->
 ### 🤖 STOPPED
@@ -57,6 +73,7 @@ export async function publishStoppedReviews(
       return err(`${review.repository}#${review.pullRequestNumber}: ${published.error}`)
     const recorded = options.store.recordStoppedReviewStatus({
       taskId: review.taskId,
+      taskKind: review.taskKind,
       revisionId: review.revisionId,
       expectedHeadSha: review.headSha,
       body,

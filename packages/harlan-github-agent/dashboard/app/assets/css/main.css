@@ -12,7 +12,7 @@
   --ui-bg: oklch(98.5% 0 0);
   --ui-bg-muted: oklch(96.5% 0 0);
   --ui-bg-elevated: oklch(100% 0 0);
-  --ui-text-dimmed: oklch(64% 0 0);
+  --ui-text-dimmed: oklch(54% 0 0);
   --ui-text-muted: oklch(52% 0 0);
   --ui-text-toned: oklch(38% 0 0);
   --ui-text: oklch(20% 0 0);
@@ -24,7 +24,7 @@
   --ui-bg: oklch(14.5% 0 0);
   --ui-bg-muted: oklch(17.5% 0 0);
   --ui-bg-elevated: oklch(19.5% 0 0);
-  --ui-text-dimmed: oklch(54% 0 0);
+  --ui-text-dimmed: oklch(58% 0 0);
   --ui-text-muted: oklch(66% 0 0);
   --ui-text-toned: oklch(80% 0 0);
   --ui-text: oklch(96% 0 0);

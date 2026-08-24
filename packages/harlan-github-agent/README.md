@@ -67,6 +67,10 @@ If the pull request premise is wrong, Review recommends Dismissal. It never atte
 
 Every published Repair head SHA gets a fresh Review. A repeated finding stops with Action required.
 
+If Repair stops, the canonical review comment changes to `BLOCKED`. It lists every finding and next action.
+
+History stores each completed Review duration and Agent provider token usage. Older runs show usage as unavailable.
+
 If default branch CI already fails, Repair leaves the reviewed pull request unchanged. One Baseline repair Agent fixes that exact default branch commit in a separate pull request.
 
 Each Worker runs like a normal local agent session inside its own Git worktree. The controller creates each worktree from its mapped checkout with `wt`, so the global Worktrunk path template applies. Workers inherit the global agent context, installed skills, environment, provider login, and authenticated `gh` client. They may read past GitHub issues and pull requests. The controller still owns comments and pushes.
