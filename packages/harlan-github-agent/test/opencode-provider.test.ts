@@ -219,12 +219,14 @@ describe('context budget', () => {
   it('lets a session inside its budget finish and answer', async () => {
     const provider = createOpencodeProvider({
       cachedContextBudget: 1_000,
-      spawnOpencode: replay([stepFinish(200), stepFinish(200), textLine]),
+      spawnOpencode: replay([stepFinish(200), textLine, stepFinish(200, 'stop')]),
     })
 
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'Usage', usage: { _tag: 'Available', input: 24, cachedInput: 400, cacheWrite: 0, output: 6, reasoning: 0 } },
+      { _tag: 'TurnCompleted' },
     ])
   })
 })
@@ -242,6 +244,7 @@ describe('a stopping step over budget', () => {
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'Usage', usage: { _tag: 'Available', input: 0, cachedInput: 500, cacheWrite: 0, output: 0, reasoning: 0 } },
       { _tag: 'TurnCompleted' },
     ])
   })

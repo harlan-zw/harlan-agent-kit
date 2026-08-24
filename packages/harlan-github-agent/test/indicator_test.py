@@ -33,60 +33,6 @@ def load_watch():
 watch = load_watch()
 
 
-class RecentlyFinishedTest(unittest.TestCase):
-    def test_lists_unique_finished_agents_newest_first(self):
-        dashboard = {
-            'agents': [
-                {
-                    '_tag': 'ReviewAgent',
-                    'repository': 'harlan-zw/mdream',
-                    'pullRequestNumber': 211,
-                    'completedAt': '2026-08-13T10:44:54.415Z',
-                    'outcome': {'_tag': 'Ready'},
-                    'pullRequestStatus': {'_tag': 'Merged', 'mergedAt': '2026-08-13T11:00:00.000Z'},
-                    'subjectUrl': 'https://github.com/harlan-zw/mdream/pull/211',
-                },
-                {
-                    '_tag': 'ReviewAgent',
-                    'repository': 'harlan-zw/mdream',
-                    'pullRequestNumber': 211,
-                    'completedAt': '2026-08-13T10:40:00.000Z',
-                    'outcome': {'_tag': 'Blocked'},
-                    'subjectUrl': 'https://github.com/harlan-zw/mdream/pull/211',
-                },
-            ],
-            'tasks': [
-                {
-                    'kind': 'resolve_conflict',
-                    'repository': 'harlan-zw/request-indexing',
-                    'pullRequestNumber': 35,
-                    'updatedAt': '2026-08-13T11:00:00.000Z',
-                    'state': {'_tag': 'Completed', 'evidence': 'Pushed conflict fix.'},
-                },
-                {
-                    'kind': 'issue_triage',
-                    'repository': 'harlan-zw/example',
-                    'issueNumber': 4,
-                    'updatedAt': '2026-08-13T12:00:00.000Z',
-                    'state': {'_tag': 'Failed', 'reason': 'Tests failed.'},
-                },
-            ],
-        }
-
-        self.assertEqual(indicator.recently_finished(dashboard), [
-            {
-                'completedAt': '2026-08-13T11:00:00.000Z',
-                'label': 'harlan-zw/request-indexing #35 · Conflict fix · Done',
-                'url': 'https://github.com/harlan-zw/request-indexing/pull/35',
-            },
-            {
-                'completedAt': '2026-08-13T10:44:54.415Z',
-                'label': 'harlan-zw/mdream #211 · Review READY · Merged',
-                'url': 'https://github.com/harlan-zw/mdream/pull/211',
-            },
-        ])
-
-
 class RunnerActivityTest(unittest.TestCase):
     def test_reports_idle_runner(self):
         self.assertEqual(indicator.runner_activity(
@@ -105,6 +51,35 @@ class RunnerActivityTest(unittest.TestCase):
             {'State': 'exited', 'Status': 'Exited (1) 2 minutes ago'},
             '',
         ), {'_tag': 'Offline', 'detail': 'Exited (1) 2 minutes ago'})
+
+    def test_summarises_runner_capacity_as_github_actions(self):
+        runners = [
+            {'Activity': {'_tag': 'Running'}},
+            {'Activity': {'_tag': 'Idle'}},
+        ]
+
+        self.assertEqual(
+            indicator.github_actions_status_label(runners, None),
+            '🟢 2 self-hosted runners · 1 running · 1 idle',
+        )
+
+    def test_reports_runner_discovery_without_changing_agent_state(self):
+        def unavailable():
+            raise RuntimeError('Docker is unavailable')
+
+        sources = indicator.read_system_sources(
+            lambda: {'status': 'ready'},
+            unavailable,
+        )
+
+        self.assertEqual(sources['harlanGithubAgent'], {
+            '_tag': 'Available',
+            'dashboard': {'status': 'ready'},
+        })
+        self.assertEqual(sources['githubActions'], {
+            '_tag': 'Unavailable',
+            'message': 'Docker is unavailable',
+        })
 
 
 class IndicatorDisplayTest(unittest.TestCase):
@@ -195,26 +170,51 @@ class IndicatorDisplayTest(unittest.TestCase):
             ('▶ Resume agents', 'resume'),
         )
 
-    def test_pluralises_agent_menu_status(self):
-        self.assertEqual(indicator.agent_status_label({'_tag': 'Running'}, []), '⚪ 0 agents running')
-        self.assertEqual(indicator.agent_status_label({'_tag': 'Running'}, [{}]), '🟢 1 agent running')
-        self.assertEqual(indicator.agent_status_label({'_tag': 'Paused'}, []), '🟡 Agents paused')
-
     def test_selection_mode_label(self):
         self.assertIsNone(indicator.selection_mode_label({'selectionMode': 'auto'}))
         self.assertIn('Manual selection', indicator.selection_mode_label({'selectionMode': 'manual'}))
 
     def test_summarises_loading_running_paused_and_unavailable_states(self):
-        self.assertEqual(indicator.indicator_summary(None, [], [], None), ('🟡', 'Loading Harlan GitHub Agent'))
+        self.assertEqual(indicator.indicator_summary(None, [], None), ('🟡', 'Loading Harlan GitHub Agent'))
         self.assertEqual(
-            indicator.indicator_summary({'agentControl': {'_tag': 'Running'}, 'queue': []}, [{}], [], None),
-            ('🟢 1', '1 agent running · 0 queued · 0 self-hosted runners'),
+            indicator.indicator_summary({'agentControl': {'_tag': 'Running'}, 'queue': []}, [{}], None),
+            ('🟢 1', '1 agent running · Queue empty'),
         )
         self.assertEqual(
-            indicator.indicator_summary({'agentControl': {'_tag': 'Paused'}, 'queue': [{}, {}]}, [], [{}], None),
-            ('🟡', 'Agents paused · 2 queued · 1 self-hosted runner'),
+            indicator.indicator_summary({'agentControl': {'_tag': 'Paused'}, 'queue': [{}, {}]}, [], None),
+            ('🟡', 'Agents paused · 2 in Queue'),
         )
-        self.assertEqual(indicator.indicator_summary(None, [], [], 'Connection refused'), ('🔴', 'Harlan GitHub Agent unavailable'))
+        self.assertEqual(indicator.indicator_summary(None, [], 'Connection refused'), ('🔴', 'Harlan GitHub Agent unavailable'))
+
+    def test_keeps_runner_counts_out_of_the_agent_summary(self):
+        _, title = indicator.indicator_summary(
+            {'agentControl': {'_tag': 'Running'}, 'queue': [{}]},
+            [],
+            None,
+        )
+
+        self.assertEqual(title, '0 agents running · 1 in Queue')
+        self.assertNotIn('runner', title)
+
+    def test_raises_action_required_for_an_exhausted_incident(self):
+        dashboard = {
+            'status': 'ready',
+            'agentControl': {'_tag': 'Running'},
+            'queue': [],
+            'incidents': [{
+                'recovery': {'_tag': 'Exhausted'},
+                'severity': 'error',
+            }],
+        }
+
+        self.assertEqual(
+            indicator.indicator_summary(dashboard, [], None),
+            ('🔴', 'Harlan GitHub Agent · Action required'),
+        )
+        self.assertEqual(
+            indicator.harlan_github_agent_status_label(dashboard, [], None),
+            '🔴 Action required · Queue empty',
+        )
 
     def test_opens_a_read_only_watch_terminal_for_the_exact_session(self):
         agent = {

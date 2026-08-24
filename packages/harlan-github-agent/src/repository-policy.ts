@@ -1,4 +1,4 @@
-import type { RepositoryMapping } from './types.ts'
+import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 
 /**
  * What Harlan may do in a repository, named once instead of compared everywhere.
@@ -41,6 +41,14 @@ export function canWritePullRequestHead(mapping: RepositoryMapping): boolean {
   return mapping.enabled
     && canPushBranch(mapping)
     && (mapping.pullRequestReview || mapping.conflictResolution)
+}
+
+/** True when one exact pull request branch is safe for a verified repair. */
+export function canRepairPullRequestHead(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
+  return canWritePullRequestHead(mapping)
+    && (pullRequest.headRepository.toLowerCase() === mapping.github.toLowerCase() || pullRequest.maintainerCanModify === true)
+    && mapping.writablePullRequestHeadPrefixes.some(prefix => pullRequest.headRef.startsWith(prefix))
+    && pullRequest.headRef !== mapping.defaultBranch
 }
 
 /**

@@ -157,6 +157,41 @@ def request_runners():
     return runners
 
 
+def read_system_sources(fetch_dashboard, fetch_runners):
+    """Read the two systems independently, so one failure cannot mask the other."""
+    try:
+        harlan_github_agent = {'_tag': 'Available', 'dashboard': fetch_dashboard()}
+    except Exception as caught:
+        harlan_github_agent = {'_tag': 'Unavailable', 'message': str(caught)}
+
+    try:
+        github_actions = {'_tag': 'Available', 'runners': fetch_runners()}
+    except Exception as caught:
+        github_actions = {'_tag': 'Unavailable', 'message': str(caught)}
+
+    return {
+        'harlanGithubAgent': harlan_github_agent,
+        'githubActions': github_actions,
+    }
+
+
+def loading_system_sources():
+    return {
+        'harlanGithubAgent': {'_tag': 'Loading'},
+        'githubActions': {'_tag': 'Loading'},
+    }
+
+
+def source_dashboard(sources):
+    source = sources['harlanGithubAgent']
+    return source['dashboard'] if source['_tag'] == 'Available' else None
+
+
+def source_runners(sources):
+    source = sources['githubActions']
+    return source['runners'] if source['_tag'] == 'Available' else []
+
+
 def active_provider(dashboard):
     if dashboard is None:
         return None
@@ -444,6 +479,17 @@ def submenu_item(label, items):
     return item
 
 
+def section_item(label):
+    item = Gtk.MenuItem()
+    text = Gtk.Label()
+    text.set_markup(f'<b>{GLib.markup_escape_text(label)}</b>')
+    text.set_xalign(0)
+    item.add(text)
+    item.set_sensitive(False)
+    item.show_all()
+    return item
+
+
 def separator():
     item = Gtk.SeparatorMenuItem()
     item.show()
@@ -532,112 +578,177 @@ def counted(count, singular, plural=None):
     return f'{count} {singular if count == 1 else plural or f"{singular}s"}'
 
 
-def agent_status_label(agent_control, agents):
-    if agent_control.get('_tag') == 'Paused':
-        return '🟡 Agents paused'
-    marker = '🟢' if agents else '⚪'
-    return f'{marker} {counted(len(agents), "agent running", "agents running")}'
+def queue_count_label(queue):
+    return 'Queue empty' if not queue else f'{len(queue)} in Queue'
 
 
-def indicator_summary(dashboard, agents, runners, error):
+def dashboard_attention(dashboard):
+    incidents = dashboard.get('incidents', [])
+    queue = dashboard.get('queue', [])
+    if dashboard.get('status') == 'degraded' or any(
+        incident.get('recovery', {}).get('_tag') in ('Exhausted', 'ActionRequired')
+        for incident in incidents
+    ) or any(entry.get('state', {}).get('_tag') == 'ActionRequired' for entry in queue):
+        return {'_tag': 'ActionRequired'}
+
+    approvals = sum(
+        entry.get('state', {}).get('_tag') == 'AwaitingApproval'
+        for entry in queue
+    )
+    if approvals > 0:
+        return {'_tag': 'ApprovalRequired', 'count': approvals}
+    if incidents:
+        return {'_tag': 'Retrying'}
+    return {'_tag': 'Clear'}
+
+
+def indicator_summary(dashboard, agents, error):
     if error is not None:
         return ('🔴', 'Harlan GitHub Agent unavailable')
     if dashboard is None:
         return ('🟡', 'Loading Harlan GitHub Agent')
 
-    queue_count = len(dashboard.get('queue', []))
-    runner_count = len(runners)
-    if dashboard.get('status') == 'degraded':
-        return ('🔴', 'Harlan GitHub Agent needs attention')
+    queue_label = queue_count_label(dashboard.get('queue', []))
+    attention = dashboard_attention(dashboard)
+    if attention['_tag'] == 'ActionRequired':
+        return ('🔴', 'Harlan GitHub Agent · Action required')
     if dashboard.get('agentControl', {}).get('_tag') == 'Paused':
         parts = ['Agents paused']
         if agents:
             parts.append(counted(len(agents), 'agent finishing', 'agents finishing'))
-        parts.extend((counted(queue_count, 'queued', 'queued'), counted(runner_count, 'self-hosted runner')))
+        parts.append(queue_label)
         return ('🟡', ' · '.join(parts))
+    if attention['_tag'] == 'ApprovalRequired':
+        approvals = counted(attention['count'], 'approval needed', 'approvals needed')
+        return ('🟡', f'{approvals} · {queue_label}')
+    if attention['_tag'] == 'Retrying':
+        return ('🟠', f'Harlan GitHub Agent retrying · {queue_label}')
 
     marker = f'🟢 {len(agents)}' if agents else '⚪'
-    title = ' · '.join((
-        counted(len(agents), 'agent running', 'agents running'),
-        counted(queue_count, 'queued', 'queued'),
-        counted(runner_count, 'self-hosted runner'),
-    ))
+    title = ' · '.join((counted(len(agents), 'agent running', 'agents running'), queue_label))
     return (marker, title)
 
 
-def recently_finished(dashboard, limit=5):
-    candidates = []
-    for agent in dashboard.get('agents', []):
-        if agent.get('_tag') != 'ReviewAgent':
-            continue
-        repository = agent['repository']
-        number = agent['pullRequestNumber']
-        outcome = agent.get('outcome', {}).get('_tag', 'Done').upper()
-        pull_request_status = agent.get('pullRequestStatus', {}).get('_tag', 'Unknown')
-        status_label = 'Status syncing' if pull_request_status == 'Unknown' else pull_request_status
-        candidates.append({
-            'key': f'review:{repository}:{number}',
-            'completedAt': agent['completedAt'],
-            'label': f'{repository} #{number} · Review {outcome} · {status_label}',
-            'url': agent['subjectUrl'],
-        })
+def harlan_github_agent_status_label(dashboard, agents, error):
+    if error is not None:
+        return '🔴 Unavailable'
+    if dashboard is None:
+        return '🟡 Loading…'
 
-    task_labels = {
-        'resolve_conflict': ('Conflict fix', 'pull', 'pullRequestNumber'),
-        'issue_triage': ('Issue triage', 'issues', 'issueNumber'),
-    }
-    for task in dashboard.get('tasks', []):
-        if task.get('state', {}).get('_tag') != 'Completed' or task.get('kind') not in task_labels:
-            continue
-        label, path, number_key = task_labels[task['kind']]
-        repository = task['repository']
-        number = task[number_key]
-        candidates.append({
-            'key': f"{task['kind']}:{repository}:{number}",
-            'completedAt': task['updatedAt'],
-            'label': f'{repository} #{number} · {label} · Done',
-            'url': f'https://github.com/{repository}/{path}/{number}',
-        })
+    queue_label = queue_count_label(dashboard.get('queue', []))
+    attention = dashboard_attention(dashboard)
+    agent_control = dashboard.get('agentControl', {'_tag': 'Running'})
+    if attention['_tag'] == 'ActionRequired':
+        return f'🔴 Action required · {queue_label}'
+    if agent_control.get('_tag') == 'Paused':
+        finishing = counted(len(agents), 'agent finishing', 'agents finishing')
+        return f'🟡 Paused · {finishing} · {queue_label}'
+    if attention['_tag'] == 'ApprovalRequired':
+        approvals = counted(attention['count'], 'approval needed', 'approvals needed')
+        return f'🟡 {approvals} · {queue_label}'
+    if attention['_tag'] == 'Retrying':
+        return f'🟠 Retrying · {queue_label}'
+    if agents:
+        running = counted(len(agents), 'agent running', 'agents running')
+        return f'🟢 {running} · {queue_label}'
+    return f'⚪ Idle · {queue_label}'
 
-    finished = []
-    seen = set()
-    for candidate in sorted(candidates, key=lambda item: item['completedAt'], reverse=True):
-        if candidate['key'] in seen:
-            continue
-        seen.add(candidate['key'])
-        finished.append({key: value for key, value in candidate.items() if key != 'key'})
-        if len(finished) == limit:
-            break
-    return finished
+
+def github_actions_status_label(runners, error):
+    if error is not None:
+        return '🔴 Status unavailable'
+    if not runners:
+        return '⚪ No self-hosted runners found'
+
+    counts = {}
+    for runner in runners:
+        state = runner.get('Activity', {}).get('_tag', 'Unknown')
+        counts[state] = counts.get(state, 0) + 1
+
+    if counts.get('Offline', 0) > 0:
+        marker = '🔴'
+    elif counts.get('Unknown', 0) > 0:
+        marker = '🟠'
+    elif counts.get('Starting', 0) > 0:
+        marker = '🟡'
+    elif counts.get('Running', 0) > 0:
+        marker = '🟢'
+    else:
+        marker = '⚪'
+
+    states = []
+    for state, label in (
+        ('Running', 'running'),
+        ('Idle', 'idle'),
+        ('Starting', 'starting'),
+        ('Offline', 'offline'),
+        ('Unknown', 'unknown'),
+    ):
+        if counts.get(state, 0) > 0:
+            states.append(f"{counts[state]} {label}")
+    return ' · '.join((f'{marker} {counted(len(runners), "self-hosted runner")}', *states))
+
+
+def incident_scope_label(incident):
+    scope = incident.get('scope', {})
+    if scope.get('_tag') == 'Repository':
+        return scope.get('repository', 'Unknown repository')
+    if scope.get('_tag') == 'Task':
+        repository = scope.get('repository', 'Unknown repository')
+        number = scope.get('itemNumber')
+        return repository if number is None else f'{repository} #{number}'
+    return 'Harlan GitHub Agent'
+
+
+def incident_recovery_label(incident):
+    recovery = incident.get('recovery', {})
+    if recovery.get('_tag') == 'Retrying':
+        return 'Retrying'
+    if recovery.get('_tag') == 'Exhausted':
+        return 'Retries exhausted'
+    return 'Action required'
+
+
+def incident_label(incident):
+    marker = '🔴' if incident.get('severity') == 'error' else '🟠'
+    message = incident.get('message', 'Incident details unavailable')[:80]
+    return f'{marker} {incident_recovery_label(incident)} · {incident_scope_label(incident)} · {message}'
+
+
+def incident_url(incident):
+    scope = incident.get('scope', {})
+    repository = scope.get('repository')
+    return None if repository is None else f'https://github.com/{repository}'
 
 
 def usage_label(dashboard, usage):
     return opencode_usage_label(usage) if active_provider(dashboard) == 'opencode' else codex_limit_label(usage)
 
 
-def build_menu(indicator, dashboard, runners, usage, error, action_error, refresh, set_agent_control, eject_agent, select_agent):
+def build_menu(indicator, sources, usage, action_error, refresh, set_agent_control, eject_agent, select_agent):
     menu = Gtk.Menu()
+    dashboard_source = sources['harlanGithubAgent']
+    runner_source = sources['githubActions']
+    dashboard = source_dashboard(sources)
+    runners = source_runners(sources)
+    dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
+    runner_error = runner_source.get('message') if runner_source['_tag'] == 'Unavailable' else None
     agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
     queue = [] if dashboard is None else dashboard.get('queue', [])
-    menu.append(submenu_item(agent_provider_label(dashboard), agent_selection_items(dashboard, select_agent)))
-    menu.append(menu_item(usage_label(dashboard, usage), enabled=False))
-    menu.append(separator())
-    menu.append(menu_item('Open Harlan GitHub Agent', DASHBOARD_URL))
-    menu.append(separator())
+    menu.append(section_item('Harlan GitHub Agent'))
+    menu.append(menu_item(harlan_github_agent_status_label(dashboard, agents, dashboard_error), enabled=False))
+    if dashboard_error is not None:
+        menu.append(menu_item(dashboard_error[:100], enabled=False))
+    if action_error is not None:
+        menu.append(menu_item(action_error[:100], enabled=False))
+    menu.append(menu_item('Open dashboard', DASHBOARD_URL))
 
-    if dashboard is None and error is None:
-        menu.append(menu_item('🟡 Loading agent activity…', enabled=False))
-    elif error is not None:
-        menu.append(menu_item('🔴 GitHub agent unavailable', enabled=False))
-        menu.append(menu_item(error[:100], enabled=False))
-    else:
+    if dashboard is not None:
+        menu.append(menu_item(usage_label(dashboard, usage), enabled=False))
         agent_control = dashboard.get('agentControl', {'_tag': 'Running'})
-        menu.append(menu_item(agent_status_label(agent_control, agents), enabled=False))
         selection_label = selection_mode_label(dashboard)
         if selection_label is not None:
             menu.append(menu_item(selection_label, enabled=False))
-        if not agents:
-            menu.append(menu_item('No active pull requests or issues', enabled=False))
         for agent in agents:
             progress = agent.get('progress', {'percent': 0, 'label': 'Starting'})
             kind = 'issue' if agent.get('subjectKind') == 'issue' else 'pull request'
@@ -655,46 +766,54 @@ def build_menu(indicator, dashboard, runners, usage, error, action_error, refres
             links.append(eject_item)
             menu.append(submenu_item(active_agent_label(agent), links))
 
-        finished = recently_finished(dashboard)
-        if finished:
+        incidents = dashboard.get('incidents', [])
+        if incidents:
             menu.append(submenu_item(
-                f'✓ Recently finished · {len(finished)}',
-                [menu_item(entry['label'], entry['url']) for entry in finished],
-            ))
-
-        repositories = [repository for repository in dashboard.get('repositories', []) if repository.get('lastError')]
-        if repositories:
-            menu.append(submenu_item(
-                f'⚠ {len(repositories)} repositories need attention',
-                [menu_item(repository['github'], f"https://github.com/{repository['github']}") for repository in repositories],
-            ))
-
-        if queue:
-            menu.append(submenu_item(
-                f'Queue · {len(queue)}',
+                f'Incidents · {len(incidents)}',
                 [
-                    menu_item(f"{entry['position']} · {entry['repository']} #{entry['number']} · {queue_state(entry)}", entry['subjectUrl'])
-                    for entry in queue[:10]
+                    menu_item(
+                        incident_label(incident),
+                        incident_url(incident),
+                        enabled=incident_url(incident) is not None,
+                    )
+                    for incident in incidents
                 ],
             ))
 
-    menu.append(separator())
-    menu.append(submenu_item(
-        f'Self-hosted runners · {len(runners)}',
-        [
-            menu_item(runner_label(runner), f"https://github.com/{runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository', '')}/actions")
-            for runner in sorted(runners, key=lambda item: runner_label(item))
-        ] or [menu_item('No runners online', enabled=False)],
-    ))
-
-    menu.append(separator())
-    if dashboard is not None:
+        if queue:
+            queue_items = [
+                menu_item(f"{entry['position']} · {entry['repository']} #{entry['number']} · {queue_state(entry)}", entry['subjectUrl'])
+                for entry in queue[:10]
+            ]
+            if len(queue) > 10:
+                queue_items.append(menu_item(f'Open dashboard for {len(queue) - 10} more', DASHBOARD_URL))
+            menu.append(submenu_item(
+                f'Queue · {len(queue)}',
+                queue_items,
+            ))
+        menu.append(submenu_item(agent_provider_label(dashboard), agent_selection_items(dashboard, select_agent)))
         control_label, action = agent_control_action(dashboard.get('agentControl', {'_tag': 'Running'}))
         control_item = menu_item(control_label)
         control_item.connect('activate', lambda *_args: set_agent_control(action))
         menu.append(control_item)
-        if action_error is not None:
-            menu.append(menu_item(action_error[:100], enabled=False))
+
+    menu.append(separator())
+    menu.append(section_item('GitHub Actions'))
+    menu.append(menu_item(github_actions_status_label(runners, runner_error), enabled=False))
+    if runner_error is not None:
+        menu.append(menu_item(runner_error[:100], enabled=False))
+    elif runners:
+        runner_items = []
+        for runner in sorted(runners, key=lambda item: runner_label(item)):
+            repository = runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository')
+            runner_items.append(menu_item(
+                runner_label(runner),
+                None if repository is None else f'https://github.com/{repository}/actions',
+                enabled=repository is not None,
+            ))
+        menu.append(submenu_item(f'Self-hosted runners · {len(runners)}', runner_items))
+
+    menu.append(separator())
     refresh_item = menu_item('Refresh')
     refresh_item.connect('activate', lambda *_args: refresh())
     menu.append(refresh_item)
@@ -724,22 +843,22 @@ def main():
     pending_action = {'value': None}
     usage_cache = {'value': None, 'updatedAt': 0.0, 'provider': None}
 
-    def apply_state(dashboard, runners, usage, error, control_error):
+    def apply_state(sources, usage, control_error):
         refreshing['active'] = False
+        dashboard = source_dashboard(sources)
         agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
-        label, title = indicator_summary(dashboard, agents, runners, error)
+        dashboard_source = sources['harlanGithubAgent']
+        dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
+        label, title = indicator_summary(dashboard, agents, dashboard_error)
         indicator.set_label(label, '🟢 99')
         indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
         indicator.set_title(title)
-        build_menu(indicator, dashboard, runners, usage, error, control_error, refresh, set_agent_control, eject_agent, select_agent)
+        build_menu(indicator, sources, usage, control_error, refresh, set_agent_control, eject_agent, select_agent)
         if pending_action['value'] is not None:
             refresh()
         return False
 
     def load_state():
-        dashboard = None
-        runners = []
-        error = None
         control_error = None
         action = pending_action['value']
         pending_action['value'] = None
@@ -753,14 +872,8 @@ def main():
                     request_agent_eject(action['taskId'])
             except Exception as caught:
                 control_error = f"{action['label']} failed: {caught}"
-        try:
-            dashboard = request_dashboard()
-        except Exception as caught:
-            error = str(caught)
-        try:
-            runners = request_runners()
-        except Exception as caught:
-            error = str(caught) if error is None else error
+        sources = read_system_sources(request_dashboard, request_runners)
+        dashboard = source_dashboard(sources)
         provider = active_provider(dashboard)
         stale = time.monotonic() - usage_cache['updatedAt'] >= CODEX_LIMIT_REFRESH_SECONDS
         if provider is not None and (stale or usage_cache['provider'] != provider):
@@ -770,7 +883,7 @@ def main():
                 usage_cache['value'] = {'_tag': 'Unavailable'}
             usage_cache['provider'] = provider
             usage_cache['updatedAt'] = time.monotonic()
-        GLib.idle_add(apply_state, dashboard, runners, usage_cache['value'], error, control_error)
+        GLib.idle_add(apply_state, sources, usage_cache['value'], control_error)
 
     def refresh(*_args):
         if refreshing['active']:
@@ -803,7 +916,7 @@ def main():
         }
         return refresh()
 
-    build_menu(indicator, None, [], None, None, None, refresh, set_agent_control, eject_agent, select_agent)
+    build_menu(indicator, loading_system_sources(), None, None, refresh, set_agent_control, eject_agent, select_agent)
     refresh()
     GLib.timeout_add_seconds(5, refresh)
     Gtk.main()

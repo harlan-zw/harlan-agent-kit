@@ -82,6 +82,12 @@ export function currentGitHubChecks(checks: GitHubCheck[]): GitHubCheck[] {
   return [...current.values()]
 }
 
+export function chronologicalPullRequestComments(entries: Array<{ body: string, createdAt: string }>): string[] {
+  return [...entries]
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map(entry => entry.body)
+}
+
 export type GitHubChecksSnapshot
   = | { _tag: 'Available', checks: GitHubCheck[] }
     | { _tag: 'Unavailable', reason: string }
@@ -483,16 +489,16 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           baseChecks,
           body: pull.data.body ?? '',
           checks,
-          comments: [
+          comments: chronologicalPullRequestComments([
             ...issueComments.flatMap(comment => comment.body === undefined || comment.body === null
               || (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body.includes(AUTOMATED_REVIEW_MARKER))
               ? []
-              : [comment.body]),
+              : [{ body: comment.body, createdAt: comment.created_at }]),
             ...reviewComments.flatMap(comment => comment.body === undefined
               || (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body.includes(AUTOMATED_REVIEW_MARKER))
               ? []
-              : [comment.body]),
-          ],
+              : [{ body: comment.body, createdAt: comment.created_at }]),
+          ]),
           priorAutomatedReview: priorAutomatedReviewForHead(issueComments.flatMap(comment =>
             comment.body === undefined || comment.body === null || comment.user?.login === undefined
               ? []
@@ -504,7 +510,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                 }]), pull.data.head.sha, options.actorLogin(repository)),
           pullRequest: pullRequestItem(repository, pull.data),
           requiredChecks,
-          reviews: reviews.flatMap(review => review.body === undefined || review.body === null ? [] : [review.body]),
+          reviews: chronologicalPullRequestComments(reviews.flatMap(review => review.body === undefined || review.body === null
+            ? []
+            : [{ body: review.body, createdAt: review.submitted_at ?? '' }])),
         })
       }).catch((error: unknown) => err(message(error)))
     },

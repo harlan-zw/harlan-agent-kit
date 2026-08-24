@@ -1,6 +1,6 @@
 import type { ChildProcessByStdio } from 'node:child_process'
 import type { Readable } from 'node:stream'
-import type { AgentEvent, AgentProvider, AgentTurnRequest } from './agent-provider.ts'
+import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -80,11 +80,27 @@ function errorMessage(error: unknown): string {
  * opencode database records, so adding them meters the session exactly.
  */
 export function opencodeCachedTokensRead(line: OpencodeLine): number {
+  return opencodeAgentUsage(line)?.cachedInput ?? 0
+}
+
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+export function opencodeAgentUsage(line: OpencodeLine): Extract<AgentTokenUsage, { _tag: 'Available' }> | undefined {
   if (line.type !== 'step_finish')
-    return 0
-  const tokens = (line.part as { tokens?: { cache?: { read?: unknown } } } | undefined)?.tokens
-  const read = tokens?.cache?.read
-  return typeof read === 'number' && Number.isFinite(read) && read > 0 ? read : 0
+    return undefined
+  const tokens = (line.part as { tokens?: { input?: unknown, output?: unknown, reasoning?: unknown, cache?: { read?: unknown, write?: unknown } } } | undefined)?.tokens
+  if (tokens === undefined)
+    return undefined
+  return {
+    _tag: 'Available',
+    input: tokenCount(tokens.input),
+    cachedInput: tokenCount(tokens.cache?.read),
+    cacheWrite: tokenCount(tokens.cache?.write),
+    output: tokenCount(tokens.output),
+    reasoning: tokenCount(tokens.reasoning),
+  }
 }
 
 /** Maps one `opencode run --format json` line to the provider-neutral event. */
@@ -186,6 +202,8 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     let sessionId: string | null = null
     let failed = false
     let cachedTokensRead = 0
+    let usage: Extract<AgentTokenUsage, { _tag: 'Available' }> = { _tag: 'Available', input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }
+    let usageAvailable = false
     let overBudget = false
     try {
       for await (const raw of createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY })) {
@@ -205,11 +223,25 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
           sessionId = parsed.sessionID
           yield { _tag: 'SessionStarted', sessionId }
         }
-        cachedTokensRead += opencodeCachedTokensRead(parsed)
+        const stepUsage = opencodeAgentUsage(parsed)
+        if (stepUsage !== undefined) {
+          usageAvailable = true
+          usage = {
+            _tag: 'Available',
+            input: usage.input + stepUsage.input,
+            cachedInput: usage.cachedInput + stepUsage.cachedInput,
+            cacheWrite: usage.cacheWrite + stepUsage.cacheWrite,
+            output: usage.output + stepUsage.output,
+            reasoning: usage.reasoning + stepUsage.reasoning,
+          }
+        }
+        cachedTokensRead += stepUsage?.cachedInput ?? 0
         const event = opencodeAgentEvent(parsed)
         if (event !== undefined) {
           if (event._tag === 'Failed')
             failed = true
+          if (event._tag === 'TurnCompleted' && usageAvailable)
+            yield { _tag: 'Usage', usage }
           yield event
         }
         // A stopping step ends the turn by itself, so the budget never discards

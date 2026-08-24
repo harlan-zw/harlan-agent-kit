@@ -36,11 +36,11 @@ Record `passed`, `waiting`, or `failed` for every gate:
 Derive one outcome without judgment:
 
 1. Any `failed` gate gives `BLOCKED`.
-2. Otherwise, any `waiting` gate gives `WAITING`.
+2. Otherwise, any `waiting` gate gives `PENDING`.
 3. Every gate `passed` gives `READY`.
 
 Gate outcomes are deterministic. Confidence never changes an outcome. Do not give
-`WAITING` or `BLOCKED` a confidence score or call either a sign-off.
+`PENDING` or `BLOCKED` a confidence score or call either a sign-off.
 
 ## Confidence
 
@@ -104,21 +104,34 @@ review body only reports material issues found or fixed.
 `▓▓▓▓▓ 100%`
 ```
 
-When the review found issues, add at most five issue bullets. Show each issue once:
+When Review found issues, show every material finding once:
 
 ```markdown
 - **Fixed:** SHORT_DESCRIPTION
 - **Open:** SHORT_DESCRIPTION. Next: NEXT_ACTION
+- **Dismissal recommended:** SHORT_DESCRIPTION. Next: Dismiss this pull request.
 ```
 
 Do not list the reviewed SHA, base state, metadata conformance, commands, passed
 checks, CI counts, review lanes, or other routine evidence in the visible body.
 Preserve that evidence in the review record outside the comment when available.
 
-For `WAITING`, append one short waiting reason to that line. For `BLOCKED`, report the
+For `PENDING`, append one short reason to that line. For `BLOCKED`, report the
 blocker as an open issue when it affects the pull request. Quote operational or
 permission blockers. Keep the exact outcome reason and next action. Do not use
 an issue bullet for a clean result.
+
+## Structured Repair handoff
+
+Record every material Review finding. Never cap the finding count.
+
+Each finding records a stable fingerprint, exact path and line, proof, summary, next action, and resolution.
+
+A `Repair` finding also records the regression test the fresh Repair Agent must write first.
+
+A `Dismissal` finding records no regression test. Use it only when the premise is wrong and Repair would replace the pull request intent.
+
+When any finding recommends Dismissal, queue no Repair. Publish `BLOCKED` with Action required. Harlan decides whether to Dismiss.
 
 ## Deployment extension
 
@@ -151,12 +164,14 @@ Build `payload.json` from the final body with `jq`; do not interpolate JSON manu
 
 ## Local journal
 
-When `harlan-github-agent` dispatches the review, record one immutable Attempt
+When `harlan-github-agent` dispatches Review, record one immutable Review run
 against the exact Revision before publication. Store the six gates, evidence
 digests, Review findings, derived outcome, agent version, skill digest, and
-timestamps. Store confidence only for `READY`.
+timestamps. Store duration and Agent provider token usage. Use an explicit
+unavailable state when the provider reports no usage. Store confidence only for
+`READY`.
 
-For an outside contributor, reject the Attempt unless the same Revision has Review and repair Approval. Queue verified repairs under that Approval.
+For an outside contributor, reject the Review run unless the same Revision has Review and repair Approval. Queue verified repairs under that Approval.
 
 Carry Approval only to an exact repair commit published by the controller for the approved Revision.
 
@@ -164,6 +179,6 @@ After each GitHub write, record one Publication with the exact Markdown and the
 GitHub comment ID and URL. If the write fails, record the attempted Markdown and
 failure reason. Never store secrets or full tool transcripts.
 
-Reject an Attempt when its Revision or head SHA does not match. Reject duplicate
+Reject a Review run when its Revision or head SHA does not match. Reject duplicate
 identifiers with different content. A dispatched review remains incomplete until
-both its Attempt and Publication result are durable.
+both its Review run and Publication result are durable.

@@ -6,12 +6,25 @@ import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stopped: StoppedReview = {
   taskId: 'review-task',
+  taskKind: 'adversarial_review',
   repository: 'harlan-zw/example',
   pullRequestNumber: 24,
   revisionId: 'revision-1',
   headSha: 'abc123',
   reason: 'The pull request is not ready for review.',
   commentId: 42,
+  findings: [],
+}
+
+const stoppedRepair: StoppedReview = {
+  ...stopped,
+  taskId: 'repair-task',
+  taskKind: 'review_fix',
+  reason: 'The Repair Agent found an unsafe scope.',
+  findings: [
+    { _tag: 'Open', summary: 'First exact finding.', nextAction: 'Fix the first boundary.', resolution: 'Repair' },
+    { _tag: 'Open', summary: 'Second exact finding.', nextAction: 'Fix the second boundary.', resolution: 'Repair' },
+  ],
 }
 
 function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
@@ -34,6 +47,16 @@ describe('stoppedReviewComment', () => {
     expect(body).toContain('### 🤖 STOPPED')
     expect(body).toContain('The pull request is not ready for review.')
     expect(body).not.toContain('REVIEWING')
+  })
+
+  it('replaces Repair progress with BLOCKED and every exact finding', () => {
+    const body = stoppedReviewComment(stoppedRepair, '2026-08-15T04:00:00.000Z')
+
+    expect(body).toContain('### 🤖 BLOCKED')
+    expect(body).toContain('First exact finding. Next: Fix the first boundary.')
+    expect(body).toContain('Second exact finding. Next: Fix the second boundary.')
+    expect(body).toContain('The Repair Agent found an unsafe scope.')
+    expect(body).not.toContain('### 🤖 REPAIR')
   })
 })
 

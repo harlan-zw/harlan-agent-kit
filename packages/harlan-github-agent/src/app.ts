@@ -71,7 +71,10 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
 }
 
 async function setRepositoryWrites(options: AgentAppOptions, event: { req: { json: () => Promise<unknown> } }, writesEnabled: boolean): Promise<{ github: string, writesEnabled: boolean }> {
-  const body = await event.req.json().catch(() => undefined)
+  const body = await event.req.json().catch(() => {
+    // Malformed JSON receives the same 400 response as a missing repository.
+    return undefined
+  })
   const github = typeof body === 'object' && body !== null && 'repository' in body ? (body as { repository: unknown }).repository : undefined
   if (typeof github !== 'string' || !/^[^/]+\/[^/]+$/.test(github))
     throw createError({ status: 400, statusText: 'Bad Request', message: 'A valid repository is required.' })

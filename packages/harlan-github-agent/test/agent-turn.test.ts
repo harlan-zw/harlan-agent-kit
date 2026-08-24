@@ -54,7 +54,7 @@ describe('runParsedAgentTurn', () => {
 
     const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
 
-    expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1' }))
+    expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }))
     expect(capture.prompts).toHaveLength(2)
     expect(capture.prompts[1]).toContain('The agent returned an invalid conflict resolution result.')
     expect(capture.prompts[1]).toContain('Use no tool.')
@@ -76,8 +76,38 @@ describe('runParsedAgentTurn', () => {
 
     const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
 
-    expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1' }))
+    expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }))
     expect(capture.prompts).toHaveLength(1)
+  })
+})
+
+describe('review usage', () => {
+  it('adds both turns when the Agent repairs its result schema', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider: AgentProvider = {
+      name: 'codex',
+      runTurn: (request) => {
+        capture.prompts.push(request.prompt)
+        const response = capture.prompts.length === 1 ? { outcome: 'nearly' } : { outcome: 'resolved' }
+        return (async function* () {
+          yield { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent
+          yield { _tag: 'Message', text: JSON.stringify(response) } as AgentEvent
+          yield {
+            _tag: 'Usage',
+            usage: { _tag: 'Available', input: 100, cachedInput: 500, cacheWrite: 10, output: 20, reasoning: 5 },
+          } as AgentEvent
+          yield { _tag: 'TurnCompleted' } as AgentEvent
+        })()
+      },
+    }
+
+    const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
+
+    expect(result).toEqual(ok({
+      value: { outcome: 'resolved' },
+      sessionId: 'session-1',
+      usage: { _tag: 'Available', input: 200, cachedInput: 1_000, cacheWrite: 20, output: 40, reasoning: 10 },
+    }))
   })
 })
 

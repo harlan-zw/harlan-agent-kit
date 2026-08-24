@@ -1,12 +1,14 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentProgressWork } from './agent-progress.ts'
+import type { AgentTokenUsage } from './agent-provider.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, AgentRole } from './types.ts'
 import { agentActivityFromEvent } from './agent-activity.ts'
 import { roleProfile } from './agent-profile.ts'
 import { agentEventProgress } from './agent-progress.ts'
+import { addAgentTokenUsage } from './agent-provider.ts'
 import { contextBudgetExhaustedReason } from './failure.ts'
 import { err, ok } from './result.ts'
 
@@ -19,6 +21,8 @@ export interface AgentTurnOptions {
 }
 
 export interface AgentTurnInput {
+  /** Start without prior session context, while still saving the new session for Eject. */
+  freshSession?: boolean
   /** Issue or pull request number the session belongs to. */
   number: number
   progress?: {
@@ -41,6 +45,7 @@ export interface AgentTurnInput {
 export interface AgentTurnResult {
   response: string
   sessionId: string
+  usage: AgentTokenUsage
 }
 
 /**
@@ -74,7 +79,9 @@ export async function runAgentTurn(
   signal: AbortSignal,
 ): Promise<Result<AgentTurnResult, string>> {
   const sessionRole = input.sessionRole ?? input.role
-  const sessionId = options.store.getWorkerSession(input.repository, input.number, sessionRole, input.scopeDigest)
+  const sessionId = input.freshSession === true
+    ? null
+    : options.store.getWorkerSession(input.repository, input.number, sessionRole, input.scopeDigest)
   const runtime = options.runtime()
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({
@@ -90,6 +97,7 @@ export async function runAgentTurn(
   let response: string | undefined
   let currentSessionId = sessionId
   let failure: string | undefined
+  let usage: AgentTokenUsage = { _tag: 'Unavailable' }
   let currentPercent = input.progress?.currentPercent ?? 0
   for await (const event of events) {
     if (event._tag === 'SessionStarted') {
@@ -98,6 +106,8 @@ export async function runAgentTurn(
     }
     if (event._tag === 'Message')
       response = event.text
+    if (event._tag === 'Usage')
+      usage = event.usage
     if (event._tag === 'ContextBudgetExhausted') {
       // The turn names the Item, so the Incident names the pull request a
       // person must look at. The provider only knows how much it read.
@@ -126,7 +136,7 @@ export async function runAgentTurn(
     return err(failure)
   if (response === undefined || currentSessionId === null)
     return err('The agent finished without a result.')
-  return ok({ response, sessionId: currentSessionId })
+  return ok({ response, sessionId: currentSessionId, usage })
 }
 
 export interface ParsedAgentTurnOptions<Value> extends AgentTurnOptions {
@@ -143,7 +153,7 @@ export async function runParsedAgentTurn<Value>(
   options: ParsedAgentTurnOptions<Value>,
   input: AgentTurnInput,
   signal: AbortSignal,
-): Promise<Result<{ value: Value, sessionId: string }, string>> {
+): Promise<Result<{ value: Value, sessionId: string, usage: AgentTokenUsage }, string>> {
   // The repair turn quotes the first answer, so both turns use one runtime even
   // when the Agent selection changes between them.
   const runtime = options.runtime()
@@ -153,7 +163,7 @@ export async function runParsedAgentTurn<Value>(
     return turn
   const parsed = await options.parse(turn.value.response)
   if (parsed._tag === 'Ok')
-    return ok({ value: parsed.value, sessionId: turn.value.sessionId })
+    return ok({ value: parsed.value, sessionId: turn.value.sessionId, usage: turn.value.usage })
 
   const repaired = await runAgentTurn(frozen, {
     ...input,
@@ -165,6 +175,10 @@ export async function runParsedAgentTurn<Value>(
     return err(parsed.error)
   const reparsed = await options.parse(repaired.value.response)
   return reparsed._tag === 'Ok'
-    ? ok({ value: reparsed.value, sessionId: repaired.value.sessionId })
+    ? ok({
+        value: reparsed.value,
+        sessionId: repaired.value.sessionId,
+        usage: addAgentTokenUsage(turn.value.usage, repaired.value.usage),
+      })
     : err(parsed.error)
 }

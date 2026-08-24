@@ -1,0 +1,32 @@
+{
+  "schema_version": 4,
+  "job_id": "system-history-0824-1658",
+  "created": "2026-08-24T07:29:42Z",
+  "git_hash": "5e50de7fed22f05a6d66fe4408818e7d1e98c377",
+  "dev_port": 43219,
+  "pages_changed": ["app/pages/history.vue", "app/layouts/default.vue"],
+  "components_created": [],
+  "routes_to_test": ["/history"],
+  "design_system_changes": true,
+  "theme_name": "devtool",
+  "contract_path": ".claude/context/jobs/system-history-0824-1658/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met"
+  },
+  "self_assessment": {
+    "confidence": "high",
+    "weakest_area": "The live service migration remains separate from the completed UI contract.",
+    "hardest_decision": "Kept Review usage inside Evidence instead of adding another History column."
+  },
+  "has_client_animations": false,
+  "known_limitations": [],
+  "next_steps": [],
+  "dark_mode_relevant": true
+}

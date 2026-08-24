@@ -1,4 +1,4 @@
-import type { AgentProviderName } from './agent-provider.ts'
+import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 
@@ -202,7 +202,27 @@ export interface ReviewGates {
 
 export type ReviewFinding
   = | { _tag: 'Fixed', summary: string }
-    | { _tag: 'Open', summary: string, nextAction: string }
+    | {
+      _tag: 'Open'
+      summary: string
+      nextAction: string
+      /** Current Reviews choose Repair or recommend a person Dismiss the Item. */
+      resolution?: 'Repair' | 'Dismissal'
+      /**
+       * Exact repair input added by current Review Agents.
+       *
+       * Optional because the journal can contain Review runs written before
+       * structured repair handoff existed.
+       */
+      details?: {
+        fingerprint: string
+        /** Raw identity behind the fingerprint, so a later Review reuses it instead of coining new wording. */
+        identity?: string
+        location: { path: string, line: number | null }
+        proof: string
+        regressionTest: string | null
+      }
+    }
 
 export type ReviewOutcome
   /** `confidence` is absent when the agent passed every gate but named no score. */
@@ -236,14 +256,17 @@ export interface ReviewRun {
   skillDigest: string
   startedAt: string
   completedAt: string
+  usage: AgentTokenUsage
   gates: ReviewGates
   outcome: ReviewOutcome
   findings: ReviewFinding[]
   publications: ReviewPublication[]
 }
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'outcome' | 'publications'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'outcome' | 'publications' | 'usage'> {
   confidence?: number
+  /** Omitted callers are stored explicitly as unavailable. */
+  usage?: AgentTokenUsage
 }
 
 export interface RecordReviewPublicationInput {
@@ -323,12 +346,9 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
  * worth another agent turn. The second never is, so the tag, and not the
  * wording of a reason, decides whether the review runs again.
  */
-export type ReviewFixClaim
-  = | { _tag: 'Claimed', task: ClaimedReviewFixTask }
-    /** Another attempt can win, because the controller lost a race. */
-    | { _tag: 'Unavailable', reason: string }
-    /** No attempt can win, because a person or a policy has to change first. */
-    | { _tag: 'Refused', reason: string }
+export type ReviewFixQueueResult
+  = | { _tag: 'Queued', taskId: string }
+    | { _tag: 'ActionRequired', reason: string }
 
 export interface BaselineRepairTask {
   id: string
@@ -413,7 +433,7 @@ interface ReviewStatusCommandBase {
 
 export type ReviewStatusTaskPhase
   = | { taskKind: 'adversarial_review', phase: 'snapshot' | 'review' | 'terminal' }
-    | { taskKind: 'review_fix', phase: 'repair' }
+    | { taskKind: 'review_fix', phase: 'repair' | 'terminal' }
 
 export type ReviewStatusCommand = ReviewStatusCommandBase & ReviewStatusTaskPhase
 

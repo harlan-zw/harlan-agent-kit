@@ -18,6 +18,7 @@ import {
   queueWork,
   repositoryState,
   reviewOutcomeLabel,
+  reviewUsageLabel,
   taskKindLabel,
   taskStateTone,
   taskSubjectUrl,
@@ -101,6 +102,7 @@ function reviewAgent(overrides: Partial<ReviewAgent> = {}): ReviewAgent {
     },
     outcome: { _tag: 'Ready', confidence: 90 },
     findings: [],
+    usage: { _tag: 'Unavailable' },
     publications: [],
     ...overrides,
   } as ReviewAgent
@@ -151,6 +153,23 @@ describe('buildHistory', () => {
   it('keeps a review task whose revision does not match any recorded review', () => {
     const history = buildHistory([reviewAgent({ revisionId: 'rev-b' })], [reviewTask])
     expect(history).toHaveLength(2)
+  })
+})
+
+describe('reviewUsageLabel', () => {
+  it('formats the whole Review run usage as one compact aggregate', () => {
+    expect(reviewUsageLabel({
+      _tag: 'Available',
+      input: 12_000,
+      cachedInput: 1_809_408,
+      cacheWrite: 0,
+      output: 9_577,
+      reasoning: 5_356,
+    })).toBe('12k input · 1.8m cached · 9.6k output · 5.4k reasoning · 0 cache write')
+  })
+
+  it('states when the Agent provider reported no usage', () => {
+    expect(reviewUsageLabel({ _tag: 'Unavailable' })).toBe('Usage unavailable')
   })
 })
 

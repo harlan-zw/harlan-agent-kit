@@ -28,6 +28,7 @@ did not cover it.
 | Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
 | Watch logs | System pane action | Observer | Opens one read-only live Task event stream | Watch logs |
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
+| Self-hosted runner | Docker container labels | GitHub Actions | N per repository, independent of this service | self-hosted runner |
 | Conflict resolution | `tasks.kind` | Scheduler | One Task kind | conflict resolution |
 | Baseline repair | `tasks.kind` | Scheduler | One Task for one failing default branch commit | Baseline repair |
 | Repair | `tasks.kind` | Scheduler | One Task for the findings of one Review run | repair |
@@ -38,10 +39,11 @@ did not cover it.
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
 | Take Ownership | `repositories.take_ownership` | Controller | One policy per Repository mapping | Take Ownership |
 | Publication command | `publication_commands` | Controller | One to one Task | none |
-| Review run | `attempts` | Runner | N to 1 Revision, 1 to N Publications | review |
-| Review gate | `attempts.gates` | Adversarial review | Six per Review run | gate |
-| Review outcome | `attempts.outcome_tag` | Adversarial review | One per Review run | READY, PENDING, or BLOCKED |
-| Review finding | `attempts.findings` | Adversarial review | N per Review run | issue |
+| Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
+| Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
+| Review gate | `review_runs.gates` | Adversarial review | Six per Review run | gate |
+| Review outcome | `review_runs.outcome_tag` | Adversarial review | One per Review run | READY, PENDING, or BLOCKED |
+| Review finding | `review_runs.findings` | Adversarial review | N per Review run | issue |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
 | Publication | `review_publications` | Journal | N to 1 Review run | automated review |
 | Approval | `pull_request_approvals` or `tasks.kind = issue_work` | Controller | N to 1 Revision | approval |
@@ -227,6 +229,10 @@ Dismissing cancels the Item's running and queued Tasks. Leaving an agent running
 
 A dismissed Item leaves the Queue. It stays visible under `Dismissed` in the Watching page, which is the only place `Restore` appears.
 
+A Review Agent may write **Dismissal recommended** when the pull request premise is wrong. Use it when Repair would replace the pull request intent or require an unrelated root architecture rewrite.
+
+A recommendation never creates a Dismissal. Harlan decides whether to use `Dismiss`.
+
 Restoring queues nothing by itself. The next observation replans the Item from its current state.
 
 `Dismiss` is GitHub's own word, used for a Dependabot alert and a code scanning alert, where it means the same thing: stop raising this, without fixing it.
@@ -250,6 +256,14 @@ Use Watch logs for this view. Do not use Monitor or attach.
 The remaining Codex allowance in the current seven-day usage window, with its reset countdown.
 
 Use Weekly Codex limit for this System pane status. Do not use weekly usage or quota.
+
+### Self-hosted runner
+
+One local GitHub Actions runner that executes workflow jobs.
+
+A self-hosted runner is independent of Harlan GitHub Agent. Its availability never changes Harlan GitHub Agent status.
+
+Use self-hosted runner. Do not use Agent, worker, executor, box, or build agent.
 
 ### Conflict resolution
 
@@ -303,6 +317,12 @@ A Review run stores its Revision, gate evidence, Review findings, Review outcome
 
 Named after GitHub's `check run`, which has the same shape: one execution against one commit that reports a conclusion. Do not use attempt, pass, or session.
 
+### Review usage
+
+The total input, cached input, cache write, output, and reasoning tokens one Review run used.
+
+Use `Unavailable` when the Agent provider reports no usage. Never infer usage from text length.
+
 ### Review gate
 
 One required condition for a Review outcome.
@@ -343,7 +363,7 @@ In `Manual` Selection mode, every pull request requires Approval. In `Auto`, onl
 
 For an outside contributor's issue, Approval permits Issue work. Use `harlan-agent-review` on GitHub or `Approve` in the dashboard. Harlan's issues do not require Approval.
 
-For a pull request, Approval permits review and verified repairs in one workflow. Use `Review and repair` for the dashboard action.
+For a pull request, Approval permits read only Review and separate scoped Repair in one workflow. Use `Review and repair` for the dashboard action.
 
 A new external Revision requires new Approval. A controller-published repair commit continues the approved workflow.
 

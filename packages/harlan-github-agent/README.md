@@ -11,7 +11,8 @@ Current:
 - review and fix approvals tied to the current head commit
 - approved issue work resumes the triage agent session and opens a pull request ready for review
 - completed issue triage posts one self identified comment and updates it on reruns
-- review and repair in one agent turn, with agent-owned commit messages
+- read only Review, followed by a fresh Repair Agent with every material finding
+- fresh Review of every published Repair head SHA
 - separate Baseline repair pull requests when default branch CI fails
 - fixed cutoff date for old issues
 - bounded GitHub polling with retry backoff
@@ -60,7 +61,17 @@ Owned repositories selected in the GitHub App enable Issue triage by default. A 
 
 The triage agent resumes its own session, selects the matching installed skills, implements the change, and runs focused checks. The agent chooses the commit message and pull request metadata. The controller commits and pushes the verified result before it opens one pull request ready for review. Conflict fixes also run by default on owned repositories. They remain disabled on maintained repositories.
 
-The review agent repairs its findings before its turn ends. If default branch CI already fails, it leaves the reviewed pull request unchanged. One Baseline repair agent fixes that exact default branch commit in a separate pull request.
+Review stays read only. Repair starts fresh with every structured finding. It writes each failing regression test before its fix.
+
+If the pull request premise is wrong, Review recommends Dismissal. It never attempts an unrelated root architecture rewrite.
+
+Every published Repair head SHA gets a fresh Review. A repeated finding stops with Action required.
+
+If Repair stops, the canonical review comment changes to `BLOCKED`. It lists every finding and next action.
+
+History stores each completed Review duration and Agent provider token usage. Older runs show usage as unavailable.
+
+If default branch CI already fails, Repair leaves the reviewed pull request unchanged. One Baseline repair Agent fixes that exact default branch commit in a separate pull request.
 
 Each Worker runs like a normal local agent session inside its own Git worktree. The controller creates each worktree from its mapped checkout with `wt`, so the global Worktrunk path template applies. Workers inherit the global agent context, installed skills, environment, provider login, and authenticated `gh` client. They may read past GitHub issues and pull requests. The controller still owns comments and pushes.
 
@@ -89,10 +100,11 @@ Read one pull request's local review history from:
 
 Use the `Auto` and `Manual` control in the header to set the Selection mode. `Auto` reviews every eligible pull request. `Manual` waits for you to select each one, whoever opened it. Select a pull request with `Review and repair` in the dashboard, or with the `harlan-agent-review` label on GitHub. The Selection mode persists across restarts, and covers pull requests only.
 
-The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers review and verified repairs for that head commit.
+The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers read only Review and separate scoped Repair for that head commit.
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
 Use `Watch logs` from the system pane to open a read-only live event stream while automation continues.
-The system pane shows the `Weekly Codex limit` first, including the remaining percentage and reset countdown.
+The system pane separates Harlan GitHub Agent from GitHub Actions. A runner failure never changes the Agent status.
+The Harlan GitHub Agent section shows the `Weekly Codex limit`, including its remaining percentage and reset countdown.
 `max_open_pull_requests` stops new issue work while that many pull requests are open. `Manual` Selection mode ignores the limit, because you already select every pull request.
 
 Use `Dismiss` on a board card to never act on that pull request or issue again. A new commit does not undo it. Dismissing cancels the item's running and queued tasks. Restore it from `Dismissed` on the Watching page.

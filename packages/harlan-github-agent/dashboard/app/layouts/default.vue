@@ -223,7 +223,7 @@ useHead({
     <header class="sticky top-0 z-50 border-b border-default bg-default/85 backdrop-blur">
       <div class="mx-auto flex max-w-[100rem] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-2.5 sm:px-6 lg:px-8">
         <div class="flex min-w-0 items-center gap-5">
-          <NuxtLink to="/" class="entity-link flex min-w-0 items-center gap-2.5 no-underline">
+          <NuxtLink to="/" aria-label="Harlan GitHub Agent" class="entity-link flex min-w-0 items-center gap-2.5 no-underline">
             <span class="grid size-8 shrink-0 place-items-center rounded-md bg-inverted text-inverted">
               <UIcon name="i-lucide-bot" class="size-4.5" aria-hidden="true" />
             </span>
@@ -236,8 +236,10 @@ useHead({
               :key="page.to"
               :to="page.to"
               :icon="page.icon"
+              :ui="{ leadingIcon: 'hidden sm:block' }"
               :color="route.path === page.to ? 'primary' : 'neutral'"
               :variant="route.path === page.to ? 'soft' : 'ghost'"
+              :class="route.path === page.to ? statusClass('primary') : undefined"
               :aria-current="route.path === page.to ? 'page' : undefined"
             >
               {{ page.label }}

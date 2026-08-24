@@ -1,5 +1,5 @@
 import type { CodexOptions, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
-import type { AgentEvent, AgentProvider, AgentTurnRequest } from './agent-provider.ts'
+import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import { Codex } from '@openai/codex-sdk'
 
 interface CodexThread {
@@ -56,6 +56,34 @@ export function codexAgentEvent(event: ThreadEvent): AgentEvent | undefined {
   return undefined
 }
 
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+export function codexAgentUsage(event: ThreadEvent): Extract<AgentTokenUsage, { _tag: 'Available' }> | undefined {
+  if (event.type !== 'turn.completed')
+    return undefined
+  return {
+    _tag: 'Available',
+    input: tokenCount(event.usage.input_tokens),
+    cachedInput: tokenCount(event.usage.cached_input_tokens),
+    cacheWrite: tokenCount(event.usage.cache_write_input_tokens),
+    output: tokenCount(event.usage.output_tokens),
+    reasoning: tokenCount(event.usage.reasoning_output_tokens),
+  }
+}
+
+async function* providerEvents(events: AsyncIterable<ThreadEvent>): AsyncGenerator<AgentEvent> {
+  for await (const event of events) {
+    const usage = codexAgentUsage(event)
+    if (usage !== undefined)
+      yield { _tag: 'Usage', usage }
+    const mapped = codexAgentEvent(event)
+    if (mapped !== undefined)
+      yield mapped
+  }
+}
+
 /**
  * Codex sessions carry no Context budget.
  *
@@ -88,11 +116,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
       if (request.sessionId !== null) {
         try {
           const resumed = await run(client.resumeThread(request.sessionId, threadOptions))
-          for await (const event of resumed.events) {
-            const mapped = codexAgentEvent(event)
-            if (mapped !== undefined)
-              yield mapped
-          }
+          yield* providerEvents(resumed.events)
           return
         }
         catch (error) {
@@ -103,11 +127,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
       }
 
       const started = await run(client.startThread(threadOptions))
-      for await (const event of started.events) {
-        const mapped = codexAgentEvent(event)
-        if (mapped !== undefined)
-          yield mapped
-      }
+      yield* providerEvents(started.events)
     })(),
   }
 }

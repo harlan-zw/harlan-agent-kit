@@ -32,6 +32,7 @@ function attempt(overrides: { headSha?: string, outcome?: ReviewOutcome, finding
     gates,
     outcome: overrides.outcome ?? { _tag: 'Ready', confidence: 100 },
     findings: overrides.findings ?? [],
+    usage: { _tag: 'Unavailable' },
     publications: [],
   }
 }

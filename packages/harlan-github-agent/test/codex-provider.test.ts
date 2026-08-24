@@ -69,6 +69,7 @@ describe('createCodexProvider', () => {
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'session-1' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'Usage', usage: { _tag: 'Available', input: 1, cachedInput: 0, cacheWrite: 0, output: 1, reasoning: 0 } },
       { _tag: 'TurnCompleted' },
     ])
     expect(threadOptions).toEqual(expect.objectContaining({
