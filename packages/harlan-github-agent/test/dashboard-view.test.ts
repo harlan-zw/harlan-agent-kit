@@ -2,6 +2,7 @@ import type { ActiveAgent, AgentTask, Incident, QueueEntry, ReviewAgent } from '
 import { describe, expect, it } from 'vitest'
 import {
   activeEntries,
+  agentProfileState,
   approvalConsequence,
   buildHistory,
   decisionEntries,
@@ -24,6 +25,8 @@ import {
   taskSubjectUrl,
   waitingEntries,
 } from '../dashboard/app/utils/dashboard.ts'
+import { OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { dashboardSnapshot } from './fixtures.ts'
 
 const now = new Date('2026-08-14T12:00:00.000Z')
 
@@ -325,6 +328,26 @@ describe('isSnapshotStale', () => {
   it('flags a snapshot older than the threshold', () => {
     expect(isSnapshotStale('2026-08-14T11:58:00.000Z', now)).toBe(true)
     expect(isSnapshotStale('2026-08-14T11:59:30.000Z', now)).toBe(false)
+  })
+})
+
+describe('agentProfileState', () => {
+  it('does not expose the placeholder provider before state loads', () => {
+    const snapshot = dashboardSnapshot({ generatedAt: '' })
+    expect(agentProfileState(snapshot, true)).toEqual({ _tag: 'Loading' })
+  })
+
+  it('reports an unavailable provider after the first load fails', () => {
+    const snapshot = dashboardSnapshot({ generatedAt: '' })
+    expect(agentProfileState(snapshot, false)).toEqual({ _tag: 'Unavailable' })
+  })
+
+  it('exposes the provider from loaded state', () => {
+    const snapshot = dashboardSnapshot({ agentProfile: OPENCODE_AGENT_PROFILE })
+    expect(agentProfileState(snapshot, false)).toEqual({
+      _tag: 'Available',
+      profile: OPENCODE_AGENT_PROFILE,
+    })
   })
 })
 
