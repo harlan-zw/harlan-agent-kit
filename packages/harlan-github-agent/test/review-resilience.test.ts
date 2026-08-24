@@ -102,6 +102,7 @@ function harness(input: {
         repairs.queued += 1
         return { _tag: 'Queued', taskId: 'repair-task' }
       }),
+      getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
       recordIncident: () => { throw new Error('Unexpected Incident.') },

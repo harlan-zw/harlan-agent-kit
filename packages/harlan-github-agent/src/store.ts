@@ -472,6 +472,13 @@ export interface JournalStore {
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
   /** Exact open findings the current Review handed to its Repair Task. */
   getReviewFixFindings: (repository: string, pullRequestNumber: number, revisionId: string) => ReviewFinding[]
+  /**
+   * Open findings of the Revision whose published Repair produced one head SHA.
+   *
+   * A fresh Review session words defects differently, so these stored
+   * identities go back into its prompt and it reuses them verbatim.
+   */
+  getRepairedHeadFindings: (repository: string, pullRequestNumber: number, commitSha: string) => ReviewFinding[]
   /** Open pull requests across enabled repositories, which is the work waiting on Harlan. */
   countOpenPullRequests: () => number
   needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string }) => boolean
@@ -4410,6 +4417,23 @@ export function openJournalStore(
       : (JSON.parse(row.findings) as ReviewFinding[]).filter(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
   }
 
+  const getRepairedHeadFindings: JournalStore['getRepairedHeadFindings'] = (repository, pullRequestNumber, commitSha) => {
+    const repaired = database.prepare(`
+      SELECT tasks.revision_id AS revision_id
+      FROM publication_commands
+      JOIN tasks ON tasks.id = publication_commands.task_id
+      JOIN subjects ON subjects.id = tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND tasks.kind = 'review_fix'
+        AND publication_commands.state_tag = 'Published'
+        AND publication_commands.commit_sha = ?
+      ORDER BY publication_commands.published_at DESC, publication_commands.id DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, commitSha) as { revision_id: string } | undefined
+    return repaired === undefined ? [] : getReviewFixFindings(repository, pullRequestNumber, repaired.revision_id)
+  }
+
   const recoverExpiredTasks = (now: string): void => {
     const expired = database.prepare(`
       SELECT id, state_tag, fence FROM tasks
@@ -6735,6 +6759,7 @@ export function openJournalStore(
     heartbeatWorkerTask,
     countOpenPullRequests,
     getReviewFixFindings,
+    getRepairedHeadFindings,
     listReviewRuns,
     needsAttentionTask,
     dismissItem,

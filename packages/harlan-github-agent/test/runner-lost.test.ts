@@ -79,6 +79,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
     now: () => new Date('2026-08-19T01:00:00.000Z'),
     store: {
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
+      getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
       isBaselineRepairPullRequest: () => false,
       recordIncident: (incident) => {

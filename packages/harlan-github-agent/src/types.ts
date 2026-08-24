@@ -216,6 +216,8 @@ export type ReviewFinding
        */
       details?: {
         fingerprint: string
+        /** Raw identity behind the fingerprint, so a later Review reuses it instead of coining new wording. */
+        identity?: string
         location: { path: string, line: number | null }
         proof: string
         regressionTest: string | null

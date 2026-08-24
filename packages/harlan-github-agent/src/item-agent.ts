@@ -81,7 +81,7 @@ export interface ItemAgentOptions {
 }
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
-  store: Pick<JournalStore, 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -649,10 +649,21 @@ function repairPreflight(task: ClaimedAdversarialReviewTask, snapshot: PullReque
   return { _tag: 'Authorized' }
 }
 
-function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, workspace: string, preflight: RepairPreflight): string {
+function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, workspace: string, preflight: RepairPreflight, repairedHeadFindings: ReviewFinding[]): string {
   const repairPolicy = preflight._tag === 'Authorized'
     ? 'Repair authority preflight passed. A separate fresh Repair Agent may fix findings after this read only Review.'
     : `Repair authority preflight requires action: ${preflight.reason}`
+  // A published Repair already produced this head commit. Fresh sessions coin
+  // new wording for a surviving defect, which defeats the repeat guard that
+  // matches stored fingerprints. Reusing the stored identity keeps the match.
+  const repeatedFindings = repairedHeadFindings.length === 0
+    ? ''
+    : `
+A published Repair built this exact head commit, and its source Review reported these open findings:
+${JSON.stringify(repairedHeadFindings.map(finding => finding._tag === 'Open'
+  ? { identity: finding.details?.identity ?? null, summary: finding.summary }
+  : finding))}
+If one of these names the same defect you find, return its identity value exactly. Do not coin new wording for it.`
   return `${reviewPolicy}
 
 ${repairPolicy}
@@ -664,7 +675,7 @@ Base SHA: ${task.pullRequest.baseSha}
 Head SHA: ${task.pullRequest.headSha}
 
 Review the full diff with: git diff ${task.pullRequest.baseSha}...${task.pullRequest.headSha}
-
+${repeatedFindings}
 Untrusted pull request data follows as JSON:
 ${JSON.stringify(reviewConversationContext(snapshot))}
 
@@ -769,9 +780,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // runtime is read once and reused for the whole review.
       const reviewRuntime = options.runtime()
       const preflight = repairPreflight(task, snapshot.value, repairsBaseline)
+      const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
         number: task.pullRequestNumber,
-        prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight),
+        prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings),
         progress: {
           currentPercent: 35,
           report: progress => reportReviewProgress(options, task, 'review', progress, signal),
@@ -822,6 +834,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         resolution: finding.resolution === 'dismiss' ? 'Dismissal' : 'Repair',
         details: {
           fingerprint: reviewFindingFingerprint(finding.identity),
+          identity: finding.identity,
           location: { path: finding.path, line: finding.line },
           proof: finding.proof,
           regressionTest: finding.regressionTest,

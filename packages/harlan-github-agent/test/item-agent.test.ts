@@ -75,6 +75,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
+        getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
@@ -160,6 +161,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
+        getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
@@ -253,6 +255,7 @@ describe('subject Workers', () => {
           queued = true
           return { _tag: 'Queued', taskId: 'repair-task' }
         },
+        getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
@@ -307,6 +310,111 @@ describe('subject Workers', () => {
     expect(worktreeVerified).toBe(true)
   })
 
+  it('gives a fresh Review the identities its repaired head already reported', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const capture: ProviderCapture = { requests: [] }
+    let askedForHeadSha: string | undefined
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
+        review: { state: 'failed', reason: 'The parser drops data.', evidence: 'focused reproduction proves the defect' },
+        verification: { state: 'passed', reason: '', evidence: 'the regression test is specified' },
+        findings: [{
+          identity: 'buffered-byte-loss',
+          path: 'src/parser.ts',
+          line: 42,
+          proof: 'A split UTF-8 sequence loses its first byte.',
+          regressionTest: 'Split one UTF-8 sequence across two chunks and assert the original string.',
+          resolution: 'repair',
+          summary: 'The parser still drops data on split UTF-8 sequences.',
+          nextAction: 'Preserve the buffered bytes.',
+        }],
+        confidence: null,
+      }), capture)),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          body: 'Fixes the parser.',
+          checks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        queueReviewFixTaskForReview: () => {
+          // The store refuses once the reused identity matches its guard.
+          return { _tag: 'ActionRequired', reason: 'A repaired head still has the same Review finding: The parser drops data.' }
+        },
+        getRepairedHeadFindings: (_repository, _pullRequestNumber, commitSha) => {
+          askedForHeadSha = commitSha
+          return [{
+            _tag: 'Open',
+            summary: 'The parser drops data.',
+            nextAction: 'Preserve the buffered bytes.',
+            resolution: 'Repair',
+            details: {
+              fingerprint: 'a'.repeat(64),
+              identity: 'buffered-byte-loss',
+              location: { path: 'src/parser.ts', line: 40 },
+              proof: 'A split UTF-8 sequence loses its first byte.',
+              regressionTest: 'Split one UTF-8 sequence across two chunks.',
+            },
+          }]
+        },
+        getWorkerSession: () => null,
+        isBaselineRepairPullRequest: () => false,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
+        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        recordReviewRun: (input) => {
+          return { _tag: 'Inserted', reviewRunId: input.id }
+        },
+        recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      status: {
+        publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verifyReview: () => Promise.resolve(ok(undefined)),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-repaired-head',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repositoryMapping(),
+      pullRequest,
+      rerun: { _tag: 'Requested' },
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(askedForHeadSha).toBe(pullRequest.headSha)
+    const prompt = capture.requests[0]?.prompt ?? ''
+    expect(prompt).toContain('buffered-byte-loss')
+    expect(prompt).toContain('return its identity value exactly')
+  })
+
   it('waits for Baseline repair without starting a review agent', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let baselineQueued = false
@@ -335,6 +443,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent Repair work.') },
+        getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
@@ -410,6 +519,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
+        getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
@@ -492,6 +602,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
+        getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
@@ -570,6 +681,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
+        getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         isBaselineRepairPullRequest: () => true,
         recordIncident: () => { throw new Error('Unexpected Incident.') },

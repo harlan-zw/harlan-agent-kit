@@ -49,6 +49,7 @@ function recordOpenFinding(
   revisionId: string,
   headSha: string,
   resolution: 'Repair' | 'Dismissal' = 'Repair',
+  identity = 'unsafe-parser-input',
 ): void {
   const gates = passedReviewGates()
   gates.review = { _tag: 'Failed', reason: 'A material finding remains.', evidence: [] }
@@ -73,6 +74,7 @@ function recordOpenFinding(
       resolution,
       details: {
         fingerprint: 'f'.repeat(64),
+        identity,
         location: { path: 'src/parser.ts', line: 42 },
         proof: 'Malformed input reaches the unsafe parser branch.',
         regressionTest: resolution === 'Dismissal' ? null : 'Pass malformed input and assert a tagged rejection.',
@@ -387,5 +389,63 @@ describe('review Repair queue', () => {
       fence: freshReview.state.fence,
       at: '2026-08-13T01:01:02.000Z',
     })).toEqual({ _tag: 'ActionRequired', reason: 'A repaired head still has the same Review finding: Unsafe parser input.' })
+  })
+
+  it('hands a fresh Review the identities its repaired Revision reported', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/wording-drift')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha, 'Repair', 'unsafe-parser-input')
+    const queued = store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })
+    if (queued._tag !== 'Queued')
+      throw new Error(queued.reason)
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    const repairCommit = 'e'.repeat(40)
+    expect(store.stagePublication({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:00:06.000Z',
+      publication: {
+        _tag: 'UpdatePullRequest',
+        taskKind: 'review_fix',
+        baseRef: 'main',
+        pullRequestNumber: repair.pullRequestNumber,
+        commitSha: repairCommit,
+        baseSha: 'base123',
+        expectedHeadSha: repair.pullRequest.headSha,
+        headRef: repair.pullRequest.headRef,
+        artifactRef: 'refs/harlan-github-agent/publications/wording-drift',
+        patchDigest: 'repair-patch',
+        changedFiles: 2,
+      },
+    })._tag).toBe('Staged')
+    const publication = store.claimNextPublication('publisher', '2026-08-13T01:00:07.000Z', 60_000)
+    if (publication === null)
+      throw new Error('Expected the Repair Publication.')
+    expect(store.completePublication({
+      commandId: publication.id,
+      workerId: publication.workerId,
+      fence: publication.fence,
+      at: '2026-08-13T01:00:08.000Z',
+      evidence: 'Published Repair commit.',
+    })).toBe(true)
+
+    // A fresh Review session words the same defect differently, so only the
+    // stored identity lets it reuse the exact fingerprint the guard matches.
+    expect(store.getRepairedHeadFindings('harlan-zw/example', 24, repairCommit)).toEqual([
+      expect.objectContaining({
+        _tag: 'Open',
+        summary: 'Unsafe parser input.',
+        details: expect.objectContaining({ identity: 'unsafe-parser-input' }),
+      }),
+    ])
+    expect(store.getRepairedHeadFindings('harlan-zw/example', 24, 'f'.repeat(40))).toEqual([])
   })
 })
