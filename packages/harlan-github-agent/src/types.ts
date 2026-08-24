@@ -638,6 +638,7 @@ export type OpencodeAgentModel
     | 'opencode-go/mimo-v2.5-pro'
     | 'opencode-go/minimax-m2.7'
     | 'opencode-go/minimax-m3'
+    | 'opencode-go/ox-alpha-free'
     | 'opencode-go/qwen3.6-plus'
     | 'opencode-go/qwen3.7-max'
     | 'opencode-go/qwen3.7-plus'

@@ -33,6 +33,12 @@ describe('agent selection parsing', () => {
     expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'max' } })
   })
 
+  it('accepts Ox Alpha Free from OpenCode Go', () => {
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/ox-alpha-free', reasoningEffort: 'high' })
+
+    expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/ox-alpha-free', reasoningEffort: 'high' } })
+  })
+
   it('rejects a model that belongs to the other provider', () => {
     const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'codex', model: 'opencode-go/deepseek-v4-pro' })
 
