@@ -6,6 +6,24 @@ user_invocable: true
 
 Create or update a pull request for the current branch. Idempotent -- safe to run at any stage.
 
+## Markdown-only exception
+
+If every task-owned changed path ends in `.md`, use this exception for a repository Harlan owns or maintains.
+Push the change directly to `origin/main`. Never open a pull request for Markdown-only work.
+
+Before editing, follow the [worktree isolation contract](../../references/worktree-isolation.md). Start from the current `origin/main`.
+
+After editing:
+
+1. Check every task-owned changed path.
+   If one path does not end in `.md`, use the normal pull request workflow below.
+2. Run any checks that cover the changed Markdown.
+3. Commit with a Conventional Commit subject.
+4. Push without force: `git push origin HEAD:main`.
+5. Verify `origin/main` points at the pushed commit.
+
+If the direct push fails, stop and report the refusal. Do not create a pull request as a fallback.
+
 ## When to invoke
 
 Invoke on intent, not on phrasing. If the next command you are about to run is `git switch -c`, `git commit`, `git push`, or `gh pr create`, stop: this skill owns that sequence. Run it instead of the raw commands.
@@ -13,7 +31,7 @@ Invoke on intent, not on phrasing. If the next command you are about to run is `
 None of these are reasons to skip it:
 
 - **The user never said "PR".** Once a fix is written and verified, "fix", "ship it", "land this", or a bare "yes" all mean land it. The trigger list in the description is examples, not a required wording.
-- **The change is small.** A one-line fix still needs the repo's template, the AI disclosure, a body with no verification section, and green CI. Size changes none of that.
+- **The change is small.** Except for Markdown-only work above, a one-line fix still needs the repo's template, the AI disclosure, a body with no verification section, and green CI. Size changes none of that.
 - **Invoking costs a turn.** Rewriting a hand-made PR body costs more, and a PR pushed without Step 4 can fail CI in front of a reviewer.
 - **You already ran the git commands.** Then a PR exists and is probably wrong. Re-enter here anyway -- Step 1 detects the existing PR and Step 5 syncs it in place.
 
@@ -211,7 +229,7 @@ Output the PR URL when done. Log to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
 `harlan-github-agent` reviews every pull request it tracks. Add `harlan-agent-auto-merge` when the change holds no judgement, and the service merges it after a `READY` review:
 
-- documentation, comments, or wording with no code change
+- comments or wording inside non-Markdown files, with no behaviour change
 - dependency bump or lockfile refresh
 - formatting, lint autofix, or generated file refresh
 - changelog or version bump

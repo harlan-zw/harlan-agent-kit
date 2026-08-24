@@ -10,7 +10,7 @@ The label never changes whether a pull request is reviewed. Automated review run
 
 Add it for a change with no judgement in it:
 
-- documentation, comments, or wording with no code change
+- comments or wording inside non-Markdown files, with no behaviour change
 - dependency bump or lockfile refresh
 - formatting, lint autofix, or generated file refresh
 - changelog or version bump
@@ -20,6 +20,8 @@ Never add it for a change a reviewer must judge: source behaviour, public API, c
 When unsure, leave it off. A missing label costs one human merge. A wrong label ships an unreviewed change.
 
 Remove the label when a pull request grows past the change it was added for.
+
+Markdown-only work never reaches this policy. The `pr` skill pushes it directly to `origin/main`.
 
 ## When the service hands over
 
