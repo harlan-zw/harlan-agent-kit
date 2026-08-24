@@ -41,10 +41,13 @@ interface ReviewResponse {
     path: string
     proof: string
     regressionTest: string | null
-    resolution: 'repair' | 'dismiss'
     summary: string
   }>
   metadata: GateResponse
+  premise: {
+    reason: string
+    verdict: 'sound' | 'wrong'
+  }
   review: GateResponse
   verification: GateResponse
 }
@@ -100,14 +103,20 @@ Keep the worktree read only. Do not edit, stage, commit, push, or post comments.
 Return only the required JSON.
 
 Report the result this way:
+Decide the pull request premise before listing defects.
+A premise is sound only when safe fixes preserve the pull request's stated intent.
+A premise is wrong when safe work must reverse that intent, remove a safeguard, or add unrelated root architecture.
+Return premise verdict wrong when Repair would deepen the harmful premise or rewrite root architecture to compensate for it.
+Treat GitHub status, comments, and labels as durable workflow truth.
+Local state may still coordinate leases, Agent sessions, Recovery, and Review usage.
+Do not call GitHub-first workflow state a wrong premise by itself.
+Call the premise wrong when the pull request removes local coordination before the required GitHub-backed replacement exists.
+Return one evidence-based finding for every material consequence of a wrong premise.
 Return every material defect.
 Each finding needs a stable identity, exact path and line, proof, summary, and next action.
 Keep the identity stable across line changes.
-For resolution repair, describe one test that fails before Repair and passes after it.
-For resolution dismiss, return null for regressionTest.
-Use resolution dismiss only when the pull request has a wrong premise and Repair would replace its intent.
-Recommend Dismissal when Repair would require a root architecture rewrite outside that intent.
-Use resolution repair for every finding that can be fixed without replacing the pull request intent.
+For a sound premise, describe one test that fails before Repair and passes after it.
+For a wrong premise, return null for every regressionTest. The controller will recommend Dismissal.
 Return confidence as an integer from 0 to 100 when every gate you report passes.
 Return every field the schema names, including empty arrays and null.`
 const issuePolicy = `Work as a normal local agent session inside the prepared Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
@@ -217,9 +226,18 @@ const gateSchema = {
 const reviewSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['metadata', 'review', 'verification', 'findings', 'confidence'],
+  required: ['metadata', 'premise', 'review', 'verification', 'findings', 'confidence'],
   properties: {
     metadata: gateSchema,
+    premise: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['verdict', 'reason'],
+      properties: {
+        verdict: { type: 'string', enum: ['sound', 'wrong'] },
+        reason: { type: 'string' },
+      },
+    },
     review: gateSchema,
     verification: gateSchema,
     findings: {
@@ -227,14 +245,13 @@ const reviewSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['identity', 'path', 'line', 'proof', 'regressionTest', 'resolution', 'summary', 'nextAction'],
+        required: ['identity', 'path', 'line', 'proof', 'regressionTest', 'summary', 'nextAction'],
         properties: {
           identity: { type: 'string' },
           path: { type: 'string' },
           line: { type: ['integer', 'null'], minimum: 1 },
           proof: { type: 'string' },
           regressionTest: { type: ['string', 'null'] },
-          resolution: { type: 'string', enum: ['repair', 'dismiss'] },
           summary: { type: 'string' },
           nextAction: { type: 'string' },
         },
@@ -293,13 +310,19 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
     .then(value => JSON.parse(value) as Record<string, unknown>)
     .then((value): Result<ReviewResponse, string> => {
       const metadata = parseGate(value.metadata)
+      const premise = typeof value.premise === 'object' && value.premise !== null
+        ? value.premise as Partial<ReviewResponse['premise']>
+        : undefined
       const review = parseGate(value.review)
       const verification = parseGate(value.verification)
       const findings = Array.isArray(value.findings) ? value.findings : undefined
       const confidence = value.confidence
       if (
-        metadata === undefined || review === undefined || verification === undefined
+        metadata === undefined || premise === undefined || review === undefined || verification === undefined
+        || (premise.verdict !== 'sound' && premise.verdict !== 'wrong')
+        || typeof premise.reason !== 'string' || cleanLine(premise.reason).length === 0
         || findings === undefined
+        || (premise.verdict === 'wrong' && findings.length === 0)
         || !findings.every((finding) => {
           if (typeof finding !== 'object' || finding === null)
             return false
@@ -308,8 +331,7 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
             && typeof candidate.path === 'string' && cleanLine(candidate.path).length > 0
             && (candidate.line === null || (Number.isInteger(candidate.line) && (candidate.line ?? 0) >= 1))
             && typeof candidate.proof === 'string' && cleanLine(candidate.proof).length > 0
-            && (candidate.resolution === 'repair' || candidate.resolution === 'dismiss')
-            && (candidate.resolution === 'repair'
+            && (premise.verdict === 'sound'
               ? typeof candidate.regressionTest === 'string' && cleanLine(candidate.regressionTest).length > 0
               : candidate.regressionTest === null)
             && typeof candidate.summary === 'string' && cleanLine(candidate.summary).length > 0
@@ -322,6 +344,7 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
       const reviewed = findings as ReviewResponse['findings']
       return ok({
         metadata,
+        premise: { verdict: premise.verdict, reason: cleanLine(premise.reason) },
         review,
         verification,
         confidence: typeof confidence === 'number' ? confidence : null,
@@ -333,7 +356,6 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
           path: cleanLine(finding.path),
           proof: cleanLine(finding.proof),
           regressionTest: finding.regressionTest === null ? null : cleanLine(finding.regressionTest),
-          resolution: finding.resolution,
         })),
       })
     })
@@ -830,8 +852,8 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       let findings: ReviewFinding[] = response.findings.map(finding => ({
         _tag: 'Open',
         summary: finding.summary,
-        nextAction: finding.nextAction,
-        resolution: finding.resolution === 'dismiss' ? 'Dismissal' : 'Repair',
+        nextAction: response.premise.verdict === 'wrong' ? 'Dismiss this pull request.' : finding.nextAction,
+        resolution: response.premise.verdict === 'wrong' ? 'Dismissal' : 'Repair',
         details: {
           fingerprint: reviewFindingFingerprint(finding.identity),
           identity: finding.identity,

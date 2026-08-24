@@ -231,6 +231,10 @@ A dismissed Item leaves the Queue. It stays visible under `Dismissed` in the Wat
 
 A Review Agent may write **Dismissal recommended** when the pull request premise is wrong. Use it when Repair would replace the pull request intent or require an unrelated root architecture rewrite.
 
+Review decides the premise once for the whole pull request. A wrong premise makes every Review finding a Dismissal recommendation. It never starts Repair.
+
+GitHub status, comments, and labels are durable workflow truth. The Journal stores local coordination and observability data.
+
 A recommendation never creates a Dismissal. Harlan decides whether to use `Dismiss`.
 
 Restoring queues nothing by itself. The next observation replans the Item from its current state.

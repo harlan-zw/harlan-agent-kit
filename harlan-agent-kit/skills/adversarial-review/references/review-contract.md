@@ -127,11 +127,13 @@ Record every material Review finding. Never cap the finding count.
 
 Each finding records a stable fingerprint, exact path and line, proof, summary, next action, and resolution.
 
-A `Repair` finding also records the regression test the fresh Repair Agent must write first.
+Decide the pull request premise once before classifying findings.
 
-A `Dismissal` finding records no regression test. Use it only when the premise is wrong and Repair would replace the pull request intent.
+A sound premise means safe fixes preserve the pull request intent. Every finding uses `Repair` and records the regression test the fresh Repair Agent must write first.
 
-When any finding recommends Dismissal, queue no Repair. Publish `BLOCKED` with Action required. Harlan decides whether to Dismiss.
+A wrong premise means safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Every finding uses `Dismissal` and records no regression test.
+
+Never mix `Repair` and `Dismissal` findings. For a wrong premise, queue no Repair. Publish `BLOCKED` with Action required. Harlan decides whether to Dismiss.
 
 ## Deployment extension
 

@@ -105,13 +105,15 @@ Record every material finding. Never cap the finding count.
 
 Give each finding a stable identity, exact location, proof, next action, and resolution.
 
-Use resolution `Repair` when the pull request premise is sound. Name the regression test Repair must write first.
+Decide the pull request premise once before classifying findings.
 
-Use resolution `Dismissal` when the premise is wrong and Repair would replace the pull request intent. Recommend Dismissal for an unrelated root architecture rewrite. Never Dismiss or close the pull request.
+Use a sound premise only when safe fixes preserve the pull request intent. Every finding then uses resolution `Repair`. Name the regression test Repair must write first.
+
+Use a wrong premise when safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Every finding then uses resolution `Dismissal` and records no regression test. Never mix Repair and Dismissal findings. Never Dismiss or close the pull request.
 
 ### 7. Hand off Repair and restart
 
-When every finding uses resolution `Repair`, queue one fresh Repair Agent with all exact findings. Never reuse the Review session.
+When the premise is sound and findings remain, queue one fresh Repair Agent with all exact findings. Never reuse the Review session.
 
 For an outside contributor, use the existing Approval. A new external Revision invalidates Approval. The exact controller repair commit continues the workflow.
 

@@ -63,7 +63,9 @@ The triage agent resumes its own session, selects the matching installed skills,
 
 Review stays read only. Repair starts fresh with every structured finding. It writes each failing regression test before its fix.
 
-If the pull request premise is wrong, Review recommends Dismissal. It never attempts an unrelated root architecture rewrite.
+Review decides the pull request premise once. A sound premise permits Repair. A wrong premise recommends Dismissal and never starts Repair.
+
+GitHub status, comments, and labels hold durable workflow truth. The local journal coordinates leases, Agent sessions, Recovery, and Review usage.
 
 Every published Repair head SHA gets a fresh Review. A repeated finding stops with Action required.
 
