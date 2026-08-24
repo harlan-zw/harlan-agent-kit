@@ -60,6 +60,9 @@ If path doesn't match either pattern, fall back to heuristics: `private: true` +
 - **`pnpm install` after catalog changes** -- lockfile must be regenerated. If you edit `pnpm-workspace.yaml` catalogs, always run `pnpm install` before running any other commands.
 - **Nuxt module `dev:prepare` order** -- must run before `typecheck` or `test`. Missing this causes confusing "module not found" errors from auto-generated types.
 - **Site vs Package misdetection** -- path-based detection (`*/pkg/*` vs `*/sites/*`) can fail for unusual directory structures. Always verify the detected type before applying rules.
+- **Markdown-only CI**: Test, build, and deploy events ignore `**/*.md` by default.
+  An explicit `paths` list may include Markdown.
+  GitHub forbids `paths` and `paths-ignore` on the same event.
 
 ---
 
@@ -159,7 +162,7 @@ See `references/` for detailed templates:
 
 1. [ ] `pnpm-workspace.yaml` - default catalog, `ignoredBuiltDependencies`, `shellEmulator`
 2. [ ] `package.json` - `type: module`, migrate deps to `catalog:`, add `packageManager`
-3. [ ] `.github/workflows/test.yml` - action versions (checkout@v6, setup-node@v6)
+3. [ ] `.github/workflows/test.yml` - action versions and Markdown path filtering
 4. [ ] `.editorconfig` - standard config
 5. [ ] `.gitignore` - standard patterns
 6. [ ] ESLint config - antfu + `eslint-plugin-harlanzw`. Package: `eslint.config.mjs`; Site: `eslint.config.js`
@@ -188,7 +191,7 @@ See `references/` for detailed templates:
 17. [ ] `.editorconfig` - 2-space indent, LF, UTF-8, trim trailing whitespace (except `.md`)
 18. [ ] `content.config.ts` - Zod schemas for content collections (if using `@nuxt/content`)
 19. [ ] `app/` directory - Nuxt 4 structure (`app.vue`, `pages/`, `layouts/`, `components/`, `composables/`)
-20. [ ] `.github/workflows/ci.yml` - calls the shared gate, NOT a hand-written job matrix. See `references/site-github-actions.md`. Never copy `references/github-actions.md` into a site.
+20. [ ] `.github/workflows/ci.yml` - calls the shared gate and ignores Markdown-only changes. See `references/site-github-actions.md`.
 
 ### Additional Nuxt Module Checklist
 
@@ -215,7 +218,7 @@ When `@nuxt/module-builder` detected, also check (extends Package checklist):
 28. [ ] `typecheck` - uses `nuxt typecheck` (not `tsc`)
 29. [ ] `dev:prepare` - prepares module + playground
 30. [ ] `prepare:fixtures` - prepares test fixtures
-31. [ ] `.github/workflows/test.yml` - includes prepare step
+31. [ ] `.github/workflows/test.yml` - includes the prepare step and Markdown path filtering
 
 ## Sync Process
 

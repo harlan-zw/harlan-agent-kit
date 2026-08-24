@@ -13,8 +13,10 @@ name: CI
 on:
   push:
     paths-ignore:
-      - '**/README.md'
-      - 'docs/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
@@ -169,8 +171,12 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
@@ -219,6 +225,13 @@ jobs:
 ```
 
 ## CI Rules
+
+### Markdown paths
+
+- Test, build, and deploy workflows ignore `**/*.md` on `push` and `pull_request` by default.
+- Use `paths` when a workflow must run for named Markdown files or directories.
+- Never add `paths-ignore` to an event that already uses `paths`. GitHub rejects both on one event.
+- Tag, schedule, and manual events keep their existing behavior. GitHub does not apply path filters to tag pushes.
 
 ### Runner
 

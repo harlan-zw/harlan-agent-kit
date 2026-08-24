@@ -109,8 +109,10 @@ name: Test
 on:
   push:
     paths-ignore:
-      - '**/README.md'
-      - 'docs/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
 
 permissions:
   contents: read

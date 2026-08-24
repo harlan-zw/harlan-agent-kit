@@ -18,8 +18,12 @@ name: CI
 
 on:
   pull_request:
+    paths-ignore:
+      - '**/*.md'
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +42,10 @@ jobs:
 Lint, typecheck and test arrive as three separately failing checks. The job key
 becomes the check name, so `harlan-desktop` reads as `harlan-desktop / lint` on a
 pull request, which is also the string a branch rule requires.
+
+The caller ignores Markdown-only changes. If site content needs a build, replace
+`paths-ignore` with `paths` and name the Markdown paths. GitHub forbids both filters
+on one event.
 
 Inputs worth knowing:
 
@@ -89,6 +97,9 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: harlan-zw/harlan-nuxt/.github/actions/harlan-desktop-setup@main
 ```
+
+A Markdown-only change does not start this `workflow_run` path because CI did not
+run. `workflow_dispatch` remains the explicit deployment opt-in.
 
 Never compare `head_sha` against `github.sha`. On a `workflow_run` event
 `github.sha` is the default branch tip at dispatch time, not the commit the run

@@ -23,6 +23,7 @@ After editing:
 5. Verify `origin/main` points at the pushed commit.
 
 If the direct push fails, stop and report the refusal. Do not create a pull request as a fallback.
+Do not wait for CI or deployment unless its event uses `paths` to include the changed Markdown.
 
 ## When to invoke
 

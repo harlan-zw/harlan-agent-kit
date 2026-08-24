@@ -84,6 +84,9 @@ Check whether another open pull request uses that branch.
 
 Determine whether deployment, migration, release, smoke verification, or monitoring applies.
 
+For Markdown-only work, verify the exact commit on `origin/main`.
+Expect no CI or deployment unless a workflow event uses `paths` to include that Markdown.
+
 Never infer delivery from a merged pull request or unrelated green check.
 
 ### Durable records
