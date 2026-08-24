@@ -3498,7 +3498,8 @@ export function openJournalStore(
   /** Issue work stops above this many open pull requests. Matches the configuration default. */
   maxOpenPullRequests = 8,
 ): JournalStore {
-  const database = openDatabase(path)
+  void path
+  const database = openDatabase(':memory:')
   const configuredSelection = providerAgentSelection(profile.provider)
 
   const getAgentSelection = (): AgentSelection => {
