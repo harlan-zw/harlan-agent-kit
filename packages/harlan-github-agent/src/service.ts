@@ -508,7 +508,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           if (result._tag === 'Ok') {
             options.logger.info(result.value._tag === 'CommentGone'
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the stopped review comment was deleted, so nothing was written.`
-              : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
+              : result.value._tag === 'Superseded'
+                ? `${result.value.repository}#${result.value.pullRequestNumber}: another writer took the comment, so it was left alone.`
+                : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
           }
           else {
             options.logger.error(`Stopped review comment: ${result.error}`)

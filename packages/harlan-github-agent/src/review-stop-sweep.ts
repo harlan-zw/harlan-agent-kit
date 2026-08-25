@@ -10,6 +10,7 @@ import { cleanLine, updatedAtLabel } from './text.ts'
 export type StoppedReviewOutcome
   = | { _tag: 'Published', repository: string, pullRequestNumber: number }
     | { _tag: 'CommentGone', repository: string, pullRequestNumber: number }
+    | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
 
 export interface ReviewStopSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
@@ -75,11 +76,13 @@ export async function publishStoppedReviews(
 
     const at = options.now().toISOString()
     const body = stoppedReviewComment(review, at)
-    const edited = await options.github.editReviewStatus(mapping, review.pullRequestNumber, review.commentId, body, signal)
+    const edited = await options.github.editReviewStatus(mapping, review.pullRequestNumber, review.commentId, review.publishedBody, body, signal)
     if (edited._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${edited.error}`)
     if (edited.value._tag === 'Missing')
       return ok({ _tag: 'CommentGone', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
+    if (edited.value._tag === 'Changed')
+      return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
     const recorded = options.store.recordStoppedReviewStatus({
       taskId: review.taskId,
       taskKind: review.taskKind,

@@ -70,9 +70,10 @@ export type QueuePositionOutcome
  * deleted stays deleted.
  *
  * An agent can claim the Task between the Queue read and the comment write,
- * because both GitHub round trips sit in between. The claim is re-checked
- * synchronously before the write, and a claim lost during the write is reported
- * as Superseded, so an active review's comment never keeps a stale QUEUED body.
+ * because both GitHub round trips sit in between. No local check closes that
+ * window: whatever it reads can go stale before the write lands. The edit is a
+ * compare and swap against the body the Queue read saw, so a claimed agent that
+ * published first keeps its comment and this sweep reports Superseded.
  */
 export async function publishQueuePositions(
   options: QueuePositionSweepOptions,
@@ -95,11 +96,13 @@ export async function publishQueuePositions(
 
     const at = options.now().toISOString()
     const body = queuePositionComment(status)
-    const edited = await options.github.editReviewStatus(mapping, status.pullRequestNumber, status.commentId, body, signal)
+    const edited = await options.github.editReviewStatus(mapping, status.pullRequestNumber, status.commentId, status.publishedBody, body, signal)
     if (edited._tag === 'Err')
       return err(`${status.repository}#${status.pullRequestNumber}: ${edited.error}`)
     if (edited.value._tag === 'Missing')
       return ok({ _tag: 'CommentGone', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
+    if (edited.value._tag === 'Changed')
+      return ok({ _tag: 'Superseded', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
     const recorded = options.store.recordQueuedReviewStatus({
       taskId: status.taskId,
       taskKind: status.taskKind,

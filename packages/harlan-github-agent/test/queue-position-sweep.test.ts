@@ -69,7 +69,7 @@ describe('publishQueuePositions', () => {
     const results = await publishQueuePositions({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
-        editReviewStatus: (_repository, _number, commentId, body) => {
+        editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
           edited = { commentId, body }
           return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
         },
@@ -187,6 +187,53 @@ describe('publishQueuePositions', () => {
     }, new AbortController().signal)
 
     expect(writes).toBe(0)
+    expect(results).toEqual([ok({ _tag: 'Superseded', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+  })
+
+  it('offers the body it read as the compare and swap, so a claimed agent cannot be overwritten', async () => {
+    let expected: string | undefined
+    await publishQueuePositions({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: (_repository, _number, _commentId, expectedBody) => {
+          expected = expectedBody
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listQueuedReviewStatuses: () => [queuedRepair()],
+        isQueuedReviewStatus: () => true,
+        recordQueuedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(expected).toBe(queuedRepair().publishedBody)
+  })
+
+  it('leaves the comment to the agent that published first, and saves nothing', async () => {
+    let recorded = 0
+    const results = await publishQueuePositions({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        // The claimed agent published its own progress, so GitHub no longer
+        // holds the body the Queue read saw and the swap declines.
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listQueuedReviewStatuses: () => [queuedRepair()],
+        isQueuedReviewStatus: () => true,
+        recordQueuedReviewStatus: () => {
+          recorded += 1
+          return true
+        },
+      },
+    }, new AbortController().signal)
+
+    expect(recorded).toBe(0)
     expect(results).toEqual([ok({ _tag: 'Superseded', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
   })
 

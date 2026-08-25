@@ -157,9 +157,13 @@ export interface PublishedReviewStatus {
   url: string
 }
 
-/** `Missing` means a person deleted the comment, so there is nothing to correct. */
+/**
+ * `Missing` means a person deleted the comment, so there is nothing to correct.
+ * `Changed` means somebody wrote it after the caller last read it.
+ */
 export type EditedReviewStatus
   = | { _tag: 'Edited', commentId: number, url: string }
+    | { _tag: 'Changed' }
     | { _tag: 'Missing' }
 
 export interface GitHubAgentSource {
@@ -178,8 +182,14 @@ export interface GitHubAgentSource {
    * which is right for a review that owns its comment and wrong for a sweep
    * correcting an old one: deleting the comment would bring it straight back.
    * A missing comment is an outcome here, not a failure.
+   *
+   * The write is a compare and swap against `expectedBody`. A sweep reads the
+   * Queue, then spends two round trips reaching this call, and an agent can
+   * claim the Task and publish its own progress inside that window. Comparing
+   * what GitHub holds is the only check that cannot be overtaken, because
+   * GitHub applies it at the moment of the write.
    */
-  editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, body: string, signal: AbortSignal) => Promise<Result<EditedReviewStatus, string>>
+  editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, expectedBody: string, body: string, signal: AbortSignal) => Promise<Result<EditedReviewStatus, string>>
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
 }
 
@@ -535,7 +545,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       }).catch((error: unknown) => err(message(error)))
     },
 
-    async editReviewStatus(repository, pullRequestNumber, commentId, body, signal) {
+    async editReviewStatus(repository, pullRequestNumber, commentId, expectedBody, body, signal) {
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -550,6 +560,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             return err('The stored automated review comment belongs to another pull request.')
           if (existing.data.body === body && existing.data.html_url !== undefined)
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
+          if (existing.data.body !== expectedBody)
+            return ok({ _tag: 'Changed' as const })
           const written = await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
           if (written.data.user?.login.toLowerCase() !== actor || written.data.body !== body)
             return err('GitHub did not confirm the edited automated review comment.')

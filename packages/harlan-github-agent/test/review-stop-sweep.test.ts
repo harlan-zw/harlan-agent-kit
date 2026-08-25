@@ -13,6 +13,7 @@ const stopped: StoppedReview = {
   headSha: 'abc123',
   reason: 'The pull request is not ready for review.',
   commentId: 42,
+  publishedBody: '### 🤖 REVIEWING · Reviewing changed files',
   findings: [],
 }
 
@@ -67,7 +68,7 @@ describe('publishStoppedReviews', () => {
     const results = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
-        editReviewStatus: (_repository, _number, commentId, body) => {
+        editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
           edited = { commentId, body }
           return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
         },

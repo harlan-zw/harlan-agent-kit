@@ -311,6 +311,7 @@ interface StoppedReviewRow {
   head_sha: string
   reason: string
   github_comment_id: number
+  published_body: string
   findings: string
 }
 
@@ -323,6 +324,8 @@ export interface StoppedReview {
   headSha: string
   reason: string
   commentId: number
+  /** What the canonical comment holds now, so the edit can compare and swap. */
+  publishedBody: string
   findings: ReviewFinding[]
 }
 
@@ -6819,6 +6822,7 @@ export function openJournalStore(
       json_extract(revisions.payload, '$.headSha') AS head_sha,
       COALESCE(stopped.reason, 'The automated review stopped.') AS reason,
       published.github_comment_id,
+      published.body AS published_body,
       COALESCE((
         SELECT review_runs.findings FROM review_runs
         WHERE review_runs.subject_id = stopped.subject_id
@@ -6879,6 +6883,7 @@ export function openJournalStore(
     headSha: row.head_sha,
     reason: row.reason,
     commentId: row.github_comment_id,
+    publishedBody: row.published_body,
     findings: JSON.parse(row.findings) as ReviewFinding[],
   }))
 
