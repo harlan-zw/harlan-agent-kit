@@ -520,6 +520,14 @@ export interface JournalStore {
     commentId: number
     url: string
   }) => boolean
+  /**
+   * True while the Task is still Queued, so a sweep may still write for it.
+   *
+   * The Queue read and the comment write are separated by GitHub round trips,
+   * during which an agent can claim the Task. This check is synchronous, so a
+   * sweep that sees false here has lost the comment to the claimed agent.
+   */
+  isQueuedReviewStatus: (input: { taskId: string, taskKind: 'adversarial_review' | 'review_fix' }) => boolean
   recordStoppedReviewStatus: (input: {
     taskId: string
     taskKind: 'adversarial_review' | 'review_fix'
@@ -6874,6 +6882,14 @@ export function openJournalStore(
     findings: JSON.parse(row.findings) as ReviewFinding[],
   }))
 
+  const isQueuedReviewStatus: JournalStore['isQueuedReviewStatus'] = (input) => {
+    const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
+    return database.prepare(`
+      SELECT 1 FROM ${taskTable}
+      WHERE id = ? AND kind = ? AND state_tag = 'Queued'
+    `).get(input.taskId, input.taskKind) !== undefined
+  }
+
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
     const commandId = digest(`${input.taskKind}:${input.taskId}:stopped:${bodySha256}`)
@@ -7044,6 +7060,7 @@ export function openJournalStore(
     recordApprovalPromptComment,
     listStoppedReviews,
     recordQueuedReviewStatus,
+    isQueuedReviewStatus,
     recordStoppedReviewStatus,
     approvePullRequest,
     authorizePublication,

@@ -525,7 +525,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           if (result._tag === 'Ok') {
             options.logger.info(result.value._tag === 'CommentGone'
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the automated comment was deleted, so nothing was written.`
-              : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.position} of ${result.value.total}.`)
+              : result.value._tag === 'Superseded'
+                ? `${result.value.repository}#${result.value.pullRequestNumber}: an agent claimed the Task, so the Queue position comment was left to it.`
+                : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.position} of ${result.value.total}.`)
           }
           else {
             options.logger.error(`Queue position comment: ${result.error}`)

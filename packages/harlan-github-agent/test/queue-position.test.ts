@@ -245,3 +245,21 @@ describe('recordQueuedReviewStatus', () => {
     })).toBe(false)
   })
 })
+
+describe('isQueuedReviewStatus', () => {
+  it('holds while the Task is Queued and breaks the moment an agent claims it', () => {
+    const store = createStore()
+    queuedRepair(store, 24, '2026-08-13T01:00:00.000Z')
+    const status = store.listQueuedReviewStatuses()[0]!
+
+    expect(store.isQueuedReviewStatus({ taskId: status.taskId, taskKind: status.taskKind })).toBe(true)
+    store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:04:00.000Z', 60_000)
+    expect(store.isQueuedReviewStatus({ taskId: status.taskId, taskKind: status.taskKind })).toBe(false)
+  })
+
+  it('answers for the exact Task, not any Task of the same kind', () => {
+    const store = createStore()
+
+    expect(store.isQueuedReviewStatus({ taskId: 'missing-task', taskKind: 'review_fix' })).toBe(false)
+  })
+})

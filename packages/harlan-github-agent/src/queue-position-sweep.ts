@@ -49,12 +49,13 @@ export interface QueuePositionSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listQueuedReviewStatuses' | 'recordQueuedReviewStatus'>
+  store: Pick<JournalStore, 'isQueuedReviewStatus' | 'listQueuedReviewStatuses' | 'recordQueuedReviewStatus'>
 }
 
 export type QueuePositionOutcome
   = | { _tag: 'Published', repository: string, pullRequestNumber: number, position: number, total: number }
     | { _tag: 'CommentGone', repository: string, pullRequestNumber: number }
+    | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
 
 /**
  * Tells a waiting pull request where its Task sits in the Queue.
@@ -67,6 +68,11 @@ export type QueuePositionOutcome
  * Only a comment this service already published is rewritten. The edit cannot
  * open a comment, so a quiet pull request stays quiet and a comment a person
  * deleted stays deleted.
+ *
+ * An agent can claim the Task between the Queue read and the comment write,
+ * because both GitHub round trips sit in between. The claim is re-checked
+ * synchronously before the write, and a claim lost during the write is reported
+ * as Superseded, so an active review's comment never keeps a stale QUEUED body.
  */
 export async function publishQueuePositions(
   options: QueuePositionSweepOptions,
@@ -79,6 +85,8 @@ export async function publishQueuePositions(
     const mapping = mappings.get(status.repository.toLowerCase())
     if (mapping === undefined)
       return err(`${status.repository}: the repository is no longer configured.`)
+    if (!options.store.isQueuedReviewStatus({ taskId: status.taskId, taskKind: status.taskKind }))
+      return ok({ _tag: 'Superseded', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
     const current = await options.github.getPullRequestReviewSnapshot(mapping, status.pullRequestNumber, signal)
     if (current._tag === 'Err')
       return err(`${status.repository}#${status.pullRequestNumber}: ${current.error}`)
@@ -110,6 +118,8 @@ export async function publishQueuePositions(
           position: status.position,
           total: status.total,
         })
-      : err(`${status.repository}#${status.pullRequestNumber}: the Queue position comment could not be saved.`)
+      // The claim was lost while the edit was in flight, so the claimed agent
+      // now owns the comment. Nothing was saved and nothing needs to be.
+      : ok({ _tag: 'Superseded', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
   }))
 }

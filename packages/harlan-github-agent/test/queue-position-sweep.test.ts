@@ -78,6 +78,7 @@ describe('publishQueuePositions', () => {
       repositories: [repositoryMapping()],
       store: {
         listQueuedReviewStatuses: () => [queuedRepair()],
+        isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: (input) => {
           recorded = { taskId: input.taskId, body: input.body }
           return true
@@ -107,6 +108,7 @@ describe('publishQueuePositions', () => {
       repositories: [repositoryMapping()],
       store: {
         listQueuedReviewStatuses: () => [{ ...unchanged, publishedBody: queuePositionComment(unchanged) }],
+        isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => true,
       },
     }, new AbortController().signal)
@@ -126,6 +128,7 @@ describe('publishQueuePositions', () => {
       repositories: [repositoryMapping()],
       store: {
         listQueuedReviewStatuses: () => [queuedRepair()],
+        isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => {
           recorded += 1
           return true
@@ -151,6 +154,7 @@ describe('publishQueuePositions', () => {
       repositories: [repositoryMapping()],
       store: {
         listQueuedReviewStatuses: () => [queuedRepair()],
+        isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => true,
       },
     }, new AbortController().signal)
@@ -160,5 +164,57 @@ describe('publishQueuePositions', () => {
       _tag: 'Err',
       error: 'harlan-zw/example#24: the pull request changed before the Queue position comment.',
     }])
+  })
+
+  it('skips the edit once an agent claimed the Task before the comment was written', async () => {
+    let writes = 0
+    const results = await publishQueuePositions({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => {
+          writes += 1
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listQueuedReviewStatuses: () => [queuedRepair()],
+        // An agent claimed the Task between the Queue read and the write.
+        isQueuedReviewStatus: () => false,
+        recordQueuedReviewStatus: () => false,
+      },
+    }, new AbortController().signal)
+
+    expect(writes).toBe(0)
+    expect(results).toEqual([ok({ _tag: 'Superseded', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+  })
+
+  it('reports the lost claim as Superseded instead of an unsaved comment once an agent claims the Task mid-edit', async () => {
+    let claimed = false
+    let recorded = 0
+    const results = await publishQueuePositions({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => new Promise((resolve) => {
+          // The claim lands while the comment edit is in flight.
+          claimed = true
+          resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        }),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listQueuedReviewStatuses: () => [queuedRepair()],
+        isQueuedReviewStatus: () => !claimed,
+        recordQueuedReviewStatus: () => {
+          recorded += 1
+          return false
+        },
+      },
+    }, new AbortController().signal)
+
+    expect(recorded).toBe(1)
+    expect(results).toEqual([ok({ _tag: 'Superseded', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
   })
 })
