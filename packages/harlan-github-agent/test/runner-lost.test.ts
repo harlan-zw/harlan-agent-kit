@@ -69,6 +69,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
     runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(cleanReview))),
     github: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+      editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
       listPullRequestFiles: () => Promise.reject(new Error('Unexpected file listing.')),

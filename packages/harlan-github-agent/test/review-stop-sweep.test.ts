@@ -62,14 +62,14 @@ describe('stoppedReviewComment', () => {
 
 describe('publishStoppedReviews', () => {
   it('rewrites the canonical comment and records it once', async () => {
-    let upserted: { commentId: number | null, body: string } | undefined
+    let edited: { commentId: number, body: string } | undefined
     let recorded = 0
     const results = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
-        upsertReviewStatus: (_repository, _number, commentId, body) => {
-          upserted = { commentId, body }
-          return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        editReviewStatus: (_repository, _number, commentId, body) => {
+          edited = { commentId, body }
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
         },
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
@@ -83,19 +83,41 @@ describe('publishStoppedReviews', () => {
       },
     }, new AbortController().signal)
 
-    expect(results).toEqual([ok({ repository: 'harlan-zw/example', pullRequestNumber: 24 })])
-    expect(upserted?.commentId).toBe(42)
-    expect(upserted?.body).toContain('### 🤖 STOPPED')
+    expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+    expect(edited?.commentId).toBe(42)
+    expect(edited?.body).toContain('### 🤖 STOPPED')
     expect(recorded).toBe(1)
   })
 
+  it('writes nothing when a person deleted the comment, rather than posting it again', async () => {
+    let recorded = 0
+    const results = await publishStoppedReviews({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listStoppedReviews: () => [stopped],
+        recordStoppedReviewStatus: () => {
+          recorded += 1
+          return true
+        },
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({ _tag: 'CommentGone', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+    expect(recorded).toBe(0)
+  })
+
   it('leaves the comment alone once the pull request moves on', async () => {
-    let upserts = 0
+    let writes = 0
     const results = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({ headSha: 'def456' })),
-        upsertReviewStatus: () => {
-          upserts += 1
+        editReviewStatus: () => {
+          writes += 1
           return Promise.resolve(err('Unexpected comment write.'))
         },
       },
@@ -107,7 +129,7 @@ describe('publishStoppedReviews', () => {
       },
     }, new AbortController().signal)
 
-    expect(upserts).toBe(0)
+    expect(writes).toBe(0)
     expect(results).toEqual([{ _tag: 'Err', error: 'harlan-zw/example#24: the pull request changed before the final comment.' }])
   })
 })

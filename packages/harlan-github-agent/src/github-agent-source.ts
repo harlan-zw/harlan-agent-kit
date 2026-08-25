@@ -157,6 +157,11 @@ export interface PublishedReviewStatus {
   url: string
 }
 
+/** `Missing` means a person deleted the comment, so there is nothing to correct. */
+export type EditedReviewStatus
+  = | { _tag: 'Edited', commentId: number, url: string }
+    | { _tag: 'Missing' }
+
 export interface GitHubAgentSource {
   consumeApprovalLabel: (repository: RepositoryMapping, subjectKind: 'issue' | 'pull_request', itemNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   ensureApprovalLabel: (repository: RepositoryMapping, label: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -166,6 +171,15 @@ export interface GitHubAgentSource {
   /** Every file one open pull request changes, which decides whether new work stacks on it. */
   listPullRequestFiles: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<string[], string>>
   upsertIssueTriageComment: (repository: RepositoryMapping, issueNumber: number, commentId: number | null, body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
+  /**
+   * Rewrites one comment this service already posted, and only that.
+   *
+   * `upsertReviewStatus` opens a comment when the stored identifier is gone,
+   * which is right for a review that owns its comment and wrong for a sweep
+   * correcting an old one: deleting the comment would bring it straight back.
+   * A missing comment is an outcome here, not a failure.
+   */
+  editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, body: string, signal: AbortSignal) => Promise<Result<EditedReviewStatus, string>>
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
 }
 
@@ -185,6 +199,10 @@ function repositoryParts(repository: string): { owner: string, repo: string } {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : 'GitHub request failed.'
+}
+
+function isMissingComment(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'status' in error && (error as { status: unknown }).status === 404
 }
 
 /** GitHub's own app slug for Actions. Only its check run id is also a job id. */
@@ -515,6 +533,29 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             : [{ body: review.body, createdAt: review.submitted_at ?? '' }])),
         })
       }).catch((error: unknown) => err(message(error)))
+    },
+
+    async editReviewStatus(repository, pullRequestNumber, commentId, body, signal) {
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      const requestOptions = { request: { signal } }
+      const actor = options.actorLogin(repository).toLowerCase()
+      return octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
+        .then(async (existing) => {
+          if (existing.data.user?.login.toLowerCase() !== actor)
+            return err('The stored automated review comment belongs to another GitHub actor.')
+          if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
+            return err('The stored automated review comment belongs to another pull request.')
+          if (existing.data.body === body && existing.data.html_url !== undefined)
+            return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
+          const written = await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
+          if (written.data.user?.login.toLowerCase() !== actor || written.data.body !== body)
+            return err('GitHub did not confirm the edited automated review comment.')
+          return ok({ _tag: 'Edited' as const, commentId: written.data.id, url: written.data.html_url })
+        })
+        .catch((error: unknown) => isMissingComment(error) ? ok({ _tag: 'Missing' as const }) : err(message(error)))
     },
 
     async upsertReviewStatus(repository, pullRequestNumber, commentId, body, replacePriorReview, signal) {
