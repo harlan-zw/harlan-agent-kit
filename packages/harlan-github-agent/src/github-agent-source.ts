@@ -183,11 +183,14 @@ export interface GitHubAgentSource {
    * correcting an old one: deleting the comment would bring it straight back.
    * A missing comment is an outcome here, not a failure.
    *
-   * The write is a compare and swap against `expectedBody`. A sweep reads the
-   * Queue, then spends two round trips reaching this call, and an agent can
-   * claim the Task and publish its own progress inside that window. Comparing
-   * what GitHub holds is the only check that cannot be overtaken, because
-   * GitHub applies it at the moment of the write.
+   * The write is a compare and swap against `expectedBody`, but GitHub's REST
+   * API applies no precondition at write time, so the swap is a client side
+   * read then write. A sweep reads the Queue, then spends round trips reaching
+   * this call, and an agent that claims the Task can publish its own progress
+   * inside that window; this call would overwrite it without knowing. The read
+   * back after the write reports `Changed` when the comment no longer holds
+   * what was written, which catches a writer that landed after the edit, but
+   * the window between the read and the write cannot be closed here.
    */
   editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, expectedBody: string, body: string, signal: AbortSignal) => Promise<Result<EditedReviewStatus, string>>
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
@@ -562,10 +565,16 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           if (existing.data.body !== expectedBody)
             return ok({ _tag: 'Changed' as const })
-          const written = await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
-          if (written.data.user?.login.toLowerCase() !== actor || written.data.body !== body)
+          await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
+          // The compare and swap above is a client side read then write, so a
+          // concurrent writer can land between the two. Reading back is the
+          // only way to see that the written body no longer holds.
+          const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
+          if (confirmed.data.user?.login.toLowerCase() !== actor)
             return err('GitHub did not confirm the edited automated review comment.')
-          return ok({ _tag: 'Edited' as const, commentId: written.data.id, url: written.data.html_url })
+          if (confirmed.data.body !== body)
+            return ok({ _tag: 'Changed' as const })
+          return ok({ _tag: 'Edited' as const, commentId: confirmed.data.id, url: confirmed.data.html_url })
         })
         .catch((error: unknown) => isMissingComment(error) ? ok({ _tag: 'Missing' as const }) : err(message(error)))
     },

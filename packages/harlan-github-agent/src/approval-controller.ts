@@ -80,7 +80,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
         // went on asking after the label arrived, because no Task exists yet to
         // own it. Recording it hands it to the sweep that corrects stale
         // comments once the review joins the Queue.
-        options.store.recordApprovalPromptComment({
+        const recorded = options.store.recordApprovalPromptComment({
           repository: repository.github,
           pullRequestNumber: pullRequest.number,
           revisionId,
@@ -88,6 +88,8 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
           body,
           at: options.now().toISOString(),
         })
+        if (!recorded)
+          return err(`The REVIEW PAUSED prompt for ${repository.github}#${pullRequest.number} could not be recorded.`)
         return ok(undefined)
       }
 

@@ -232,6 +232,27 @@ describe('approval controller', () => {
     expect(calls).toEqual(['ensure'])
   })
 
+  it('fails when the prompt comment cannot be recorded', async () => {
+    const controller = createApprovalController({
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label consumption.')),
+        ensureApprovalLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewStatus: () => Promise.resolve(ok({ commentId: 1, url: 'url' })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        ...unusedIssueApproval,
+        recordApprovalPromptComment: () => false,
+        getSelectionMode: () => 'auto' as const,
+        hasPullRequestApproval: () => false,
+        approvePullRequest: () => { throw new Error('Unexpected Approval.') },
+      },
+    })
+
+    const result = await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)
+    expect(result._tag).toBe('Err')
+  })
+
   it('consumes the shared label before approving the exact outside issue state', async () => {
     const calls: string[] = []
     let consumedItemKind: unknown
