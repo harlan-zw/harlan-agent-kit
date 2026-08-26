@@ -267,6 +267,36 @@ function restoreRecoveryBudget(database: DatabaseSync, github: string, at: strin
   return restored
 }
 
+/**
+ * Gives exhausted provider failures another budget after one Agent succeeds.
+ *
+ * A completed Agent turn is the provider health signal. Only exhausted Tasks
+ * need help; Tasks still inside their budget already have a scheduled retry.
+ */
+function restoreAgentProviderRecoveryBudget(database: DatabaseSync, at: string): number {
+  let restored = 0
+  for (const table of ['tasks', 'worker_tasks'] as const) {
+    const rows = database.prepare(`
+      SELECT id, reason FROM ${table}
+      WHERE state_tag = 'Failed' AND recovery_attempts >= ? AND reason IS NOT NULL
+    `).all(MAXIMUM_RECOVERY_ATTEMPTS) as unknown as Array<{ id: string, reason: string }>
+    const reset = database.prepare(`
+      UPDATE ${table} SET recovery_attempts = 0, updated_at = ?
+      WHERE id = ? AND state_tag = 'Failed' AND recovery_attempts >= ?
+    `)
+    for (const row of rows) {
+      const failure = classifyFailure({ message: row.reason })
+      if (failure._tag !== 'Transient' || failure.kind !== 'agent_provider')
+        continue
+      if (reset.run(at, row.id, MAXIMUM_RECOVERY_ATTEMPTS).changes !== 1)
+        continue
+      restored += 1
+      resolveTaskIncidents(database, row.id, at)
+    }
+  }
+  return restored
+}
+
 interface RecoveryCandidateRow {
   id: string
   fence: number
@@ -5319,6 +5349,7 @@ export function openJournalStore(
       if (result.changes === 1) {
         recordWorkerTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
         resolveTaskIncidents(database, input.taskId, input.at)
+        restoreAgentProviderRecoveryBudget(database, input.at)
         const row = database.prepare(`
           SELECT worker_tasks.subject_id, worker_tasks.revision_id, revisions.payload, repositories.policy_json
           FROM worker_tasks
@@ -6039,6 +6070,7 @@ export function openJournalStore(
       if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
         resolveTaskIncidents(database, input.taskId, input.at)
+        restoreAgentProviderRecoveryBudget(database, input.at)
       }
       database.exec('COMMIT')
       return result.changes === 1

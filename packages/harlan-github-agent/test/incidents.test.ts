@@ -488,6 +488,31 @@ describe('recovery budget after a GitHub outage', () => {
     expect(store.restoreOutageRecoveryBudget('2026-08-18T12:01:00.000Z')).toBe(1)
     expect(store.retryRecoverableWorkerFailures('2026-08-18T12:02:00.000Z')).toBe(1)
   })
+
+  it('frees exhausted provider failures after another Agent completes', () => {
+    const store = storeWithExhaustedReview('The opencode session failed: Unexpected server error.')
+    expect(store.listIncidents()[0]?.recovery).toEqual({ _tag: 'Exhausted' })
+
+    store.recordObservation({
+      externalId: 'healthy-provider-pr',
+      observedAt: '2026-08-18T12:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ number: 25, mergeState: 'clean' }),
+    })
+    const healthy = store.claimNextAdversarialReviewTask('healthy-provider', '2026-08-18T12:00:01.000Z', 10_000)
+    if (healthy === null)
+      throw new Error('Expected a Review Task for the healthy Agent provider.')
+    expect(store.completeWorkerTask({
+      taskId: healthy.id,
+      workerId: healthy.state.workerId,
+      fence: healthy.state.fence,
+      at: '2026-08-18T12:00:02.000Z',
+      evidence: 'The Agent provider completed a Review.',
+    })).toBe(true)
+
+    expect(store.listIncidents()).toEqual([])
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T12:00:03.000Z')).toBe(1)
+  })
 })
 
 describe('stale task incidents', () => {
