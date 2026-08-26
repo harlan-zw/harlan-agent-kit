@@ -208,7 +208,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
             evidence,
           })
         }
-        if (rerun._tag === 'Duplicate') {
+        if (rerun._tag === 'Duplicate' || rerun.reason._tag === 'DisputeCapReached') {
           return ok({
             _tag: 'ActionRequired',
             reason: `Repair and the fresh Review still disagree: ${turn.value.value.summary}`,

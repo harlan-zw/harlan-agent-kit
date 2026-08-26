@@ -250,6 +250,75 @@ describe('review fix Worker', () => {
     expect(repeatedDispute[0]).toBe(firstDispute[0])
   })
 
+  it('routes a capped second disagreement to action without another Review', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const mapping = repositoryMapping({ ownership: 'maintained' })
+    const task: ClaimedReviewFixTask = {
+      id: 'repair-task-dispute-capped',
+      kind: 'review_fix',
+      repository: mapping.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'repair-worker', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: mapping,
+      pullRequest,
+    }
+    const findings: ReviewFinding[] = [{
+      _tag: 'Open',
+      summary: 'The history query has no limit.',
+      nextAction: 'Limit the history query.',
+      details: {
+        fingerprint: 'b'.repeat(64),
+        location: { path: 'src/store.ts', line: 42 },
+        proof: 'The false branch omits LIMIT 100.',
+        regressionTest: null,
+      },
+    }]
+
+    const result = await createReviewFixWorker({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [] },
+          body: '',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' },
+          reviews: [],
+        })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'disputed',
+        summary: 'The false branch already adds LIMIT 100.',
+        checks: [],
+        commitMessage: '',
+      }))),
+      status: { publishRepair: () => Promise.resolve(ok(undefined)) },
+      store: {
+        getReviewFixFindings: () => findings,
+        getWorkerSession: () => null,
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'DisputeCapReached' } }),
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(mapping)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/repair-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verify: () => { throw new Error('A disputed finding must not produce a patch.') },
+        commit: () => { throw new Error('A disputed finding must not produce a commit.') },
+      },
+    }).run(task, new AbortController().signal)
+
+    expect(result).toEqual(ok({
+      _tag: 'ActionRequired',
+      reason: 'Repair and the fresh Review still disagree: The false branch already adds LIMIT 100.',
+      evidence: JSON.stringify({ findings, checks: [] }),
+    }))
+  })
+
   it('rejects a blocked result with an empty summary', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const mapping = repositoryMapping({ ownership: 'maintained' })

@@ -50,11 +50,12 @@ function recordOpenFinding(
   headSha: string,
   resolution: 'Repair' | 'Dismissal' = 'Repair',
   identity = 'unsafe-parser-input',
+  runId?: string,
 ): void {
   const gates = passedReviewGates()
   gates.review = { _tag: 'Failed', reason: 'A material finding remains.', evidence: [] }
   store.recordReviewRun({
-    id: `review-run-${revisionId}`,
+    id: runId ?? `review-run-${revisionId}`,
     repository: 'harlan-zw/example',
     pullRequestNumber: 24,
     revisionId,
@@ -187,6 +188,91 @@ describe('review Repair queue', () => {
       _tag: 'Superseded',
       reason: 'A fresh Review found no repairable finding.',
     })
+  })
+
+  it('caps Repair disputes at one fresh Review per revision', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/dispute-loop')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
+    const queued = store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })
+    if (queued._tag !== 'Queued')
+      throw new Error(queued.reason)
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    expect(store.needsAttentionTask({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:00:06.000Z',
+      reason: 'Repair disputed the finding.',
+      evidence: 'The query already limits rows.',
+    })).toBe(true)
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:06.100Z',
+      evidence: 'Queued Repair.',
+    })).toBe(true)
+    expect(store.requestReviewRerun({
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId,
+      requestId: `repair-dispute:${repair.id}:first`,
+      source: 'repair_dispute',
+      requestedBy: 'review_fix',
+      at: '2026-08-13T01:00:06.500Z',
+    })._tag).toBe('Queued')
+
+    // The fresh Review rewords the same defect, so its Repair mints a new
+    // dispute digest. The second disagreement must not queue another Review.
+    const freshReview = store.claimNextAdversarialReviewTask('fresh-review-agent', '2026-08-13T01:00:07.000Z', 60_000)
+    if (freshReview === null)
+      throw new Error('Expected the fresh Review Task.')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha, 'Repair', 'history-query-unbounded', 'fresh-dispute-review')
+    const freshQueued = store.queueReviewFixTaskForReview({
+      taskId: freshReview.id,
+      workerId: freshReview.state.workerId,
+      fence: freshReview.state.fence,
+      at: '2026-08-13T01:00:07.500Z',
+    })
+    if (freshQueued._tag !== 'Queued')
+      throw new Error(freshQueued.reason)
+    const secondRepair = store.claimNextReviewFixTask('repair-agent-2', '2026-08-13T01:00:08.000Z', 60_000)
+    if (secondRepair === null)
+      throw new Error('Expected the second Repair Task.')
+    expect(store.needsAttentionTask({
+      taskId: secondRepair.id,
+      workerId: secondRepair.state.workerId,
+      fence: secondRepair.state.fence,
+      at: '2026-08-13T01:00:09.000Z',
+      reason: 'Repair disputed the finding again.',
+      evidence: 'The wording drifted, so the dispute is new.',
+    })).toBe(true)
+    expect(store.completeWorkerTask({
+      taskId: freshReview.id,
+      workerId: freshReview.state.workerId,
+      fence: freshReview.state.fence,
+      at: '2026-08-13T01:00:09.100Z',
+      evidence: 'Queued Repair.',
+    })).toBe(true)
+
+    expect(store.requestReviewRerun({
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId,
+      requestId: `repair-dispute:${secondRepair.id}:second`,
+      source: 'repair_dispute',
+      requestedBy: 'review_fix',
+      at: '2026-08-13T01:00:09.500Z',
+    })).toEqual({ _tag: 'Rejected', reason: { _tag: 'DisputeCapReached' } })
+    expect(store.claimNextAdversarialReviewTask('another-review-agent', '2026-08-13T01:00:10.000Z', 60_000)).toBeNull()
   })
 
   it('ends a review whose repair the controller may never publish', () => {

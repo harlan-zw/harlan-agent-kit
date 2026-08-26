@@ -156,6 +156,7 @@ export type ReviewRerunRejection
     | { _tag: 'RevisionMismatch' }
     | { _tag: 'AuthorNotAllowed' }
     | { _tag: 'ReviewNotReady' }
+    | { _tag: 'DisputeCapReached' }
 
 export type ReviewRerunResult
   = | { _tag: 'Queued', taskId: string }

@@ -3888,6 +3888,24 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
       }
+      // A Repair dispute mints its request id from reviewer-coined finding
+      // identities, so wording drift evades the exact-digest duplicate check.
+      // Cap disputes at one fresh Review per subject and revision.
+      if (input.source === 'repair_dispute') {
+        const priorDispute = database.prepare(`
+          SELECT 1
+          FROM review_rerun_requests
+          JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
+          WHERE review_rerun_requests.source = 'repair_dispute'
+            AND worker_tasks.subject_id = ?
+            AND worker_tasks.revision_id = ?
+          LIMIT 1
+        `).get(row.subject_id, input.revisionId) !== undefined
+        if (priorDispute) {
+          database.exec('COMMIT')
+          return { _tag: 'Rejected', reason: { _tag: 'DisputeCapReached' } }
+        }
+      }
 
       const pullRequest = JSON.parse(row.payload) as GitHubPullRequestItem
       const mapping = JSON.parse(row.policy_json) as RepositoryMapping
