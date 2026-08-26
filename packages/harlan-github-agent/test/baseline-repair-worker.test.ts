@@ -163,6 +163,72 @@ describe('baseline repair worker', () => {
     }))
   })
 
+  it('does not publish an internal missing-template value as the pull request body', async () => {
+    const mapping = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const worker = createBaselineRepairWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'repaired',
+        summary: 'Fixed the failing harness type check.',
+        checks: ['pnpm test'],
+        commitMessage: 'fix(harness): accept bare sandbox sessions',
+        pullRequestTitle: 'fix(harness): accept bare sandbox sessions',
+        pullRequestBody: JSON.stringify({ _tag: 'Missing' }),
+      }))),
+      github: {
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
+          body: '',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getWorkerSession: () => null,
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: value => Promise.resolve(ok(value)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/baseline-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.baseSha })),
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 1 })),
+        commit: () => Promise.resolve(ok({
+          commitSha: 'repair-commit',
+          baseSha: pullRequest.baseSha,
+          artifactRef: 'artifact-ref',
+          digest: 'patch-digest',
+          changedFiles: 1,
+        })),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'baseline-task',
+      kind: 'baseline_repair',
+      repository: mapping.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'baseline-agent', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: mapping,
+      pullRequest,
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({
+      _tag: 'Publish',
+      publication: expect.objectContaining({
+        pullRequestBody: expect.stringContaining('Repairs failing default branch CI.'),
+      }),
+    }))
+    expect(JSON.stringify(result)).not.toContain('"_tag":"Missing"')
+  })
+
   it('surfaces ActionRequired when a blocked result carries malformed metadata', async () => {
     const mapping = repositoryMapping()
     const pullRequest = pullRequestItem({ mergeState: 'clean' })

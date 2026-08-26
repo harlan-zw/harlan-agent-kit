@@ -131,6 +131,21 @@ function terminal(comments: string[]): string {
   return comments[comments.length - 1] ?? ''
 }
 
+describe('baseline repair classification', () => {
+  it('reviews a pull request whose head already fixes the failed base check', async () => {
+    const probe = reviewWith({
+      baseChecks: [check(1, 'ci / test', 'failure')],
+      headChecks: [check(2, 'ci / test', 'success')],
+    })
+
+    await probe.run()
+
+    expect(probe.baselineRepairs).toBe(0)
+    expect(probe.runs).toHaveLength(1)
+    expect(terminal(probe.comments)).toContain('READY')
+  })
+})
+
 describe('a failing job with no failed step', () => {
   it('reads a killed container as a lost runner', () => {
     expect(classifyFailedJob([
