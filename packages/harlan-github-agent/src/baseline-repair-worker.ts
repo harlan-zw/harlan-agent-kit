@@ -107,7 +107,9 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
       if (value.outcome === 'blocked') {
         return ok({
           outcome: 'blocked',
-          summary: typeof value.summary === 'string' ? value.summary : '',
+          summary: typeof value.summary === 'string' && cleanLine(value.summary).length > 0
+            ? value.summary
+            : 'The Agent reported that it could not safely repair Baseline CI.',
           checks: Array.isArray(value.checks) ? value.checks.filter((check): check is string => typeof check === 'string') : [],
         })
       }

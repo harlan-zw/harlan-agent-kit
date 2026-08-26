@@ -213,7 +213,7 @@ describe('baseline repair worker', () => {
 
     expect(result).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: '',
+      reason: 'The Agent reported that it could not safely repair Baseline CI.',
       evidence: expect.stringContaining('"outcome":"blocked"'),
     }))
   })
