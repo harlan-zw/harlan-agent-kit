@@ -96,7 +96,11 @@ Closes #12.`,
     const repository = repositoryMapping()
     const issue = issueItem()
     let commitMessage = ''
+    const recorded: Array<{ taskId: string, item: unknown }> = []
     const worker = createIssueWorkWorker({
+      activityLog: {
+        record: (taskId, item) => recorded.push({ taskId, item }),
+      },
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
         { _tag: 'SessionStarted', sessionId: 'session-1' },
         { _tag: 'Message', text: '{' },
@@ -139,12 +143,73 @@ Closes #12.`,
     }, new AbortController().signal)
 
     expect(commitMessage).toBe('fix: resolve issue #12')
+    expect(recorded).toEqual([{
+      taskId: 'issue-work-task',
+      item: expect.objectContaining({
+        _tag: 'Reasoning',
+        text: expect.stringMatching(/malformed issue work JSON[\s\S]*\{/),
+      }),
+    }])
     expect(result).toEqual(ok({
       _tag: 'Publish',
       publication: expect.objectContaining({
         pullRequestTitle: 'fix: resolve issue #12',
         pullRequestBody: expect.stringMatching(/### Description[\s\S]*### Linked Issues[\s\S]*Closes #12\./),
       }),
+    }))
+  })
+
+  it('surfaces a blocked verdict without checks as ActionRequired', async () => {
+    const repository = repositoryMapping()
+    const issue = issueItem()
+    let committed = false
+    const worker = createIssueWorkWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
+        { _tag: 'SessionStarted', sessionId: 'session-1' },
+        { _tag: 'Message', text: '{"outcome":"blocked","summary":"Cannot determine safe implementation"}' },
+        { _tag: 'TurnCompleted' },
+      ])),
+      github: {
+        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getWorkerSession: (_repository, _number, _role, scopeDigest) => scopeDigest === undefined ? null : 'triage-session',
+        listOpenAgentPullRequests: () => [],
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(repository)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/issue-work', headSha: 'base-sha', baseSha: 'base-sha', defaultBranchSha: 'base-sha' })),
+        verify: () => Promise.reject(new Error('A blocked verdict must not be verified.')),
+        restack: () => Promise.reject(new Error('A blocked verdict must not restack.')),
+        commit: () => {
+          committed = true
+          return Promise.reject(new Error('A blocked verdict must not be committed.'))
+        },
+      },
+    })
+
+    const result = await worker.run({
+      id: 'issue-work-task',
+      kind: 'issue_work',
+      repository: repository.github,
+      issueNumber: issue.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      issue,
+    }, new AbortController().signal)
+
+    expect(committed).toBe(false)
+    expect(result).toEqual(ok({
+      _tag: 'ActionRequired',
+      reason: 'Cannot determine safe implementation',
+      evidence: '{"outcome":"blocked","summary":"Cannot determine safe implementation","checks":[]}',
     }))
   })
 

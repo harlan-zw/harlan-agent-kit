@@ -5,6 +5,7 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAgentPullRequest, PullRequestBase, RepositoryMapping } from './types.ts'
 import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
+import { truncateOutput } from './agent-activity.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
 import { canWorkIssues } from './repository-policy.ts'
@@ -138,10 +139,17 @@ function parseAgentResponse(text: string, issueNumber: number, template: PullReq
   return Promise.resolve(text)
     .then(value => JSON.parse(value) as AgentResponsePayload)
     .then((value): Result<AgentResponse, string> => {
+      if (value.outcome === 'blocked') {
+        if (typeof value.summary !== 'string')
+          return err('The agent returned an invalid issue work result.')
+        return ok({
+          outcome: 'blocked',
+          summary: value.summary,
+          checks: Array.isArray(value.checks) && value.checks.every(check => typeof check === 'string') ? value.checks : [],
+        })
+      }
       if (typeof value.summary !== 'string' || !Array.isArray(value.checks) || !value.checks.every(check => typeof check === 'string'))
         return err('The agent returned an invalid issue work result.')
-      if (value.outcome === 'blocked')
-        return ok({ outcome: 'blocked', summary: value.summary, checks: value.checks as string[] })
       if (value.outcome !== 'implemented' || typeof value.commitMessage !== 'string' || value.commitMessage.trim().length === 0 || typeof value.pullRequestTitle !== 'string' || typeof value.pullRequestBody !== 'string')
         return err('The agent returned an invalid issue work result.')
       const pullRequestBody = withAiDisclosure(value.pullRequestBody)
@@ -310,6 +318,11 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       // safe PR metadata and keeps the Agent's work moving.
       let response: ImplementedAgentResponse
       if (parsed._tag === 'Err') {
+        options.activityLog?.record(task.id, {
+          _tag: 'Reasoning',
+          at: options.now().toISOString(),
+          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(turn.value.response)}`,
+        })
         response = controllerIssueMetadata(task, template.value)
       }
       else {
