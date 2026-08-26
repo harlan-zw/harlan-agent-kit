@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Snapshot with sentry-cli, then fetch redacted issue evidence read-only."""
+"""Snapshot with sentry-cli, fetch redacted issue evidence, resolve proven fixes.
+
+Every command except resolve is read-only. Resolve writes only with --apply.
+"""
 
 import argparse
 import configparser
@@ -15,13 +18,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 
 DEFAULT_URL = "https://sentry.io"
 PAGE_SIZE = 100
 SAFETY_CAP = 10_000
+RESOLVE_CAP = 200
 SECRET_KEYS = {
     "authorization",
     "cookie",
@@ -446,6 +450,115 @@ def bulk_bundles(args, base_url, token):
     return manifest
 
 
+def request_write(base_url, token, path, payload, params=None, method="PUT"):
+    url = f"{base_url}{path}"
+    if params:
+        url = f"{url}?{urlencode(params, doseq=True)}"
+    request = Request(
+        url,
+        data=json.dumps(payload).encode(),
+        method=method,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=30) as response:
+                body = response.read().decode("utf-8")
+                return json.loads(body) if body else None
+        except HTTPError as error:
+            body = error.read().decode("utf-8", "ignore")
+            if attempt < 2 and (error.code == 429 or error.code >= 500):
+                time.sleep(attempt + 1)
+                continue
+            raise RuntimeError(f"Sentry returned HTTP {error.code}: {body}") from error
+        except URLError as error:
+            if attempt < 2:
+                time.sleep(attempt + 1)
+                continue
+            raise RuntimeError(f"Sentry network error: {error.reason}") from error
+    raise RuntimeError("Sentry write retry loop ended unexpectedly.")
+
+
+def resolve_release_target(org, project, version, base_url, token):
+    """Reject a release that Sentry does not hold for this project.
+
+    A local build with an auth token can create a release that was never
+    deployed, so an unchecked version silently resolves against nothing.
+    """
+    data, _ = request_json(
+        base_url, token, f"/api/0/organizations/{org}/releases/{quote(version, safe='')}/"
+    )
+    slugs = {entry.get("slug") for entry in (data or {}).get("projects") or []}
+    if project not in slugs:
+        raise RuntimeError(
+            f"Release {version} is not associated with project {project}."
+        )
+    return {"version": version, "released": (data or {}).get("dateReleased")}
+
+
+def resolve_issues(args, base_url, token):
+    issue_ids = [str(value) for value in args.issue]
+    if len(issue_ids) != len(set(issue_ids)):
+        raise RuntimeError("Repeated --issue value.")
+    if any(not value.isdigit() for value in issue_ids):
+        raise RuntimeError("Every --issue must be a numeric issue ID.")
+    if len(issue_ids) > RESOLVE_CAP:
+        raise RuntimeError(f"Refusing to resolve more than {RESOLVE_CAP} issues at once.")
+    if args.in_release:
+        release = resolve_release_target(
+            args.org, args.project, args.in_release, base_url, token
+        )
+        status_details = {"inRelease": args.in_release}
+    else:
+        release = None
+        status_details = {"inNextRelease": True}
+    before = {}
+    for issue_id in issue_ids:
+        data, _ = request_json(
+            base_url, token, f"/api/0/organizations/{args.org}/issues/{issue_id}/"
+        )
+        issue_project = ((data or {}).get("project") or {}).get("slug")
+        if issue_project is not None and issue_project != args.project:
+            raise RuntimeError(
+                f"Issue {issue_id} does not belong to project {args.project}."
+            )
+        before[issue_id] = {
+            "short_id": (data or {}).get("shortId"),
+            "status": (data or {}).get("status"),
+        }
+    already = sorted(key for key, value in before.items() if value["status"] == "resolved")
+    pending = [issue_id for issue_id in issue_ids if issue_id not in set(already)]
+    result = {
+        "org": args.org,
+        "project": args.project,
+        "mode": "in-release" if args.in_release else "in-next-release",
+        "release": release,
+        "issues": dict(sorted(before.items())),
+        "already_resolved": already,
+        "would_resolve": sorted(pending, key=int),
+        "applied": False,
+    }
+    if not args.apply:
+        return result
+    if not pending:
+        result["applied"] = True
+        return result
+    request_write(
+        base_url,
+        token,
+        f"/api/0/projects/{args.org}/{args.project}/issues/",
+        {"status": "resolved", "statusDetails": status_details},
+        params={"id": pending},
+    )
+    result["applied"] = True
+    result["resolved"] = sorted(pending, key=int)
+    return result
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--org", required=True, help="Sentry organization slug")
@@ -472,6 +585,20 @@ def build_parser():
     bulk.add_argument("--output", required=True)
     bulk.add_argument("--events", type=int, default=1)
     bulk.add_argument("--workers", type=int, default=4)
+
+    resolve = subparsers.add_parser(
+        "resolve", help="Resolve issues this run proved fixed"
+    )
+    resolve.add_argument("--project", required=True)
+    resolve.add_argument("--issue", required=True, action="append")
+    mode = resolve.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--in-next-release", action="store_true")
+    mode.add_argument("--in-release")
+    resolve.add_argument(
+        "--apply",
+        action="store_true",
+        help="Perform the write. Without it the command only reports the plan.",
+    )
     return parser
 
 
@@ -487,6 +614,8 @@ def main():
         token, base_url = load_cli_config()
         if args.command == "bundle":
             result = issue_bundle(args, base_url, token)
+        elif args.command == "resolve":
+            result = resolve_issues(args, base_url, token)
         else:
             result = bulk_bundles(args, base_url, token)
     print(stable_json(redact(result)), end="")
