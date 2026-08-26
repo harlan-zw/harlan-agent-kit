@@ -5,6 +5,7 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { BaselineRepairWorktreeManager } from './worktree.ts'
+import { truncateOutput } from './agent-activity.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -80,6 +81,20 @@ function withDisclosure(body: string): string {
     .join('\n')
     .trimEnd()
   return `${description}\n\n${disclosure}`
+}
+
+function controllerBaselineMetadata(template: PullRequestTemplate): RepairedResponse {
+  const title = 'fix: repair default branch CI'
+  return {
+    outcome: 'repaired',
+    summary: 'The controller published the verified Baseline repair patch.',
+    checks: [],
+    commitMessage: title,
+    pullRequestTitle: title,
+    pullRequestBody: template._tag === 'Found'
+      ? `${template.body.trimEnd()}\n\nRepairs failing default branch CI.`
+      : 'Repairs failing default branch CI.',
+  }
 }
 
 function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
@@ -182,10 +197,23 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       if (turn._tag === 'Err')
         return turn
       const parsed = await parseResponse(turn.value.response)
-      if (parsed._tag === 'Err')
-        return parsed
-      if (parsed.value.outcome === 'blocked')
-        return ok({ _tag: 'ActionRequired', reason: cleanLine(parsed.value.summary), evidence: JSON.stringify(parsed.value) })
+      // A bad metadata envelope must not discard a finished patch. Review and
+      // Repair own code quality after publication, so the controller supplies
+      // safe PR metadata and keeps the Agent's work moving.
+      let response: RepairedResponse
+      if (parsed._tag === 'Err') {
+        options.activityLog?.record(task.id, {
+          _tag: 'Reasoning',
+          at: options.now().toISOString(),
+          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(turn.value.response)}`,
+        })
+        response = controllerBaselineMetadata(template.value)
+      }
+      else {
+        if (parsed.value.outcome === 'blocked')
+          return ok({ _tag: 'ActionRequired', reason: cleanLine(parsed.value.summary), evidence: JSON.stringify(parsed.value) })
+        response = parsed.value
+      }
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')
         return verified
@@ -194,7 +222,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         return frozen
       if (frozen.value.pullRequest.baseSha !== prepared.value.baseSha)
         return err('Default branch changed before the controller committed the Baseline repair.')
-      const committed = await options.worktrees.commit(task, prepared.value, verified.value, parsed.value.commitMessage, signal)
+      const committed = await options.worktrees.commit(task, prepared.value, verified.value, response.commitMessage, signal)
       if (committed._tag === 'Err')
         return committed
       return ok({
@@ -203,8 +231,8 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           _tag: 'OpenPullRequest',
           taskKind: 'baseline_repair',
           pullRequestNumber: task.pullRequestNumber,
-          pullRequestTitle: parsed.value.pullRequestTitle,
-          pullRequestBody: withDisclosure(parsed.value.pullRequestBody),
+          pullRequestTitle: response.pullRequestTitle,
+          pullRequestBody: withDisclosure(response.pullRequestBody),
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
           // A Baseline repair fixes the default branch, so it never stacks.
