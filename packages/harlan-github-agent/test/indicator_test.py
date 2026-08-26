@@ -908,6 +908,32 @@ class WatchLogTest(unittest.TestCase):
         self.assertIn('pnpm test', output.getvalue())
         self.assertIn('\x1b[', output.getvalue())
 
+    def test_first_opencode_poll_tick_skips_history_before_the_initial_window(self):
+        session_id = 'ses_fc1f02fd3ffeCm7SwBkWsH6YGb'
+        parts = [
+            {'id': f'part_{index}', 'type': 'text', 'text': f'message {index:03d}'}
+            for index in range(100)
+        ]
+
+        def message(finish):
+            return {'id': 'msg_1', 'info': {'role': 'assistant', 'finish': finish}, 'parts': parts}
+
+        sessions = iter([
+            {'info': {'title': 'Review #24', 'directory': '/tmp/example'}, 'messages': [message(None)]},
+            {'info': {'title': 'Review #24', 'directory': '/tmp/example'}, 'messages': [message('stop')]},
+        ])
+        output = io.StringIO()
+        console = watch.Console(file=output, force_terminal=False, width=200)
+
+        with patch.object(watch, 'load_opencode_session', side_effect=lambda _id: next(sessions)), \
+                patch.object(watch.time, 'sleep'), \
+                patch.object(watch, 'Console', return_value=console), \
+                patch.object(watch, 'input', lambda *_args: None):
+            watch.watch_opencode(session_id)
+
+        self.assertEqual(output.getvalue().count('message 005'), 0)
+        self.assertEqual(output.getvalue().count('message 099'), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

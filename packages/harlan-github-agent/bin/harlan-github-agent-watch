@@ -252,10 +252,9 @@ def watch_opencode(session_id):
     console.print(Text(f'Watching opencode session {session_id}', style='bold white'))
     console.print(Text(f"{session['info']['directory']}\n", style='dim'))
     parts = opencode_parts(session)
-    seen = {}
+    seen = {part['id']: json.dumps(part, sort_keys=True) for part in parts}
     for part in parts[-80:]:
         render_opencode_part(part, console)
-        seen[part['id']] = json.dumps(part, sort_keys=True)
     if opencode_session_complete(session):
         input('\nAutomation finished. Press Enter to close.')
         return
