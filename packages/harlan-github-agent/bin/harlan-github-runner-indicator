@@ -1,0 +1,322 @@
+#!/usr/bin/python3
+
+import fcntl
+import json
+import os
+import subprocess
+import threading
+import webbrowser
+from pathlib import Path
+
+import gi
+
+gi.require_version('AyatanaAppIndicator3', '0.1')
+gi.require_version('Gtk', '3.0')
+from gi.repository import AyatanaAppIndicator3, GLib, Gtk
+
+RUNNER_LABEL = 'com.harlanzw.desktop-runner=true'
+RUNNER_HOSTS_ENV = 'HARLAN_GITHUB_RUNNER_HOSTS'
+
+
+def parse_labels(value):
+    return dict(label.split('=', 1) for label in value.split(',') if '=' in label)
+
+
+def parse_runner_hosts(value):
+    hosts = []
+    names = set()
+    for definition in value.split(','):
+        name, separator, docker_host = definition.strip().partition('=')
+        name = name.strip()
+        docker_host = docker_host.strip()
+        if not separator or not name or not docker_host:
+            raise ValueError('Each self-hosted runner location must use Name=Docker URL.')
+        if name in names:
+            raise ValueError(f'Self-hosted runner location {name} appears more than once.')
+        names.add(name)
+        hosts.append({'name': name, 'dockerHost': docker_host})
+    if not hosts:
+        raise ValueError('Configure at least one self-hosted runner location.')
+    return hosts
+
+
+def runner_activity(runner, logs):
+    if runner.get('State', '').lower() != 'running':
+        return {'_tag': 'Offline', 'detail': runner.get('Status', 'Container stopped')}
+    for line in reversed(logs.splitlines()):
+        if 'Listening for Jobs' in line or 'completed with result:' in line:
+            return {'_tag': 'Idle'}
+        if 'Running job:' in line:
+            return {'_tag': 'Running', 'job': line.split('Running job:', 1)[1].strip()}
+    return {'_tag': 'Starting'}
+
+
+def request_runners(host):
+    docker = ['docker', '--host', host['dockerHost']]
+    completed = subprocess.run(
+        [*docker, 'ps', '--all', '--filter', f'label={RUNNER_LABEL}', '--format', '{{json .}}'],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=4,
+    )
+    runners = []
+    for line in completed.stdout.splitlines():
+        if not line:
+            continue
+        runner = json.loads(line)
+        logs = subprocess.run(
+            [*docker, 'logs', '--tail', '80', runner['ID']],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        activity = runner_activity(runner, logs.stdout + logs.stderr) if logs.returncode == 0 else {
+            '_tag': 'Unknown',
+            'detail': logs.stderr.strip() or 'Runner logs unavailable',
+        }
+        runners.append({
+            **runner,
+            'Activity': activity,
+            'RunnerLabels': parse_labels(runner.get('Labels', '')),
+            'Host': host['name'],
+        })
+    return runners
+
+
+def request_runner_hosts(hosts):
+    results = []
+    for host in hosts:
+        try:
+            results.append({
+                '_tag': 'Available',
+                'name': host['name'],
+                'runners': request_runners(host),
+            })
+        except Exception as caught:
+            results.append({
+                '_tag': 'Unavailable',
+                'name': host['name'],
+                'message': str(caught),
+            })
+    return results
+
+
+def read_runner_source(fetch_runner_hosts):
+    try:
+        return {'_tag': 'Available', 'hosts': fetch_runner_hosts()}
+    except Exception as caught:
+        return {'_tag': 'Unavailable', 'message': str(caught)}
+
+
+def source_runners(source):
+    if source['_tag'] != 'Available':
+        return []
+    return [
+        runner
+        for host in source['hosts']
+        if host['_tag'] == 'Available'
+        for runner in host['runners']
+    ]
+
+
+def counted(count, singular, plural=None):
+    return f'{count} {singular if count == 1 else plural or f"{singular}s"}'
+
+
+def runner_label(runner):
+    labels = runner['RunnerLabels']
+    repository = labels.get('com.harlanzw.desktop-runner.repository', 'Unknown repository')
+    name = runner.get('Names') or labels.get('com.harlanzw.desktop-runner.pool', 'runner')
+    activity = runner['Activity']
+    marker = {
+        'Idle': '⚪',
+        'Offline': '🔴',
+        'Running': '🟢',
+        'Starting': '🟡',
+        'Unknown': '🟠',
+    }.get(activity['_tag'], '🟠')
+    if activity['_tag'] == 'Running':
+        return f"{marker} Running · {activity['job']} · {repository} · {name}"
+    if activity['_tag'] == 'Offline':
+        return f"{marker} Offline · {repository} · {name} · {activity['detail']}"
+    if activity['_tag'] == 'Unknown':
+        return f'{marker} Status unavailable · {repository} · {name}'
+    return f"{marker} {activity['_tag']} · {repository} · {name}"
+
+
+def github_actions_status_label(runners, error):
+    if error is not None:
+        return '🔴 Status unavailable'
+    if not runners:
+        return '⚪ No self-hosted runners found'
+
+    counts = {}
+    for runner in runners:
+        state = runner.get('Activity', {}).get('_tag', 'Unknown')
+        counts[state] = counts.get(state, 0) + 1
+
+    if counts.get('Offline', 0) > 0:
+        marker = '🔴'
+    elif counts.get('Unknown', 0) > 0:
+        marker = '🟠'
+    elif counts.get('Starting', 0) > 0:
+        marker = '🟡'
+    elif counts.get('Running', 0) > 0:
+        marker = '🟢'
+    else:
+        marker = '⚪'
+
+    states = []
+    for state, label in (
+        ('Running', 'running'),
+        ('Idle', 'idle'),
+        ('Starting', 'starting'),
+        ('Offline', 'offline'),
+        ('Unknown', 'unknown'),
+    ):
+        if counts.get(state, 0) > 0:
+            states.append(f'{counts[state]} {label}')
+    return ' · '.join((f'{marker} {counted(len(runners), "self-hosted runner")}', *states))
+
+
+def runner_host_status_label(host):
+    if host['_tag'] == 'Unavailable':
+        return f"🔴 {host['name']} · unavailable · {host['message'][:100]}"
+    status = github_actions_status_label(host['runners'], None)
+    marker, detail = status.split(' ', 1)
+    return f"{marker} {host['name']} · {detail}"
+
+
+def menu_item(label, url=None, enabled=True):
+    item = Gtk.MenuItem(label=label)
+    item.set_sensitive(enabled)
+    if url is not None:
+        item.connect('activate', lambda *_args: webbrowser.open(url))
+    return item
+
+
+def submenu_item(label, items):
+    item = Gtk.MenuItem(label=label)
+    submenu = Gtk.Menu()
+    for child in items:
+        submenu.append(child)
+    item.set_submenu(submenu)
+    return item
+
+
+def section_item(label):
+    item = Gtk.MenuItem(label=label)
+    item.set_sensitive(False)
+    return item
+
+
+def separator():
+    return Gtk.SeparatorMenuItem()
+
+
+def runner_error(source):
+    if source['_tag'] == 'Unavailable':
+        return source['message']
+    if source['_tag'] == 'Loading':
+        return None
+    if source['hosts'] and all(host['_tag'] == 'Unavailable' for host in source['hosts']):
+        return 'All runner hosts unavailable'
+    return None
+
+
+def build_menu(indicator, source, refresh):
+    menu = Gtk.Menu()
+    error = runner_error(source)
+    runners = source_runners(source)
+    hosts = source['hosts'] if source['_tag'] == 'Available' else []
+    status = '🟡 Loading…' if source['_tag'] == 'Loading' else github_actions_status_label(runners, error)
+
+    menu.append(section_item('GitHub Actions'))
+    menu.append(menu_item(status, enabled=False))
+    if error is not None:
+        menu.append(menu_item(error[:100], enabled=False))
+    for host in hosts:
+        if host['_tag'] == 'Unavailable' or not host['runners']:
+            menu.append(menu_item(runner_host_status_label(host), enabled=False))
+            continue
+        items = []
+        for runner in sorted(host['runners'], key=runner_label):
+            repository = runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository')
+            items.append(menu_item(
+                runner_label(runner),
+                None if repository is None else f'https://github.com/{repository}/actions',
+                enabled=repository is not None,
+            ))
+        menu.append(submenu_item(runner_host_status_label(host), items))
+
+    menu.append(separator())
+    refresh_item = menu_item('Refresh')
+    refresh_item.connect('activate', lambda *_args: refresh())
+    menu.append(refresh_item)
+    quit_item = menu_item('Quit')
+    quit_item.connect('activate', lambda *_args: Gtk.main_quit())
+    menu.append(quit_item)
+    menu.show_all()
+    indicator.set_menu(menu)
+
+
+def indicator_summary(source):
+    if source['_tag'] == 'Loading':
+        return ('🟡', 'Loading GitHub Actions')
+    runners = source_runners(source)
+    status = github_actions_status_label(runners, runner_error(source))
+    marker, detail = status.split(' ', 1)
+    running = sum(runner.get('Activity', {}).get('_tag') == 'Running' for runner in runners)
+    return (f'{marker} {running}' if running else marker, f'GitHub Actions · {detail}')
+
+
+def main():
+    runner_hosts = parse_runner_hosts(os.environ.get(
+        RUNNER_HOSTS_ENV,
+        'Desktop=unix:///var/run/docker.sock',
+    ))
+    runtime = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
+    lock = (runtime / 'harlan-github-runner-indicator.lock').open('w')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+
+    indicator = AyatanaAppIndicator3.Indicator.new(
+        'harlan-github-runners',
+        'media-playback-start-symbolic',
+        AyatanaAppIndicator3.IndicatorCategory.SYSTEM_SERVICES,
+    )
+    indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
+    indicator.set_title('GitHub Actions')
+    refreshing = {'active': False}
+
+    def apply_state(source):
+        refreshing['active'] = False
+        label, title = indicator_summary(source)
+        indicator.set_label(label, '🟢 99')
+        indicator.set_title(title)
+        build_menu(indicator, source, refresh)
+        return False
+
+    def load_state():
+        source = read_runner_source(lambda: request_runner_hosts(runner_hosts))
+        GLib.idle_add(apply_state, source)
+
+    def refresh(*_args):
+        if refreshing['active']:
+            return True
+        refreshing['active'] = True
+        threading.Thread(target=load_state, daemon=True).start()
+        return True
+
+    build_menu(indicator, {'_tag': 'Loading'}, refresh)
+    refresh()
+    GLib.timeout_add_seconds(5, refresh)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()

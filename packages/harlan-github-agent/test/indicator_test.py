@@ -22,6 +22,18 @@ def load_indicator():
 indicator = load_indicator()
 
 
+def load_runner_indicator():
+    path = Path(__file__).parents[1] / 'bin/harlan-github-runner-indicator'
+    loader = importlib.machinery.SourceFileLoader('harlan_github_runner_indicator', str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+runner_indicator = load_runner_indicator()
+
+
 def load_watch():
     path = Path(__file__).parents[1] / 'bin/harlan-github-agent-watch'
     loader = importlib.machinery.SourceFileLoader('harlan_github_agent_watch', str(path))
@@ -48,7 +60,7 @@ def menu_labels(menu):
 
 class RunnerActivityTest(unittest.TestCase):
     def test_parses_named_runner_hosts_for_future_balancing(self):
-        self.assertEqual(indicator.parse_runner_hosts(
+        self.assertEqual(runner_indicator.parse_runner_hosts(
             'Hogwild=ssh://hogwild,Desktop=unix:///var/run/docker.sock',
         ), [
             {'name': 'Hogwild', 'dockerHost': 'ssh://hogwild'},
@@ -72,11 +84,11 @@ class RunnerActivityTest(unittest.TestCase):
                 stderr='',
             )
 
-        hosts = indicator.parse_runner_hosts(
+        hosts = runner_indicator.parse_runner_hosts(
             'Hogwild=ssh://hogwild,Desktop=unix:///var/run/docker.sock',
         )
-        with patch.object(indicator.subprocess, 'run', side_effect=run):
-            result = indicator.request_runner_hosts(hosts)
+        with patch.object(runner_indicator.subprocess, 'run', side_effect=run):
+            result = runner_indicator.request_runner_hosts(hosts)
 
         self.assertEqual(result, [
             {
@@ -100,19 +112,19 @@ class RunnerActivityTest(unittest.TestCase):
         ])
 
     def test_reports_idle_runner(self):
-        self.assertEqual(indicator.runner_activity(
+        self.assertEqual(runner_indicator.runner_activity(
             {'State': 'running', 'Status': 'Up 10 minutes'},
             "2026-08-13T15:43:11Z: Listening for Jobs\n",
         ), {'_tag': 'Idle'})
 
     def test_reports_current_job(self):
-        self.assertEqual(indicator.runner_activity(
+        self.assertEqual(runner_indicator.runner_activity(
             {'State': 'running', 'Status': 'Up 10 minutes'},
             "Listening for Jobs\n2026-08-13T15:50:00Z: Running job: deploy production\n",
         ), {'_tag': 'Running', 'job': 'deploy production'})
 
     def test_reports_offline_runner(self):
-        self.assertEqual(indicator.runner_activity(
+        self.assertEqual(runner_indicator.runner_activity(
             {'State': 'exited', 'Status': 'Exited (1) 2 minutes ago'},
             '',
         ), {'_tag': 'Offline', 'detail': 'Exited (1) 2 minutes ago'})
@@ -124,7 +136,7 @@ class RunnerActivityTest(unittest.TestCase):
         ]
 
         self.assertEqual(
-            indicator.github_actions_status_label(runners, None),
+            runner_indicator.github_actions_status_label(runners, None),
             '🟢 2 self-hosted runners · 1 running · 1 idle',
         )
 
@@ -139,13 +151,13 @@ class RunnerActivityTest(unittest.TestCase):
         }
 
         self.assertEqual(
-            indicator.runner_host_status_label(host),
+            runner_indicator.runner_host_status_label(host),
             '🟢 Hogwild · 2 self-hosted runners · 1 running · 1 idle',
         )
 
     def test_appends_the_failure_message_to_an_unavailable_runner_host(self):
         self.assertEqual(
-            indicator.runner_host_status_label({
+            runner_indicator.runner_host_status_label({
                 '_tag': 'Unavailable',
                 'name': 'Hogwild',
                 'message': 'ssh://hogwild refused',
@@ -153,20 +165,13 @@ class RunnerActivityTest(unittest.TestCase):
             '🔴 Hogwild · unavailable · ssh://hogwild refused',
         )
 
-    def test_reports_runner_discovery_without_changing_agent_state(self):
+    def test_reports_runner_discovery_failure(self):
         def unavailable():
             raise RuntimeError('Docker is unavailable')
 
-        sources = indicator.read_system_sources(
-            lambda: {'status': 'ready'},
-            unavailable,
-        )
+        source = runner_indicator.read_runner_source(unavailable)
 
-        self.assertEqual(sources['harlanGithubAgent'], {
-            '_tag': 'Available',
-            'dashboard': {'status': 'ready'},
-        })
-        self.assertEqual(sources['githubActions'], {
+        self.assertEqual(source, {
             '_tag': 'Unavailable',
             'message': 'Docker is unavailable',
         })
@@ -205,7 +210,7 @@ class IndicatorDisplayTest(unittest.TestCase):
         }
 
         self.assertEqual(
-            indicator.runner_label(runner),
+            runner_indicator.runner_label(runner),
             '🟢 Running · deploy production · harlan-zw/example · runner-1',
         )
 
@@ -307,10 +312,24 @@ class IndicatorDisplayTest(unittest.TestCase):
         )
 
     def test_treats_an_all_unavailable_host_list_as_an_error_state(self):
-        sources = indicator.read_system_sources(
-            lambda: {'status': 'ready'},
+        source = runner_indicator.read_runner_source(
             lambda: [{'_tag': 'Unavailable', 'name': 'Hogwild', 'message': 'ssh://hogwild refused'}],
         )
+        stub = StubIndicator()
+
+        runner_indicator.build_menu(
+            stub,
+            source,
+            lambda: None,
+        )
+        labels = menu_labels(stub.menus[0])
+
+        self.assertIn('🔴 Status unavailable', labels)
+        self.assertNotIn('⚪ No self-hosted runners found', labels)
+        self.assertIn('🔴 Hogwild · unavailable · ssh://hogwild refused', labels)
+
+    def test_agent_menu_does_not_include_github_actions(self):
+        sources = indicator.read_system_sources(lambda: {'status': 'ready'})
         stub = StubIndicator()
 
         indicator.build_menu(
@@ -323,11 +342,8 @@ class IndicatorDisplayTest(unittest.TestCase):
             lambda *_args: None,
             lambda *_args: None,
         )
-        labels = menu_labels(stub.menus[0])
 
-        self.assertIn('🔴 Status unavailable', labels)
-        self.assertNotIn('⚪ No self-hosted runners found', labels)
-        self.assertIn('🔴 Hogwild · unavailable · ssh://hogwild refused', labels)
+        self.assertNotIn('GitHub Actions', menu_labels(stub.menus[0]))
 
     def test_opens_a_read_only_watch_terminal_for_the_exact_session(self):
         agent = {
