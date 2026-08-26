@@ -1354,69 +1354,81 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
-  it('recognises the pull request the controller opened to repair the default branch', () => {
+  it('keeps a stopped Review eligible after GitHub closes its pull request Revision', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    store.recordObservation({
-      externalId: 'baseline-identity-pr',
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'review-before-merge',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestItem({ mergeState: 'clean' }),
+      subject: pullRequest,
     })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the open pull request Revision.')
     const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
     if (review === null)
-      throw new Error('Expected the review Task.')
-    const queued = store.queueBaselineRepairForReview({
+      throw new Error('Expected the Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'review',
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
-      baseSha: review.pullRequest.baseSha,
       at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 REVIEWING · Git worktree ready',
     })
-    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
-      throw new Error(queued.reason)
-    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
-    if (repair === null)
-      throw new Error('Expected the Baseline repair Task.')
-    const staged = store.stagePublication({
-      taskId: repair.id,
-      workerId: repair.state.workerId,
-      fence: repair.state.fence,
-      at: '2026-08-13T01:04:00.000Z',
-      publication: {
-        _tag: 'OpenPullRequest',
-        taskKind: 'baseline_repair',
-        pullRequestNumber: repair.pullRequestNumber,
-        pullRequestTitle: 'fix(ci): repair the default branch',
-        pullRequestBody: 'Repairs default branch CI.',
-        commitSha: 'baseline-commit',
-        baseSha: repair.pullRequest.baseSha,
-        baseRef: 'main',
-        expectedHeadSha: repair.pullRequest.baseSha,
-        headRef: 'fix/baseline-ci-abcdef012345',
-        artifactRef: 'refs/harlan-github-agent/publications/baseline',
-        patchDigest: 'patch',
-        changedFiles: 1,
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: 'Waiting for Baseline repair baseline-task.',
+    })).toBe(true)
+
+    store.recordObservation({
+      externalId: 'review-merged',
+      observedAt: '2026-08-13T01:03:00.000Z',
+      source: 'poll',
+      subject: {
+        ...pullRequest,
+        state: 'closed',
+        mergedAt: '2026-08-13T01:03:00.000Z',
+        updatedAt: '2026-08-13T01:03:00.000Z',
       },
     })
-    if (staged._tag !== 'Staged')
-      throw new Error('Expected a staged publication.')
 
-    expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/baseline-ci-abcdef012345')).toBe(false)
-
-    const claimed = store.claimNextPublication('publisher', '2026-08-13T01:05:00.000Z', 60_000)
-    if (claimed === null)
-      throw new Error('Expected the publication command.')
-    store.completePublication({
-      commandId: claimed.id,
-      workerId: claimed.workerId,
-      fence: claimed.fence,
-      at: '2026-08-13T01:05:30.000Z',
-      evidence: 'Opened pull request #99.',
-    })
-
-    expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/baseline-ci-abcdef012345')).toBe(true)
-    expect(store.isBaselineRepairPullRequest('harlan-zw/example', 'fix/other')).toBe(false)
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
+      taskId: review.id,
+      revisionId: observed.revisionId,
+      headSha: pullRequest.headSha,
+    })])
+    expect(store.recordStoppedReviewStatus({
+      taskId: review.id,
+      taskKind: 'adversarial_review',
+      revisionId: observed.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 MERGED',
+      at: '2026-08-13T01:04:00.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([])
   })
 
   it('lists the open pull requests this service opened, so a new one can stack on them', () => {
@@ -1837,6 +1849,51 @@ describe('journal store', () => {
       taskKind: 'baseline_repair',
       pullRequestNumber: repair.pullRequestNumber,
     }))
+  })
+
+  it('recovers an open Baseline repair from GitHub without local Task history', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const baseSha = 'a'.repeat(40)
+    store.recordObservation({
+      externalId: 'cold-recovery-subject',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ baseSha, mergeState: 'clean' }),
+    })
+    store.recordObservation({
+      externalId: 'cold-recovery-baseline-pr',
+      observedAt: '2026-08-13T01:00:01.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        number: 99,
+        author: 'harlan-github-agent[bot]',
+        headRef: `fix/baseline-ci-${baseSha.slice(0, 12)}`,
+        headSha: 'repair-head',
+        mergeState: 'clean',
+        purpose: { _tag: 'BaselineRepair', baseShaPrefix: baseSha.slice(0, 12) },
+        url: 'https://github.com/harlan-zw/example/pull/99',
+      }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 60_000)
+    if (review === null)
+      throw new Error('Expected the original Review Task.')
+
+    const recovered = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha,
+      at: '2026-08-13T01:01:01.000Z',
+    })
+
+    expect(recovered).toEqual({ _tag: 'Existing', taskId: expect.any(String) })
+    expect(store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:01:02.000Z', 60_000)).toBeNull()
+    expect(store.getDashboardSnapshot('2026-08-13T01:01:03.000Z').tasks)
+      .toContainEqual(expect.objectContaining({
+        id: recovered._tag === 'Existing' ? recovered.taskId : '',
+        state: { _tag: 'Completed', evidence: expect.stringContaining('pull/99') },
+      }))
   })
 
   it('shows separately claimed Review and Repair agents', () => {
@@ -2403,6 +2460,124 @@ describe('journal store', () => {
       revisionId: secondObservation.revisionId,
       pullRequest: expect.objectContaining({ baseSha: 'new-base' }),
     }))
+  })
+
+  it('releases a review after its completed Baseline repair becomes stale', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'stale-baseline-old-base',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean', baseSha: 'old-base' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (review === null)
+      throw new Error('Expected the first Review Task.')
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:01:01.000Z',
+    })
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
+      throw new Error(queued.reason)
+    const baseline = store.claimNextBaselineRepairTask('baseline-1', '2026-08-13T01:01:02.000Z', 60_000)
+    if (baseline === null)
+      throw new Error('Expected the Baseline repair Task.')
+    store.completeTask({
+      taskId: baseline.id,
+      workerId: baseline.state.workerId,
+      fence: baseline.state.fence,
+      at: '2026-08-13T01:01:03.000Z',
+      evidence: 'Opened Baseline repair pull request.',
+    })
+    store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:01:04.000Z',
+      evidence: 'Waiting for the Baseline repair.',
+    })
+
+    const moved = store.recordObservation({
+      externalId: 'stale-baseline-live-base',
+      observedAt: '2026-08-13T02:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean', baseSha: 'live-base' }),
+    })
+
+    if (moved._tag !== 'Inserted')
+      throw new Error('Expected GitHub state to create a fresh Revision.')
+    expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 60_000))
+      .toEqual(expect.objectContaining({
+        revisionId: moved.revisionId,
+        pullRequest: expect.objectContaining({ baseSha: 'live-base' }),
+      }))
+    expect(store.getDashboardSnapshot('2026-08-13T02:01:00.000Z').queue)
+      .not
+      .toContainEqual(expect.objectContaining({
+        state: expect.objectContaining({
+          reason: 'Waiting for GitHub to report the Baseline repair pull request.',
+        }),
+      }))
+  })
+
+  it('requeues a completed review when GitHub has no open Baseline repair', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'clean', baseSha: 'red-base' })
+    store.recordObservation({
+      externalId: 'missing-baseline-first-poll',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject,
+    })
+    const review = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (review === null)
+      throw new Error('Expected the first Review Task.')
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:01:01.000Z',
+    })
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
+      throw new Error(queued.reason)
+    const baseline = store.claimNextBaselineRepairTask('baseline-1', '2026-08-13T01:01:02.000Z', 60_000)
+    if (baseline === null)
+      throw new Error('Expected the Baseline repair Task.')
+    store.completeTask({
+      taskId: baseline.id,
+      workerId: baseline.state.workerId,
+      fence: baseline.state.fence,
+      at: '2026-08-13T01:01:03.000Z',
+      evidence: 'Publication finished locally.',
+    })
+    store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:01:04.000Z',
+      evidence: 'Waiting for the Baseline repair.',
+    })
+
+    store.recordObservation({
+      externalId: 'missing-baseline-second-poll',
+      observedAt: '2026-08-13T02:00:00.000Z',
+      source: 'poll',
+      subject,
+    })
+
+    expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 60_000))
+      .toEqual(expect.objectContaining({ id: review.id }))
+    expect(store.getDashboardSnapshot('2026-08-13T02:01:00.000Z').tasks)
+      .toContainEqual(expect.objectContaining({
+        id: baseline.id,
+        state: { _tag: 'Superseded', reason: 'GitHub reports no open Baseline repair for this base commit.' },
+      }))
   })
 
   it('deduplicates one GitHub review rerun command', () => {

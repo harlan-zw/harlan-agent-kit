@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { BASELINE_REPAIR_MARKER } from '../src/baseline-repair-state.ts'
 import { createBaselineRepairWorker } from '../src/baseline-repair-worker.ts'
 import { ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
@@ -69,8 +70,10 @@ describe('baseline repair worker', () => {
     }, new AbortController().signal)
 
     expect(commitMessage).toBe(response.commitMessage)
-    if (result._tag === 'Ok' && result.value._tag === 'Publish' && result.value.publication._tag === 'OpenPullRequest')
+    if (result._tag === 'Ok' && result.value._tag === 'Publish' && result.value.publication._tag === 'OpenPullRequest') {
       expect(result.value.publication.pullRequestBody.match(/🤖 AI disclosure:/g)).toHaveLength(1)
+      expect(result.value.publication.pullRequestBody).toContain(BASELINE_REPAIR_MARKER)
+    }
     expect(result).toEqual(ok({
       _tag: 'Publish',
       publication: expect.objectContaining({
@@ -335,6 +338,6 @@ describe('baseline repair worker', () => {
       pullRequest,
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ _tag: 'Obsolete', evidence: expect.stringContaining(expected) }))
+    expect(result).toEqual(ok({ _tag: 'Superseded', reason: expect.stringContaining(expected) }))
   })
 })

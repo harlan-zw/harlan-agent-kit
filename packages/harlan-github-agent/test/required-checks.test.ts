@@ -76,7 +76,6 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
-      isBaselineRepairPullRequest: () => false,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
       retireBaselineRepairForReview: () => 0,

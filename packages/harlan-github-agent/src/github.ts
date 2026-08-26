@@ -5,7 +5,9 @@ import type { Result } from './result.ts'
 import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
+import { pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
+import { currentBaseSha } from './github-base.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { isReviewRerunCommand } from './review-rerun.ts'
@@ -36,6 +38,7 @@ export interface GitHubSourceOptions {
   issueCutoff: string
   /** The login the controller posts as, which depends on how the repository authenticates. */
   actorLogin: (repository: RepositoryMapping) => string
+  createClient?: (token: string) => Octokit
   userAgent?: string
 }
 
@@ -53,6 +56,7 @@ export interface GitHubPullRequestPublisher {
     expectedHeadSha: string
     title: string
     body: string
+    labels?: Array<{ name: string, color: string, description: string }>
   }, signal?: AbortSignal) => Promise<Result<PublishedPullRequest, GitHubReadError>>
 }
 
@@ -91,7 +95,12 @@ function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.flatMap(label => typeof label === 'string' ? [label] : label.name === undefined ? [] : [label.name])
 }
 
-function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data']): GitHubPullRequestItem {
+function pullRequestItem(
+  repository: RepositoryMapping,
+  pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data'],
+  liveBaseSha: string,
+  actorLogin: string,
+): GitHubPullRequestItem {
   const labels = labelNames(pull.labels)
   return {
     kind: 'pull_request',
@@ -107,7 +116,7 @@ function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType
     createdAt: pull.created_at,
     updatedAt: pull.updated_at,
     draft: pull.draft ?? false,
-    baseSha: pull.base.sha,
+    baseSha: liveBaseSha,
     baseRef: pull.base.ref,
     headSha: pull.head.sha,
     headRepository: pull.head.repo?.full_name ?? '',
@@ -116,6 +125,15 @@ function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType
     mergeState: pull.mergeable === false
       ? 'conflicting'
       : pull.mergeable === true ? 'clean' : 'unknown',
+    purpose: pullRequestPurpose({
+      actorLogin,
+      authorLogin: pull.user?.login ?? 'ghost',
+      body: pull.body ?? '',
+      headRef: pull.head.ref,
+      headRepository: pull.head.repo?.full_name ?? '',
+      labels,
+      repository: repository.github,
+    }),
     priorAutomatedReview: { _tag: 'None' },
   }
 }
@@ -147,7 +165,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
     const token = await options.tokens.getToken(repository, 'read', signal)
     if (token._tag === 'Err')
       return err(token.error)
-    return ok(createAuthenticatedClient({
+    return ok(options.createClient?.(token.value.token) ?? createAuthenticatedClient({
       access: 'read',
       repository,
       signal,
@@ -203,7 +221,10 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
       if (octokit._tag === 'Err')
         return octokit
       return octokit.value.rest.pulls.get({ owner, repo, pull_number: number, ...(signal === undefined ? {} : { request: { signal } }) })
-        .then(response => ok(pullRequestItem(repository, response.data)))
+        .then(async (response) => {
+          const baseSha = await currentBaseSha(octokit.value, owner, repo, response.data.base.ref, signal)
+          return ok(pullRequestItem(repository, response.data, baseSha, options.actorLogin(repository)))
+        })
         .catch((error: unknown): Result<GitHubPullRequestItem, GitHubReadError> => {
           const status = errorStatus(error)
           return err({
@@ -252,6 +273,15 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
         octokit.value.paginate(octokit.value.rest.issues.listForRepo, { owner, repo, state: 'open', per_page: 100, ...requestOptions }),
         octokit.value.paginate(octokit.value.rest.pulls.list, { owner, repo, state: 'open', per_page: 100, ...requestOptions }),
       ]).then(async ([issueRows, pullRows]) => {
+        const baseShas = new Map<string, Promise<string>>()
+        const baseShaFor = (branch: string): Promise<string> => {
+          const existing = baseShas.get(branch)
+          if (existing !== undefined)
+            return existing
+          const requested = currentBaseSha(octokit.value, owner, repo, branch, signal)
+          baseShas.set(branch, requested)
+          return requested
+        }
         const issues: GitHubItem[] = issueRows
           .filter(issue => issue.pull_request === undefined)
           .filter(issue => !isAutomatedGitHubActor({
@@ -281,8 +311,9 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             octokit.value.rest.pulls.get({ owner, repo, pull_number: pull.number, ...requestOptions }).then(response => response.data),
             octokit.value.paginate(octokit.value.rest.issues.listComments, { owner, repo, issue_number: pull.number, per_page: 100, ...requestOptions }),
           ])
+          const baseSha = await baseShaFor(detail.base.ref)
           return {
-            ...pullRequestItem(repository, detail),
+            ...pullRequestItem(repository, detail, baseSha, options.actorLogin(repository)),
             priorAutomatedReview: priorAutomatedReviewForHead(comments.flatMap(comment =>
               comment.body === undefined || comment.body === null || comment.user?.login === undefined
                 ? []
@@ -329,6 +360,24 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
         })
       const request = signal === undefined ? {} : { request: { signal } }
+      const applyLabels = async (pullRequestNumber: number): Promise<void> => {
+        if (input.labels === undefined || input.labels.length === 0)
+          return
+        for (const label of input.labels) {
+          await octokit.rest.issues.createLabel({ owner, repo, ...label, ...request })
+            .catch((error: unknown) => {
+              if (errorStatus(error) !== 422)
+                throw error
+            })
+        }
+        await octokit.rest.issues.addLabels({
+          owner,
+          repo,
+          issue_number: pullRequestNumber,
+          labels: input.labels.map(label => label.name),
+          ...request,
+        })
+      }
       return octokit.rest.pulls.list({
         owner,
         repo,
@@ -345,8 +394,10 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
             message: `Pull request #${existing.number} is still draft.`,
           })
         }
-        if (existing !== undefined)
+        if (existing !== undefined) {
+          await applyLabels(existing.number)
           return ok({ number: existing.number, url: existing.html_url })
+        }
         return octokit.rest.pulls.create({
           owner,
           repo,
@@ -356,7 +407,10 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           body: input.body,
           draft: false,
           ...request,
-        }).then(created => ok({ number: created.data.number, url: created.data.html_url }))
+        }).then(async (created) => {
+          await applyLabels(created.data.number)
+          return ok({ number: created.data.number, url: created.data.html_url })
+        })
       }).catch((error: unknown): Result<PublishedPullRequest, GitHubReadError> => {
         const status = errorStatus(error)
         return err({

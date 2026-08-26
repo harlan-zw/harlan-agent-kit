@@ -353,6 +353,7 @@ describe('git publication remote', () => {
           headRepository: command.repository,
           headRef: command.headRef,
           mergeState: 'conflicting',
+          purpose: { _tag: 'Change' },
           priorAutomatedReview: { _tag: 'None' },
         })),
         hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),

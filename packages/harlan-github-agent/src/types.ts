@@ -1,5 +1,6 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
+import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
@@ -116,6 +117,8 @@ export interface GitHubPullRequestItem extends GitHubItemBase {
   headRef: string
   maintainerCanModify?: boolean
   mergeState: 'clean' | 'conflicting' | 'unknown'
+  /** Why this pull request exists, derived from marked GitHub state. */
+  purpose: PullRequestPurpose
   priorAutomatedReview: PriorAutomatedReview
 }
 
@@ -549,7 +552,7 @@ export type MutationWorkerOutcome
      * Retrying cannot help and nobody needs to act, so the Task completes
      * instead of failing. A failure here used to sit in the dashboard forever.
      */
-    | { _tag: 'Obsolete', evidence: string }
+    | { _tag: 'Superseded', reason: string }
 
 export type ClaimedPublicationCommand = PublicationCommand & {
   workerId: string

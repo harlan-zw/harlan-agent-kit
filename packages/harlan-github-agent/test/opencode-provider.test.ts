@@ -119,7 +119,7 @@ describe('opencodeAgentEvent', () => {
 
   it('reports a session error as a turn failure', () => {
     expect(opencodeAgentEvent({ type: 'error', error: { name: 'ProviderError', data: { message: 'Rate limited.' } } }))
-      .toEqual({ _tag: 'Failed', reason: 'Rate limited.' })
+      .toEqual({ _tag: 'Failed', reason: 'The opencode session failed: Rate limited.' })
   })
 
   it('completes the turn when the model stops', () => {
@@ -143,7 +143,8 @@ describe('createOpencodeProvider', () => {
       spawnOpencode: replay([], { exitCode: 1, standardError: 'Error: No such model' }),
     })
 
-    expect(await collect(provider.runTurn(request()))).toEqual([{ _tag: 'Failed', reason: 'No such model' }])
+    expect(await collect(provider.runTurn(request())))
+      .toEqual([{ _tag: 'Failed', reason: 'The opencode session failed: No such model' }])
   })
 
   it('starts a fresh session even when one was saved', async () => {

@@ -161,7 +161,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       }
       const findings = options.store.getReviewFixFindings(task.repository, task.pullRequestNumber, task.revisionId)
       if (findings.length === 0)
-        return ok({ _tag: 'Obsolete', evidence: 'The current Review has no open finding.' })
+        return ok({ _tag: 'Superseded', reason: 'The current Review has no open finding.' })
 
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value, pullRequest: current }, signal)
       if (prepared._tag === 'Err')

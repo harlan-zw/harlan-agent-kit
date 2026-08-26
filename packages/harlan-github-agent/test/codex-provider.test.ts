@@ -49,7 +49,7 @@ describe('codexAgentEvent', () => {
 
   it('maps a failed turn to a turn failure', () => {
     expect(codexAgentEvent({ type: 'turn.failed', error: { message: 'Usage limit reached.' } } as ThreadEvent))
-      .toEqual({ _tag: 'Failed', reason: 'Usage limit reached.' })
+      .toEqual({ _tag: 'Failed', reason: 'The codex session failed: Usage limit reached.' })
   })
 })
 

@@ -12,6 +12,11 @@ export type StoppedReviewOutcome
     | { _tag: 'CommentGone', repository: string, pullRequestNumber: number }
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
 
+export type StoppedReviewDisposition
+  = | { _tag: 'Stopped' }
+    | { _tag: 'Merged' }
+    | { _tag: 'Closed' }
+
 export interface ReviewStopSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
@@ -19,7 +24,28 @@ export interface ReviewStopSweepOptions {
   store: Pick<JournalStore, 'listStoppedReviews' | 'recordStoppedReviewStatus'>
 }
 
-export function stoppedReviewComment(review: StoppedReview, at: string): string {
+export function stoppedReviewComment(
+  review: StoppedReview,
+  at: string,
+  disposition: StoppedReviewDisposition = { _tag: 'Stopped' },
+): string {
+  if (disposition._tag !== 'Stopped') {
+    const workflow = JSON.stringify({
+      _tag: disposition._tag === 'Merged' ? 'PullRequestMerged' : 'PullRequestClosed',
+      headSha: review.headSha,
+    })
+    const action = disposition._tag === 'Merged' ? 'merged' : 'closed'
+    return `${AUTOMATED_REVIEW_MARKER}
+<!-- reviewed-sha: ${review.headSha} -->
+<!-- workflow-state: ${workflow} -->
+### 🤖 ${disposition._tag.toUpperCase()}
+
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${updatedAtLabel(at)}.
+
+\`${formatProgressBar(100)}\`
+
+GitHub ${action} this pull request. The unfinished automated review stopped.`
+  }
   if (review.taskKind === 'review_fix') {
     const findings = review.findings.map(finding => finding._tag === 'Fixed'
       ? `- **Fixed:** ${cleanLine(finding.summary)}`
@@ -71,11 +97,16 @@ export async function publishStoppedReviews(
     const current = await options.github.getPullRequestReviewSnapshot(mapping, review.pullRequestNumber, signal)
     if (current._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${current.error}`)
-    if (current.value.pullRequest.state !== 'open' || current.value.pullRequest.headSha !== review.headSha)
-      return err(`${review.repository}#${review.pullRequestNumber}: the pull request changed before the final comment.`)
+    if (current.value.pullRequest.state === 'open' && current.value.pullRequest.headSha !== review.headSha)
+      return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
     const at = options.now().toISOString()
-    const body = stoppedReviewComment(review, at)
+    const disposition: StoppedReviewDisposition = current.value.pullRequest.state === 'open'
+      ? { _tag: 'Stopped' }
+      : current.value.pullRequest.mergedAt === null
+        ? { _tag: 'Closed' }
+        : { _tag: 'Merged' }
+    const body = stoppedReviewComment(review, at, disposition)
     const edited = await options.github.editReviewStatus(mapping, review.pullRequestNumber, review.commentId, review.publishedBody, body, signal)
     if (edited._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${edited.error}`)

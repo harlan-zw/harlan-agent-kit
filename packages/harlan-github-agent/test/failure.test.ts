@@ -13,6 +13,7 @@ describe('classifyFailure', () => {
     ['fetch failed', 'network'],
     ['The opencode session stopped sending output.', 'agent_provider'],
     ['The opencode session exited with code 1.', 'agent_provider'],
+    ['The opencode session failed: Unexpected server error. Check server logs for details.', 'agent_provider'],
     ['The agent finished without a result.', 'agent_provider'],
     ['The review Task lease changed before the repair started.', 'subject_changed'],
     ['The repair Task changed before the review claimed it.', 'subject_changed'],

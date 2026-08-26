@@ -116,7 +116,6 @@ function harness(input: {
       }),
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
-      isBaselineRepairPullRequest: () => false,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },
       retireBaselineRepairForReview: () => 0,

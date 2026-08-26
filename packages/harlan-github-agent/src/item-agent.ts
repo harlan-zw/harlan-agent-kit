@@ -80,7 +80,7 @@ export interface ItemAgentOptions {
   /** Called when a progress update succeeds, so Recovery can close an earlier failure. */
   onProgressPublishSuccess?: (task: ClaimedAgentTask) => void
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getWorkerSession' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'updateAgentProgress'>
   status: Pick<ReviewStatusController, 'publish'>
   triageStatus: IssueTriageCommentController
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue'>
@@ -88,7 +88,7 @@ export interface ItemAgentOptions {
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -622,6 +622,22 @@ function progressComment(headSha: string, progress: AgentProgress, at: string): 
 Next: ${progress.percent >= 90 ? 'Post the review comment.' : progress.percent >= 85 ? 'Check the head commit and CI.' : progress.percent >= 70 ? 'Verify findings or fixes.' : progress.percent >= 55 ? 'Finish checking the changed files and docs.' : progress.percent >= 35 ? 'Review the diff.' : 'Create a Git worktree.'}`
 }
 
+function baselineWaitingComment(headSha: string, baseSha: string, at: string): string {
+  const workflow = JSON.stringify({ _tag: 'WaitingForBaselineRepair', baseSha })
+  return `${AUTOMATED_REVIEW_MARKER}
+<!-- reviewed-sha: ${headSha} -->
+<!-- workflow-state: ${workflow} -->
+### 🤖 WAITING
+
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated status. Last updated: ${updatedAtLabel(at)}.
+
+\`${formatProgressBar(100)}\`
+
+Base branch CI fails at \`${baseSha}\`.
+
+Next: merge or repair the marked Baseline repair pull request.`
+}
+
 function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
@@ -788,8 +804,8 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         recordRunnerLostIncident(options, task.repository)
       if (snapshot.value.priorAutomatedReview._tag === 'Found' && task.rerun._tag === 'NotRequested')
         return ok({ evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}` })
-      const knownBaselineRepair = options.store.isBaselineRepairPullRequest(task.repository, task.pullRequest.headRef)
-      const repairsBaseline = knownBaselineRepair
+      const markedBaselineRepair = snapshot.value.pullRequest.purpose._tag === 'BaselineRepair'
+      const repairsBaseline = markedBaselineRepair
         || (basesDefaultBranch(snapshot.value.pullRequest, task.repositoryMapping) && headRepairsFailedBaseChecks(snapshot.value))
       const ciAtStart = ciGate(snapshot.value, repairsBaseline).state
       const repairAccess = await options.preflightRepair(task.repository, signal)
@@ -807,10 +823,19 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           return err(baseline.reason)
         // A repository Harlan only watches cannot get a Baseline repair. The
         // review still runs, and its CI gate reports the red default branch.
-        if (baseline._tag !== 'NotAuthorized')
+        if (baseline._tag !== 'NotAuthorized') {
+          const waiting = await options.status.publish(
+            task,
+            'terminal',
+            baselineWaitingComment(task.pullRequest.headSha, snapshot.value.pullRequest.baseSha, options.now().toISOString()),
+            signal,
+          )
+          if (waiting._tag === 'Err')
+            return waiting
           return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
+        }
       }
-      else if (!knownBaselineRepair) {
+      else if (!markedBaselineRepair) {
         // This head needs no separate Baseline repair, so retire a dead one.
         options.store.retireBaselineRepairForReview({
           taskId: task.id,
