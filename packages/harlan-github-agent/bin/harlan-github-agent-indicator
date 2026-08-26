@@ -27,6 +27,7 @@ PASSWORD_FILE = Path.home() / '.config/harlan-github-agent/dashboard-password'
 APP_ICON = Path(__file__).resolve().parent.parent / 'assets/github-app-icon.png'
 WATCHER = Path(__file__).resolve().parent / 'harlan-github-agent-watch'
 RUNNER_LABEL = 'com.harlanzw.desktop-runner=true'
+RUNNER_HOSTS_ENV = 'HARLAN_GITHUB_RUNNER_HOSTS'
 WEEKLY_LIMIT_MINS = 7 * 24 * 60
 WEEKLY_SECONDS = 7 * 24 * 60 * 60
 CODEX_LIMIT_REFRESH_SECONDS = 60
@@ -114,6 +115,24 @@ def parse_labels(value):
     return dict(label.split('=', 1) for label in value.split(',') if '=' in label)
 
 
+def parse_runner_hosts(value):
+    hosts = []
+    names = set()
+    for definition in value.split(','):
+        name, separator, docker_host = definition.strip().partition('=')
+        name = name.strip()
+        docker_host = docker_host.strip()
+        if not separator or not name or not docker_host:
+            raise ValueError('Each self-hosted runner location must use Name=Docker URL.')
+        if name in names:
+            raise ValueError(f'Self-hosted runner location {name} appears more than once.')
+        names.add(name)
+        hosts.append({'name': name, 'dockerHost': docker_host})
+    if not hosts:
+        raise ValueError('Configure at least one self-hosted runner location.')
+    return hosts
+
+
 def runner_activity(runner, logs):
     if runner.get('State', '').lower() != 'running':
         return {'_tag': 'Offline', 'detail': runner.get('Status', 'Container stopped')}
@@ -125,9 +144,10 @@ def runner_activity(runner, logs):
     return {'_tag': 'Starting'}
 
 
-def request_runners():
+def request_runners(host):
+    docker = ['docker', '--host', host['dockerHost']]
     completed = subprocess.run(
-        ['docker', 'ps', '--all', '--filter', f'label={RUNNER_LABEL}', '--format', '{{json .}}'],
+        [*docker, 'ps', '--all', '--filter', f'label={RUNNER_LABEL}', '--format', '{{json .}}'],
         check=True,
         capture_output=True,
         text=True,
@@ -139,7 +159,7 @@ def request_runners():
             continue
         runner = json.loads(line)
         logs = subprocess.run(
-            ['docker', 'logs', '--tail', '80', runner['ID']],
+            [*docker, 'logs', '--tail', '80', runner['ID']],
             check=False,
             capture_output=True,
             text=True,
@@ -153,11 +173,30 @@ def request_runners():
             **runner,
             'Activity': activity,
             'RunnerLabels': parse_labels(runner.get('Labels', '')),
+            'Host': host['name'],
         })
     return runners
 
 
-def read_system_sources(fetch_dashboard, fetch_runners):
+def request_runner_hosts(hosts):
+    results = []
+    for host in hosts:
+        try:
+            results.append({
+                '_tag': 'Available',
+                'name': host['name'],
+                'runners': request_runners(host),
+            })
+        except Exception as caught:
+            results.append({
+                '_tag': 'Unavailable',
+                'name': host['name'],
+                'message': str(caught),
+            })
+    return results
+
+
+def read_system_sources(fetch_dashboard, fetch_runner_hosts):
     """Read the two systems independently, so one failure cannot mask the other."""
     try:
         harlan_github_agent = {'_tag': 'Available', 'dashboard': fetch_dashboard()}
@@ -165,7 +204,7 @@ def read_system_sources(fetch_dashboard, fetch_runners):
         harlan_github_agent = {'_tag': 'Unavailable', 'message': str(caught)}
 
     try:
-        github_actions = {'_tag': 'Available', 'runners': fetch_runners()}
+        github_actions = {'_tag': 'Available', 'hosts': fetch_runner_hosts()}
     except Exception as caught:
         github_actions = {'_tag': 'Unavailable', 'message': str(caught)}
 
@@ -189,7 +228,19 @@ def source_dashboard(sources):
 
 def source_runners(sources):
     source = sources['githubActions']
-    return source['runners'] if source['_tag'] == 'Available' else []
+    if source['_tag'] != 'Available':
+        return []
+    return [
+        runner
+        for host in source['hosts']
+        if host['_tag'] == 'Available'
+        for runner in host['runners']
+    ]
+
+
+def source_runner_hosts(sources):
+    source = sources['githubActions']
+    return source['hosts'] if source['_tag'] == 'Available' else []
 
 
 def active_provider(dashboard):
@@ -689,6 +740,14 @@ def github_actions_status_label(runners, error):
     return ' · '.join((f'{marker} {counted(len(runners), "self-hosted runner")}', *states))
 
 
+def runner_host_status_label(host):
+    if host['_tag'] == 'Unavailable':
+        return f"🔴 {host['name']} · unavailable · {host['message'][:100]}"
+    status = github_actions_status_label(host['runners'], None)
+    marker, detail = status.split(' ', 1)
+    return f"{marker} {host['name']} · {detail}"
+
+
 def incident_scope_label(incident):
     scope = incident.get('scope', {})
     if scope.get('_tag') == 'Repository':
@@ -731,8 +790,15 @@ def build_menu(indicator, sources, usage, action_error, refresh, set_agent_contr
     runner_source = sources['githubActions']
     dashboard = source_dashboard(sources)
     runners = source_runners(sources)
+    runner_hosts = source_runner_hosts(sources)
     dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
     runner_error = runner_source.get('message') if runner_source['_tag'] == 'Unavailable' else None
+    if (
+        runner_source['_tag'] == 'Available'
+        and runner_source['hosts']
+        and all(host['_tag'] == 'Unavailable' for host in runner_source['hosts'])
+    ):
+        runner_error = 'All runner hosts unavailable'
     agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
     queue = [] if dashboard is None else dashboard.get('queue', [])
     menu.append(section_item('Harlan GitHub Agent'))
@@ -802,16 +868,19 @@ def build_menu(indicator, sources, usage, action_error, refresh, set_agent_contr
     menu.append(menu_item(github_actions_status_label(runners, runner_error), enabled=False))
     if runner_error is not None:
         menu.append(menu_item(runner_error[:100], enabled=False))
-    elif runners:
+    for host in runner_hosts:
+        if host['_tag'] == 'Unavailable' or not host['runners']:
+            menu.append(menu_item(runner_host_status_label(host), enabled=False))
+            continue
         runner_items = []
-        for runner in sorted(runners, key=lambda item: runner_label(item)):
+        for runner in sorted(host['runners'], key=lambda item: runner_label(item)):
             repository = runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository')
             runner_items.append(menu_item(
                 runner_label(runner),
                 None if repository is None else f'https://github.com/{repository}/actions',
                 enabled=repository is not None,
             ))
-        menu.append(submenu_item(f'Self-hosted runners · {len(runners)}', runner_items))
+        menu.append(submenu_item(runner_host_status_label(host), runner_items))
 
     menu.append(separator())
     refresh_item = menu_item('Refresh')
@@ -825,6 +894,10 @@ def build_menu(indicator, sources, usage, action_error, refresh, set_agent_contr
 
 
 def main():
+    runner_hosts = parse_runner_hosts(os.environ.get(
+        RUNNER_HOSTS_ENV,
+        'Desktop=unix:///var/run/docker.sock',
+    ))
     runtime = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
     lock = (runtime / 'harlan-github-agent-indicator.lock').open('w')
     try:
@@ -872,7 +945,7 @@ def main():
                     request_agent_eject(action['taskId'])
             except Exception as caught:
                 control_error = f"{action['label']} failed: {caught}"
-        sources = read_system_sources(request_dashboard, request_runners)
+        sources = read_system_sources(request_dashboard, lambda: request_runner_hosts(runner_hosts))
         dashboard = source_dashboard(sources)
         provider = active_provider(dashboard)
         stale = time.monotonic() - usage_cache['updatedAt'] >= CODEX_LIMIT_REFRESH_SECONDS
