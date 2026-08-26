@@ -97,6 +97,7 @@ describe('publishStoppedReviews', () => {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({
           state: 'closed',
           mergedAt: '2026-08-15T03:00:00.000Z',
+          headSha: 'def456',
         })),
         editReviewStatus: (_repository, _number, _commentId, _expectedBody, value) => {
           body = value
@@ -157,6 +158,6 @@ describe('publishStoppedReviews', () => {
     }, new AbortController().signal)
 
     expect(writes).toBe(0)
-    expect(results).toEqual([{ _tag: 'Err', error: 'harlan-zw/example#24: the pull request changed before the final comment.' }])
+    expect(results).toEqual([ok({ _tag: 'Superseded', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
   })
 })

@@ -97,8 +97,8 @@ export async function publishStoppedReviews(
     const current = await options.github.getPullRequestReviewSnapshot(mapping, review.pullRequestNumber, signal)
     if (current._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${current.error}`)
-    if (current.value.pullRequest.headSha !== review.headSha)
-      return err(`${review.repository}#${review.pullRequestNumber}: the pull request changed before the final comment.`)
+    if (current.value.pullRequest.state === 'open' && current.value.pullRequest.headSha !== review.headSha)
+      return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
     const at = options.now().toISOString()
     const disposition: StoppedReviewDisposition = current.value.pullRequest.state === 'open'
