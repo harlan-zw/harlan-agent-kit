@@ -321,7 +321,7 @@ describe('provider session recovery migration', () => {
       if (recovery < 5)
         expect(store.retryRecoverableWorkerFailures(at(3_600_000))).toBe(1)
     }
-    expect(store.listIncidents()[0]?.recovery).toEqual({ _tag: 'Exhausted' })
+    expect(store.listIncidents()[0]?.recovery).toEqual(expect.objectContaining({ _tag: 'Retrying' }))
     store.close()
 
     const oldJournal = new DatabaseSync(path)

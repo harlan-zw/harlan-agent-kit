@@ -317,7 +317,7 @@ export function mayRetryFailure(signal: FailureSignal): boolean {
   return failure._tag !== 'Permanent' || failure.kind === 'unknown'
 }
 
-/** How many times the controller requeues a Failed Task before it waits for a person. */
+/** Recovery limit for failures a person can affect. Provider outages keep capped backoff. */
 export const MAXIMUM_RECOVERY_ATTEMPTS = 5
 
 const baseRecoveryDelayMilliseconds = 60_000

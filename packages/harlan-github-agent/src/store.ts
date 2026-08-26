@@ -188,7 +188,8 @@ function recordTaskIncident(database: DatabaseSync, taskId: string, reason: stri
   // instead of leaving several contradictory recovery instructions visible.
   resolveTaskIncidents(database, taskId, at)
   const failure = classifyFailure({ message: reason })
-  const exhausted = row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS
+  const providerWillRetry = failure._tag === 'Transient' && failure.kind === 'agent_provider'
+  const exhausted = row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS && !providerWillRetry
   upsertIncident(database, {
     scope: { _tag: 'Task', taskId, repository: row.repository, itemNumber: row.github_number },
     kind: failure.kind,
@@ -319,9 +320,12 @@ interface RecoveryCandidateRow {
 function isRecoverable(row: RecoveryCandidateRow, at: string): boolean {
   if (row.reason === null)
     return false
-  if (classifyFailure({ message: row.reason })._tag !== 'Transient')
+  const failure = classifyFailure({ message: row.reason })
+  if (failure._tag !== 'Transient')
     return false
-  if (row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS)
+  // A provider outage cannot be fixed by a person. Keep checking it at capped
+  // backoff so every Task resumes after the selected provider recovers.
+  if (row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS && failure.kind !== 'agent_provider')
     return false
   return Date.parse(at) >= Date.parse(nextRecoveryAt(row.updated_at, row.recovery_attempts))
 }
