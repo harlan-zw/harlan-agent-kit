@@ -27,6 +27,11 @@ class SentryHandler(BaseHTTPRequestHandler):
         if self.path == "/api/0/organizations/test/issues/2/":
             self.respond({"shortId": "TEST-2", "status": "resolved"})
             return
+        if self.path == "/api/0/organizations/test/issues/3/":
+            self.respond(
+                {"shortId": "TEST-3", "status": "unresolved", "project": {"slug": "elsewhere"}}
+            )
+            return
         if self.path == "/api/0/organizations/test/releases/live/":
             self.respond({"version": "live", "projects": [{"slug": "site"}]})
             return
@@ -328,6 +333,12 @@ print('''+----------+----------+----------------------+-------------------------
         payload = json.loads(result.stdout)
         self.assertEqual(payload["already_resolved"], ["2"])
         self.assertEqual(payload["would_resolve"], [])
+        self.assertEqual(SentryHandler.writes, [])
+
+    def test_resolve_rejects_an_issue_from_a_different_project(self):
+        result = self.run_resolve("--issue", "3", "--in-next-release", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("does not belong to project site", result.stderr)
         self.assertEqual(SentryHandler.writes, [])
 
     def test_resolve_rejects_a_non_numeric_issue(self):

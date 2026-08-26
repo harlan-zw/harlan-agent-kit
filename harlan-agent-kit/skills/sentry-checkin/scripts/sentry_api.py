@@ -521,6 +521,11 @@ def resolve_issues(args, base_url, token):
         data, _ = request_json(
             base_url, token, f"/api/0/organizations/{args.org}/issues/{issue_id}/"
         )
+        issue_project = ((data or {}).get("project") or {}).get("slug")
+        if issue_project is not None and issue_project != args.project:
+            raise RuntimeError(
+                f"Issue {issue_id} does not belong to project {args.project}."
+            )
         before[issue_id] = {
             "short_id": (data or {}).get("shortId"),
             "status": (data or {}).get("status"),
