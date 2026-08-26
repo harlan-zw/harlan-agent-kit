@@ -21,7 +21,7 @@ RUNNER_LABEL = 'com.harlanzw.desktop-runner=true'
 RUNNER_HOSTS_ENV = 'HARLAN_GITHUB_RUNNER_HOSTS'
 RUNNER_REPOSITORIES_ENV = 'HARLAN_GITHUB_RUNNER_REPOSITORIES'
 JOBS_REFRESH_SECONDS = 30
-RUNNER_ICON = 'system-run-symbolic'
+RUNNER_ICON = Path(__file__).resolve().parent.parent / 'assets/github-runner-icon.svg'
 
 
 def parse_labels(value):
@@ -518,7 +518,7 @@ def main():
 
     indicator = AyatanaAppIndicator3.Indicator.new(
         'harlan-github-runners',
-        RUNNER_ICON,
+        str(RUNNER_ICON),
         AyatanaAppIndicator3.IndicatorCategory.SYSTEM_SERVICES,
     )
     indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
@@ -531,6 +531,7 @@ def main():
         refreshing['active'] = False
         label, title = indicator_summary(source)
         indicator.set_label(label, '🟢 99')
+        indicator.set_icon_full(str(RUNNER_ICON), 'GitHub Actions')
         indicator.set_title(title)
         build_menu(indicator, source, jobs_source, action_error, manual_refresh, change_host_capacity)
         if pending_action['value'] is not None:
