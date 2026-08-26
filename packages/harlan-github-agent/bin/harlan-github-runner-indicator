@@ -227,21 +227,22 @@ def request_workflow_jobs(repositories, on_error=None):
     jobs = []
     for repository in repositories:
         try:
-            page = 1
-            while True:
-                runs = github_api(
-                    f'repos/{repository}/actions/runs?page={page}&per_page={WORKFLOW_RUNS_PAGE_SIZE}',
-                ).get('workflow_runs', [])
-                jobs.extend(collect_workflow_jobs(
-                    repository,
-                    runs,
-                    lambda run_id, current=repository: github_api(
-                        f'repos/{current}/actions/runs/{run_id}/jobs',
-                    ).get('jobs', []),
-                ))
-                if len(runs) < WORKFLOW_RUNS_PAGE_SIZE:
-                    break
-                page += 1
+            for status in ('queued', 'in_progress'):
+                page = 1
+                while True:
+                    runs = github_api(
+                        f'repos/{repository}/actions/runs?status={status}&page={page}&per_page={WORKFLOW_RUNS_PAGE_SIZE}',
+                    ).get('workflow_runs', [])
+                    jobs.extend(collect_workflow_jobs(
+                        repository,
+                        runs,
+                        lambda run_id, current=repository: github_api(
+                            f'repos/{current}/actions/runs/{run_id}/jobs',
+                        ).get('jobs', []),
+                    ))
+                    if len(runs) < WORKFLOW_RUNS_PAGE_SIZE:
+                        break
+                    page += 1
         except Exception as caught:
             if on_error is not None:
                 on_error(f'{repository} · Jobs unavailable · {caught}')

@@ -231,9 +231,11 @@ class RunnerActivityTest(unittest.TestCase):
                     'labels': ['self-hosted'],
                     'html_url': 'https://github.com/job/9',
                 }]}
-            return {'workflow_runs': [
-                {'id': 7, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/7'},
-            ]}
+            if 'status=queued' in path:
+                return {'workflow_runs': [
+                    {'id': 7, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/7'},
+                ]}
+            return {'workflow_runs': []}
 
         with patch.object(runner_indicator, 'github_api', side_effect=fake_github_api):
             jobs = runner_indicator.request_workflow_jobs(['good/repo', 'broken/repo'], errors.append)
@@ -249,12 +251,12 @@ class RunnerActivityTest(unittest.TestCase):
 
     def test_follows_pagination_for_queued_jobs_beyond_the_first_page(self):
         def fake_github_api(path):
-            if path == 'repos/harlan-zw/example/actions/runs?page=1&per_page=50' or path == 'repos/harlan-zw/example/actions/runs':
+            if path == 'repos/harlan-zw/example/actions/runs?status=queued&page=1&per_page=50':
                 return {'workflow_runs': [
                     {'id': index, 'name': 'Recent', 'status': 'in_progress', 'html_url': f'https://github.com/run/{index}'}
                     for index in range(50)
                 ]}
-            if path == 'repos/harlan-zw/example/actions/runs?page=2&per_page=50':
+            if path == 'repos/harlan-zw/example/actions/runs?status=queued&page=2&per_page=50':
                 return {'workflow_runs': [
                     {'id': 99, 'name': 'Old', 'status': 'queued', 'html_url': 'https://github.com/run/99'},
                 ]}
