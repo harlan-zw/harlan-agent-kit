@@ -552,6 +552,45 @@ describe('recovery budget after a GitHub outage', () => {
 })
 
 describe('stale task incidents', () => {
+  it('refreshes a legacy exhausted provider Incident to Retrying', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'legacy-provider-incident-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const reason = 'The opencode session failed: Unexpected server error.'
+    let taskId = ''
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextAdversarialReviewTask(`provider-${attempt}`, `2026-08-18T00:00:0${attempt}.000Z`, 10_000)
+      if (task === null)
+        throw new Error(`Expected provider failure attempt ${attempt}.`)
+      taskId = task.id
+      store.failWorkerTask({
+        taskId,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-18T00:00:0${attempt}.000Z`,
+        reason,
+      })
+    }
+    store.recordIncident({
+      scope: { _tag: 'Task', taskId, repository: 'harlan-zw/example', itemNumber: 24 },
+      kind: 'agent_provider',
+      severity: 'error',
+      operation: 'adversarial_review',
+      message: reason,
+      recovery: { _tag: 'Exhausted' },
+      at: '2026-08-18T00:00:04.000Z',
+    })
+    expect(store.listIncidents()[0]?.recovery).toEqual({ _tag: 'Exhausted' })
+
+    expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:05.000Z')).toBe(1)
+    expect(store.listIncidents()[0]?.recovery).toEqual(expect.objectContaining({ _tag: 'Retrying' }))
+  })
+
   it('restores a missing incident for the current failed task', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
