@@ -138,7 +138,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         if (!saved)
           return err('This Agent is no longer assigned to the current pull request.')
         const published = await options.status.publishRepair(task, value, signal)
-        if (published._tag === 'Err')
+        if (published._tag === 'Err' && !signal.aborted)
           options.onProgressPublishFailure?.(task, published.error)
         return ok(undefined)
       }

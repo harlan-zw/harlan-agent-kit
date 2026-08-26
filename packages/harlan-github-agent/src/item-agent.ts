@@ -687,7 +687,7 @@ async function reportReviewProgress(
   if (saved._tag === 'Err')
     return saved
   const posted = await options.status.publish(task, phase, progressComment(task.pullRequest.headSha, progress, options.now().toISOString()), signal)
-  if (posted._tag === 'Err')
+  if (posted._tag === 'Err' && !signal.aborted)
     options.onProgressPublishFailure?.(task, posted.error)
   else
     options.onProgressPublishSuccess?.(task)
