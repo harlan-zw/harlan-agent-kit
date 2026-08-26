@@ -184,6 +184,9 @@ function recordTaskIncident(database: DatabaseSync, taskId: string, reason: stri
   `).get(taskId, taskId) as { repository: string, github_number: number, kind: string, recovery_attempts: number } | undefined
   if (row === undefined)
     return
+  // A Task has one current failure. A later failure replaces the earlier cause
+  // instead of leaving several contradictory recovery instructions visible.
+  resolveTaskIncidents(database, taskId, at)
   const failure = classifyFailure({ message: reason })
   const exhausted = row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS
   upsertIncident(database, {
@@ -572,7 +575,7 @@ export interface JournalStore {
   /** Names one failure for the system pane. Repeats raise `occurrences`. */
   recordIncident: (input: RecordIncidentInput) => Incident
   /** Clears every open Incident for one scope once the work behind it succeeds. */
-  resolveIncidents: (scope: IncidentScope, at: string) => number
+  resolveIncidents: (scope: IncidentScope, at: string, operation?: string, exceptMessages?: readonly string[]) => number
   listIncidents: () => Incident[]
   recordReviewRun: (input: RecordReviewRunInput) => RecordReviewRunResult
   recordReviewPublication: (input: RecordReviewPublicationInput) => RecordReviewPublicationResult
@@ -3730,6 +3733,12 @@ export function openJournalStore(
         at,
         'Repository policy no longer permits this Worker.',
       ))
+      database.prepare(`
+        UPDATE incidents SET resolved_at = ?
+        WHERE resolved_at IS NULL AND scope_tag = 'Repository' AND repository IN (
+          SELECT github FROM repositories WHERE enabled = 0
+        )
+      `).run(at)
       database.exec('COMMIT')
     }
     catch (error) {
@@ -4244,20 +4253,24 @@ export function openJournalStore(
 
   const recordIncident: JournalStore['recordIncident'] = input => upsertIncident(database, input)
 
-  const resolveIncidents: JournalStore['resolveIncidents'] = (scope, at) => {
+  const resolveIncidents: JournalStore['resolveIncidents'] = (scope, at, operation, exceptMessages = []) => {
+    const operationClause = operation === undefined ? '' : ' AND operation = ?'
+    const operationArgs = operation === undefined ? [] : [operation]
+    const exceptClause = exceptMessages.length === 0 ? '' : ` AND message NOT IN (${exceptMessages.map(() => '?').join(', ')})`
+    const filterArgs = [...operationArgs, ...exceptMessages]
     const changes = scope._tag === 'Service'
       ? database.prepare(`
-        UPDATE incidents SET resolved_at = ? WHERE resolved_at IS NULL AND scope_tag = 'Service'
-      `).run(at).changes
+        UPDATE incidents SET resolved_at = ? WHERE resolved_at IS NULL AND scope_tag = 'Service'${operationClause}${exceptClause}
+      `).run(at, ...filterArgs).changes
       : scope._tag === 'Repository'
         ? database.prepare(`
           UPDATE incidents SET resolved_at = ?
-          WHERE resolved_at IS NULL AND scope_tag = 'Repository' AND repository = ?
-        `).run(at, scope.repository).changes
+          WHERE resolved_at IS NULL AND scope_tag = 'Repository' AND repository = ?${operationClause}${exceptClause}
+        `).run(at, scope.repository, ...filterArgs).changes
         : database.prepare(`
           UPDATE incidents SET resolved_at = ?
-          WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?
-        `).run(at, scope.taskId).changes
+          WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?${operationClause}${exceptClause}
+        `).run(at, scope.taskId, ...filterArgs).changes
     return Number(changes)
   }
 
@@ -4291,20 +4304,43 @@ export function openJournalStore(
   }
 
   const resolveStaleTaskIncidents: JournalStore['resolveStaleTaskIncidents'] = (at) => {
-    // An Incident belongs to work the controller still intends to do. A Task
-    // that completed, was superseded, or belongs to an older Revision is none
-    // of those, so its Incident is only noise in the System pane.
+    // An Incident belongs to the current failure of work that can still run.
+    // Startup repairs journals written before that invariant was enforced.
     const stale = (table: 'tasks' | 'worker_tasks') => `
       UPDATE incidents SET resolved_at = ?
       WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id IN (
         SELECT ${table}.id FROM ${table}
         JOIN subjects ON subjects.id = ${table}.subject_id
-        WHERE ${table}.state_tag IN ('Completed', 'Superseded')
+        WHERE (${table}.state_tag IN ('Completed', 'Superseded')
           OR ${table}.revision_id != subjects.current_revision_id
+          OR (${table}.state_tag = 'Failed' AND incidents.message != ${table}.reason))
       )
     `
-    return (['tasks', 'worker_tasks'] as const)
+    const resolved = (['tasks', 'worker_tasks'] as const)
       .reduce((total, table) => total + Number(database.prepare(stale(table)).run(at).changes), 0)
+
+    for (const table of ['tasks', 'worker_tasks'] as const) {
+      const missing = database.prepare(`
+        SELECT ${table}.id, ${table}.reason
+        FROM ${table}
+        JOIN subjects ON subjects.id = ${table}.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE ${table}.state_tag = 'Failed'
+          AND ${table}.reason IS NOT NULL
+          AND ${table}.revision_id = subjects.current_revision_id
+          AND repositories.enabled = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM incidents
+            WHERE incidents.resolved_at IS NULL
+              AND incidents.scope_tag = 'Task'
+              AND incidents.task_id = ${table}.id
+              AND incidents.message = ${table}.reason
+          )
+      `).all() as unknown as Array<{ id: string, reason: string }>
+      for (const task of missing)
+        recordTaskIncident(database, task.id, task.reason, at)
+    }
+    return resolved
   }
 
   const restoreOutageRecoveryBudget: JournalStore['restoreOutageRecoveryBudget'] = (at) => {
@@ -6341,19 +6377,22 @@ export function openJournalStore(
         at: input.at,
       })
       if (!retry) {
-        database.prepare(`
+        const task = database.prepare(`
           UPDATE tasks
           SET state_tag = 'Failed', reason = ?, command_id = NULL, updated_at = ?
           WHERE id = ? AND state_tag = 'Publishing' AND command_id = ?
         `).run(input.reason, input.at, row.task_id, input.commandId)
-        recordTransition(database, {
-          taskId: row.task_id,
-          from: 'Publishing',
-          to: 'Failed',
-          reason: input.reason,
-          fence: row.task_fence,
-          at: input.at,
-        })
+        if (task.changes === 1) {
+          recordTransition(database, {
+            taskId: row.task_id,
+            from: 'Publishing',
+            to: 'Failed',
+            reason: input.reason,
+            fence: row.task_fence,
+            at: input.at,
+          })
+          recordTaskIncident(database, row.task_id, input.reason, input.at)
+        }
       }
       database.exec('COMMIT')
       return retry ? 'Retrying' : 'Failed'

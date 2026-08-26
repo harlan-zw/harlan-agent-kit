@@ -84,6 +84,7 @@ export interface ItemAgentOptions {
 }
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
+  preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
@@ -661,9 +662,11 @@ type RepairPreflight
   = | { _tag: 'Authorized' }
     | { _tag: 'ActionRequired', reason: string }
 
-function repairPreflight(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): RepairPreflight {
+function repairPreflight(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean, access: Result<void, string>): RepairPreflight {
   if (!canRepairPullRequestHead(task.repositoryMapping, task.pullRequest))
     return { _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.' }
+  if (access._tag === 'Err')
+    return { _tag: 'ActionRequired', reason: access.error }
   const baseAllowsRepair = snapshot.baseChecks._tag === 'Available'
     && (snapshot.baseChecks.checks.length === 0 || checksGate(snapshot.baseChecks, 'base-ci', 'Pending')._tag === 'Passed')
   if (!repairsBaseline && !baseAllowsRepair)
@@ -762,14 +765,17 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       if (snapshot.value.priorAutomatedReview._tag === 'Found' && task.rerun._tag === 'NotRequested')
         return ok({ evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}` })
       const repairsBaseline = options.store.isBaselineRepairPullRequest(task.repository, task.pullRequest.headRef)
+      const repairAccess = await options.preflightRepair(task.repository, signal)
       if (!repairsBaseline && baseChecksFailed(snapshot.value) && basesDefaultBranch(snapshot.value.pullRequest, task.repositoryMapping)) {
-        const baseline = options.store.queueBaselineRepairForReview({
-          taskId: task.id,
-          workerId: task.state.workerId,
-          fence: task.state.fence,
-          baseSha: snapshot.value.pullRequest.baseSha,
-          at: options.now().toISOString(),
-        })
+        const baseline = repairAccess._tag === 'Ok'
+          ? options.store.queueBaselineRepairForReview({
+              taskId: task.id,
+              workerId: task.state.workerId,
+              fence: task.state.fence,
+              baseSha: snapshot.value.pullRequest.baseSha,
+              at: options.now().toISOString(),
+            })
+          : { _tag: 'NotAuthorized' as const }
         if (baseline._tag === 'Rejected')
           return err(baseline.reason)
         // A repository Harlan only watches cannot get a Baseline repair. The
@@ -801,7 +807,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // The Review run records which Agent provider and model answered, so the
       // runtime is read once and reused for the whole review.
       const reviewRuntime = options.runtime()
-      const preflight = repairPreflight(task, snapshot.value, repairsBaseline)
+      const preflight = repairPreflight(task, snapshot.value, repairsBaseline, repairAccess)
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
         number: task.pullRequestNumber,

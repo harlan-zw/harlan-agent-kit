@@ -52,7 +52,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   dependencies.store.recordPollAttempt(repository.github, observedAt)
   const result = await dependencies.github.listOpenItems(repository, dependencies.signal)
   if (result._tag === 'Err') {
-    dependencies.store.recordPollFailure(repository.github, observedAt, result.error.message)
+    if (dependencies.signal?.aborted !== true)
+      dependencies.store.recordPollFailure(repository.github, observedAt, result.error.message)
     return err({ repository: repository.github, message: result.error.message })
   }
 
@@ -82,7 +83,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     }))
     const failed = approvals.find(approval => approval._tag === 'Err')
     if (failed?._tag === 'Err') {
-      dependencies.store.recordPollFailure(repository.github, observedAt, failed.error)
+      if (dependencies.signal?.aborted !== true)
+        dependencies.store.recordPollFailure(repository.github, observedAt, failed.error)
       return err({ repository: repository.github, message: failed.error })
     }
   }

@@ -22,7 +22,7 @@ import { classifyFailure } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
-import { createGitHubWriteGate, repositoryQuarantineReason } from './github-write-gate.ts'
+import { createGitHubWriteGate, preflightGitHubWriteAccess, repositoryQuarantineReason, withGitHubWritePreflight } from './github-write-gate.ts'
 import { createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker } from './issue-work-worker.ts'
@@ -171,13 +171,30 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   // A repository the App cannot reach is answered with Harlan's own account.
   const actorLogin = (repository: RepositoryMapping): string => repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN
-  const tokens = createRoutedTokenProvider({
+  const routedTokens = createRoutedTokenProvider({
     app: createGitHubAppTokenProvider({
       appId: config.github.appId,
       privateKey: options.githubPrivateKey,
     }),
     user: createUserTokenProvider({ readToken: signal => userAccess.token(signal) }),
     usesUserToken: repository => userRepositoryNames.has(repository.toLowerCase()),
+  })
+  // Write authority belongs at the credential boundary. Every current and
+  // future mutation needs one of these write credentials before it can leave.
+  const tokens = createGitHubWriteGate({
+    mayWrite: github => store.mayWriteRepository(github),
+    onRefused: (github) => {
+      store.recordIncident({
+        scope: { _tag: 'Repository', repository: github },
+        kind: 'policy',
+        severity: 'warning',
+        message: repositoryQuarantineReason(github),
+        operation: 'write',
+        recovery: { _tag: 'ActionRequired' },
+        at: now().toISOString(),
+      })
+    },
+    source: routedTokens,
   })
   const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff })
   const pullRequestStatuses = createPullRequestStatusController({
@@ -194,23 +211,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   // Ephemeral: what each running agent is doing right now, never persisted.
   const activityLog = createAgentActivityLog()
-  // Every GitHub write leaves through this object, so quarantine sits on it
-  // rather than on the callers. Two of them write without staging a command.
-  const workerGithub = createGitHubWriteGate({
-    mayWrite: github => store.mayWriteRepository(github),
-    onRefused: (github) => {
-      store.recordIncident({
-        scope: { _tag: 'Repository', repository: github },
-        kind: 'policy',
-        severity: 'warning',
-        message: repositoryQuarantineReason(github),
-        operation: 'write',
-        recovery: { _tag: 'ActionRequired' },
-        at: now().toISOString(),
-      })
-    },
-    source: createGitHubAgentSource({ actorLogin, tokens }),
-  })
+  const workerGithub = createGitHubAgentSource({ actorLogin, tokens })
   const mutationSchedulers = await (async () => {
     if (!config.mutationsEnabled)
       return undefined
@@ -233,14 +234,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const current = validated.value.repositories[0]
       return current === undefined ? err('Repository mapping disappeared during validation.') : ok(current)
     }
-    const conflictWorker = createConflictWorker({
-      activityLog,
-      github,
-      now,
-      runtime,
-      store,
-      worktrees,
-      validateMapping,
+    const conflictWorker = withGitHubWritePreflight({
+      accesses: ['item_write', 'contents_write'],
+      source: tokens,
+      worker: createConflictWorker({
+        activityLog,
+        github,
+        now,
+        runtime,
+        store,
+        worktrees,
+        validateMapping,
+      }),
     })
     const reviewStatus = createReviewStatusController({
       github: workerGithub,
@@ -266,6 +271,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           at: now().toISOString(),
         })
       },
+      preflightRepair: (repository: string, signal: AbortSignal) => preflightGitHubWriteAccess(tokens, repository, ['contents_write'], signal),
       store,
       runtime,
       status: reviewStatus,
@@ -311,14 +317,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onTaskSettled: activityLog.clear,
         permits,
         store,
-        worker: createBaselineRepairWorker({
-          activityLog,
-          github: workerGithub,
-          now,
-          runtime,
-          store,
-          validateMapping,
-          worktrees: baselineWorktrees,
+        worker: withGitHubWritePreflight({
+          accesses: ['item_write', 'contents_write'],
+          source: tokens,
+          worker: createBaselineRepairWorker({
+            activityLog,
+            github: workerGithub,
+            now,
+            runtime,
+            store,
+            validateMapping,
+            worktrees: baselineWorktrees,
+          }),
         }),
         workerId: randomUUID(),
       }),
@@ -334,7 +344,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onError: error => options.logger.error(error),
         onTaskSettled: activityLog.clear,
         permits,
-        worker: createIssueTriageWorker(subjectWorkerOptions),
+        worker: withGitHubWritePreflight({
+          accesses: ['item_write'],
+          source: tokens,
+          worker: createIssueTriageWorker(subjectWorkerOptions),
+        }),
         workerId: randomUUID(),
       }),
       publications: createPublicationScheduler({
@@ -361,16 +375,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onTaskSettled: activityLog.clear,
         permits,
         store,
-        worker: createReviewFixWorker({
-          activityLog,
-          github: workerGithub,
-          now,
-          onProgressPublishFailure: subjectWorkerOptions.onProgressPublishFailure,
-          runtime,
-          status: reviewStatus,
-          store,
-          validateMapping,
-          worktrees: fixWorktrees,
+        worker: withGitHubWritePreflight({
+          accesses: ['item_write', 'contents_write'],
+          source: tokens,
+          worker: createReviewFixWorker({
+            activityLog,
+            github: workerGithub,
+            now,
+            onProgressPublishFailure: subjectWorkerOptions.onProgressPublishFailure,
+            runtime,
+            status: reviewStatus,
+            store,
+            validateMapping,
+            worktrees: fixWorktrees,
+          }),
         }),
         workerId: randomUUID(),
       })),
@@ -386,7 +404,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onError: error => options.logger.error(error),
         onTaskSettled: activityLog.clear,
         permits,
-        worker: createReviewWorker(subjectWorkerOptions),
+        worker: withGitHubWritePreflight({
+          accesses: ['item_write'],
+          source: tokens,
+          worker: createReviewWorker(subjectWorkerOptions),
+        }),
         workerId: randomUUID(),
       })),
       issueWork: createTaskScheduler({
@@ -403,14 +425,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onTaskSettled: activityLog.clear,
         permits,
         store,
-        worker: createIssueWorkWorker({
-          github: workerGithub,
-          activityLog,
-          now,
-          runtime,
-          store,
-          validateMapping,
-          worktrees: issueWorktrees,
+        worker: withGitHubWritePreflight({
+          accesses: ['item_write', 'contents_write'],
+          source: tokens,
+          worker: createIssueWorkWorker({
+            github: workerGithub,
+            activityLog,
+            now,
+            runtime,
+            store,
+            validateMapping,
+            worktrees: issueWorktrees,
+          }),
         }),
         workerId: randomUUID(),
       }),
@@ -446,6 +472,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     })
   }
 
+  function replaceServiceIncidents(operation: string, messages: string[]): void {
+    messages.forEach(message => recordServiceIncident(operation, message))
+    store.resolveIncidents({ _tag: 'Service' }, now().toISOString(), operation, messages)
+  }
+
   const poller = createPoller({
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
@@ -459,6 +490,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         now,
         signal,
       })
+      if (signal.aborted)
+        return
       results.forEach((result) => {
         if (result._tag === 'Ok')
           options.logger.info(`${result.value.repository}: observed ${result.value.subjects} open pull requests and issues.`)
@@ -486,17 +519,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       reruns.forEach((result) => {
         if (result._tag === 'Err') {
           options.logger.error(`Review rerun command: ${result.error}`)
-          recordServiceIncident('review_rerun', result.error)
         }
         else if (result.value.results.some(item => item._tag === 'Queued')) {
           options.logger.info(`${result.value.repository}: queued a requested review rerun.`)
         }
       })
+      replaceServiceIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       const statusSync = await pullRequestStatuses.sync(store.getDashboardSnapshot(now().toISOString()), signal)
       statusSync.errors.forEach((error) => {
         options.logger.error(`Pull request status: ${error}`)
-        recordServiceIncident('pull_request_status', error)
       })
+      replaceServiceIncidents('pull_request_status', statusSync.errors)
       if (mutationSchedulers !== undefined) {
         const stopped = await publishStoppedReviews({
           github: workerGithub,
@@ -514,9 +547,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
           else {
             options.logger.error(`Stopped review comment: ${result.error}`)
-            recordServiceIncident('stopped_review_comment', result.error)
           }
         })
+        replaceServiceIncidents('stopped_review_comment', stopped.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const positions = await publishQueuePositions({
           github: workerGithub,
           now,
@@ -533,9 +566,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
           else {
             options.logger.error(`Queue position comment: ${result.error}`)
-            recordServiceIncident('queue_position_comment', result.error)
           }
         })
+        replaceServiceIncidents('queue_position_comment', positions.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       }
       // Only a pass where nothing succeeded describes an outage. Throwing for a
       // partial failure backed the poller off to its 15 minute ceiling and held
@@ -543,11 +576,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const failed = results.filter(result => result._tag === 'Err').length
       if (failed > 0 && failed === results.length)
         throw new Error(`Every repository reconciliation failed (${failed}).`)
-      if (failed > 0) {
+      if (failed > 0)
         options.logger.info(`${failed} of ${results.length} repositories failed this pass. The rest reconciled.`)
-        return
-      }
-      store.resolveIncidents({ _tag: 'Service' }, now().toISOString())
     },
     onError: error => options.logger.error(error),
   })

@@ -68,6 +68,7 @@ function harness(input: {
   response: unknown
   snapshots?: Array<ReturnType<typeof reviewSnapshot>>
   publish?: () => ReturnType<ReviewWorkerOptions['status']['publish']>
+  preflightRepair?: ReviewWorkerOptions['preflightRepair']
   queueRepair?: () => ReviewFixQueueResult
   verifyReview?: () => ReturnType<ReviewWorkerOptions['workspaces']['verifyReview']>
 }): Harness {
@@ -102,6 +103,7 @@ function harness(input: {
     },
     now: () => new Date('2026-08-13T01:00:00.000Z'),
     onProgressPublishFailure: (_task, reason) => progressFailures.push(reason),
+    preflightRepair: input.preflightRepair ?? (() => Promise.resolve(ok(undefined))),
     store: {
       queueReviewFixTaskForReview: input.queueRepair ?? (() => {
         repairs.queued += 1
@@ -448,6 +450,27 @@ describe('review resilience', () => {
 
     expect(test.queued).toBe(0)
     expect(test.comments.at(-1)).toContain('The base branch must pass CI before Repair starts.')
+  })
+
+  it('does not queue Repair when GitHub refuses write access', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const reason = 'The GitHub App needs Contents write permission.'
+    const test = harness({
+      pullRequest,
+      preflightRepair: () => Promise.resolve(err(reason)),
+      response: {
+        metadata: passingGate,
+        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'proof' },
+        verification: passingGate,
+        findings: [materialFinding()],
+        confidence: null,
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.queued).toBe(0)
+    expect(test.comments.at(-1)).toContain(reason)
   })
 
   it('hands every material finding to Repair without a count cap', async () => {

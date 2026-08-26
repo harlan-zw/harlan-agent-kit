@@ -132,6 +132,26 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
+  it('does not report shutdown cancellation as repository failure', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = repositoryMapping()
+    const controller = new AbortController()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    controller.abort()
+
+    const result = await reconcileRepository(repository, {
+      github: { listOpenItems: () => Promise.resolve(err({ repository: repository.github, message: 'This operation was aborted' })) },
+      store,
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      signal: controller.signal,
+    })
+
+    expect(result).toEqual({ _tag: 'Err', error: { repository: repository.github, message: 'This operation was aborted' } })
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').repositories[0]?.lastError).toBeNull()
+    expect(store.listIncidents()).toEqual([])
+    store.close()
+  })
+
   it('does not reuse legacy observation identities after revision schema changes', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()

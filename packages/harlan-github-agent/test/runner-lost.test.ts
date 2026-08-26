@@ -79,6 +79,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
     },
     now: () => new Date('2026-08-19T01:00:00.000Z'),
+    preflightRepair: () => Promise.resolve(ok(undefined)),
     store: {
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
