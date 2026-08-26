@@ -236,6 +236,58 @@ describe('review usage migration', () => {
   })
 })
 
+describe('installation permission recovery migration', () => {
+  it('gives Tasks blocked by the old Workflow permission request one bounded recovery', () => {
+    const path = join(directory, 'state.sqlite')
+    const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'old-workflow-permission',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    const reason = 'The level of access for permissions requested are not granted to this installation.'
+    let elapsedMilliseconds = 0
+    const at = (advance = 1_000) => {
+      elapsedMilliseconds += advance
+      return new Date(Date.parse('2026-08-18T00:00:00.000Z') + elapsedMilliseconds).toISOString()
+    }
+    for (let recovery = 0; recovery <= 5; recovery += 1) {
+      for (const attempt of [1, 2, 3]) {
+        const task = store.claimNextConflictTask(`worker-${recovery}-${attempt}`, at(), 60_000)
+        if (task === null)
+          throw new Error(`Expected attempt ${attempt} of recovery ${recovery}.`)
+        store.failTask({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at: at(),
+          reason,
+        })
+      }
+      if (recovery < 5)
+        expect(store.retryRecoverableWorkerFailures(at(3_600_000))).toBe(1)
+    }
+    expect(store.listIncidents()[0]?.recovery).toEqual({ _tag: 'Exhausted' })
+    store.close()
+
+    const oldJournal = new DatabaseSync(path)
+    oldJournal.exec('PRAGMA user_version = 32')
+    oldJournal.close()
+
+    const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    try {
+      expect(migrated.listIncidents()).toEqual([])
+      expect(migrated.retryRecoverableWorkerFailures(at())).toBe(1)
+      expect(migrated.claimNextConflictTask('recovered-worker', at(), 60_000)).not.toBeNull()
+    }
+    finally {
+      migrated.close()
+    }
+  })
+})
+
 describe('gitHub vocabulary migration', () => {
   it('carries a version 22 journal across without losing a row', () => {
     const path = join(directory, 'state.sqlite')
@@ -253,7 +305,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(32)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(33)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

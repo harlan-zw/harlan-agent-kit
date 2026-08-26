@@ -32,7 +32,7 @@ function contentDigest(checkout: string, from: string, to: string): string {
   return createHash('sha256').update(git(checkout, 'diff', '--raw', '--no-abbrev', '--no-renames', from, to)).digest('hex')
 }
 
-function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPublicationCommand, { _tag: 'UpdatePullRequest' }>, expectedHeadSha: string, root: string } {
+function fixture(changedPath = 'base.txt'): { bare: string, checkout: string, command: Extract<ClaimedPublicationCommand, { _tag: 'UpdatePullRequest' }>, expectedHeadSha: string, root: string } {
   const root = mkdtempSync(join(tmpdir(), 'harlan-publication-'))
   temporaryDirectories.push(root)
   const bare = join(root, 'remote.git')
@@ -48,8 +48,9 @@ function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPu
   git(checkout, 'push', 'origin', 'fix/conflict')
   const expectedHeadSha = git(checkout, 'rev-parse', 'HEAD')
   git(checkout, 'checkout', '-b', 'main')
-  writeFileSync(join(checkout, 'base.txt'), 'base change\n')
-  git(checkout, 'add', 'base.txt')
+  mkdirSync(join(checkout, changedPath, '..'), { recursive: true })
+  writeFileSync(join(checkout, changedPath), 'base change\n')
+  git(checkout, 'add', changedPath)
   git(checkout, 'commit', '-m', 'base change')
   const baseSha = git(checkout, 'rev-parse', 'HEAD')
   git(checkout, 'push', 'origin', 'main')
@@ -92,6 +93,33 @@ function fixture(): { bare: string, checkout: string, command: Extract<ClaimedPu
 }
 
 describe('git publication remote', () => {
+  it.each([
+    ['a source patch', 'base.txt', 'contents_write'],
+    ['a workflow patch', '.github/workflows/ci.yml', 'workflows_write'],
+  ])('requests the narrow token for %s', async (_scenario, changedPath, expectedAccess) => {
+    const { bare, command, root } = fixture(changedPath)
+    const requested: string[] = []
+    const remote = createGitPublicationRemote({
+      github: {
+        getPullRequest: () => Promise.reject(new Error('Not needed.')),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
+        isBranchProtected: () => Promise.reject(new Error('Not needed.')),
+      },
+      remoteUrl: () => bare,
+      root,
+      tokens: {
+        getToken: (_repository, access) => {
+          requested.push(access)
+          return Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' }))
+        },
+        invalidate: () => undefined,
+      },
+    })
+
+    expect(await remote.push(command, new AbortController().signal)).toEqual(ok(undefined))
+    expect(requested).toEqual([expectedAccess])
+  })
+
   it('pins the stack base branch, not the default branch', async () => {
     const { bare, command, expectedHeadSha, root } = fixture()
     const stacked: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> = {

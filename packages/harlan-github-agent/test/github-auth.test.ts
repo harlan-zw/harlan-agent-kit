@@ -7,8 +7,9 @@ describe('gitHub App authentication', () => {
   it.each([
     ['read', { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }],
     ['checks_read', { checks: 'read', metadata: 'read', statuses: 'read' }],
-    ['contents_write', { contents: 'write', metadata: 'read', workflows: 'write' }],
+    ['contents_write', { contents: 'write', metadata: 'read' }],
     ['item_write', { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }],
+    ['workflows_write', { contents: 'write', metadata: 'read', workflows: 'write' }],
   ] as const)('mints one repository-scoped %s token', async (access, permissions) => {
     const requests: unknown[] = []
     const provider = createRepositoryTokenProvider({

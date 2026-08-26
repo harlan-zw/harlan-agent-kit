@@ -3249,6 +3249,33 @@ const queuedReviewStatusMigration = `
   PRAGMA user_version = 32;
 `
 
+/**
+ * Gives mutation Tasks one fresh recovery after removing the unconditional
+ * Workflow permission from ordinary branch writes.
+ *
+ * The old token request exhausted these Tasks before an Agent could inspect
+ * their patch. A real missing permission can still spend this one new bounded
+ * recovery and return to Action required.
+ */
+const narrowPublicationPermissionMigration = `
+  UPDATE incidents
+  SET resolved_at = last_seen_at
+  WHERE resolved_at IS NULL
+    AND scope_tag = 'Task'
+    AND task_id IN (
+      SELECT id FROM tasks
+      WHERE state_tag = 'Failed'
+        AND reason LIKE '%permissions requested are not granted to this installation%'
+    );
+
+  UPDATE tasks
+  SET recovery_attempts = 0
+  WHERE state_tag = 'Failed'
+    AND reason LIKE '%permissions requested are not granted to this installation%';
+
+  PRAGMA user_version = 33;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3274,7 +3301,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 32)
+  if (version === 33)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3403,6 +3430,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 31) {
     applyForeignKeyMigration(database, queuedReviewStatusMigration)
+    version = 32
+  }
+  if (version === 32) {
+    applyMigration(database, narrowPublicationPermissionMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -3433,51 +3464,45 @@ function openDatabase(path: string): DatabaseSync {
 }
 
 function taskRows(database: DatabaseSync): TaskRow[] {
-  const conflictRows = database.prepare(`
+  const rows = (table: 'tasks' | 'worker_tasks', current: boolean): TaskRow[] => database.prepare(`
     SELECT
-      tasks.id,
-      tasks.kind,
+      ${table}.id,
+      ${table}.kind,
       repositories.github AS repository,
       subjects.github_number,
-      tasks.revision_id,
-      tasks.state_tag,
-      tasks.reason,
-      tasks.worker_id,
-      tasks.evidence,
-      tasks.command_id,
-      tasks.fence,
-      tasks.lease_expires_at,
-      tasks.updated_at
-    FROM tasks
-    JOIN subjects ON subjects.id = tasks.subject_id
+      ${table}.revision_id,
+      ${table}.state_tag,
+      ${table}.reason,
+      ${table}.worker_id,
+      ${table}.evidence,
+      ${table === 'tasks' ? 'tasks.command_id' : 'NULL'} AS command_id,
+      ${table}.fence,
+      ${table}.lease_expires_at,
+      ${table}.updated_at
+    FROM ${table}
+    JOIN subjects ON subjects.id = ${table}.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
-    ORDER BY tasks.updated_at DESC
-    LIMIT 100
+    ${current
+      ? `JOIN revisions ON revisions.id = subjects.current_revision_id
+         WHERE ${table}.revision_id = subjects.current_revision_id
+           AND repositories.enabled = 1
+           AND json_extract(revisions.payload, '$.state') = 'open'`
+      : ''}
+    ORDER BY ${table}.updated_at DESC
+    ${current ? '' : 'LIMIT 100'}
   `).all() as unknown as TaskRow[]
-  const workerRows = database.prepare(`
-    SELECT
-      worker_tasks.id,
-      worker_tasks.kind,
-      repositories.github AS repository,
-      subjects.github_number,
-      worker_tasks.revision_id,
-      worker_tasks.state_tag,
-      worker_tasks.reason,
-      worker_tasks.worker_id,
-      worker_tasks.evidence,
-      NULL AS command_id,
-      worker_tasks.fence,
-      worker_tasks.lease_expires_at,
-      worker_tasks.updated_at
-    FROM worker_tasks
-    JOIN subjects ON subjects.id = worker_tasks.subject_id
-    JOIN repositories ON repositories.id = subjects.repository_id
-    ORDER BY worker_tasks.updated_at DESC
-    LIMIT 100
-  `).all() as unknown as TaskRow[]
-  return [...conflictRows, ...workerRows]
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-    .slice(0, 100)
+  const current = [...rows('tasks', true), ...rows('worker_tasks', true)]
+  const currentIds = new Set(current.map(row => row.id))
+  const historyLimit = Math.max(0, 100 - current.length)
+  const history = [...rows('tasks', false), ...rows('worker_tasks', false)]
+    .filter(row => !currentIds.has(row.id))
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at) || left.id.localeCompare(right.id))
+    .slice(0, historyLimit)
+  const tableOrder = (row: TaskRow): number => row.kind === 'adversarial_review' || row.kind === 'issue_triage' ? 1 : 0
+  return [...current, ...history]
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at)
+      || tableOrder(left) - tableOrder(right)
+      || left.id.localeCompare(right.id))
 }
 
 function activeAgentRows(database: DatabaseSync, provider: AgentProviderName): ActiveAgentRow[] {

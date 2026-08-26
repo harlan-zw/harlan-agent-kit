@@ -72,7 +72,9 @@ function permissions(access: GitHubRepositoryAccess): Record<string, PermissionL
     return { checks: 'read', metadata: 'read', statuses: 'read' }
   if (access === 'item_write')
     return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
-  return { contents: 'write', metadata: 'read', workflows: 'write' }
+  if (access === 'workflows_write')
+    return { contents: 'write', metadata: 'read', workflows: 'write' }
+  return { contents: 'write', metadata: 'read' }
 }
 
 /**
