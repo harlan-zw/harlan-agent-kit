@@ -7100,6 +7100,7 @@ export function openJournalStore(
     JOIN subjects ON subjects.id = stopped.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = stopped.revision_id
+    JOIN revisions AS current_revisions ON current_revisions.id = subjects.current_revision_id
     JOIN review_status_commands AS published ON published.id = COALESCE(
       (
         SELECT candidate.id FROM review_status_commands AS candidate
@@ -7121,10 +7122,11 @@ export function openJournalStore(
       )
     )
     WHERE stopped.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
-      AND stopped.revision_id = subjects.current_revision_id
-      AND json_extract(revisions.payload, '$.state') = 'open'
       AND published.phase != 'terminal'
       AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
+      -- GitHub closure creates a new Revision. The stopped Review still owns
+      -- the canonical comment while GitHub reports the same exact head SHA.
+      AND json_extract(current_revisions.payload, '$.headSha') = json_extract(revisions.payload, '$.headSha')
       AND repositories.enabled = 1
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       -- A live review posts its own comment, so leave the pull request to it.
@@ -7171,10 +7173,20 @@ export function openJournalStore(
         SELECT ${taskTable}.fence
         FROM ${taskTable}
         JOIN subjects ON subjects.id = ${taskTable}.subject_id
+        JOIN revisions AS task_revision ON task_revision.id = ${taskTable}.revision_id
+        JOIN revisions AS current_revision ON current_revision.id = subjects.current_revision_id
         WHERE ${taskTable}.id = ? AND ${taskTable}.kind = ?
           AND ${taskTable}.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
-          AND ${taskTable}.revision_id = ? AND subjects.current_revision_id = ?
-      `).get(input.taskId, input.taskKind, input.revisionId, input.revisionId) as { fence: number } | undefined
+          AND ${taskTable}.revision_id = ?
+          AND json_extract(task_revision.payload, '$.headSha') = ?
+          AND json_extract(current_revision.payload, '$.headSha') = ?
+      `).get(
+        input.taskId,
+        input.taskKind,
+        input.revisionId,
+        input.expectedHeadSha,
+        input.expectedHeadSha,
+      ) as { fence: number } | undefined
       if (authorized === undefined) {
         database.exec('COMMIT')
         return false

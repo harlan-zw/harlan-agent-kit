@@ -90,6 +90,32 @@ describe('publishStoppedReviews', () => {
     expect(recorded).toBe(1)
   })
 
+  it('closes a stale progress comment after GitHub merges the pull request', async () => {
+    let body = ''
+    const results = await publishStoppedReviews({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({
+          state: 'closed',
+          mergedAt: '2026-08-15T03:00:00.000Z',
+        })),
+        editReviewStatus: (_repository, _number, _commentId, _expectedBody, value) => {
+          body = value
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listStoppedReviews: () => [stopped],
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+    expect(body).toContain('### 🤖 MERGED')
+    expect(body).not.toContain('REVIEWING')
+  })
+
   it('writes nothing when a person deleted the comment, rather than posting it again', async () => {
     let recorded = 0
     const results = await publishStoppedReviews({
