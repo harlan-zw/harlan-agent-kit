@@ -311,6 +311,7 @@ interface StoppedReviewRow {
   head_sha: string
   reason: string
   github_comment_id: number
+  published_body: string
   findings: string
 }
 
@@ -323,7 +324,38 @@ export interface StoppedReview {
   headSha: string
   reason: string
   commentId: number
+  /** What the canonical comment holds now, so the edit can compare and swap. */
+  publishedBody: string
   findings: ReviewFinding[]
+}
+
+interface QueuedReviewStatusRow {
+  task_id: string
+  task_kind: 'adversarial_review' | 'review_fix'
+  repository: string
+  github_number: number
+  revision_id: string
+  head_sha: string
+  position: number
+  total: number
+  github_comment_id: number
+  published_body: string
+}
+
+export interface QueuedReviewStatus {
+  taskId: string
+  taskKind: 'adversarial_review' | 'review_fix'
+  repository: string
+  pullRequestNumber: number
+  revisionId: string
+  headSha: string
+  /** 1 for the Task the next free agent claims. */
+  position: number
+  /** Claimable queued Tasks of the same kind, this one included. */
+  total: number
+  commentId: number
+  /** What the canonical comment holds now, so an unchanged position writes nothing. */
+  publishedBody: string
 }
 
 export type RecordObservationResult
@@ -457,8 +489,48 @@ export interface JournalStore {
    * worktree still in use from one nothing will touch again.
    */
   listActiveTaskLeases: () => AgentWorktreeLease[]
+  /**
+   * Queued Tasks whose pull request already carries a canonical comment.
+   *
+   * Position comes from the same predicate and order the claim uses, so the
+   * number a person reads is the number of Tasks that must finish first.
+   */
+  listQueuedReviewStatuses: () => QueuedReviewStatus[]
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listStoppedReviews: () => StoppedReview[]
+  /**
+   * Records the Approval prompt comment, so a sweep can correct it later.
+   *
+   * No Task exists while a pull request waits for Approval, so this comment has
+   * no Task to own it and nothing to hang a review status command on.
+   */
+  recordApprovalPromptComment: (input: {
+    repository: string
+    pullRequestNumber: number
+    revisionId: string
+    commentId: number
+    body: string
+    at: string
+  }) => boolean
+  /** Records the Queue position this service published on the canonical comment. */
+  recordQueuedReviewStatus: (input: {
+    taskId: string
+    taskKind: 'adversarial_review' | 'review_fix'
+    revisionId: string
+    expectedHeadSha: string
+    body: string
+    at: string
+    commentId: number
+    url: string
+  }) => boolean
+  /**
+   * True while the Task is still Queued, so a sweep may still write for it.
+   *
+   * The Queue read and the comment write are separated by GitHub round trips,
+   * during which an agent can claim the Task. This check is synchronous, so a
+   * sweep that sees false here has lost the comment to the claimed agent.
+   */
+  isQueuedReviewStatus: (input: { taskId: string, taskKind: 'adversarial_review' | 'review_fix' }) => boolean
   recordStoppedReviewStatus: (input: {
     taskId: string
     taskKind: 'adversarial_review' | 'review_fix'
@@ -3109,6 +3181,71 @@ const reviewUsageMigration = `
   PRAGMA user_version = 31;
 `
 
+/**
+ * Adds the queued phase to the canonical review comment.
+ *
+ * A Task can wait hours behind other Tasks. The comment it already owns went on
+ * claiming a review was under way the whole time, so a person read progress
+ * where there was none. The comment now states the Queue position instead, and
+ * that publication needs a phase of its own to be recorded under.
+ *
+ * The Approval prompt is recorded for the same reason. It asks a person to add
+ * a label, and it went on asking after they added it, because no Task existed
+ * yet to own that comment and nothing else ever came back to correct it.
+ */
+const queuedReviewStatusMigration = `
+  DROP INDEX IF EXISTS review_status_commands_state;
+  CREATE TABLE review_status_commands_v32 (
+    id TEXT PRIMARY KEY,
+    task_kind TEXT NOT NULL CHECK (task_kind IN ('adversarial_review', 'review_fix')),
+    task_id TEXT NOT NULL,
+    task_fence INTEGER NOT NULL,
+    revision_id TEXT NOT NULL REFERENCES revisions(id),
+    expected_head_sha TEXT NOT NULL,
+    phase TEXT NOT NULL CHECK (phase IN ('snapshot', 'review', 'repair', 'terminal', 'queued')),
+    body TEXT NOT NULL,
+    body_sha256 TEXT NOT NULL CHECK (length(body_sha256) = 64),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Superseded')),
+    outcome_unknown INTEGER NOT NULL DEFAULT 0 CHECK (outcome_unknown IN (0, 1)),
+    reason TEXT,
+    github_comment_id INTEGER,
+    github_url TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (task_kind, task_id, task_fence, phase, body_sha256),
+    CHECK (
+      (task_kind = 'adversarial_review' AND phase IN ('snapshot', 'review', 'terminal', 'queued'))
+      OR (task_kind = 'review_fix' AND phase IN ('repair', 'terminal', 'queued'))
+    ),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (
+      (state_tag = 'Published' AND github_comment_id IS NOT NULL AND github_url IS NOT NULL)
+      OR state_tag != 'Published'
+    )
+  );
+  INSERT INTO review_status_commands_v32 SELECT * FROM review_status_commands;
+  DROP TABLE review_status_commands;
+  ALTER TABLE review_status_commands_v32 RENAME TO review_status_commands;
+  CREATE INDEX review_status_commands_state ON review_status_commands(state_tag, updated_at);
+
+  DROP TABLE IF EXISTS approval_prompt_comments;
+  CREATE TABLE approval_prompt_comments (
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL REFERENCES revisions(id),
+    github_comment_id INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, revision_id)
+  );
+  PRAGMA user_version = 32;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3134,7 +3271,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 31)
+  if (version === 32)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3259,6 +3396,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 30) {
     applyForeignKeyMigration(database, reviewUsageMigration)
+    version = 31
+  }
+  if (version === 31) {
+    applyForeignKeyMigration(database, queuedReviewStatusMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -6473,6 +6614,197 @@ export function openJournalStore(
     SELECT id AS taskId, fence FROM worker_tasks WHERE state_tag NOT IN ('Completed', 'Failed', 'Superseded')
   `).all() as unknown as AgentWorktreeLease[]
 
+  const recordApprovalPromptComment: JournalStore['recordApprovalPromptComment'] = (input) => {
+    const subject = database.prepare(`
+      SELECT subjects.id
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND subjects.current_revision_id = ?
+    `).get(input.repository, input.pullRequestNumber, input.revisionId) as { id: number } | undefined
+    if (subject === undefined)
+      return false
+    database.prepare(`
+      INSERT INTO approval_prompt_comments (subject_id, revision_id, github_comment_id, body, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (subject_id, revision_id) DO UPDATE SET
+        github_comment_id = excluded.github_comment_id,
+        body = excluded.body,
+        updated_at = excluded.updated_at
+    `).run(subject.id, input.revisionId, input.commentId, input.body, input.at)
+    return true
+  }
+
+  const listQueuedReviewStatuses: JournalStore['listQueuedReviewStatuses'] = () => (database.prepare(`
+    WITH claimable AS (
+      SELECT
+        worker_tasks.id AS task_id,
+        'adversarial_review' AS task_kind,
+        worker_tasks.subject_id,
+        worker_tasks.revision_id,
+        worker_tasks.updated_at
+      FROM worker_tasks
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE worker_tasks.kind = 'adversarial_review' AND worker_tasks.state_tag = 'Queued'
+        AND worker_tasks.revision_id = subjects.current_revision_id
+        AND repositories.enabled = 1
+        AND repositories.paused = 0
+        AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      UNION ALL
+      SELECT
+        tasks.id AS task_id,
+        'review_fix' AS task_kind,
+        tasks.subject_id,
+        tasks.revision_id,
+        tasks.updated_at
+      FROM tasks
+      JOIN subjects ON subjects.id = tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE tasks.kind = 'review_fix' AND tasks.state_tag = 'Queued'
+        AND tasks.revision_id = subjects.current_revision_id
+        AND repositories.enabled = 1
+        AND repositories.paused = 0
+        AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+        AND EXISTS (
+          SELECT 1 FROM pull_request_approvals
+          WHERE pull_request_approvals.subject_id = subjects.id
+            AND pull_request_approvals.revision_id = tasks.revision_id
+            AND pull_request_approvals.kind = 'fixes'
+        )
+    )
+    SELECT
+      claimable.task_id,
+      claimable.task_kind,
+      repositories.github AS repository,
+      subjects.github_number,
+      claimable.revision_id,
+      json_extract(revisions.payload, '$.headSha') AS head_sha,
+      (
+        SELECT COUNT(*) + 1 FROM claimable AS ahead
+        WHERE ahead.task_kind = claimable.task_kind
+          AND (
+            ahead.updated_at < claimable.updated_at
+            OR (ahead.updated_at = claimable.updated_at AND ahead.task_id < claimable.task_id)
+          )
+      ) AS position,
+      (
+        SELECT COUNT(*) FROM claimable AS peer WHERE peer.task_kind = claimable.task_kind
+      ) AS total,
+      COALESCE(published.github_comment_id, prompt.github_comment_id) AS github_comment_id,
+      COALESCE(published.body, prompt.body) AS published_body
+    FROM claimable
+    JOIN subjects ON subjects.id = claimable.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = claimable.revision_id
+    -- The Approval prompt is the canonical comment until a Task publishes one.
+    LEFT JOIN approval_prompt_comments AS prompt
+      ON prompt.subject_id = claimable.subject_id AND prompt.revision_id = claimable.revision_id
+    LEFT JOIN review_status_commands AS published ON published.id = COALESCE(
+      (
+        SELECT candidate.id FROM review_status_commands AS candidate
+        WHERE candidate.task_kind = claimable.task_kind AND candidate.task_id = claimable.task_id
+          AND candidate.state_tag = 'Published'
+        ORDER BY candidate.updated_at DESC, candidate.id DESC
+        LIMIT 1
+      ),
+      -- A Repair queued straight after a Review has published nothing of its
+      -- own. It inherits the canonical comment of the Review for the same
+      -- revision, which is the comment left reading "Repair queued".
+      (
+        SELECT candidate.id FROM review_status_commands AS candidate
+        JOIN worker_tasks AS sibling ON sibling.id = candidate.task_id
+        WHERE candidate.task_kind = 'adversarial_review' AND candidate.state_tag = 'Published'
+          AND sibling.subject_id = claimable.subject_id
+          AND candidate.revision_id = claimable.revision_id
+        ORDER BY candidate.updated_at DESC, candidate.id DESC
+        LIMIT 1
+      )
+    )
+    WHERE json_extract(revisions.payload, '$.state') = 'open'
+      AND COALESCE(published.github_comment_id, prompt.github_comment_id) IS NOT NULL
+      AND (
+        published.id IS NULL
+        OR (
+          published.phase != 'terminal'
+          AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
+        )
+      )
+      -- A final status for this exact head is a complete statement. Writing a
+      -- Queue position over it would delete the review a person still needs.
+      AND NOT EXISTS (
+        SELECT 1 FROM review_status_commands AS final
+        WHERE final.phase = 'terminal' AND final.state_tag = 'Published'
+          AND final.revision_id = claimable.revision_id
+          AND final.expected_head_sha = json_extract(revisions.payload, '$.headSha')
+      )
+  `).all() as unknown as QueuedReviewStatusRow[]).map(row => ({
+    taskId: row.task_id,
+    taskKind: row.task_kind,
+    repository: row.repository,
+    pullRequestNumber: row.github_number,
+    revisionId: row.revision_id,
+    headSha: row.head_sha,
+    position: row.position,
+    total: row.total,
+    commentId: row.github_comment_id,
+    publishedBody: row.published_body,
+  }))
+
+  const recordQueuedReviewStatus: JournalStore['recordQueuedReviewStatus'] = (input) => {
+    const bodySha256 = digest(input.body)
+    const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const authorized = database.prepare(`
+        SELECT ${taskTable}.fence
+        FROM ${taskTable}
+        JOIN subjects ON subjects.id = ${taskTable}.subject_id
+        WHERE ${taskTable}.id = ? AND ${taskTable}.kind = ?
+          AND ${taskTable}.state_tag = 'Queued'
+          AND ${taskTable}.revision_id = ? AND subjects.current_revision_id = ?
+      `).get(input.taskId, input.taskKind, input.revisionId, input.revisionId) as { fence: number } | undefined
+      if (authorized === undefined) {
+        database.exec('COMMIT')
+        return false
+      }
+      const commandId = digest(`${input.taskKind}:${input.taskId}:${authorized.fence}:queued:${bodySha256}`)
+      // A position can return to a number this comment already held, because a
+      // Task ahead of it can leave the Queue and another can join behind it.
+      // Rewriting the row keeps the newest publication the newest row, so the
+      // next pass compares against what GitHub actually shows.
+      database.prepare(`
+        INSERT INTO review_status_commands (
+          id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase, body, body_sha256,
+          state_tag, github_comment_id, github_url, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, 'Published', ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+          github_comment_id = excluded.github_comment_id,
+          github_url = excluded.github_url,
+          updated_at = excluded.updated_at
+      `).run(
+        commandId,
+        input.taskKind,
+        input.taskId,
+        authorized.fence,
+        input.revisionId,
+        input.expectedHeadSha,
+        input.body,
+        bodySha256,
+        input.commentId,
+        input.url,
+        input.at,
+        input.at,
+      )
+      database.exec('COMMIT')
+      return true
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const listStoppedReviews: JournalStore['listStoppedReviews'] = () => (database.prepare(`
     WITH stopped AS (
       SELECT id, subject_id, revision_id, kind AS task_kind, state_tag, reason
@@ -6490,6 +6822,7 @@ export function openJournalStore(
       json_extract(revisions.payload, '$.headSha') AS head_sha,
       COALESCE(stopped.reason, 'The automated review stopped.') AS reason,
       published.github_comment_id,
+      published.body AS published_body,
       COALESCE((
         SELECT review_runs.findings FROM review_runs
         WHERE review_runs.subject_id = stopped.subject_id
@@ -6550,8 +6883,17 @@ export function openJournalStore(
     headSha: row.head_sha,
     reason: row.reason,
     commentId: row.github_comment_id,
+    publishedBody: row.published_body,
     findings: JSON.parse(row.findings) as ReviewFinding[],
   }))
+
+  const isQueuedReviewStatus: JournalStore['isQueuedReviewStatus'] = (input) => {
+    const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
+    return database.prepare(`
+      SELECT 1 FROM ${taskTable}
+      WHERE id = ? AND kind = ? AND state_tag = 'Queued'
+    `).get(input.taskId, input.taskKind) !== undefined
+  }
 
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
@@ -6719,7 +7061,11 @@ export function openJournalStore(
     isIssueWorkApprovalReady,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
+    listQueuedReviewStatuses,
+    recordApprovalPromptComment,
     listStoppedReviews,
+    recordQueuedReviewStatus,
+    isQueuedReviewStatus,
     recordStoppedReviewStatus,
     approvePullRequest,
     authorizePublication,

@@ -13,7 +13,7 @@ export interface ApprovalController {
 export interface ApprovalControllerOptions {
   github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
   now: () => Date
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'getSelectionMode' | 'hasPullRequestApproval' | 'isIssueWorkApprovalReady'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'getSelectionMode' | 'hasPullRequestApproval' | 'isIssueWorkApprovalReady' | 'recordApprovalPromptComment'>
 }
 
 function approvalPrompt(label: string, headSha: string): string {
@@ -72,7 +72,25 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
         const available = await options.github.ensureApprovalLabel(repository, label, signal)
         if (available._tag === 'Err')
           return available
-        return options.github.upsertReviewStatus(repository, pullRequest.number, null, approvalPrompt(label, pullRequest.headSha), false, signal).then(result => result._tag === 'Err' ? result : ok(undefined))
+        const body = approvalPrompt(label, pullRequest.headSha)
+        const posted = await options.github.upsertReviewStatus(repository, pullRequest.number, null, body, false, signal)
+        if (posted._tag === 'Err')
+          return posted
+        // This comment asks for a label and then has nothing left to say. It
+        // went on asking after the label arrived, because no Task exists yet to
+        // own it. Recording it hands it to the sweep that corrects stale
+        // comments once the review joins the Queue.
+        const recorded = options.store.recordApprovalPromptComment({
+          repository: repository.github,
+          pullRequestNumber: pullRequest.number,
+          revisionId,
+          commentId: posted.value.commentId,
+          body,
+          at: options.now().toISOString(),
+        })
+        if (!recorded)
+          return err(`The REVIEW PAUSED prompt for ${repository.github}#${pullRequest.number} could not be recorded.`)
+        return ok(undefined)
       }
 
       const approved = options.store.approvePullRequest({

@@ -138,6 +138,7 @@ describe('selection mode approval controller', () => {
       store: {
         approveIssueWork: () => { throw new Error('Unexpected issue Approval.') },
         isIssueWorkApprovalReady: () => false,
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => mode,
         hasPullRequestApproval: () => false,
         approvePullRequest: () => {

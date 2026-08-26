@@ -31,6 +31,7 @@ import { createOpencodeProvider } from './opencode-provider.ts'
 import { createPoller } from './poller.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
 import { createPullRequestStatusController } from './pull-request-status-controller.ts'
+import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
 import { err, ok } from './result.ts'
@@ -505,11 +506,34 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }, signal)
         stopped.forEach((result) => {
           if (result._tag === 'Ok') {
-            options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
+            options.logger.info(result.value._tag === 'CommentGone'
+              ? `${result.value.repository}#${result.value.pullRequestNumber}: the stopped review comment was deleted, so nothing was written.`
+              : result.value._tag === 'Superseded'
+                ? `${result.value.repository}#${result.value.pullRequestNumber}: another writer took the comment, so it was left alone.`
+                : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
           }
           else {
             options.logger.error(`Stopped review comment: ${result.error}`)
             recordServiceIncident('stopped_review_comment', result.error)
+          }
+        })
+        const positions = await publishQueuePositions({
+          github: workerGithub,
+          now,
+          repositories: config.repositories,
+          store,
+        }, signal)
+        positions.forEach((result) => {
+          if (result._tag === 'Ok') {
+            options.logger.info(result.value._tag === 'CommentGone'
+              ? `${result.value.repository}#${result.value.pullRequestNumber}: the automated comment was deleted, so nothing was written.`
+              : result.value._tag === 'Superseded'
+                ? `${result.value.repository}#${result.value.pullRequestNumber}: an agent claimed the Task, so the Queue position comment was left to it.`
+                : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.position} of ${result.value.total}.`)
+          }
+          else {
+            options.logger.error(`Queue position comment: ${result.error}`)
+            recordServiceIncident('queue_position_comment', result.error)
           }
         })
       }

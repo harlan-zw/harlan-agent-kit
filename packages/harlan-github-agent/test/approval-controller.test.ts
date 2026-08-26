@@ -29,6 +29,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         approvePullRequest: () => {
@@ -54,7 +55,7 @@ describe('approval controller', () => {
         },
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
-      store: { ...unusedIssueApproval, getSelectionMode: () => 'auto' as const, hasPullRequestApproval: () => false, approvePullRequest: () => { throw new Error('Unexpected Approval.') } },
+      store: { ...unusedIssueApproval, recordApprovalPromptComment: () => true, getSelectionMode: () => 'auto' as const, hasPullRequestApproval: () => false, approvePullRequest: () => { throw new Error('Unexpected Approval.') } },
     })
 
     expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
@@ -79,6 +80,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         approvePullRequest(input) {
@@ -110,6 +112,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: (_repository, _number, revisionId) => approvals.has(revisionId),
         approvePullRequest(input) {
@@ -139,6 +142,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         approvePullRequest: () => {
@@ -162,6 +166,7 @@ describe('approval controller', () => {
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
         ...unusedIssueApproval,
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => true,
         approvePullRequest: () => { throw new Error('Unexpected Approval.') },
@@ -187,6 +192,7 @@ describe('approval controller', () => {
       },
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         isIssueWorkApprovalReady: () => false,
@@ -213,6 +219,7 @@ describe('approval controller', () => {
       },
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         isIssueWorkApprovalReady: () => true,
@@ -223,6 +230,27 @@ describe('approval controller', () => {
 
     expect(await controller.reconcile(repositoryMapping(), issueItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
     expect(calls).toEqual(['ensure'])
+  })
+
+  it('fails when the prompt comment cannot be recorded', async () => {
+    const controller = createApprovalController({
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label consumption.')),
+        ensureApprovalLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewStatus: () => Promise.resolve(ok({ commentId: 1, url: 'url' })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        ...unusedIssueApproval,
+        recordApprovalPromptComment: () => false,
+        getSelectionMode: () => 'auto' as const,
+        hasPullRequestApproval: () => false,
+        approvePullRequest: () => { throw new Error('Unexpected Approval.') },
+      },
+    })
+
+    const result = await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)
+    expect(result._tag).toBe('Err')
   })
 
   it('consumes the shared label before approving the exact outside issue state', async () => {
@@ -241,6 +269,7 @@ describe('approval controller', () => {
       },
       now: () => new Date('2026-08-14T01:00:00.000Z'),
       store: {
+        recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
         isIssueWorkApprovalReady: () => true,
