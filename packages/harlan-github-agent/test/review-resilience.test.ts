@@ -377,6 +377,29 @@ describe('review resilience', () => {
     expect(test.progressSuccesses).toBeGreaterThan(0)
   })
 
+  it('does not report a progress failure caused by an intentional stop', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const controller = new AbortController()
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: passingGate,
+        verification: passingGate,
+        findings: [],
+        confidence: 91,
+      },
+      publish: () => {
+        controller.abort()
+        return Promise.resolve(err('This operation was aborted'))
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), controller.signal)
+
+    expect(test.progressFailures).toEqual([])
+  })
+
   it('rejects a Review Agent that changed the worktree', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({

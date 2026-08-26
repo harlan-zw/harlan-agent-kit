@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { contextBudgetExhaustedReason } from '../src/failure.ts'
+import { replaceServiceIncidents } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -9,6 +10,16 @@ function createStore() {
 }
 
 describe('incident log', () => {
+  it('clears a worktree sweep incident after the next clean sweep', () => {
+    const store = createStore()
+
+    replaceServiceIncidents(store, '2026-08-18T00:01:00.000Z', 'agent_worktree_sweep', ['wt list failed'])
+    expect(store.listIncidents()).toHaveLength(1)
+
+    replaceServiceIncidents(store, '2026-08-18T00:02:00.000Z', 'agent_worktree_sweep', [])
+    expect(store.listIncidents()).toEqual([])
+  })
+
   it('folds a repeated failure into one incident instead of one row per poll', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')

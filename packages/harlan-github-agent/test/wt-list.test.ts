@@ -6,6 +6,32 @@ function entry(branch: string | null, path: string): unknown {
 }
 
 describe('parseWtWorktrees', () => {
+  it('reads Worktrunk schema 2 worktree entries', () => {
+    const parsed = parseWtWorktrees(JSON.stringify({
+      schema: 2,
+      repo: { default_branch: 'main' },
+      collected: { ci: false, summary: false },
+      items: [
+        {
+          branch: 'main',
+          worktree: { path: '/home/harlan/pkg/repo', detached: false },
+        },
+        {
+          branch: 'harlan-agent/review-1',
+          worktree: { path: '/home/harlan/pkg/repo.review-1', detached: false },
+        },
+      ],
+    }))
+
+    expect(parsed).toEqual({
+      _tag: 'Ok',
+      value: [
+        { branch: 'main', path: '/home/harlan/pkg/repo' },
+        { branch: 'harlan-agent/review-1', path: '/home/harlan/pkg/repo.review-1' },
+      ],
+    })
+  })
+
   it('keeps every branch worktree when a detached worktree sits between them', () => {
     const parsed = parseWtWorktrees(JSON.stringify([
       entry('main', '/home/harlan/pkg/repo'),
@@ -37,7 +63,7 @@ describe('parseWtWorktrees', () => {
     })
   })
 
-  it('rejects output that is not a list of worktrees', () => {
+  it('rejects output that is not a supported worktree collection', () => {
     expect(parseWtWorktrees('{"worktrees":[]}')._tag).toBe('Err')
     expect(parseWtWorktrees('not json')._tag).toBe('Err')
   })

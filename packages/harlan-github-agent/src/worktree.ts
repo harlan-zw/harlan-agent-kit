@@ -124,6 +124,10 @@ interface WtWorktree {
   path: string
 }
 
+type WtList
+  = | { _tag: 'Schema1', entries: unknown[] }
+    | { _tag: 'Schema2', entries: unknown[] }
+
 function gitEnvironment(githubToken?: string): NodeJS.ProcessEnv {
   const allowed = [
     'GIT_CONFIG_GLOBAL',
@@ -289,14 +293,27 @@ export function parseWtWorktrees(stdout: string): Result<WtWorktree[], string> {
   catch {
     return err('wt list returned invalid JSON.')
   }
-  if (!Array.isArray(value))
+  const list: WtList | null = Array.isArray(value)
+    ? { _tag: 'Schema1', entries: value }
+    : typeof value === 'object'
+      && value !== null
+      && 'schema' in value
+      && value.schema === 2
+      && 'items' in value
+      && Array.isArray(value.items)
+      ? { _tag: 'Schema2', entries: value.items }
+      : null
+  if (list === null)
     return err('wt list returned an invalid worktree list.')
   const worktrees: WtWorktree[] = []
-  for (const entry of value) {
+  for (const entry of list.entries) {
     if (typeof entry !== 'object' || entry === null)
       continue
     const branch: unknown = 'branch' in entry ? entry.branch : undefined
-    const path: unknown = 'path' in entry ? entry.path : undefined
+    const worktree = 'worktree' in entry ? entry.worktree : undefined
+    const path: unknown = list._tag === 'Schema1'
+      ? 'path' in entry ? entry.path : undefined
+      : typeof worktree === 'object' && worktree !== null && 'path' in worktree ? worktree.path : undefined
     if (typeof branch !== 'string' || branch.length === 0)
       continue
     if (typeof path !== 'string' || !isAbsolute(path))
@@ -307,7 +324,7 @@ export function parseWtWorktrees(stdout: string): Result<WtWorktree[], string> {
 }
 
 async function listWtWorktrees(checkout: string, signal: AbortSignal): Promise<Result<WtWorktree[], string>> {
-  const listed = await runWt(checkout, ['list', '--format=json'], signal)
+  const listed = await runWt(checkout, ['--config-set', 'list.json-schema=2', 'list', '--format=json'], signal)
   if (listed.exitCode !== 0)
     return err(`Could not list wt worktrees: ${listed.stderr}`)
   return parseWtWorktrees(listed.stdout)
