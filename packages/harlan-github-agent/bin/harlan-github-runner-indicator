@@ -21,6 +21,7 @@ RUNNER_LABEL = 'com.harlanzw.desktop-runner=true'
 RUNNER_HOSTS_ENV = 'HARLAN_GITHUB_RUNNER_HOSTS'
 RUNNER_REPOSITORIES_ENV = 'HARLAN_GITHUB_RUNNER_REPOSITORIES'
 JOBS_REFRESH_SECONDS = 30
+RUNNER_ICON = 'system-run-symbolic'
 
 
 def parse_labels(value):
@@ -505,7 +506,7 @@ def main():
 
     indicator = AyatanaAppIndicator3.Indicator.new(
         'harlan-github-runners',
-        'media-playback-start-symbolic',
+        RUNNER_ICON,
         AyatanaAppIndicator3.IndicatorCategory.SYSTEM_SERVICES,
     )
     indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
