@@ -618,7 +618,7 @@ describe('subject Workers', () => {
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
           body: 'Fixes the parser.',
-          checks: { _tag: 'Available', checks: [{ id: 2, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'success' }] },
+          checks: { _tag: 'Available', checks: [{ id: 2, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'build', status: 'completed', conclusion: 'failure' }] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,

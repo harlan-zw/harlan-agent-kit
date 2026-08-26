@@ -153,6 +153,33 @@ function harness(input: {
 }
 
 describe('review resilience', () => {
+  it('retries when required CI settles after the Agent answered waiting', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const initial = reviewSnapshot(pullRequest)
+    const frozen = reviewSnapshot(pullRequest)
+    initial.requiredChecks = { _tag: 'Declared', contexts: ['test'] }
+    initial.checks = { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'in_progress', conclusion: null }] }
+    frozen.requiredChecks = { _tag: 'Declared', contexts: ['test'] }
+    const test = harness({
+      pullRequest,
+      snapshots: [initial, frozen],
+      response: {
+        metadata: { state: 'waiting', reason: 'Required CI has not concluded.', evidence: 'CI is pending.' },
+        review: passingGate,
+        verification: { state: 'waiting', reason: 'Required CI is pending.', evidence: 'CI is pending.' },
+        findings: [],
+        confidence: null,
+      },
+    })
+
+    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(result).toEqual(err('Required CI settled during the review. Retry with the current check results.'))
+    expect(test.attempts).toHaveLength(0)
+    expect(test.comments.at(-1)).toContain('REVIEWING')
+    expect(test.comments.at(-1)).not.toContain('PENDING')
+  })
+
   it('keeps the newest discussion inside one bounded Review context', () => {
     const oldComment = `old-comment-${'a'.repeat(8_000)}`
     const newComment = `new-comment-${'b'.repeat(8_000)}`

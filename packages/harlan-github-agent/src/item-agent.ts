@@ -20,6 +20,7 @@ import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { formatProgressBar } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
+import { currentGitHubChecks } from './github-agent-source.ts'
 import { issueTriageComment } from './issue-triage-comment.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -553,6 +554,25 @@ function baseChecksFailed(snapshot: PullRequestReviewSnapshot): boolean {
   return snapshot.baseChecks._tag === 'Available' && snapshot.baseChecks.checks.some(checkFailed)
 }
 
+function sameCheckContext(left: GitHubCheck, right: GitHubCheck): boolean {
+  if (left.name !== right.name || left.source._tag !== right.source._tag)
+    return false
+  return left.source._tag === 'CommitStatus'
+    || (right.source._tag === 'CheckRun' && left.source.appId === right.source.appId)
+}
+
+/** True when this head turns every failed base check green. */
+function headRepairsFailedBaseChecks(snapshot: PullRequestReviewSnapshot): boolean {
+  if (snapshot.baseChecks._tag !== 'Available' || snapshot.checks._tag !== 'Available')
+    return false
+  const failedBaseChecks = currentGitHubChecks(snapshot.baseChecks.checks).filter(checkFailed)
+  const headChecks = currentGitHubChecks(snapshot.checks.checks)
+  return failedBaseChecks.length > 0 && failedBaseChecks.every(baseCheck => headChecks.some(headCheck =>
+    sameCheckContext(baseCheck, headCheck)
+    && headCheck.status === 'completed'
+    && headCheck.conclusion === 'success'))
+}
+
 function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean): { gates: ReviewGates, reportedChecks: string[] } {
   const findings = response.findings
   const ci = ciGate(snapshot, repairsBaseline)
@@ -764,7 +784,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         recordRunnerLostIncident(options, task.repository)
       if (snapshot.value.priorAutomatedReview._tag === 'Found' && task.rerun._tag === 'NotRequested')
         return ok({ evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}` })
-      const repairsBaseline = options.store.isBaselineRepairPullRequest(task.repository, task.pullRequest.headRef)
+      const knownBaselineRepair = options.store.isBaselineRepairPullRequest(task.repository, task.pullRequest.headRef)
+      const repairsBaseline = knownBaselineRepair
+        || (basesDefaultBranch(snapshot.value.pullRequest, task.repositoryMapping) && headRepairsFailedBaseChecks(snapshot.value))
+      const ciAtStart = ciGate(snapshot.value, repairsBaseline).state
       const repairAccess = await options.preflightRepair(task.repository, signal)
       if (!repairsBaseline && baseChecksFailed(snapshot.value) && basesDefaultBranch(snapshot.value.pullRequest, task.repositoryMapping)) {
         const baseline = repairAccess._tag === 'Ok'
@@ -783,8 +806,8 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         if (baseline._tag !== 'NotAuthorized')
           return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
       }
-      else if (!repairsBaseline) {
-        // The base is healthy, so any Baseline repair that died for it is done.
+      else if (!knownBaselineRepair) {
+        // This head needs no separate Baseline repair, so retire a dead one.
         options.store.retireBaselineRepairForReview({
           taskId: task.id,
           workerId: task.state.workerId,
@@ -844,6 +867,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const checked = await reportReviewProgress(options, task, 'review', { percent: 90, label: 'Head commit and CI checked' }, signal)
       if (checked._tag === 'Err')
         return checked
+      const ciAtCompletion = ciGate(frozen.value, repairsBaseline).state
+      const agentWaited = response.metadata.state === 'waiting' || response.verification.state === 'waiting'
+      if (ciAtStart._tag !== 'Passed' && ciAtCompletion._tag === 'Passed' && agentWaited)
+        return err('Required CI settled during the review. Retry with the current check results.')
       // The agent answers waiting on its own review gate when it did not review
       // the diff, which an unreliable model does after its first answer fails
       // the schema. Publishing that reports a verdict nobody produced, so the
