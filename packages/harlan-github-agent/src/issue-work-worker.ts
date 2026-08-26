@@ -298,6 +298,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (sessionId === null)
         return err('The issue changed before work started.')
       const turn = await runAgentTurn(options, {
+        freshSession: task.state.fence > 1,
         number: task.issueNumber,
         progress: { currentPercent: 35, report: reportProgress, work: 'fix' },
         prompt: workerPrompt(task, snapshot.value.body, snapshot.value.comments, template.value),

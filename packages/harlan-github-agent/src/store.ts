@@ -3292,6 +3292,40 @@ const repairDisputeRerunMigration = `
   PRAGMA user_version = 34;
 `
 
+/**
+ * Gives Tasks exhausted by one poisoned provider session a fresh recovery.
+ *
+ * Retries now start a fresh Agent session after the first claim. These old
+ * Tasks exhausted their recovery budget before that boundary existed.
+ */
+const freshProviderSessionMigration = `
+  UPDATE incidents
+  SET resolved_at = last_seen_at
+  WHERE resolved_at IS NULL
+    AND scope_tag = 'Task'
+    AND task_id IN (
+      SELECT id FROM worker_tasks
+      WHERE state_tag = 'Failed'
+        AND reason = 'The opencode session stopped sending output.'
+      UNION ALL
+      SELECT id FROM tasks
+      WHERE state_tag = 'Failed'
+        AND reason = 'The opencode session stopped sending output.'
+    );
+
+  UPDATE worker_tasks
+  SET recovery_attempts = 0
+  WHERE state_tag = 'Failed'
+    AND reason = 'The opencode session stopped sending output.';
+
+  UPDATE tasks
+  SET recovery_attempts = 0
+  WHERE state_tag = 'Failed'
+    AND reason = 'The opencode session stopped sending output.';
+
+  PRAGMA user_version = 35;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3317,7 +3351,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 34)
+  if (version === 35)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3454,6 +3488,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 33) {
     applyMigration(database, repairDisputeRerunMigration)
+    version = 34
+  }
+  if (version === 34) {
+    applyMigration(database, freshProviderSessionMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)

@@ -195,6 +195,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       if (ready._tag === 'Err')
         return ready
       const turn = await runAgentTurn(options, {
+        freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
         progress: { currentPercent: 35, report: progress, work: 'baseline' },
         prompt: prompt(task, checks, template.value),
