@@ -49,7 +49,7 @@ Treat a prior disposition as a lead, never as an answer. It tells you where a pa
 
 An `unclosed` ID needs care. A past run already proved a commit fixes it, and the issue is open anyway. Do not repeat that proof. Establish which of these is true, and record it as the evidence:
 
-- The fix is deployed and the issue is stale in Sentry. Disposition `already-fixed`, and name the release that carries the fix plus the last-seen time that precedes it.
+- The fix is deployed and the issue is stale in Sentry. Disposition `already-fixed`, and name the release that carries the fix plus the last-seen time that precedes it. Resolve it in that release.
 - The fix is merged but never deployed. Disposition `blocked`, naming the missing deploy.
 - The fix does not hold. Treat it as a live defect and fix the category, not the instance.
 
@@ -90,7 +90,23 @@ Repeat `--manifest` for every project. Invoke `$harlan-agent-kit:pr` from the wo
 
 If the audited ledger produces no code diff, do not create an empty PR. Confirm the selected checkout is clean. If this task created a worktree, run `wt remove <branch>`. Then return the ledger checksum. If GitHub registers no PR checks, report `no PR workflow` after confirming the PR remains mergeable.
 
-Do not deploy. Do not resolve or mute Sentry issues.
+Do not deploy. Never mute a Sentry issue.
+
+## Close what you proved
+
+Resolve an issue only on the evidence in your own ledger. Run the plan first, then apply.
+
+```bash
+python3 SKILL_DIR/scripts/sentry_api.py --org ORG resolve --project PROJECT \
+  --issue ID --in-next-release --apply
+```
+
+- `fixed` rows: `--in-next-release`, only after your PR merges into the default branch. If it is still open when you finish, leave the issue open and say so. The next run inherits it.
+- `already-fixed` rows: `--in-release VERSION`, naming the deployed release that carries the fix.
+- `covered` rows: follow the owning row, after it resolves.
+- `expected`, `third-party`, `blocked`: never resolve.
+
+Use `--in-next-release` only when CI owns every release for that project. A local build with an auth token can create a release that was never deployed, and that release would close the issue early. Name the release with `--in-release` instead.
 
 ## Return evidence
 
@@ -101,6 +117,7 @@ Return:
 3. The ledger path, row count, checksum, and one row per frozen numeric issue ID.
 4. The issue IDs owned by each test and fix.
 5. Any blocked item with the exact next action.
-6. Confidence out of 100, based on verified evidence.
+6. Every issue you resolved, with the release that closed it, and every `fixed` row you left open because its PR had not merged.
+7. Confidence out of 100, based on verified evidence.
 
 For a zero-issue site, confirm the project query and return without a branch, worktree, or PR.

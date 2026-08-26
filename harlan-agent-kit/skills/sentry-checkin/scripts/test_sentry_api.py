@@ -12,9 +12,26 @@ from pathlib import Path
 
 
 class SentryHandler(BaseHTTPRequestHandler):
+    writes = []
+
+    def do_PUT(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        SentryHandler.writes.append((self.path, payload))
+        self.respond({"status": "resolved"})
+
     def do_GET(self):
         if self.path == "/api/0/organizations/test/issues/1/":
-            self.respond({"shortId": "TEST-1"})
+            self.respond({"shortId": "TEST-1", "status": "unresolved"})
+            return
+        if self.path == "/api/0/organizations/test/issues/2/":
+            self.respond({"shortId": "TEST-2", "status": "resolved"})
+            return
+        if self.path == "/api/0/organizations/test/releases/live/":
+            self.respond({"version": "live", "projects": [{"slug": "site"}]})
+            return
+        if self.path == "/api/0/organizations/test/releases/other/":
+            self.respond({"version": "other", "projects": [{"slug": "elsewhere"}]})
             return
         if self.path.startswith("/api/0/organizations/test/issues/1/events/"):
             self.respond(
@@ -241,6 +258,83 @@ print('''+----------+----------+----------------------+-------------------------
             manifest = json.loads((output / "manifest.json").read_text())
             self.assertEqual(list(manifest["completed"]), ["1"])
             self.assertEqual(json.loads((output / "1.json").read_text())["project"], "site")
+
+
+    def run_resolve(self, *arguments):
+        SentryHandler.writes = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        env = dict(os.environ)
+        env["SENTRY_AUTH_TOKEN"] = "test-token"
+        env["SENTRY_URL"] = f"http://127.0.0.1:{server.server_port}"
+        try:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("sentry_api.py")),
+                    "--org",
+                    "test",
+                    "resolve",
+                    "--project",
+                    "site",
+                    *arguments,
+                ],
+                capture_output=True,
+                check=False,
+                env=env,
+                text=True,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_resolve_reports_the_plan_and_writes_nothing_without_apply(self):
+        result = self.run_resolve("--issue", "1", "--in-next-release")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["applied"])
+        self.assertEqual(payload["would_resolve"], ["1"])
+        self.assertEqual(payload["mode"], "in-next-release")
+        self.assertEqual(SentryHandler.writes, [])
+
+    def test_resolve_apply_sends_in_next_release(self):
+        result = self.run_resolve("--issue", "1", "--in-next-release", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["resolved"], ["1"])
+        self.assertEqual(len(SentryHandler.writes), 1)
+        path, body = SentryHandler.writes[0]
+        self.assertIn("id=1", path)
+        self.assertEqual(body["status"], "resolved")
+        self.assertEqual(body["statusDetails"], {"inNextRelease": True})
+
+    def test_resolve_apply_sends_the_named_release(self):
+        result = self.run_resolve("--issue", "1", "--in-release", "live", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            SentryHandler.writes[0][1]["statusDetails"], {"inRelease": "live"}
+        )
+
+    def test_resolve_rejects_a_release_the_project_does_not_hold(self):
+        result = self.run_resolve("--issue", "1", "--in-release", "other", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not associated with project site", result.stderr)
+        self.assertEqual(SentryHandler.writes, [])
+
+    def test_resolve_skips_an_issue_already_resolved(self):
+        result = self.run_resolve("--issue", "2", "--in-next-release", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["already_resolved"], ["2"])
+        self.assertEqual(payload["would_resolve"], [])
+        self.assertEqual(SentryHandler.writes, [])
+
+    def test_resolve_rejects_a_non_numeric_issue(self):
+        result = self.run_resolve("--issue", "TEST-1", "--in-next-release", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("numeric issue ID", result.stderr)
+        self.assertEqual(SentryHandler.writes, [])
 
 
 if __name__ == "__main__":

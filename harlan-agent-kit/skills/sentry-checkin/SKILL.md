@@ -40,7 +40,9 @@ pnpm dlx @sentry/cli organizations list
 
 Use the sole organization when only one exists. If two or more exist and the request names none, ask which organization is in scope.
 
-Use `sentry-cli` for authentication, project discovery, and issue discovery. Sentry CLI 3.6 does not expose issue or stack details. The bundled `scripts/sentry_api.py` fills only that read-only gap. It uses the CLI token from `~/.sentryclirc` and redacts common secrets and personal data.
+Use `sentry-cli` for authentication, project discovery, and issue discovery. Sentry CLI 3.6 does not expose issue or stack details. The bundled `scripts/sentry_api.py` fills that gap. It uses the CLI token from `~/.sentryclirc` and redacts common secrets and personal data.
+
+Every command in that script reads, except `resolve`. `resolve` reports its plan and writes only with `--apply`.
 
 Create a persistent run directory outside every repository:
 
@@ -94,7 +96,7 @@ Repeat `--snapshot` to cover every project of a site in one report. It tags ever
 - `recurring`: a prior run left it open, accepted, or blocked.
 - `unclosed`: a prior run called it `fixed` or `already-fixed`, yet it is still open.
 
-A high `unclosed` count means fixes are landing but Sentry never hears about it. Report the count with the run.
+A high `unclosed` count means fixes are landing but Sentry never hears about it. Report the count with the run. An `unclosed` ID this run proves deployed gets resolved, not just re-triaged.
 
 The history is evidence from a past run, not a verdict. It never shortens the ledger: every frozen ID still needs its own row and its own evidence this run.
 
@@ -135,7 +137,36 @@ Each site with code fixes gets one branch and one PR. If another agent is active
 
 If a complete ledger produces no diff, do not create an empty PR. Confirm the branch is clean. If this task created a worktree, run `wt remove <branch>`. Return the verified ledger. If the repository has no PR workflow, state that explicitly and use the complete local gate as evidence.
 
-Do not resolve or mute Sentry issues when opening a PR. Code is not live yet. Let a verified release resolve issues, unless the user explicitly asks for a Sentry state change after production verification.
+Never mute a Sentry issue. Muting hides a live defect.
+
+## Close what this run fixed
+
+An open issue that nobody can close is the reason the same IDs return every run. Close them here, using the release as the proof.
+
+Resolve only these dispositions:
+
+- `fixed`: resolve in the next release, after the PR merges into the default branch. Never at PR open. An unmerged PR would let an unrelated release close the issue.
+- `already-fixed`: resolve in the release that carries the fix, once this run proved that release is deployed.
+- `covered`: resolve with the owning row's mode, after the owning row resolves.
+
+Never resolve `expected`, `third-party`, or `blocked`. None of them is fixed.
+
+Run the plan first, then apply:
+
+```bash
+python3 scripts/sentry_api.py --org ORG resolve --project PROJECT \
+  --issue ID --issue ID --in-next-release
+python3 scripts/sentry_api.py --org ORG resolve --project PROJECT \
+  --issue ID --issue ID --in-next-release --apply
+```
+
+Use `--in-release VERSION` instead of `--in-next-release` for an `already-fixed` row. The command rejects a version the project does not hold.
+
+`--in-next-release` binds to whichever release appears next. Use it only when CI owns every release for that project. If a local build can create a release, name the release with `--in-release`. A local build with an auth token creates a release that was never deployed, and that release would close the issue early.
+
+Sentry reopens a resolved issue as a regression if the error returns. A fix that stops working still surfaces.
+
+Project auto-resolve is the backstop, not the mechanism. It closes a stale issue when this run has no proof to act on. It never replaces a resolution the evidence supports.
 
 ## Record the run
 
@@ -151,3 +182,5 @@ Repeat `--ledger` for every site. `record` refuses a ledger with any empty dispo
 ## Return the run
 
 Report each site with its issue count, ledger coverage, PR URL, CI state, and confidence. List zero-issue sites and unmatched projects. Keep blocked rows explicit. Give the run's `new`, `recurring`, and `unclosed` counts, and name the history path.
+
+Name every issue this run resolved, with the release that closed it. Name every `fixed` row left unresolved because its PR is still open. The next run inherits those.
