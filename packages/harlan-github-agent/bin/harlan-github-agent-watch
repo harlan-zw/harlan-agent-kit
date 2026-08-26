@@ -2,6 +2,7 @@
 
 import json
 import re
+import sqlite3
 import sys
 import time
 from collections import deque
@@ -12,7 +13,9 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 SESSION_ID = re.compile(r'^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$', re.IGNORECASE)
+OPENCODE_SESSION_ID = re.compile(r'^ses_[A-Za-z\d]+$')
 SESSION_ROOT = Path.home() / '.codex/sessions'
+OPENCODE_DATABASE = Path.home() / '.local/share/opencode/opencode.db'
 
 
 def clean(value, limit=2400):
@@ -135,10 +138,140 @@ def render_event(event, console):
 
 
 def find_session_log(session_id, root=SESSION_ROOT):
-    if SESSION_ID.fullmatch(session_id) is None:
-        raise ValueError('Invalid Codex session ID.')
+    validate_session_id('codex', session_id)
     matches = list(root.glob(f'**/*{session_id}.jsonl'))
     return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
+
+
+def validate_session_id(provider, session_id):
+    pattern = SESSION_ID if provider == 'codex' else OPENCODE_SESSION_ID if provider == 'opencode' else None
+    if pattern is None:
+        raise ValueError('Unsupported Agent provider.')
+    if pattern.fullmatch(session_id) is None:
+        label = 'Codex' if provider == 'codex' else 'opencode'
+        raise ValueError(f'Invalid {label} session ID.')
+    return session_id
+
+
+def load_opencode_session(session_id, database=OPENCODE_DATABASE):
+    validate_session_id('opencode', session_id)
+    connection = sqlite3.connect(f'file:{database}?mode=ro', uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        session = connection.execute(
+            'SELECT title, directory FROM session WHERE id = ?',
+            (session_id,),
+        ).fetchone()
+        if session is None:
+            raise ValueError('The opencode session is unavailable.')
+        rows = connection.execute(
+            '''
+            SELECT message.id AS message_id, message.data AS message_data,
+              part.id AS part_id, part.time_created, part.time_updated, part.data AS part_data
+            FROM message
+            JOIN part ON part.message_id = message.id
+            WHERE message.session_id = ?
+            ORDER BY message.time_created, part.time_created, part.id
+            ''',
+            (session_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    messages = []
+    current = None
+    for row in rows:
+        if current is None or current['id'] != row['message_id']:
+            current = {
+                'id': row['message_id'],
+                'info': json.loads(row['message_data']),
+                'parts': [],
+            }
+            messages.append(current)
+        current['parts'].append({
+            'id': row['part_id'],
+            'timeCreated': row['time_created'],
+            'timeUpdated': row['time_updated'],
+            **json.loads(row['part_data']),
+        })
+    return {
+        'info': {'title': session['title'], 'directory': session['directory']},
+        'messages': messages,
+    }
+
+
+def format_opencode_part(part):
+    part_type = part.get('type')
+    if part_type in ('reasoning', 'text'):
+        text = clean(part.get('text', ''))
+        return f'Agent\n{text}' if text else None
+    if part_type == 'tool':
+        state = part.get('state', {})
+        tool_input = state.get('input', {})
+        command = tool_input.get('command') or state.get('title') or part.get('tool', 'tool')
+        status = state.get('status', 'running')
+        metadata = state.get('metadata', {})
+        exit_code = metadata.get('exit')
+        status_label = f'exit {exit_code}' if isinstance(exit_code, int) else status
+        output = clean(state.get('output') or metadata.get('output') or '')
+        return f'$ {clean(command)}\n[{status_label}]' if not output else f'$ {clean(command)}\n[{status_label}]\n{output}'
+    if part_type == 'step-finish' and part.get('reason') == 'stop':
+        return 'Task complete'
+    return None
+
+
+def opencode_parts(session):
+    return [
+        part
+        for message in session.get('messages', [])
+        if message.get('info', {}).get('role') == 'assistant'
+        for part in message.get('parts', [])
+        if format_opencode_part(part) is not None
+    ]
+
+
+def opencode_session_complete(session):
+    assistant_messages = [
+        message for message in session.get('messages', [])
+        if message.get('info', {}).get('role') == 'assistant'
+    ]
+    return bool(assistant_messages) and assistant_messages[-1].get('info', {}).get('finish') == 'stop'
+
+
+def render_opencode_part(part, console):
+    formatted = format_opencode_part(part)
+    if formatted is None:
+        return False
+    console.print(Text.from_ansi(formatted))
+    return True
+
+
+def watch_opencode(session_id):
+    session = load_opencode_session(session_id)
+    console = Console(force_terminal=True, color_system='truecolor', highlight=False)
+    console.print(Text(f'Watching opencode session {session_id}', style='bold white'))
+    console.print(Text(f"{session['info']['directory']}\n", style='dim'))
+    parts = opencode_parts(session)
+    seen = {}
+    for part in parts[-80:]:
+        render_opencode_part(part, console)
+        seen[part['id']] = json.dumps(part, sort_keys=True)
+    if opencode_session_complete(session):
+        input('\nAutomation finished. Press Enter to close.')
+        return
+
+    while True:
+        time.sleep(0.5)
+        session = load_opencode_session(session_id)
+        for part in opencode_parts(session):
+            version = json.dumps(part, sort_keys=True)
+            if seen.get(part['id']) == version:
+                continue
+            render_opencode_part(part, console)
+            seen[part['id']] = version
+        if opencode_session_complete(session):
+            input('\nAutomation finished. Press Enter to close.')
+            return
 
 
 def wait_for_session_log(session_id, timeout_seconds=15):
@@ -184,16 +317,28 @@ def watch(path, session_id):
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit('Usage: harlan-github-agent-watch SESSION_ID')
+    if len(sys.argv) != 3:
+        raise SystemExit('Usage: harlan-github-agent-watch PROVIDER SESSION_ID')
+    provider, session_id = sys.argv[1:]
     try:
-        path = wait_for_session_log(sys.argv[1])
+        validate_session_id(provider, session_id)
     except ValueError as error:
         raise SystemExit(str(error)) from error
+    if provider == 'opencode':
+        try:
+            watch_opencode(session_id)
+        except BrokenPipeError:
+            return
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        except (json.JSONDecodeError, sqlite3.Error) as error:
+            raise SystemExit('The opencode session log is unavailable.') from error
+        return
+    path = wait_for_session_log(session_id)
     if path is None:
         raise SystemExit('The Codex session log is unavailable.')
     try:
-        watch(path, sys.argv[1])
+        watch(path, session_id)
     except BrokenPipeError:
         return
 

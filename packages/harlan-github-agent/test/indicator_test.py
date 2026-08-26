@@ -2,6 +2,7 @@ import importlib.machinery
 import importlib.util
 import io
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -548,9 +549,10 @@ class IndicatorDisplayTest(unittest.TestCase):
     def test_opens_a_read_only_watch_terminal_for_the_exact_session(self):
         agent = {
             'id': 'task-123',
+            'provider': 'opencode',
             'repository': 'harlan-zw/example',
             'itemNumber': 24,
-            'session': {'_tag': 'Connected', 'id': '019fff56-466c-7980-9a63-962018752af2'},
+            'session': {'_tag': 'Connected', 'id': 'ses_fc1f02fd3ffeCm7SwBkWsH6YGb'},
         }
 
         with patch.object(indicator.subprocess, 'Popen') as spawn:
@@ -562,7 +564,8 @@ class IndicatorDisplayTest(unittest.TestCase):
             '-e',
             sys.executable,
             str(indicator.WATCHER),
-            '019fff56-466c-7980-9a63-962018752af2',
+            'opencode',
+            'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
         ], start_new_session=True)
 
 
@@ -824,6 +827,65 @@ class WatchLogTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'Invalid Codex session ID'):
             watch.find_session_log('../session', Path('/tmp'))
+
+    def test_formats_an_opencode_command_and_validates_its_session(self):
+        session_id = 'ses_fc1f02fd3ffeCm7SwBkWsH6YGb'
+        self.assertEqual(watch.validate_session_id('opencode', session_id), session_id)
+        with self.assertRaisesRegex(ValueError, 'Invalid opencode session ID'):
+            watch.validate_session_id('opencode', '../session')
+
+        self.assertEqual(watch.format_opencode_part({
+            'type': 'tool',
+            'tool': 'bash',
+            'state': {
+                'status': 'completed',
+                'input': {'command': 'pnpm test'},
+                'output': 'passed',
+                'metadata': {'exit': 0},
+            },
+        }), '$ pnpm test\n[exit 0]\npassed')
+
+    def test_loads_an_opencode_session_from_its_read_only_store(self):
+        session_id = 'ses_fc1f02fd3ffeCm7SwBkWsH6YGb'
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / 'opencode.db'
+            connection = sqlite3.connect(database)
+            connection.executescript('''
+                CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, directory TEXT);
+                CREATE TABLE message (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    time_created INTEGER,
+                    data TEXT
+                );
+                CREATE TABLE part (
+                    id TEXT PRIMARY KEY,
+                    message_id TEXT,
+                    time_created INTEGER,
+                    time_updated INTEGER,
+                    data TEXT
+                );
+            ''')
+            connection.execute(
+                'INSERT INTO session VALUES (?, ?, ?)',
+                (session_id, 'Review #24', '/tmp/example'),
+            )
+            connection.execute(
+                'INSERT INTO message VALUES (?, ?, ?, ?)',
+                ('msg_1', session_id, 1, '{"role":"assistant","finish":"stop"}'),
+            )
+            connection.execute(
+                'INSERT INTO part VALUES (?, ?, ?, ?, ?)',
+                ('part_1', 'msg_1', 2, 3, '{"type":"text","text":"Done."}'),
+            )
+            connection.commit()
+            connection.close()
+
+            session = watch.load_opencode_session(session_id, database)
+
+        self.assertEqual(session['info'], {'title': 'Review #24', 'directory': '/tmp/example'})
+        self.assertEqual(watch.format_opencode_part(watch.opencode_parts(session)[0]), 'Agent\nDone.')
+        self.assertTrue(watch.opencode_session_complete(session))
 
     def test_renders_commands_with_terminal_syntax_highlighting(self):
         output = io.StringIO()

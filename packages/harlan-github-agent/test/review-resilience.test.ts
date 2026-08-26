@@ -57,6 +57,7 @@ interface Harness {
   attempts: RecordReviewRunInput[]
   comments: string[]
   progressFailures: string[]
+  progressSuccesses: number
   provider: ProviderCapture
   queued: number
   options: ReviewWorkerOptions
@@ -75,6 +76,7 @@ function harness(input: {
   const attempts: RecordReviewRunInput[] = []
   const comments: string[] = []
   const progressFailures: string[] = []
+  let progressSuccesses = 0
   const provider: ProviderCapture = { requests: [] }
   const repairs = { queued: 0 }
   const snapshots = input.snapshots ?? [reviewSnapshot(input.pullRequest)]
@@ -103,6 +105,9 @@ function harness(input: {
     },
     now: () => new Date('2026-08-13T01:00:00.000Z'),
     onProgressPublishFailure: (_task, reason) => progressFailures.push(reason),
+    onProgressPublishSuccess: () => {
+      progressSuccesses += 1
+    },
     preflightRepair: input.preflightRepair ?? (() => Promise.resolve(ok(undefined))),
     store: {
       queueReviewFixTaskForReview: input.queueRepair ?? (() => {
@@ -144,6 +149,9 @@ function harness(input: {
     attempts,
     comments,
     progressFailures,
+    get progressSuccesses() {
+      return progressSuccesses
+    },
     provider,
     get queued() {
       return repairs.queued
@@ -342,6 +350,32 @@ describe('review resilience', () => {
     // The terminal comment still failed, which the Task reports, but the review
     // itself was completed and stored rather than thrown away at 10 percent.
     expect(result).toEqual({ _tag: 'Err', error: 'Resource not accessible by integration' })
+  })
+
+  it('reports a successful status retry after an earlier progress failure', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    let publications = 0
+    const test = harness({
+      pullRequest,
+      response: {
+        metadata: passingGate,
+        review: passingGate,
+        verification: passingGate,
+        findings: [],
+        confidence: 91,
+      },
+      publish: () => {
+        publications += 1
+        return Promise.resolve(publications === 1
+          ? err('This operation was aborted')
+          : ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.progressFailures).toEqual(['This operation was aborted'])
+    expect(test.progressSuccesses).toBeGreaterThan(0)
   })
 
   it('rejects a Review Agent that changed the worktree', async () => {

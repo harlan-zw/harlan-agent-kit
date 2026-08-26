@@ -77,6 +77,8 @@ export interface ItemAgentOptions {
   now: () => Date
   /** Called when a cosmetic status update fails, which never stops the turn. */
   onProgressPublishFailure?: (task: ClaimedAgentTask, reason: string) => void
+  /** Called when a progress update succeeds, so Recovery can close an earlier failure. */
+  onProgressPublishSuccess?: (task: ClaimedAgentTask) => void
   runtime: AgentRuntimeSource
   store: Pick<JournalStore, 'getWorkerSession' | 'isBaselineRepairPullRequest' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'updateAgentProgress'>
   status: Pick<ReviewStatusController, 'publish'>
@@ -671,6 +673,8 @@ async function reportReviewProgress(
   const posted = await options.status.publish(task, phase, progressComment(task.pullRequest.headSha, progress, options.now().toISOString()), signal)
   if (posted._tag === 'Err')
     options.onProgressPublishFailure?.(task, posted.error)
+  else
+    options.onProgressPublishSuccess?.(task)
   return ok(undefined)
 }
 
