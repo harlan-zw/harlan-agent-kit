@@ -1,0 +1,602 @@
+#!/usr/bin/python3
+
+import fcntl
+import json
+import os
+import re
+import subprocess
+import threading
+import time
+import webbrowser
+from pathlib import Path
+from urllib.parse import urlparse
+
+import gi
+
+gi.require_version('AyatanaAppIndicator3', '0.1')
+gi.require_version('Gtk', '3.0')
+from gi.repository import AyatanaAppIndicator3, GLib, Gtk
+
+RUNNER_LABEL = 'com.harlanzw.desktop-runner=true'
+RUNNER_HOSTS_ENV = 'HARLAN_GITHUB_RUNNER_HOSTS'
+RUNNER_REPOSITORIES_ENV = 'HARLAN_GITHUB_RUNNER_REPOSITORIES'
+JOBS_REFRESH_SECONDS = 30
+RUNNER_ICON = Path(__file__).resolve().parent.parent / 'assets/github-runner-icon.svg'
+
+
+def parse_labels(value):
+    return dict(label.split('=', 1) for label in value.split(',') if '=' in label)
+
+
+def parse_runner_hosts(value):
+    hosts = []
+    names = set()
+    for definition in value.split(','):
+        name, separator, docker_host = definition.strip().partition('=')
+        name = name.strip()
+        docker_host, control_separator, control_value = docker_host.strip().partition('|')
+        docker_host = docker_host.strip()
+        if not separator or not name or not docker_host:
+            raise ValueError('Each self-hosted runner location must use Name=Docker URL.')
+        if name in names:
+            raise ValueError(f'Self-hosted runner location {name} appears more than once.')
+        names.add(name)
+        host = {'name': name, 'dockerHost': docker_host}
+        if control_separator:
+            scope, scope_separator, unit = control_value.strip().partition(':')
+            if scope not in ('system', 'user') or not scope_separator or not re.fullmatch(r'[A-Za-z0-9@_.-]+\.service', unit):
+                raise ValueError(f'Self-hosted runner control for {name} must use system:UNIT.service or user:UNIT.service.')
+            host['control'] = {'scope': scope, 'unit': unit}
+        hosts.append(host)
+    if not hosts:
+        raise ValueError('Configure at least one self-hosted runner location.')
+    return hosts
+
+
+def parse_repositories(value):
+    repositories = []
+    for repository in value.split(','):
+        repository = repository.strip()
+        if not repository:
+            continue
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+            raise ValueError(f'GitHub repository {repository} must use OWNER/REPOSITORY.')
+        if repository not in repositories:
+            repositories.append(repository)
+    return repositories
+
+
+def host_systemctl_command(host, action):
+    control = host.get('service') or host.get('control')
+    if control is not None and control.get('configuration') is not None:
+        control = control['configuration']
+    if control is None:
+        raise ValueError(f"{host['name']} has no self-hosted runner service control.")
+
+    docker_url = urlparse(host['dockerHost'])
+    prefix = []
+    if docker_url.scheme == 'ssh':
+        if docker_url.hostname is None:
+            raise ValueError(f"{host['name']} has an invalid SSH Docker URL.")
+        target = f'{docker_url.username}@{docker_url.hostname}' if docker_url.username else docker_url.hostname
+        prefix = ['ssh']
+        if docker_url.port is not None:
+            prefix.extend(['-p', str(docker_url.port)])
+        prefix.append(target)
+    elif docker_url.scheme != 'unix':
+        raise ValueError(f"{host['name']} service control requires an SSH or Unix Docker URL.")
+
+    systemctl = ['sudo', '-n', 'systemctl'] if control['scope'] == 'system' else ['systemctl', '--user']
+    return [*prefix, *systemctl, action, control['unit']]
+
+
+def request_host_control(host, run=subprocess.run):
+    command = host_systemctl_command(host, 'is-active')
+    completed = run(command, check=False, capture_output=True, text=True, timeout=4)
+    status = completed.stdout.strip()
+    if status not in ('active', 'activating', 'deactivating', 'inactive', 'failed'):
+        message = completed.stderr.strip() or status or 'Service status unavailable'
+        return {'configuration': host['control'], 'status': 'unavailable', 'message': message}
+    return {'configuration': host['control'], 'status': status}
+
+
+def set_host_accepting_jobs(host, accepting, run=subprocess.run):
+    action = 'start' if accepting else 'stop'
+    command = host_systemctl_command(host, action)
+    command.insert(-1, '--no-block')
+    run(command, check=True, capture_output=True, text=True, timeout=4)
+
+
+def runner_activity(runner, logs):
+    if runner.get('State', '').lower() != 'running':
+        return {'_tag': 'Offline', 'detail': runner.get('Status', 'Container stopped')}
+    for line in reversed(logs.splitlines()):
+        if 'Listening for Jobs' in line or 'completed with result:' in line:
+            return {'_tag': 'Idle'}
+        if 'Running job:' in line:
+            return {'_tag': 'Running', 'job': line.split('Running job:', 1)[1].strip()}
+    return {'_tag': 'Starting'}
+
+
+def request_runners(host):
+    docker = ['docker', '--host', host['dockerHost']]
+    completed = subprocess.run(
+        [*docker, 'ps', '--all', '--filter', f'label={RUNNER_LABEL}', '--format', '{{json .}}'],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=4,
+    )
+    runners = []
+    for line in completed.stdout.splitlines():
+        if not line:
+            continue
+        runner = json.loads(line)
+        logs = subprocess.run(
+            [*docker, 'logs', '--tail', '80', runner['ID']],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        activity = runner_activity(runner, logs.stdout + logs.stderr) if logs.returncode == 0 else {
+            '_tag': 'Unknown',
+            'detail': logs.stderr.strip() or 'Runner logs unavailable',
+        }
+        runners.append({
+            **runner,
+            'Activity': activity,
+            'RunnerLabels': parse_labels(runner.get('Labels', '')),
+            'Host': host['name'],
+        })
+    return runners
+
+
+def request_runner_hosts(hosts):
+    results = []
+    for host in hosts:
+        control = None
+        if host.get('control') is not None:
+            try:
+                control = request_host_control(host)
+            except Exception as caught:
+                control = {
+                    'configuration': host['control'],
+                    'status': 'unavailable',
+                    'message': str(caught),
+                }
+        try:
+            result = {
+                '_tag': 'Available',
+                'name': host['name'],
+                'runners': request_runners(host),
+            }
+        except Exception as caught:
+            result = {
+                '_tag': 'Unavailable',
+                'name': host['name'],
+                'message': str(caught),
+            }
+        if control is not None:
+            result['dockerHost'] = host['dockerHost']
+            result['service'] = host['control']
+            result['control'] = control
+        results.append(result)
+    return results
+
+
+def read_runner_source(fetch_runner_hosts):
+    try:
+        return {'_tag': 'Available', 'hosts': fetch_runner_hosts()}
+    except Exception as caught:
+        return {'_tag': 'Unavailable', 'message': str(caught)}
+
+
+WORKFLOW_RUNS_PAGE_SIZE = 50
+WORKFLOW_JOBS_PAGE_SIZE = 100
+
+
+def github_api(path):
+    completed = subprocess.run(
+        ['gh', 'api', path, '--method', 'GET'],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    return json.loads(completed.stdout)
+
+
+def collect_workflow_jobs(repository, runs, fetch_jobs):
+    jobs = []
+    for run in runs:
+        if run.get('status') not in ('queued', 'in_progress'):
+            continue
+        for job in fetch_jobs(run['id']):
+            if job.get('status') not in ('queued', 'in_progress') or 'self-hosted' not in job.get('labels', []):
+                continue
+            jobs.append({
+                '_tag': 'Queued' if job['status'] == 'queued' else 'Running',
+                'repository': repository,
+                'workflow': run.get('name', 'Workflow'),
+                'name': job.get('name', 'Job'),
+                'url': job.get('html_url') or run.get('html_url'),
+            })
+    return jobs
+
+
+def request_run_jobs(repository, run_id):
+    jobs = []
+    page = 1
+    while True:
+        fetched = github_api(
+            f'repos/{repository}/actions/runs/{run_id}/jobs?page={page}&per_page={WORKFLOW_JOBS_PAGE_SIZE}',
+        ).get('jobs', [])
+        jobs.extend(fetched)
+        if len(fetched) < WORKFLOW_JOBS_PAGE_SIZE:
+            return jobs
+        page += 1
+
+
+def request_workflow_jobs(repositories, on_error=None):
+    jobs = []
+    for repository in repositories:
+        try:
+            for status in ('queued', 'in_progress'):
+                page = 1
+                while True:
+                    runs = github_api(
+                        f'repos/{repository}/actions/runs?status={status}&page={page}&per_page={WORKFLOW_RUNS_PAGE_SIZE}',
+                    ).get('workflow_runs', [])
+                    jobs.extend(collect_workflow_jobs(
+                        repository,
+                        runs,
+                        lambda run_id, current=repository: request_run_jobs(current, run_id),
+                    ))
+                    if len(runs) < WORKFLOW_RUNS_PAGE_SIZE:
+                        break
+                    page += 1
+        except Exception as caught:
+            if on_error is not None:
+                on_error(f'{repository} · Jobs unavailable · {caught}')
+    return jobs
+
+
+def source_runners(source):
+    if source['_tag'] != 'Available':
+        return []
+    return [
+        runner
+        for host in source['hosts']
+        if host['_tag'] == 'Available'
+        for runner in host['runners']
+    ]
+
+
+def counted(count, singular, plural=None):
+    return f'{count} {singular if count == 1 else plural or f"{singular}s"}'
+
+
+def runner_label(runner):
+    labels = runner['RunnerLabels']
+    repository = labels.get('com.harlanzw.desktop-runner.repository', 'Unknown repository')
+    name = runner.get('Names') or labels.get('com.harlanzw.desktop-runner.pool', 'runner')
+    activity = runner['Activity']
+    marker = {
+        'Idle': '⚪',
+        'Offline': '🔴',
+        'Running': '🟢',
+        'Starting': '🟡',
+        'Unknown': '🟠',
+    }.get(activity['_tag'], '🟠')
+    if activity['_tag'] == 'Running':
+        return f"{marker} Running · {activity['job']} · {repository} · {name}"
+    if activity['_tag'] == 'Offline':
+        return f"{marker} Offline · {repository} · {name} · {activity['detail']}"
+    if activity['_tag'] == 'Unknown':
+        return f'{marker} Status unavailable · {repository} · {name}'
+    return f"{marker} {activity['_tag']} · {repository} · {name}"
+
+
+def github_actions_status_label(runners, error):
+    if error is not None:
+        return '🔴 Status unavailable'
+    if not runners:
+        return '⚪ No self-hosted runners found'
+
+    counts = {}
+    for runner in runners:
+        state = runner.get('Activity', {}).get('_tag', 'Unknown')
+        counts[state] = counts.get(state, 0) + 1
+
+    if counts.get('Offline', 0) > 0:
+        marker = '🔴'
+    elif counts.get('Unknown', 0) > 0:
+        marker = '🟠'
+    elif counts.get('Starting', 0) > 0:
+        marker = '🟡'
+    elif counts.get('Running', 0) > 0:
+        marker = '🟢'
+    else:
+        marker = '⚪'
+
+    states = []
+    for state, label in (
+        ('Running', 'running'),
+        ('Idle', 'idle'),
+        ('Starting', 'starting'),
+        ('Offline', 'offline'),
+        ('Unknown', 'unknown'),
+    ):
+        if counts.get(state, 0) > 0:
+            states.append(f'{counts[state]} {label}')
+    return ' · '.join((f'{marker} {counted(len(runners), "self-hosted runner")}', *states))
+
+
+def runner_host_status_label(host):
+    if host['_tag'] == 'Unavailable':
+        return f"🔴 {host['name']} · unavailable · {host['message'][:100]}"
+    status = github_actions_status_label(host['runners'], None)
+    marker, detail = status.split(' ', 1)
+    return f"{marker} {host['name']} · {detail}"
+
+
+def menu_item(label, url=None, enabled=True):
+    item = Gtk.MenuItem(label=label)
+    item.set_sensitive(enabled)
+    if url is not None:
+        item.connect('activate', lambda *_args: webbrowser.open(url))
+    return item
+
+
+def submenu_item(label, items):
+    item = Gtk.MenuItem(label=label)
+    submenu = Gtk.Menu()
+    for child in items:
+        submenu.append(child)
+    item.set_submenu(submenu)
+    return item
+
+
+def section_item(label):
+    item = Gtk.MenuItem(label=label)
+    item.set_sensitive(False)
+    return item
+
+
+def separator():
+    return Gtk.SeparatorMenuItem()
+
+
+def runner_error(source):
+    if source['_tag'] == 'Unavailable':
+        return source['message']
+    if source['_tag'] == 'Loading':
+        return None
+    if source['hosts'] and all(host['_tag'] == 'Unavailable' for host in source['hosts']):
+        return 'All runner hosts unavailable'
+    return None
+
+
+def workflow_job_label(job):
+    marker = '🟡' if job['_tag'] == 'Queued' else '🟢'
+    return f"{marker} {job['repository']} · {job['workflow']} · {job['name']}"
+
+
+def job_menu(label, jobs):
+    if not jobs:
+        return menu_item(f'{label} · 0', enabled=False)
+    return submenu_item(
+        f'{label} · {len(jobs)}',
+        [menu_item(workflow_job_label(job), job['url']) for job in jobs],
+    )
+
+
+def host_control_status_label(control):
+    status = control['status']
+    if status == 'active':
+        return '🟢 Accepting new jobs'
+    if status == 'activating':
+        return '🟡 Starting'
+    if status == 'deactivating':
+        return '🟡 Finishing current jobs'
+    if status == 'inactive':
+        return '⚪ Not accepting new jobs'
+    if status == 'failed':
+        return '🔴 Service failed'
+    return f"🔴 Service unavailable · {control.get('message', 'Status unavailable')[:80]}"
+
+
+def confirm_stop_accepting_jobs(host, set_accepting):
+    dialog = Gtk.MessageDialog(
+        transient_for=None,
+        flags=0,
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.CANCEL,
+        text=f"Stop accepting new jobs on {host['name']}?",
+    )
+    dialog.format_secondary_text('Current jobs finish. Queued jobs wait for another self-hosted runner.')
+    dialog.add_button('Stop accepting', Gtk.ResponseType.OK)
+    response = dialog.run()
+    dialog.destroy()
+    if response == Gtk.ResponseType.OK:
+        set_accepting(host, False)
+
+
+def build_menu(indicator, source, jobs_source, action_error, refresh, set_accepting):
+    menu = Gtk.Menu()
+    error = runner_error(source)
+    runners = source_runners(source)
+    hosts = source['hosts'] if source['_tag'] == 'Available' else []
+    status = '🟡 Loading…' if source['_tag'] == 'Loading' else github_actions_status_label(runners, error)
+
+    menu.append(section_item('GitHub Actions'))
+    menu.append(menu_item(status, enabled=False))
+    if error is not None:
+        menu.append(menu_item(error[:100], enabled=False))
+    if action_error is not None:
+        menu.append(menu_item(action_error[:100], enabled=False))
+
+    if jobs_source['_tag'] == 'Loading':
+        menu.append(menu_item('Queued jobs · Loading…', enabled=False))
+    elif jobs_source['_tag'] == 'Unavailable':
+        menu.append(menu_item('Queued jobs · unavailable', enabled=False))
+        menu.append(menu_item(jobs_source['message'][:100], enabled=False))
+    else:
+        queued_jobs = [job for job in jobs_source['jobs'] if job['_tag'] == 'Queued']
+        running_jobs = [job for job in jobs_source['jobs'] if job['_tag'] == 'Running']
+        menu.append(job_menu('Queued jobs', queued_jobs))
+        menu.append(job_menu('Running jobs', running_jobs))
+        for message in jobs_source.get('errors', []):
+            menu.append(menu_item(message[:100], enabled=False))
+
+    for host in hosts:
+        control = host.get('control')
+        if control is None and (host['_tag'] == 'Unavailable' or not host['runners']):
+            menu.append(menu_item(runner_host_status_label(host), enabled=False))
+            continue
+        items = []
+        if host['_tag'] == 'Available':
+            for runner in sorted(host['runners'], key=runner_label):
+                repository = runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository')
+                items.append(menu_item(
+                    runner_label(runner),
+                    None if repository is None else f'https://github.com/{repository}/actions',
+                    enabled=repository is not None,
+                ))
+        if not items:
+            items.append(menu_item(runner_host_status_label(host), enabled=False))
+        if control is not None:
+            items.append(separator())
+            items.append(menu_item(host_control_status_label(control), enabled=False))
+            if control['status'] == 'active':
+                control_item = menu_item('Stop accepting new jobs…')
+                control_item.connect(
+                    'activate',
+                    lambda *_args, current=host: confirm_stop_accepting_jobs(current, set_accepting),
+                )
+                items.append(control_item)
+            elif control['status'] in ('inactive', 'failed', 'deactivating'):
+                control_item = menu_item('Accept new jobs')
+                control_item.connect('activate', lambda *_args, current=host: set_accepting(current, True))
+                items.append(control_item)
+        menu.append(submenu_item(runner_host_status_label(host), items))
+
+    menu.append(separator())
+    refresh_item = menu_item('Refresh')
+    refresh_item.connect('activate', lambda *_args: refresh())
+    menu.append(refresh_item)
+    quit_item = menu_item('Quit')
+    quit_item.connect('activate', lambda *_args: Gtk.main_quit())
+    menu.append(quit_item)
+    menu.show_all()
+    indicator.set_menu(menu)
+
+
+def indicator_summary(source):
+    if source['_tag'] == 'Loading':
+        return ('🟡', 'Loading GitHub Actions')
+    runners = source_runners(source)
+    status = github_actions_status_label(runners, runner_error(source))
+    marker, detail = status.split(' ', 1)
+    running = sum(runner.get('Activity', {}).get('_tag') == 'Running' for runner in runners)
+    return (f'{marker} {running}' if running else marker, f'GitHub Actions · {detail}')
+
+
+def main():
+    runner_hosts = parse_runner_hosts(os.environ.get(
+        RUNNER_HOSTS_ENV,
+        'Desktop=unix:///var/run/docker.sock',
+    ))
+    configured_repositories = parse_repositories(os.environ.get(RUNNER_REPOSITORIES_ENV, ''))
+    runtime = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
+    lock = (runtime / 'harlan-github-runner-indicator.lock').open('w')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+
+    indicator = AyatanaAppIndicator3.Indicator.new(
+        'harlan-github-runners',
+        str(RUNNER_ICON),
+        AyatanaAppIndicator3.IndicatorCategory.SYSTEM_SERVICES,
+    )
+    indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
+    indicator.set_title('GitHub Actions')
+    refreshing = {'active': False}
+    pending_action = {'value': None}
+    jobs_cache = {'source': {'_tag': 'Loading'}, 'updatedAt': 0.0}
+
+    def apply_state(source, jobs_source, action_error):
+        refreshing['active'] = False
+        label, title = indicator_summary(source)
+        indicator.set_label(label, '🟢 99')
+        indicator.set_icon_full(str(RUNNER_ICON), 'GitHub Actions')
+        indicator.set_title(title)
+        build_menu(indicator, source, jobs_source, action_error, manual_refresh, change_host_capacity)
+        if pending_action['value'] is not None:
+            refresh()
+        return False
+
+    def load_state():
+        action_error = None
+        action = pending_action['value']
+        pending_action['value'] = None
+        if action is not None:
+            try:
+                set_host_accepting_jobs(action['host'], action['accepting'])
+            except Exception as caught:
+                action_error = f"{action['host']['name']} · Action required · {caught}"
+
+        source = read_runner_source(lambda: request_runner_hosts(runner_hosts))
+        repositories = list(configured_repositories)
+        for runner in source_runners(source):
+            repository = runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository')
+            if repository is not None and repository not in repositories:
+                repositories.append(repository)
+        stale = time.monotonic() - jobs_cache['updatedAt'] >= JOBS_REFRESH_SECONDS
+        if stale:
+            errors = []
+            jobs = request_workflow_jobs(repositories, errors.append)
+            jobs_cache['source'] = (
+                {'_tag': 'Unavailable', 'message': '\n'.join(errors)}
+                if errors and not jobs
+                else {'_tag': 'Available', 'jobs': jobs, 'errors': errors}
+            )
+            jobs_cache['updatedAt'] = time.monotonic()
+        GLib.idle_add(apply_state, source, jobs_cache['source'], action_error)
+
+    def refresh(*_args):
+        if refreshing['active']:
+            return True
+        refreshing['active'] = True
+        threading.Thread(target=load_state, daemon=True).start()
+        return True
+
+    def manual_refresh(*_args):
+        jobs_cache['updatedAt'] = 0.0
+        return refresh()
+
+    def change_host_capacity(host, accepting):
+        pending_action['value'] = {
+            'host': host,
+            'accepting': accepting,
+        }
+        jobs_cache['updatedAt'] = 0.0
+        return refresh()
+
+    build_menu(
+        indicator,
+        {'_tag': 'Loading'},
+        {'_tag': 'Loading'},
+        None,
+        manual_refresh,
+        change_host_capacity,
+    )
+    refresh()
+    GLib.timeout_add_seconds(15, refresh)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()
