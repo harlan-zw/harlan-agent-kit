@@ -61,10 +61,19 @@ def menu_labels(menu):
 class RunnerActivityTest(unittest.TestCase):
     def test_parses_named_runner_hosts_for_future_balancing(self):
         self.assertEqual(runner_indicator.parse_runner_hosts(
-            'Hogwild=ssh://hogwild,Desktop=unix:///var/run/docker.sock',
+            'Hogwild=ssh://hogwild|system:hogwild-github-runner.service,'
+            'Desktop=unix:///var/run/docker.sock|user:harlan-desktop-github-runner.service',
         ), [
-            {'name': 'Hogwild', 'dockerHost': 'ssh://hogwild'},
-            {'name': 'Desktop', 'dockerHost': 'unix:///var/run/docker.sock'},
+            {
+                'name': 'Hogwild',
+                'dockerHost': 'ssh://hogwild',
+                'control': {'scope': 'system', 'unit': 'hogwild-github-runner.service'},
+            },
+            {
+                'name': 'Desktop',
+                'dockerHost': 'unix:///var/run/docker.sock',
+                'control': {'scope': 'user', 'unit': 'harlan-desktop-github-runner.service'},
+            },
         ])
 
     def test_keeps_runner_hosts_independent_when_one_is_unavailable(self):
@@ -175,6 +184,62 @@ class RunnerActivityTest(unittest.TestCase):
             '_tag': 'Unavailable',
             'message': 'Docker is unavailable',
         })
+
+    def test_lists_only_active_self_hosted_jobs(self):
+        runs = [
+            {'id': 12, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/12'},
+            {'id': 13, 'name': 'Docs', 'status': 'completed', 'html_url': 'https://github.com/run/13'},
+        ]
+
+        result = runner_indicator.collect_workflow_jobs(
+            'harlan-zw/example',
+            runs,
+            lambda _run_id: [
+                {
+                    'name': 'test',
+                    'status': 'queued',
+                    'labels': ['self-hosted', 'harlan-desktop-ci'],
+                    'html_url': 'https://github.com/job/1',
+                },
+                {
+                    'name': 'cloud',
+                    'status': 'in_progress',
+                    'labels': ['ubuntu-latest'],
+                    'html_url': 'https://github.com/job/2',
+                },
+            ],
+        )
+
+        self.assertEqual(result, [{
+            '_tag': 'Queued',
+            'repository': 'harlan-zw/example',
+            'workflow': 'Code',
+            'name': 'test',
+            'url': 'https://github.com/job/1',
+        }])
+
+    def test_stops_a_remote_runner_service_without_waiting_for_jobs(self):
+        commands = []
+        host = runner_indicator.parse_runner_hosts(
+            'Hogwild=ssh://hogwild|system:hogwild-github-runner.service',
+        )[0]
+
+        runner_indicator.set_host_accepting_jobs(
+            host,
+            False,
+            lambda command, **_options: commands.append(command),
+        )
+
+        self.assertEqual(commands, [[
+            'ssh',
+            'hogwild',
+            'sudo',
+            '-n',
+            'systemctl',
+            'stop',
+            '--no-block',
+            'hogwild-github-runner.service',
+        ]])
 
 
 class IndicatorDisplayTest(unittest.TestCase):
@@ -320,13 +385,49 @@ class IndicatorDisplayTest(unittest.TestCase):
         runner_indicator.build_menu(
             stub,
             source,
+            {'_tag': 'Available', 'jobs': []},
+            None,
             lambda: None,
+            lambda *_args: None,
         )
         labels = menu_labels(stub.menus[0])
 
         self.assertIn('🔴 Status unavailable', labels)
         self.assertNotIn('⚪ No self-hosted runners found', labels)
         self.assertIn('🔴 Hogwild · unavailable · ssh://hogwild refused', labels)
+
+    def test_shows_queued_jobs_and_runner_server_control(self):
+        source = {'_tag': 'Available', 'hosts': [{
+            '_tag': 'Available',
+            'name': 'Hogwild',
+            'runners': [],
+            'control': {
+                'configuration': {'scope': 'system', 'unit': 'hogwild-github-runner.service'},
+                'status': 'active',
+            },
+        }]}
+        jobs = {'_tag': 'Available', 'jobs': [{
+            '_tag': 'Queued',
+            'repository': 'harlan-zw/example',
+            'workflow': 'Code',
+            'name': 'test',
+            'url': 'https://github.com/job/1',
+        }]}
+        stub = StubIndicator()
+
+        runner_indicator.build_menu(
+            stub,
+            source,
+            jobs,
+            None,
+            lambda: None,
+            lambda *_args: None,
+        )
+
+        menu = stub.menus[0]
+        self.assertIn('Queued jobs · 1', menu_labels(menu))
+        host = next(item for item in menu.get_children() if item.get_label().startswith('⚪ Hogwild'))
+        self.assertIn('Stop accepting new jobs…', menu_labels(host.get_submenu()))
 
     def test_agent_menu_does_not_include_github_actions(self):
         sources = indicator.read_system_sources(lambda: {'status': 'ready'})
