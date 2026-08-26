@@ -6,6 +6,7 @@ import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
 import type { ReviewFixWorktreeManager } from './worktree.ts'
+import { createHash } from 'node:crypto'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -112,6 +113,16 @@ Exact Review findings:
 ${JSON.stringify(findings)}`
 }
 
+function disputeRequestId(taskId: string, findings: ReviewFinding[]): string {
+  const fingerprints = findings
+    .map(finding => finding._tag === 'Open'
+      ? (finding.details?.fingerprint ?? cleanLine(finding.summary).toLocaleLowerCase('en-US'))
+      : '')
+    .sort()
+  const digest = createHash('sha256').update(fingerprints.join('\n')).digest('hex')
+  return `repair-dispute:${taskId}:${digest}`
+}
+
 export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFixWorker {
   return {
     async run(task, signal) {
@@ -185,7 +196,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
           repository: task.repository,
           pullRequestNumber: task.pullRequestNumber,
           revisionId: task.revisionId,
-          requestId: `repair-dispute:${task.id}`,
+          requestId: disputeRequestId(task.id, findings),
           source: 'repair_dispute',
           requestedBy: 'review_fix',
           at: options.now().toISOString(),

@@ -167,11 +167,87 @@ describe('review fix Worker', () => {
       repository: mapping.github,
       pullRequestNumber: pullRequest.number,
       revisionId: task.revisionId,
-      requestId: `repair-dispute:${task.id}`,
+      requestId: expect.stringMatching(/^repair-dispute:repair-task-disputed:[0-9a-f]{64}$/),
       source: 'repair_dispute',
       requestedBy: 'review_fix',
       at: '2026-08-13T01:00:00.000Z',
     }])
+  })
+
+  it('gives each distinct dispute set its own rerun request', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const mapping = repositoryMapping({ ownership: 'maintained' })
+    const task: ClaimedReviewFixTask = {
+      id: 'repair-task-disputed',
+      kind: 'review_fix',
+      repository: mapping.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'repair-worker', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: mapping,
+      pullRequest,
+    }
+    const openFinding = (fingerprint: string): ReviewFinding => ({
+      _tag: 'Open',
+      summary: `Finding ${fingerprint.slice(0, 4)}.`,
+      nextAction: 'Fix it.',
+      details: {
+        fingerprint,
+        location: { path: 'src/store.ts', line: 42 },
+        proof: 'The false branch omits LIMIT 100.',
+        regressionTest: null,
+      },
+    })
+    const snapshot = () => Promise.resolve(ok({
+      baseChecks: { _tag: 'Available' as const, checks: [] },
+      body: '',
+      checks: { _tag: 'Available' as const, checks: [] },
+      comments: [],
+      priorAutomatedReview: { _tag: 'None' } as const,
+      pullRequest,
+      requiredChecks: { _tag: 'None' } as const,
+      reviews: [],
+    }))
+    const run = async (findings: ReviewFinding[]) => {
+      const reruns: string[] = []
+      await createReviewFixWorker({
+        github: { getPullRequestReviewSnapshot: snapshot },
+        now: () => new Date('2026-08-13T01:00:00.000Z'),
+        runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+          outcome: 'disputed',
+          summary: 'The false branch already adds LIMIT 100.',
+          checks: [],
+          commitMessage: '',
+        }))),
+        status: { publishRepair: () => Promise.resolve(ok(undefined)) },
+        store: {
+          getReviewFixFindings: () => findings,
+          getWorkerSession: () => null,
+          requestReviewRerun: (input) => {
+            reruns.push(input.requestId)
+            return { _tag: 'Queued', taskId: 'review-task' }
+          },
+          saveWorkerSession: () => undefined,
+          updateAgentProgress: () => true,
+        },
+        validateMapping: () => Promise.resolve(ok(mapping)),
+        worktrees: {
+          prepare: () => Promise.resolve(ok({ path: '/tmp/repair-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+          verify: () => { throw new Error('A disputed finding must not produce a patch.') },
+          commit: () => { throw new Error('A disputed finding must not produce a commit.') },
+        },
+      }).run(task, new AbortController().signal)
+      return reruns
+    }
+
+    const firstDispute = await run([openFinding('a'.repeat(64))])
+    const repeatedDispute = await run([openFinding('a'.repeat(64))])
+    const secondDispute = await run([openFinding('b'.repeat(64))])
+
+    expect(firstDispute[0]).toMatch(/^repair-dispute:repair-task-disputed:[0-9a-f]{64}$/)
+    expect(secondDispute[0]).not.toBe(firstDispute[0])
+    expect(repeatedDispute[0]).toBe(firstDispute[0])
   })
 
   it('rejects a blocked result with an empty summary', async () => {
