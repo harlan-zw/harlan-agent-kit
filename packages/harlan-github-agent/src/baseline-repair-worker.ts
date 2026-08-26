@@ -5,7 +5,7 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { BaselineRepairWorktreeManager } from './worktree.ts'
-import { truncateOutput } from './agent-activity.ts'
+import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -101,10 +101,18 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
   return Promise.resolve(text)
     .then(value => JSON.parse(value) as AgentResponsePayload)
     .then((value): Result<AgentResponse, string> => {
+      // A blocked intent is a completed turn, even when its metadata fields are
+      // malformed. Surface it so the caller returns ActionRequired instead of
+      // substituting metadata and publishing a patch.
+      if (value.outcome === 'blocked') {
+        return ok({
+          outcome: 'blocked',
+          summary: typeof value.summary === 'string' ? value.summary : '',
+          checks: Array.isArray(value.checks) ? value.checks.filter((check): check is string => typeof check === 'string') : [],
+        })
+      }
       if (typeof value.summary !== 'string' || !Array.isArray(value.checks) || !value.checks.every(check => typeof check === 'string'))
         return err('The agent returned an invalid Baseline repair result.')
-      if (value.outcome === 'blocked')
-        return ok({ outcome: 'blocked', summary: value.summary, checks: value.checks as string[] })
       if (
         value.outcome !== 'repaired'
         || typeof value.commitMessage !== 'string'
@@ -205,7 +213,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         options.activityLog?.record(task.id, {
           _tag: 'Reasoning',
           at: options.now().toISOString(),
-          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(turn.value.response)}`,
+          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
         })
         response = controllerBaselineMetadata(template.value)
       }
