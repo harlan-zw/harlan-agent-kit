@@ -820,4 +820,75 @@ describe('stale task incidents', () => {
     expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:06.000Z')).toBe(0)
     expect(store.listIncidents()).toHaveLength(1)
   })
+
+  it('shows an exhausted transient non-provider review as ActionRequired, not retrying', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'exhausted-result-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    for (let round = 0; round < 12; round += 1) {
+      const at = new Date(Date.parse('2026-08-18T00:00:00.000Z') + round * 60 * 60_000).toISOString()
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const task = store.claimNextAdversarialReviewTask(`worker-${round}-${attempt}`, at, 10_000)
+        if (task === null)
+          break
+        store.failWorkerTask({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at,
+          reason: 'The agent returned malformed adversarial review JSON.',
+        })
+      }
+      store.retryRecoverableWorkerFailures(at)
+    }
+    expect(store.retryRecoverableWorkerFailures('2026-08-19T00:00:00.000Z')).toBe(0)
+
+    expect(store.getDashboardSnapshot('2026-08-19T00:00:01.000Z').queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'The agent returned malformed adversarial review JSON.',
+    })
+  })
+
+  it('resolves a Service provider Incident once the task that raised it no longer runs', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'service-incident-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const reason = 'The opencode session failed: Unexpected server error.'
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-18T00:00:0${attempt}.000Z`
+      const task = store.claimNextAdversarialReviewTask(`provider-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected review attempt ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason,
+      })
+    }
+    expect(store.listIncidents()).toMatchObject([{ scope: { _tag: 'Service' }, kind: 'agent_provider' }])
+
+    // A new head commit moves the failing review off the current revision, so
+    // no work still depends on this shared provider Incident.
+    store.recordObservation({
+      externalId: 'service-incident-pr-new-head',
+      observedAt: '2026-08-18T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean', headSha: 'def456' }),
+    })
+
+    expect(store.resolveStaleTaskIncidents('2026-08-18T01:00:01.000Z')).toBe(1)
+    expect(store.listIncidents()).toEqual([])
+  })
 })

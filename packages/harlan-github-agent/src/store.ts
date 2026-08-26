@@ -718,6 +718,7 @@ interface TaskRow {
   fence: number
   lease_expires_at: string | null
   updated_at: string
+  recovery_attempts: number
 }
 
 interface PublicationRow {
@@ -2271,6 +2272,7 @@ function taskFromRow(row: TaskRow): AgentTask {
     revisionId: row.revision_id,
     state: taskStateFromRow(row),
     updatedAt: row.updated_at,
+    recoveryAttempts: row.recovery_attempts,
   }
   if (row.kind === 'issue_triage' || row.kind === 'issue_work')
     return { ...base, kind: row.kind, issueNumber: row.github_number } satisfies IssueTriageTask | IssueWorkTask
@@ -2322,8 +2324,13 @@ function queuePriority(entry: UnpositionedQueueEntry): number {
   }
 }
 
-function failedQueueState(reason: string): QueueState {
-  return classifyFailure({ message: reason })._tag === 'Transient'
+function failedQueueState(reason: string, recoveryAttempts?: number): QueueState {
+  const failure = classifyFailure({ message: reason })
+  // A Task the controller can still requeue is Pending. An exhausted non-provider
+  // failure is never requeued, so it needs a person and reads ActionRequired.
+  const recoverable = failure._tag === 'Transient'
+    && ((recoveryAttempts ?? 0) < MAXIMUM_RECOVERY_ATTEMPTS || failure.kind === 'agent_provider')
+  return recoverable
     ? { _tag: 'Pending', reason: `${reason} The controller will retry.` }
     : { _tag: 'ActionRequired', reason }
 }
@@ -2378,7 +2385,7 @@ function dashboardQueue(
               : `Issue work stopped after ${rejectedResults} invalid pull request titles or descriptions. Update the issue to start fresh Issue triage.`
             return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason } }]
           }
-          case 'Failed': return [{ ...base, kind: 'issue', state: failedQueueState(work.state.reason) }]
+          case 'Failed': return [{ ...base, kind: 'issue', state: failedQueueState(work.state.reason, work.recoveryAttempts) }]
           case 'Completed': return [{ ...base, kind: 'issue', state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the pull request.' } }]
           case 'Superseded': break
         }
@@ -2390,7 +2397,7 @@ function dashboardQueue(
         case 'Running': return [{ ...base, kind: 'issue', state: { _tag: 'Active', work: 'issue_triage' } }]
         case 'Queued': return [{ ...base, kind: 'issue', state: { _tag: 'Queued', work: 'issue_triage' } }]
         case 'ActionRequired': return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: task.state.reason } }]
-        case 'Failed': return [{ ...base, kind: 'issue', state: failedQueueState(task.state.reason) }]
+        case 'Failed': return [{ ...base, kind: 'issue', state: failedQueueState(task.state.reason, task.recoveryAttempts) }]
         case 'Completed': {
           const triage = JSON.parse(task.state.evidence) as { validity?: unknown, nextAction?: unknown }
           if (triage.validity === 'valid' && canWorkIssues(mapping))
@@ -2418,7 +2425,7 @@ function dashboardQueue(
         case 'Running':
         case 'Publishing': return [{ ...pullRequest, state: { _tag: 'Active', work: 'conflict_resolution' } }]
         case 'ActionRequired': return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: task.state.reason } }]
-        case 'Failed': return [{ ...pullRequest, state: failedQueueState(task.state.reason) }]
+        case 'Failed': return [{ ...pullRequest, state: failedQueueState(task.state.reason, task.recoveryAttempts) }]
         case 'Queued': return [{ ...pullRequest, state: { _tag: 'Queued', work: 'conflict_resolution' } }]
         case 'Completed': return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the updated head.' } }]
         case 'Superseded': break
@@ -2431,7 +2438,7 @@ function dashboardQueue(
         case 'Publishing': return [{ ...pullRequest, state: { _tag: 'Active', work: 'baseline_repair' } }]
         case 'Queued': return [{ ...pullRequest, state: { _tag: 'Queued', work: 'baseline_repair' } }]
         case 'ActionRequired': return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: baseline.state.reason } }]
-        case 'Failed': return [{ ...pullRequest, state: failedQueueState(baseline.state.reason) }]
+        case 'Failed': return [{ ...pullRequest, state: failedQueueState(baseline.state.reason, baseline.recoveryAttempts) }]
         case 'Completed': return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the Baseline repair pull request.' } }]
         case 'Superseded': break
       }
@@ -2457,7 +2464,7 @@ function dashboardQueue(
         case 'Publishing': return [{ ...pullRequest, state: { _tag: 'Active', work: 'review_fix' } }]
         case 'Queued': return [{ ...pullRequest, state: { _tag: 'Queued', work: 'review_fix' } }]
         case 'ActionRequired': return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: fixTask.state.reason } }]
-        case 'Failed': return [{ ...pullRequest, state: failedQueueState(fixTask.state.reason) }]
+        case 'Failed': return [{ ...pullRequest, state: failedQueueState(fixTask.state.reason, fixTask.recoveryAttempts) }]
         case 'Completed': return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the repaired head commit.' } }]
         case 'Superseded': break
       }
@@ -2498,7 +2505,7 @@ function dashboardQueue(
       case 'Running':
       case 'Queued': throw new Error('Active review Tasks were handled before historical review results.')
       case 'ActionRequired': return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: reviewTask.state.reason } }]
-      case 'Failed': return [{ ...pullRequest, state: failedQueueState(reviewTask.state.reason) }]
+      case 'Failed': return [{ ...pullRequest, state: failedQueueState(reviewTask.state.reason, reviewTask.recoveryAttempts) }]
       case 'Completed': return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'The review result is being recorded.' } }]
       case 'Superseded': return []
       case 'Publishing': throw new Error('Adversarial review cannot enter publication state.')
@@ -3643,7 +3650,8 @@ function taskRows(database: DatabaseSync): TaskRow[] {
       ${table === 'tasks' ? 'tasks.command_id' : 'NULL'} AS command_id,
       ${table}.fence,
       ${table}.lease_expires_at,
-      ${table}.updated_at
+      ${table}.updated_at,
+      ${table}.recovery_attempts
     FROM ${table}
     JOIN subjects ON subjects.id = ${table}.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
@@ -4531,6 +4539,33 @@ export function openJournalStore(
     const resolved = (['tasks', 'worker_tasks'] as const)
       .reduce((total, table) => total + Number(database.prepare(stale(table)).run(at).changes), 0)
 
+    // Provider failures now share one Service-scoped Incident per message. It
+    // belongs to the Task that raised it, so once no current Failed Task still
+    // carries that reason the Incident is stale and must not linger after the
+    // work that caused it is superseded or closed.
+    const serviceProviderResolved = Number(database.prepare(`
+      UPDATE incidents SET resolved_at = ?
+      WHERE resolved_at IS NULL AND scope_tag = 'Service' AND kind = 'agent_provider'
+        AND NOT EXISTS (
+          SELECT 1 FROM tasks t
+          JOIN subjects s ON s.id = t.subject_id
+          JOIN repositories r ON r.id = s.repository_id
+          WHERE t.state_tag = 'Failed'
+            AND t.revision_id = s.current_revision_id
+            AND r.enabled = 1
+            AND t.reason = incidents.message
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM worker_tasks wt
+          JOIN subjects ws ON ws.id = wt.subject_id
+          JOIN repositories wr ON wr.id = ws.repository_id
+          WHERE wt.state_tag = 'Failed'
+            AND wt.revision_id = ws.current_revision_id
+            AND wr.enabled = 1
+            AND wt.reason = incidents.message
+        )
+    `).run(at).changes)
+
     for (const table of ['tasks', 'worker_tasks'] as const) {
       const missing = database.prepare(`
         SELECT ${table}.id, ${table}.reason
@@ -4552,7 +4587,7 @@ export function openJournalStore(
       for (const task of missing)
         recordTaskIncident(database, task.id, task.reason, at)
     }
-    return resolved
+    return resolved + serviceProviderResolved
   }
 
   const restoreOutageRecoveryBudget: JournalStore['restoreOutageRecoveryBudget'] = (at) => {

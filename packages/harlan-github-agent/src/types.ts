@@ -318,6 +318,7 @@ export interface ConflictResolutionTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedConflictResolutionTask extends ConflictResolutionTask {
@@ -334,6 +335,7 @@ export interface ReviewFixTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedReviewFixTask extends ReviewFixTask {
@@ -362,6 +364,7 @@ export interface BaselineRepairTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedBaselineRepairTask extends BaselineRepairTask {
@@ -378,6 +381,7 @@ export interface AdversarialReviewTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedAdversarialReviewTask extends AdversarialReviewTask {
@@ -395,6 +399,7 @@ export interface IssueTriageTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedIssueTriageTask extends IssueTriageTask {
@@ -411,6 +416,7 @@ export interface IssueWorkTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedIssueWorkTask extends IssueWorkTask {
