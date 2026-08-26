@@ -149,13 +149,14 @@ export type IssueWorkApprovalResult
     | { _tag: 'Duplicate', taskId: string }
     | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'TriageRequired' | 'NotAuthorized' } }
 
-export type ReviewRerunSource = 'dashboard' | 'github_comment'
+export type ReviewRerunSource = 'dashboard' | 'github_comment' | 'repair_dispute'
 
 export type ReviewRerunRejection
   = | { _tag: 'ItemNotFound' }
     | { _tag: 'RevisionMismatch' }
     | { _tag: 'AuthorNotAllowed' }
     | { _tag: 'ReviewNotReady' }
+    | { _tag: 'DisputeCapReached' }
 
 export type ReviewRerunResult
   = | { _tag: 'Queued', taskId: string }
@@ -471,7 +472,7 @@ export interface ClaimedIssueTriageCommentCommand extends IssueTriageCommentComm
  * token that covers one kind and not the other fails half of those calls. One
  * level means no caller can pick the wrong one.
  */
-export type GitHubRepositoryAccess = 'read' | 'checks_read' | 'contents_write' | 'item_write'
+export type GitHubRepositoryAccess = 'read' | 'checks_read' | 'contents_write' | 'item_write' | 'workflows_write'
 
 export interface GitHubRepositoryToken {
   token: string

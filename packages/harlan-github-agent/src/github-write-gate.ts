@@ -16,12 +16,12 @@ export function repositoryQuarantineReason(github: string): string {
   return `The controller has never been trusted to write to ${github}. Enable writes for it first.`
 }
 
-const writeAccess = new Set<GitHubRepositoryAccess>(['contents_write', 'item_write'])
+const writeAccess = new Set<GitHubRepositoryAccess>(['contents_write', 'item_write', 'workflows_write'])
 
 /**
  * Refuses every write credential to a repository nobody enabled.
  *
- * Every GitHub mutation needs one of the two write access levels. Keeping the
+ * Every GitHub mutation needs a write access level. Keeping the
  * gate at that shared boundary covers comments, labels, branches, pull requests,
  * and future writers without each caller remembering a separate policy check.
  */

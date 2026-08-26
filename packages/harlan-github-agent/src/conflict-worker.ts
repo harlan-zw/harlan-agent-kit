@@ -125,6 +125,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         return worktreeReady
 
       const turn = await runAgentTurn(options, {
+        freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
         progress: { currentPercent: 35, report: reportProgress, work: 'conflict' },
         prompt: workerPrompt(currentTask),

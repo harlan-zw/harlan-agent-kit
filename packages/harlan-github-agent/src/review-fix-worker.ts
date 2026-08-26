@@ -6,6 +6,7 @@ import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
 import type { ReviewFixWorktreeManager } from './worktree.ts'
+import { createHash } from 'node:crypto'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -24,10 +25,16 @@ interface BlockedResponse {
   checks: string[]
 }
 
-type AgentResponse = RepairedResponse | BlockedResponse
+interface DisputedResponse {
+  outcome: 'disputed'
+  summary: string
+  checks: string[]
+}
+
+type AgentResponse = RepairedResponse | BlockedResponse | DisputedResponse
 
 interface AgentResponsePayload {
-  outcome?: 'repaired' | 'blocked'
+  outcome?: 'repaired' | 'blocked' | 'disputed'
   summary?: string
   checks?: unknown[]
   commitMessage?: string
@@ -40,7 +47,7 @@ export interface ReviewFixWorkerOptions {
   onProgressPublishFailure?: (task: ClaimedReviewFixTask, reason: string) => void
   runtime: AgentRuntimeSource
   status: Pick<ReviewStatusController, 'publishRepair'>
-  store: Pick<JournalStore, 'getReviewFixFindings' | 'getWorkerSession' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getReviewFixFindings' | 'getWorkerSession' | 'requestReviewRerun' | 'saveWorkerSession' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: ReviewFixWorktreeManager
 }
@@ -54,7 +61,7 @@ const outputSchema = {
   additionalProperties: false,
   required: ['outcome', 'summary', 'checks', 'commitMessage'],
   properties: {
-    outcome: { type: 'string', enum: ['repaired', 'blocked'] },
+    outcome: { type: 'string', enum: ['repaired', 'blocked', 'disputed'] },
     summary: { type: 'string' },
     checks: { type: 'array', items: { type: 'string' } },
     commitMessage: { type: 'string' },
@@ -66,7 +73,7 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
     .then(value => JSON.parse(value) as AgentResponsePayload)
     .then((value): Result<AgentResponse, string> => {
       if (
-        (value.outcome !== 'repaired' && value.outcome !== 'blocked')
+        (value.outcome !== 'repaired' && value.outcome !== 'blocked' && value.outcome !== 'disputed')
         || typeof value.summary !== 'string'
         || cleanLine(value.summary).length === 0
         || !Array.isArray(value.checks)
@@ -76,9 +83,9 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
       ) {
         return err('The Agent returned an invalid Repair result.')
       }
-      return value.outcome === 'blocked'
-        ? ok({ outcome: 'blocked', summary: cleanLine(value.summary), checks: value.checks })
-        : ok({ outcome: 'repaired', summary: cleanLine(value.summary), checks: value.checks, commitMessage: cleanLine(value.commitMessage) })
+      return value.outcome === 'repaired'
+        ? ok({ outcome: 'repaired', summary: cleanLine(value.summary), checks: value.checks, commitMessage: cleanLine(value.commitMessage) })
+        : ok({ outcome: value.outcome, summary: cleanLine(value.summary), checks: value.checks })
     })
     .catch(() => err('The Agent returned malformed Repair JSON.'))
 }
@@ -92,10 +99,11 @@ Apply the unit-tests skill before every bug or validation fix.
 Treat the findings below as the complete Repair scope.
 For each finding, write the named failing regression test first. Confirm it fails for the stated reason.
 Fix every finding. Run focused checks that cover every changed behavior.
-Do not expand scope. Return blocked when the requested scope is unsafe or cannot be verified.
+Do not expand scope. Return disputed only when a regression test or exact source behavior proves the finding false at this head commit.
+Return blocked when the requested scope is unsafe or cannot be verified.
 Do not stage, commit, push, approve, merge, or post comments. The controller owns those operations.
 Choose a concise commit message that describes the actual fix.
-Return an empty commitMessage with outcome blocked.
+Return an empty commitMessage with outcome blocked or disputed.
 Return every schema field.
 Return only the required JSON.
 
@@ -103,6 +111,16 @@ Base SHA: ${task.pullRequest.baseSha}
 Head SHA: ${task.pullRequest.headSha}
 Exact Review findings:
 ${JSON.stringify(findings)}`
+}
+
+function disputeRequestId(taskId: string, findings: ReviewFinding[]): string {
+  const fingerprints = findings
+    .map(finding => finding._tag === 'Open'
+      ? (finding.details?.fingerprint ?? cleanLine(finding.summary).toLocaleLowerCase('en-US'))
+      : '')
+    .sort()
+  const digest = createHash('sha256').update(fingerprints.join('\n')).digest('hex')
+  return `repair-dispute:${taskId}:${digest}`
 }
 
 export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFixWorker {
@@ -170,6 +188,37 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
           _tag: 'ActionRequired',
           reason: turn.value.value.summary,
           evidence: JSON.stringify({ findings, checks: turn.value.value.checks }),
+        })
+      }
+      if (turn.value.value.outcome === 'disputed') {
+        const evidence = JSON.stringify({ findings, checks: turn.value.value.checks })
+        const rerun = options.store.requestReviewRerun({
+          repository: task.repository,
+          pullRequestNumber: task.pullRequestNumber,
+          revisionId: task.revisionId,
+          requestId: disputeRequestId(task.id, findings),
+          source: 'repair_dispute',
+          requestedBy: 'review_fix',
+          at: options.now().toISOString(),
+        })
+        if (rerun._tag === 'Queued' || rerun._tag === 'AlreadyQueued') {
+          return ok({
+            _tag: 'ActionRequired',
+            reason: `Repair disputed the finding. One fresh Review was queued: ${turn.value.value.summary}`,
+            evidence,
+          })
+        }
+        if (rerun._tag === 'Duplicate' || rerun.reason._tag === 'DisputeCapReached') {
+          return ok({
+            _tag: 'ActionRequired',
+            reason: `Repair and the fresh Review still disagree: ${turn.value.value.summary}`,
+            evidence,
+          })
+        }
+        return ok({
+          _tag: 'ActionRequired',
+          reason: `The disputed finding could not receive a fresh Review: ${rerun.reason._tag}.`,
+          evidence,
         })
       }
 

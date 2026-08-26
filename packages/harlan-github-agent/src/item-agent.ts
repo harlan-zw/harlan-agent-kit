@@ -810,6 +810,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const preflight = repairPreflight(task, snapshot.value, repairsBaseline, repairAccess)
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
+        freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
         prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings),
         progress: {
@@ -955,6 +956,7 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
         return started
       const scopeDigest = issueSnapshotDigest({ ...snapshot.value, baseSha: workspace.value.baseSha })
       const turn = await runParsedAgentTurn({ ...options, parse: parseIssueTriageResponse }, {
+        freshSession: task.state.fence > 1,
         number: task.issueNumber,
         prompt: issuePrompt(task, snapshot.value, workspace.value.path),
         progress: {

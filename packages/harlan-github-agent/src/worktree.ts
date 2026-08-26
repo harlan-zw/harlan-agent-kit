@@ -1126,7 +1126,19 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
   const remoteUrl = options.remoteUrl ?? publicationRemoteUrl
 
   async function token(command: ClaimedPublicationCommand, signal: AbortSignal): Promise<Result<string, string>> {
-    const result = await options.tokens.getToken(command.repository, 'contents_write', signal)
+    const changed = await runGit(repositoryGitDirectory(options.root, command.repository), [
+      'diff',
+      '--name-only',
+      '-z',
+      command.expectedHeadSha,
+      command.commitSha,
+    ], signal)
+    if (changed.exitCode !== 0)
+      return err(`Could not read the prepared publication paths: ${changed.stderr}`)
+    const access = changed.stdout.split('\0').some(path => path.startsWith('.github/workflows/'))
+      ? 'workflows_write'
+      : 'contents_write'
+    const result = await options.tokens.getToken(command.repository, access, signal)
     return result._tag === 'Ok' ? ok(result.value.token) : err(result.error.message)
   }
 
@@ -1190,6 +1202,11 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       const credential = await token(command, signal)
       if (credential._tag === 'Err')
         return credential
+      // A Repair commit is based on the unchanged pull request head. A moving
+      // base cannot invalidate its patch, and fresh Review checks the new head
+      // against the latest base after publication.
+      if (command._tag === 'UpdatePullRequest' && command.taskKind === 'review_fix')
+        return ok(undefined)
       // A stacked pull request merges into another pull request's head branch, so
       // the branch this pins is the recorded base, never the default branch.
       const base = await runGit(repositoryGitDirectory(options.root, command.repository), [

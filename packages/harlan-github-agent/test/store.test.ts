@@ -210,6 +210,59 @@ describe('journal store', () => {
     ])
   })
 
+  it('keeps an older current failed Task in the Queue after newer history passes the snapshot limit', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'failed-current-task',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    let failedTaskId = ''
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-13T01:00:0${attempt}.000Z`
+      const task = store.claimNextConflictTask(`failed-worker-${attempt}`, at, 60_000)
+      if (task === null)
+        throw new Error(`Expected failed Task attempt ${attempt}.`)
+      failedTaskId = task.id
+      store.failTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'The mutation failed for an unknown reason.',
+      })
+    }
+
+    for (let index = 0; index < 101; index += 1) {
+      const observedAt = new Date(Date.parse('2026-08-13T02:00:00.000Z') + index * 1_000).toISOString()
+      store.recordObservation({
+        externalId: `newer-history-${index}`,
+        observedAt,
+        source: 'poll',
+        subject: pullRequestItem({
+          number: 25,
+          url: 'https://github.com/harlan-zw/example/pull/25',
+          headRef: 'fix/newer-history',
+          headSha: `newer-head-${index}`,
+          mergeState: 'clean',
+          updatedAt: observedAt,
+        }),
+      })
+    }
+
+    const snapshot = store.getDashboardSnapshot('2026-08-13T03:00:00.000Z')
+    expect(snapshot.tasks).toContainEqual(expect.objectContaining({
+      id: failedTaskId,
+      state: { _tag: 'Failed', reason: 'The mutation failed for an unknown reason.' },
+    }))
+    expect(snapshot.queue).toContainEqual(expect.objectContaining({
+      number: 24,
+      state: { _tag: 'ActionRequired', reason: 'The mutation failed for an unknown reason.' },
+    }))
+  })
+
   it('names the policy that leaves maintained merge conflicts for Harlan', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({ ownership: 'maintained', conflictResolution: false })], '2026-08-13T00:00:00.000Z')

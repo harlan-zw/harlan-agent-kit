@@ -844,7 +844,7 @@ describe('subject Workers', () => {
     expect(published).toContain('READY · 88/100')
   })
 
-  it('publishes a valid issue triage result on the issue', async () => {
+  it('publishes a valid issue triage result from a fresh retry session', async () => {
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
     let triageBody = ''
@@ -871,7 +871,7 @@ describe('subject Workers', () => {
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
-        getWorkerSession: () => null,
+        getWorkerSession: () => 'poisoned-session',
         isBaselineRepairPullRequest: () => false,
         saveWorkerSession: () => undefined,
         updateAgentProgress: () => true,
@@ -896,7 +896,7 @@ describe('subject Workers', () => {
       repository: 'harlan-zw/example',
       issueNumber: 12,
       revisionId: 'revision-1',
-      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 2, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
       updatedAt: '2026-08-13T01:00:00.000Z',
       repositoryMapping: repositoryMapping(),
       issue,
@@ -916,7 +916,7 @@ describe('subject Workers', () => {
         }),
       },
     })
-    expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium' })])
+    expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium', sessionId: null })])
     expect(triageBody).toBe(`<!-- harlan-agent-kit:issue-triage -->
 ### 🤖 Issue triage
 
