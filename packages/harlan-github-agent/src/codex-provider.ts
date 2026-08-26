@@ -1,6 +1,7 @@
 import type { CodexOptions, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import { Codex } from '@openai/codex-sdk'
+import { agentProviderFailureReason } from './agent-provider.ts'
 
 interface CodexThread {
   runStreamed: (prompt: string, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }>
@@ -50,9 +51,9 @@ export function codexAgentEvent(event: ThreadEvent): AgentEvent | undefined {
   if (event.type === 'turn.completed')
     return { _tag: 'TurnCompleted' }
   if (event.type === 'turn.failed')
-    return { _tag: 'Failed', reason: event.error.message }
+    return { _tag: 'Failed', reason: agentProviderFailureReason('codex', event.error.message) }
   if (event.type === 'error')
-    return { _tag: 'Failed', reason: event.message }
+    return { _tag: 'Failed', reason: agentProviderFailureReason('codex', event.message) }
   return undefined
 }
 

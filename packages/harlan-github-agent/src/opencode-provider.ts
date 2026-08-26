@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
-import { DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
+import { agentProviderFailureReason, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
 const fileTools = new Set(['edit', 'write', 'patch', 'multiedit'])
@@ -106,7 +106,7 @@ export function opencodeAgentUsage(line: OpencodeLine): Extract<AgentTokenUsage,
 /** Maps one `opencode run --format json` line to the provider-neutral event. */
 export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
   if (line.type === 'error')
-    return { _tag: 'Failed', reason: errorMessage(line.error) }
+    return { _tag: 'Failed', reason: agentProviderFailureReason('opencode', errorMessage(line.error)) }
   if (line.type === 'reasoning')
     return { _tag: 'Reasoning', text: text(line.part?.text) }
   if (line.type === 'text')
@@ -284,7 +284,7 @@ function opencodeFailureReason(standardError: string, exit: { code: number | nul
   // eslint-disable-next-line no-control-regex
   const clean = standardError.replaceAll(/\u001B\[[\d;]*m/g, '').replace(/^Error:\s*/m, '').trim()
   if (clean.length > 0)
-    return clean
+    return agentProviderFailureReason('opencode', clean)
   // A signal means something outside the turn ended it, which names the cause.
   return exit.signal === null
     ? `The opencode session exited with code ${exit.code ?? 'unknown'}.`

@@ -7,6 +7,11 @@
 
 export type AgentProviderName = 'codex' | 'opencode'
 
+/** Keeps the failure owner intact after workers persist only its reason. */
+export function agentProviderFailureReason(provider: AgentProviderName, reason: string): string {
+  return `The ${provider} session failed: ${reason}`
+}
+
 export type AgentTokenUsage
   = | { _tag: 'Unavailable' }
     | {

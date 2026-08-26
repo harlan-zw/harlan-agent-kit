@@ -200,6 +200,11 @@ const agentProviderPatterns: RegExp[] = [
   /\bcontext\b.+\blength\b/i,
 ]
 
+/** Provider boundaries add this owner before a reason enters the Journal. */
+const ownedAgentProviderPatterns: RegExp[] = [
+  /\b(?:codex|opencode) session failed:/i,
+]
+
 /**
  * The controller lost a race with itself. The next pass starts from a clean state.
  *
@@ -259,6 +264,10 @@ export function classifyFailure(signal: FailureSignal): FailureClass {
   if (permanentMessages.has(message.trim()) || matches(permanentPatterns, message))
     return { _tag: 'Permanent', kind: 'policy' }
 
+  // Provider errors carry their owner in the persisted reason. Match that
+  // before generic service and rate-limit text that any provider may return.
+  if (matches(ownedAgentProviderPatterns, message))
+    return { _tag: 'Transient', kind: 'agent_provider' }
   if (signal.status === 429 || matches(rateLimitPatterns, message))
     return { _tag: 'Transient', kind: 'rate_limit' }
   if (signal.status !== undefined && signal.status >= 500)
