@@ -103,7 +103,7 @@ Closes #12.`,
       },
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
         { _tag: 'SessionStarted', sessionId: 'session-1' },
-        { _tag: 'Message', text: '{' },
+        { _tag: 'Message', text: '{ broken ghp_Abcdefghijklmnopqrstuvwx' },
         { _tag: 'TurnCompleted' },
       ])),
       github: {
@@ -147,9 +147,10 @@ Closes #12.`,
       taskId: 'issue-work-task',
       item: expect.objectContaining({
         _tag: 'Reasoning',
-        text: expect.stringMatching(/malformed issue work JSON[\s\S]*\{/),
+        text: expect.stringMatching(/malformed issue work JSON[\s\S]*ghp_\*\*\*/),
       }),
     }])
+    expect(JSON.stringify(recorded)).not.toContain('ghp_Abcdefghijklmnopqrstuvwx')
     expect(result).toEqual(ok({
       _tag: 'Publish',
       publication: expect.objectContaining({
@@ -166,7 +167,7 @@ Closes #12.`,
     const worker = createIssueWorkWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
         { _tag: 'SessionStarted', sessionId: 'session-1' },
-        { _tag: 'Message', text: '{"outcome":"blocked","summary":"Cannot determine safe implementation"}' },
+        { _tag: 'Message', text: '{"outcome":"blocked"}' },
         { _tag: 'TurnCompleted' },
       ])),
       github: {
@@ -208,8 +209,8 @@ Closes #12.`,
     expect(committed).toBe(false)
     expect(result).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: 'Cannot determine safe implementation',
-      evidence: '{"outcome":"blocked","summary":"Cannot determine safe implementation","checks":[]}',
+      reason: 'The Agent reported that it could not safely complete the issue work.',
+      evidence: '{"outcome":"blocked","summary":"The Agent reported that it could not safely complete the issue work.","checks":[]}',
     }))
   })
 

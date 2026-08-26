@@ -82,6 +82,142 @@ describe('baseline repair worker', () => {
       }),
     }))
   })
+
+  it('publishes a verified patch with safe metadata when Agent output is malformed', async () => {
+    const mapping = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const recorded: Array<{ taskId: string, item: unknown }> = []
+    let commitMessage = ''
+    const worker = createBaselineRepairWorker({
+      activityLog: {
+        record: (taskId, item) => recorded.push({ taskId, item }),
+      },
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
+        { _tag: 'SessionStarted', sessionId: 'session-1' },
+        { _tag: 'Message', text: '{ broken ghp_Abcdefghijklmnopqrstuvwx' },
+        { _tag: 'TurnCompleted' },
+      ])),
+      github: {
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
+          body: '',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getWorkerSession: () => null,
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: value => Promise.resolve(ok(value)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/baseline-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.baseSha })),
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 2 })),
+        commit: (_task, _worktree, _patch, message) => {
+          commitMessage = message
+          return Promise.resolve(ok({
+            commitSha: 'repair-commit',
+            baseSha: pullRequest.baseSha,
+            artifactRef: 'artifact-ref',
+            digest: 'patch-digest',
+            changedFiles: 2,
+          }))
+        },
+      },
+    })
+
+    const result = await worker.run({
+      id: 'baseline-task',
+      kind: 'baseline_repair',
+      repository: mapping.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'baseline-agent', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: mapping,
+      pullRequest,
+    }, new AbortController().signal)
+
+    expect(commitMessage).toBe('fix: repair default branch CI')
+    expect(recorded).toEqual([{
+      taskId: 'baseline-task',
+      item: expect.objectContaining({
+        _tag: 'Reasoning',
+        text: expect.stringMatching(/malformed Baseline repair JSON[\s\S]*ghp_\*\*\*/),
+      }),
+    }])
+    expect(JSON.stringify(recorded)).not.toContain('ghp_Abcdefghijklmnopqrstuvwx')
+    expect(result).toEqual(ok({
+      _tag: 'Publish',
+      publication: expect.objectContaining({
+        pullRequestTitle: 'fix: repair default branch CI',
+        pullRequestBody: expect.stringMatching(/### Description[\s\S]*### Linked Issues[\s\S]*Repairs failing default branch CI\./),
+      }),
+    }))
+  })
+
+  it('surfaces ActionRequired when a blocked result carries malformed metadata', async () => {
+    const mapping = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const worker = createBaselineRepairWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
+        { _tag: 'SessionStarted', sessionId: 'session-1' },
+        { _tag: 'Message', text: JSON.stringify({ outcome: 'blocked' }) },
+        { _tag: 'TurnCompleted' },
+      ])),
+      github: {
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'failure' }] },
+          body: '',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getWorkerSession: () => null,
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: value => Promise.resolve(ok(value)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/baseline-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.baseSha })),
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 2 })),
+        commit: () => Promise.reject(new Error('A blocked result must not publish a patch.')),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'baseline-task',
+      kind: 'baseline_repair',
+      repository: mapping.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'baseline-agent', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: mapping,
+      pullRequest,
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({
+      _tag: 'ActionRequired',
+      reason: 'The Agent reported that it could not safely repair Baseline CI.',
+      evidence: expect.stringContaining('"outcome":"blocked"'),
+    }))
+  })
+
   it.each([
     ['the default branch went green', { green: true }, 'Default branch CI no longer fails'],
     ['the default branch moved past the failing commit', { moved: true }, 'The default branch moved to'],

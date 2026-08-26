@@ -5,7 +5,7 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAgentPullRequest, PullRequestBase, RepositoryMapping } from './types.ts'
 import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
-import { truncateOutput } from './agent-activity.ts'
+import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
 import { canWorkIssues } from './repository-policy.ts'
@@ -140,11 +140,11 @@ function parseAgentResponse(text: string, issueNumber: number, template: PullReq
     .then(value => JSON.parse(value) as AgentResponsePayload)
     .then((value): Result<AgentResponse, string> => {
       if (value.outcome === 'blocked') {
-        if (typeof value.summary !== 'string')
-          return err('The agent returned an invalid issue work result.')
         return ok({
           outcome: 'blocked',
-          summary: value.summary,
+          summary: typeof value.summary === 'string' && cleanLine(value.summary).length > 0
+            ? value.summary
+            : 'The Agent reported that it could not safely complete the issue work.',
           checks: Array.isArray(value.checks) && value.checks.every(check => typeof check === 'string') ? value.checks : [],
         })
       }
@@ -321,7 +321,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         options.activityLog?.record(task.id, {
           _tag: 'Reasoning',
           at: options.now().toISOString(),
-          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(turn.value.response)}`,
+          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
         })
         response = controllerIssueMetadata(task, template.value)
       }
