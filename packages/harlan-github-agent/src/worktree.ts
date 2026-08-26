@@ -1202,6 +1202,11 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       const credential = await token(command, signal)
       if (credential._tag === 'Err')
         return credential
+      // A Repair commit is based on the unchanged pull request head. A moving
+      // base cannot invalidate its patch, and fresh Review checks the new head
+      // against the latest base after publication.
+      if (command._tag === 'UpdatePullRequest' && command.taskKind === 'review_fix')
+        return ok(undefined)
       // A stacked pull request merges into another pull request's head branch, so
       // the branch this pins is the recorded base, never the default branch.
       const base = await runGit(repositoryGitDirectory(options.root, command.repository), [

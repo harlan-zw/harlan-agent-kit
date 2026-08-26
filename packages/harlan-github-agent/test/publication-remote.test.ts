@@ -222,13 +222,18 @@ describe('git publication remote', () => {
     expect(git(bare, 'rev-parse', 'refs/heads/fix/baseline-ci')).toBe(repairSha)
   })
 
-  it('authorizes an approved repair while the pull request remains clean', async () => {
-    const { bare, command, root } = fixture()
+  it('authorizes an approved repair after its clean pull request base moves', async () => {
+    const { bare, checkout, command, root } = fixture()
     const repair = {
       ...command,
       repositoryMapping: { ...command.repositoryMapping, ownership: 'maintained' as const },
       taskKind: 'review_fix' as const,
     }
+    git(checkout, 'checkout', 'main')
+    writeFileSync(join(checkout, 'later.txt'), 'later base change\n')
+    git(checkout, 'add', 'later.txt')
+    git(checkout, 'commit', '-m', 'later base change')
+    git(checkout, 'push', 'origin', 'main')
     const remote = createGitPublicationRemote({
       github: {
         getPullRequest: () => Promise.resolve(ok(pullRequestItem({
