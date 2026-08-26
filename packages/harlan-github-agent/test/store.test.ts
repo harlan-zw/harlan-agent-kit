@@ -1393,6 +1393,13 @@ describe('journal store', () => {
       commentId: 42,
       url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
     })
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: 'Waiting for Baseline repair baseline-task.',
+    })).toBe(true)
 
     store.recordObservation({
       externalId: 'review-merged',

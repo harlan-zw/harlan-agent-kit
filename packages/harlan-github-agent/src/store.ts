@@ -7121,7 +7121,10 @@ export function openJournalStore(
         LIMIT 1
       )
     )
-    WHERE stopped.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
+    -- The GitHub comment is nonterminal while its Task is terminal. Task
+    -- outcome does not change that contradiction, including legacy Tasks that
+    -- completed while waiting for separate work.
+    WHERE stopped.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
       AND published.phase != 'terminal'
       AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
       -- GitHub closure creates a new Revision. The stopped Review still owns
@@ -7129,6 +7132,16 @@ export function openJournalStore(
       AND json_extract(current_revisions.payload, '$.headSha') = json_extract(revisions.payload, '$.headSha')
       AND repositories.enabled = 1
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      -- Repair owns the canonical comment after Review hands work to it.
+      AND NOT (
+        stopped.task_kind = 'adversarial_review'
+        AND EXISTS (
+          SELECT 1 FROM tasks AS repair
+          WHERE repair.subject_id = stopped.subject_id
+            AND repair.revision_id = stopped.revision_id
+            AND repair.kind = 'review_fix'
+        )
+      )
       -- A live review posts its own comment, so leave the pull request to it.
       AND NOT EXISTS (
         SELECT 1 FROM worker_tasks AS live
@@ -7176,7 +7189,7 @@ export function openJournalStore(
         JOIN revisions AS task_revision ON task_revision.id = ${taskTable}.revision_id
         JOIN revisions AS current_revision ON current_revision.id = subjects.current_revision_id
         WHERE ${taskTable}.id = ? AND ${taskTable}.kind = ?
-          AND ${taskTable}.state_tag IN ('Failed', 'ActionRequired', 'Superseded')
+          AND ${taskTable}.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
           AND ${taskTable}.revision_id = ?
           AND json_extract(task_revision.payload, '$.headSha') = ?
           AND json_extract(current_revision.payload, '$.headSha') = ?
