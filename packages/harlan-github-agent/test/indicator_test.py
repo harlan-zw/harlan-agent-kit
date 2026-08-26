@@ -218,6 +218,66 @@ class RunnerActivityTest(unittest.TestCase):
             'url': 'https://github.com/job/1',
         }])
 
+    def test_keeps_jobs_when_one_repository_fails(self):
+        errors = []
+
+        def fake_github_api(path):
+            if path.startswith('repos/broken/repo'):
+                raise RuntimeError('renamed repository')
+            if '/jobs' in path:
+                return {'jobs': [{
+                    'name': 'test',
+                    'status': 'queued',
+                    'labels': ['self-hosted'],
+                    'html_url': 'https://github.com/job/9',
+                }]}
+            return {'workflow_runs': [
+                {'id': 7, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/7'},
+            ]}
+
+        with patch.object(runner_indicator, 'github_api', side_effect=fake_github_api):
+            jobs = runner_indicator.request_workflow_jobs(['good/repo', 'broken/repo'], errors.append)
+
+        self.assertEqual(jobs, [{
+            '_tag': 'Queued',
+            'repository': 'good/repo',
+            'workflow': 'Code',
+            'name': 'test',
+            'url': 'https://github.com/job/9',
+        }])
+        self.assertEqual(errors, ['broken/repo · Jobs unavailable · renamed repository'])
+
+    def test_follows_pagination_for_queued_jobs_beyond_the_first_page(self):
+        def fake_github_api(path):
+            if path == 'repos/harlan-zw/example/actions/runs?page=1&per_page=50' or path == 'repos/harlan-zw/example/actions/runs':
+                return {'workflow_runs': [
+                    {'id': index, 'name': 'Recent', 'status': 'in_progress', 'html_url': f'https://github.com/run/{index}'}
+                    for index in range(50)
+                ]}
+            if path == 'repos/harlan-zw/example/actions/runs?page=2&per_page=50':
+                return {'workflow_runs': [
+                    {'id': 99, 'name': 'Old', 'status': 'queued', 'html_url': 'https://github.com/run/99'},
+                ]}
+            if '/runs/99/jobs' in path:
+                return {'jobs': [{
+                    'name': 'test',
+                    'status': 'queued',
+                    'labels': ['self-hosted'],
+                    'html_url': 'https://github.com/job/99',
+                }]}
+            return {'jobs': []}
+
+        with patch.object(runner_indicator, 'github_api', side_effect=fake_github_api):
+            jobs = runner_indicator.request_workflow_jobs(['harlan-zw/example'])
+
+        self.assertEqual(jobs, [{
+            '_tag': 'Queued',
+            'repository': 'harlan-zw/example',
+            'workflow': 'Old',
+            'name': 'test',
+            'url': 'https://github.com/job/99',
+        }])
+
     def test_stops_a_remote_runner_service_without_waiting_for_jobs(self):
         commands = []
         host = runner_indicator.parse_runner_hosts(

@@ -191,9 +191,12 @@ def read_runner_source(fetch_runner_hosts):
         return {'_tag': 'Unavailable', 'message': str(caught)}
 
 
+WORKFLOW_RUNS_PAGE_SIZE = 50
+
+
 def github_api(path):
     completed = subprocess.run(
-        ['gh', 'api', path, '--method', 'GET', '-f', 'per_page=50'],
+        ['gh', 'api', path, '--method', 'GET'],
         check=True,
         capture_output=True,
         text=True,
@@ -220,25 +223,29 @@ def collect_workflow_jobs(repository, runs, fetch_jobs):
     return jobs
 
 
-def request_workflow_jobs(repositories):
+def request_workflow_jobs(repositories, on_error=None):
     jobs = []
     for repository in repositories:
-        runs = github_api(f'repos/{repository}/actions/runs').get('workflow_runs', [])
-        jobs.extend(collect_workflow_jobs(
-            repository,
-            runs,
-            lambda run_id, current=repository: github_api(
-                f'repos/{current}/actions/runs/{run_id}/jobs',
-            ).get('jobs', []),
-        ))
+        try:
+            page = 1
+            while True:
+                runs = github_api(
+                    f'repos/{repository}/actions/runs?page={page}&per_page={WORKFLOW_RUNS_PAGE_SIZE}',
+                ).get('workflow_runs', [])
+                jobs.extend(collect_workflow_jobs(
+                    repository,
+                    runs,
+                    lambda run_id, current=repository: github_api(
+                        f'repos/{current}/actions/runs/{run_id}/jobs',
+                    ).get('jobs', []),
+                ))
+                if len(runs) < WORKFLOW_RUNS_PAGE_SIZE:
+                    break
+                page += 1
+        except Exception as caught:
+            if on_error is not None:
+                on_error(f'{repository} · Jobs unavailable · {caught}')
     return jobs
-
-
-def read_jobs_source(fetch_jobs):
-    try:
-        return {'_tag': 'Available', 'jobs': fetch_jobs()}
-    except Exception as caught:
-        return {'_tag': 'Unavailable', 'message': str(caught)}
 
 
 def source_runners(source):
@@ -426,6 +433,8 @@ def build_menu(indicator, source, jobs_source, action_error, refresh, set_accept
         running_jobs = [job for job in jobs_source['jobs'] if job['_tag'] == 'Running']
         menu.append(job_menu('Queued jobs', queued_jobs))
         menu.append(job_menu('Running jobs', running_jobs))
+        for message in jobs_source.get('errors', []):
+            menu.append(menu_item(message[:100], enabled=False))
 
     for host in hosts:
         control = host.get('control')
@@ -532,7 +541,13 @@ def main():
                 repositories.append(repository)
         stale = time.monotonic() - jobs_cache['updatedAt'] >= JOBS_REFRESH_SECONDS
         if stale:
-            jobs_cache['source'] = read_jobs_source(lambda: request_workflow_jobs(repositories))
+            errors = []
+            jobs = request_workflow_jobs(repositories, errors.append)
+            jobs_cache['source'] = (
+                {'_tag': 'Unavailable', 'message': '\n'.join(errors)}
+                if errors and not jobs
+                else {'_tag': 'Available', 'jobs': jobs, 'errors': errors}
+            )
             jobs_cache['updatedAt'] = time.monotonic()
         GLib.idle_add(apply_state, source, jobs_cache['source'], action_error)
 
