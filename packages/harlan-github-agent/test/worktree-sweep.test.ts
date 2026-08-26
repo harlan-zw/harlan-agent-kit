@@ -45,8 +45,14 @@ function createCheckout(): { checkout: string, baseSha: string } {
 }
 
 function branches(checkout: string): string[] {
-  const listed: unknown = JSON.parse(wt(checkout, 'list', '--format=json'))
-  return (listed as Array<{ branch: string | null }>).flatMap(entry => entry.branch === null ? [] : [entry.branch]).sort()
+  const listed: unknown = JSON.parse(wt(checkout, '--config-set', 'list.json-schema=2', 'list', '--format=json'))
+  if (typeof listed !== 'object' || listed === null || !('items' in listed) || !Array.isArray(listed.items))
+    throw new Error('Expected Worktrunk list schema 2.')
+  return listed.items.flatMap((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null || !('branch' in entry) || typeof entry.branch !== 'string')
+      return []
+    return [entry.branch]
+  }).sort()
 }
 
 describe('agent worktree branch', () => {

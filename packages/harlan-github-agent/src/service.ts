@@ -3,6 +3,7 @@ import type { Server } from 'srvx'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { Result } from './result.ts'
+import type { JournalStore } from './store.ts'
 import type { ClaimedAgentTask, RepositoryMapping, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -60,6 +61,38 @@ export interface StartAgentServiceOptions {
   gitIdentity: GitIdentity
   logger: Pick<ConsolaInstance, 'error' | 'info'>
   now?: () => Date
+}
+
+function recordServiceIncident(
+  store: Pick<JournalStore, 'recordIncident'>,
+  at: string,
+  operation: string,
+  message: string,
+): void {
+  const failure = classifyFailure({ message })
+  store.recordIncident({
+    scope: { _tag: 'Service' },
+    kind: failure.kind,
+    severity: failure._tag === 'Transient' ? 'warning' : 'error',
+    operation,
+    message,
+    recovery: failure._tag === 'Transient'
+      ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: at }
+      : { _tag: 'ActionRequired' },
+    at,
+  })
+}
+
+/** Replaces one controller pass's Service Incidents with its current failures. */
+export function replaceServiceIncidents(
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
+  at: string,
+  operation: string,
+  messages: readonly string[],
+): void {
+  const currentMessages = [...new Set(messages)]
+  currentMessages.forEach(message => recordServiceIncident(store, at, operation, message))
+  store.resolveIncidents({ _tag: 'Service' }, at, operation, currentMessages)
 }
 
 /**
@@ -310,7 +343,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             return
           }
           options.logger.error(`${event.repository}#${event.pullRequestNumber}: GitHub refused auto-merge: ${event.reason}`)
-          recordServiceIncident('auto_merge', event.reason)
+          recordServiceIncident(store, now().toISOString(), 'auto_merge', event.reason)
         },
         store,
       }),
@@ -464,26 +497,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.close()
     throw error
   })
-  function recordServiceIncident(operation: string, message: string): void {
-    const failure = classifyFailure({ message })
-    store.recordIncident({
-      scope: { _tag: 'Service' },
-      kind: failure.kind,
-      severity: failure._tag === 'Transient' ? 'warning' : 'error',
-      operation,
-      message,
-      recovery: failure._tag === 'Transient'
-        ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: now().toISOString() }
-        : { _tag: 'ActionRequired' },
-      at: now().toISOString(),
-    })
-  }
-
-  function replaceServiceIncidents(operation: string, messages: string[]): void {
-    messages.forEach(message => recordServiceIncident(operation, message))
-    store.resolveIncidents({ _tag: 'Service' }, now().toISOString(), operation, messages)
-  }
-
   const poller = createPoller({
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
@@ -531,12 +544,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           options.logger.info(`${result.value.repository}: queued a requested review rerun.`)
         }
       })
-      replaceServiceIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+      replaceServiceIncidents(store, now().toISOString(), 'review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       const statusSync = await pullRequestStatuses.sync(store.getDashboardSnapshot(now().toISOString()), signal)
       statusSync.errors.forEach((error) => {
         options.logger.error(`Pull request status: ${error}`)
       })
-      replaceServiceIncidents('pull_request_status', statusSync.errors)
+      replaceServiceIncidents(store, now().toISOString(), 'pull_request_status', statusSync.errors)
       if (mutationSchedulers !== undefined) {
         const stopped = await publishStoppedReviews({
           github: workerGithub,
@@ -556,7 +569,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             options.logger.error(`Stopped review comment: ${result.error}`)
           }
         })
-        replaceServiceIncidents('stopped_review_comment', stopped.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        replaceServiceIncidents(store, now().toISOString(), 'stopped_review_comment', stopped.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const positions = await publishQueuePositions({
           github: workerGithub,
           now,
@@ -575,7 +588,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             options.logger.error(`Queue position comment: ${result.error}`)
           }
         })
-        replaceServiceIncidents('queue_position_comment', positions.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        replaceServiceIncidents(store, now().toISOString(), 'queue_position_comment', positions.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       }
       // Only a pass where nothing succeeded describes an outage. Throwing for a
       // partial failure backed the poller off to its 15 minute ceiling and held
@@ -610,6 +623,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     intervalMilliseconds: 5 * 60_000,
     poll: async (signal) => {
       const checkouts = [...new Set(config.repositories.map(repository => repository.checkout))]
+      const failures: string[] = []
       for (const checkout of checkouts) {
         const swept = await sweepAgentWorktrees({
           checkout,
@@ -617,15 +631,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }, signal)
         if (swept._tag === 'Err') {
           options.logger.error(`Agent worktree sweep in ${checkout}: ${swept.error}`)
-          recordServiceIncident('agent_worktree_sweep', swept.error)
+          failures.push(swept.error)
           continue
         }
         if (swept.value.removed.length > 0)
           options.logger.info(`${checkout}: removed ${swept.value.removed.length} agent worktrees that no task uses.`)
         swept.value.failures.forEach((failure) => {
-          options.logger.error(`Could not remove agent worktree ${failure.branch}: ${failure.reason}`)
+          const message = `Could not remove agent worktree ${failure.branch}: ${failure.reason}`
+          options.logger.error(message)
+          failures.push(message)
         })
       }
+      replaceServiceIncidents(store, now().toISOString(), 'agent_worktree_sweep', failures)
     },
     onError: error => options.logger.error(error),
   })
