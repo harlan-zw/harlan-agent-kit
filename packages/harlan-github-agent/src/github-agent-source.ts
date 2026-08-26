@@ -4,7 +4,9 @@ import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
+import { pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
+import { currentBaseSha } from './github-base.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
@@ -199,6 +201,7 @@ export interface GitHubAgentSource {
 export interface GitHubAgentSourceOptions {
   /** The login the controller posts as, which depends on how the repository authenticates. */
   actorLogin: (repository: RepositoryMapping) => string
+  createClient?: (token: string) => Octokit
   tokens: GitHubTokenProvider
   userAgent?: string
 }
@@ -262,11 +265,17 @@ function errorStatus(error: unknown): number | undefined {
     : undefined
 }
 
-function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data']): GitHubPullRequestItem {
+function pullRequestItem(
+  repository: RepositoryMapping,
+  pull: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data'],
+  liveBaseSha: string,
+  actorLogin: string,
+): GitHubPullRequestItem {
+  const labels = pull.labels.flatMap(label => label.name === undefined ? [] : [label.name])
   return {
     kind: 'pull_request',
     approvalLabels: [],
-    autoMerge: hasAutoMergeLabel(pull.labels.flatMap(label => label.name === undefined ? [] : [label.name])),
+    autoMerge: hasAutoMergeLabel(labels),
     repository: repository.github,
     number: pull.number,
     state: pull.state === 'closed' ? 'closed' : 'open',
@@ -277,13 +286,22 @@ function pullRequestItem(repository: RepositoryMapping, pull: Awaited<ReturnType
     createdAt: pull.created_at,
     updatedAt: pull.updated_at,
     draft: pull.draft ?? false,
-    baseSha: pull.base.sha,
+    baseSha: liveBaseSha,
     baseRef: pull.base.ref,
     headSha: pull.head.sha,
     headRepository: pull.head.repo?.full_name ?? '',
     headRef: pull.head.ref,
     maintainerCanModify: pull.maintainer_can_modify ?? false,
     mergeState: pull.mergeable === false ? 'conflicting' : pull.mergeable === true ? 'clean' : 'unknown',
+    purpose: pullRequestPurpose({
+      actorLogin,
+      authorLogin: pull.user?.login ?? 'ghost',
+      body: pull.body ?? '',
+      headRef: pull.head.ref,
+      headRepository: pull.head.repo?.full_name ?? '',
+      labels,
+      repository: repository.github,
+    }),
     priorAutomatedReview: { _tag: 'None' },
   }
 }
@@ -293,7 +311,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     const token = await options.tokens.getToken(repository, access, signal)
     return token._tag === 'Err'
       ? err(token.error.message)
-      : ok(createAuthenticatedClient({
+      : ok(options.createClient?.(token.value.token) ?? createAuthenticatedClient({
           access,
           repository,
           signal,
@@ -511,9 +529,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             return contexts.length === 0 ? { _tag: 'None' } : { _tag: 'Declared', contexts }
           })
           .catch((error: unknown): RequiredChecks => ({ _tag: 'Unavailable', reason: message(error) }))
+        const liveBaseSha = await currentBaseSha(octokit.value, owner, repo, pull.data.base.ref, signal)
         const [checks, baseChecks, requiredChecks] = await Promise.all([
           checksFor(pull.data.head.sha),
-          checksFor(pull.data.base.sha),
+          checksFor(liveBaseSha),
           requiredChecksFor(pull.data.base.ref),
         ])
         return ok({
@@ -539,7 +558,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                   body: comment.body,
                   url: comment.html_url,
                 }]), pull.data.head.sha, options.actorLogin(repository)),
-          pullRequest: pullRequestItem(repository, pull.data),
+          pullRequest: pullRequestItem(repository, pull.data, liveBaseSha, options.actorLogin(repository)),
           requiredChecks,
           reviews: chronologicalPullRequestComments(reviews.flatMap(review => review.body === undefined || review.body === null
             ? []

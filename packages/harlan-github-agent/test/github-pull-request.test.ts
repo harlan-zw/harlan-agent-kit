@@ -1,5 +1,6 @@
 import type { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
+import { BASELINE_REPAIR_LABEL_SPEC } from '../src/baseline-repair-state.ts'
 import { createGitHubPullRequestPublisher } from '../src/github.ts'
 import { ok } from '../src/result.ts'
 import { repositoryMapping } from './fixtures.ts'
@@ -73,5 +74,47 @@ describe('gitHub pull request publication', () => {
 
     expect(draft).toBe(false)
     expect(result).toEqual(ok({ number: 31, url: 'https://github.com/harlan-zw/example/pull/31' }))
+  })
+
+  it('marks a Baseline repair pull request on GitHub', async () => {
+    const createdLabels: string[] = []
+    const appliedLabels: string[] = []
+    const publisher = createGitHubPullRequestPublisher({
+      createClient: () => ({
+        rest: {
+          issues: {
+            addLabels: (input: { labels: string[] }) => {
+              appliedLabels.push(...input.labels)
+              return Promise.resolve({ data: [] })
+            },
+            createLabel: (input: { name: string }) => {
+              createdLabels.push(input.name)
+              return Promise.resolve({ data: {} })
+            },
+          },
+          pulls: {
+            create: () => Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31 } }),
+            list: () => Promise.resolve({ data: [] }),
+          },
+        },
+      }) as unknown as Octokit,
+      tokens: {
+        getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T02:00:00.000Z' })),
+        invalidate: () => undefined,
+      },
+    })
+
+    await publisher.ensurePullRequest({
+      repository: repositoryMapping(),
+      baseRef: 'main',
+      headRef: 'fix/baseline-ci-abcdef012345',
+      expectedHeadSha: 'abc123',
+      title: 'fix: repair default branch CI',
+      body: 'Repairs CI.',
+      labels: [BASELINE_REPAIR_LABEL_SPEC],
+    })
+
+    expect(createdLabels).toEqual(['harlan-agent-baseline-repair'])
+    expect(appliedLabels).toEqual(['harlan-agent-baseline-repair'])
   })
 })

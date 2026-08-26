@@ -477,8 +477,6 @@ export interface JournalStore {
   heartbeatWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   heartbeatPublication: (input: { commandId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   hasPullRequestApproval: (repository: string, pullRequestNumber: number, revisionId: string, kind: PullRequestApprovalKind) => boolean
-  /** True when the controller opened this branch to repair the default branch. */
-  isBaselineRepairPullRequest: (repository: string, headRef: string) => boolean
   /**
    * The open pull requests this service opened in one repository.
    *
@@ -617,6 +615,7 @@ export interface JournalStore {
     at: string
     publication: PreparedPublication
   }) => StagePublicationResult
+  supersedeTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   supersedePublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   syncRepositories: (repositories: RepositoryMapping[], at: string) => void
 }
@@ -649,6 +648,8 @@ interface SubjectRow {
   head_ref: string | null
   merge_state: 'clean' | 'conflicting' | 'unknown' | null
   merged_at: string | null
+  purpose_tag?: 'Change' | 'BaselineRepair' | null
+  purpose_base_sha_prefix?: string | null
   revision_id: string
   observed_at: string
 }
@@ -2155,6 +2156,9 @@ function githubSubjectFromRow(row: SubjectRow): GitHubItem {
     headRepository: row.head_repository,
     headRef: row.head_ref,
     mergeState: row.merge_state,
+    purpose: row.purpose_tag === 'BaselineRepair' && row.purpose_base_sha_prefix !== undefined && row.purpose_base_sha_prefix !== null
+      ? { _tag: 'BaselineRepair', baseShaPrefix: row.purpose_base_sha_prefix }
+      : { _tag: 'Change' },
     priorAutomatedReview: { _tag: 'None' },
   }
 }
@@ -3015,6 +3019,43 @@ function planAdversarialReview(
     recordWorkerTransition(database, { taskId: existing.id, from: 'Failed', to: 'Queued', reason: 'Retrying a recoverable review failure.', fence: existing.fence, at: observedAt })
     return
   }
+  const completedBaseline = subject.kind === 'pull_request' && existing?.state_tag === 'Completed' && localAttempt.revision_attempt === 0
+    ? database.prepare(`
+        SELECT tasks.id, tasks.fence
+        FROM tasks
+        WHERE tasks.subject_id = ? AND tasks.revision_id = ?
+          AND tasks.kind = 'baseline_repair' AND tasks.state_tag = 'Completed'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM subjects AS repair_subjects
+            JOIN repositories AS repair_repositories ON repair_repositories.id = repair_subjects.repository_id
+            JOIN revisions AS repair_revisions ON repair_revisions.id = repair_subjects.current_revision_id
+            WHERE repair_repositories.github = ? AND repair_subjects.kind = 'pull_request'
+              AND json_extract(repair_revisions.payload, '$.state') = 'open'
+              AND json_extract(repair_revisions.payload, '$.purpose._tag') = 'BaselineRepair'
+              AND lower(substr(?, 1, length(json_extract(repair_revisions.payload, '$.purpose.baseShaPrefix'))))
+                = lower(json_extract(repair_revisions.payload, '$.purpose.baseShaPrefix'))
+          )
+        LIMIT 1
+      `).get(subjectId, revisionId, mapping.github, subject.baseSha) as { id: string, fence: number } | undefined
+    : undefined
+  if (completedBaseline !== undefined && existing !== undefined) {
+    const reason = 'GitHub reports no open Baseline repair for this base commit.'
+    database.prepare(`
+      UPDATE tasks SET state_tag = 'Superseded', reason = ?, evidence = NULL, updated_at = ?
+      WHERE id = ? AND state_tag = 'Completed'
+    `).run(reason, observedAt, completedBaseline.id)
+    recordTransition(database, { taskId: completedBaseline.id, from: 'Completed', to: 'Superseded', reason, fence: completedBaseline.fence, at: observedAt })
+    database.prepare(`
+      UPDATE worker_tasks
+      SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
+        worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
+        progress_label = 'Starting', updated_at = ?
+      WHERE id = ? AND state_tag = 'Completed'
+    `).run(observedAt, existing.id)
+    recordWorkerTransition(database, { taskId: existing.id, from: 'Completed', to: 'Queued', reason: 'Recovering from current GitHub state.', fence: existing.fence, at: observedAt })
+    return
+  }
   if (existing !== undefined)
     return
 
@@ -3326,6 +3367,16 @@ const freshProviderSessionMigration = `
   PRAGMA user_version = 35;
 `
 
+/** Adds the GitHub-derived purpose to pull request Revisions. */
+const pullRequestPurposeMigration = `
+  UPDATE revisions
+  SET payload = json_set(payload, '$.purpose', json('{"_tag":"Change"}'))
+  WHERE json_extract(payload, '$.kind') = 'pull_request'
+    AND json_type(payload, '$.purpose') IS NULL;
+
+  PRAGMA user_version = 36;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3351,7 +3402,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 35)
+  if (version === 36)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3492,6 +3543,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 34) {
     applyMigration(database, freshProviderSessionMigration)
+    version = 35
+  }
+  if (version === 35) {
+    applyMigration(database, pullRequestPurposeMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -4298,6 +4353,8 @@ export function openJournalStore(
         json_extract(revisions.payload, '$.headRef') AS head_ref,
         json_extract(revisions.payload, '$.mergeState') AS merge_state,
         json_extract(revisions.payload, '$.mergedAt') AS merged_at,
+        json_extract(revisions.payload, '$.purpose._tag') AS purpose_tag,
+        json_extract(revisions.payload, '$.purpose.baseShaPrefix') AS purpose_base_sha_prefix,
         revisions.id AS revision_id,
         revisions.observed_at
       FROM subjects
@@ -4340,6 +4397,7 @@ export function openJournalStore(
             headRepository: current.headRepository,
             headRef: current.headRef,
             mergeState: 'unknown',
+            purpose: current.purpose,
             priorAutomatedReview: { _tag: 'None' },
           }
       recordObservation({
@@ -5011,6 +5069,39 @@ export function openJournalStore(
       const taskId = digest(`${row.github}:baseline:${input.baseSha}`)
       const existing = database.prepare('SELECT state_tag, fence FROM tasks WHERE id = ?').get(taskId) as
         { state_tag: TaskRow['state_tag'], fence: number } | undefined
+      const openRepair = database.prepare(`
+        SELECT subjects.github_number, json_extract(revisions.payload, '$.url') AS url
+        FROM subjects
+        JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        WHERE repositories.github = ? AND subjects.kind = 'pull_request'
+          AND json_extract(revisions.payload, '$.state') = 'open'
+          AND json_extract(revisions.payload, '$.purpose._tag') = 'BaselineRepair'
+          AND lower(substr(?, 1, length(json_extract(revisions.payload, '$.purpose.baseShaPrefix'))))
+            = lower(json_extract(revisions.payload, '$.purpose.baseShaPrefix'))
+        LIMIT 1
+      `).get(row.github, input.baseSha) as { github_number: number, url: string } | undefined
+      if (openRepair !== undefined) {
+        const evidence = `GitHub reports Baseline repair pull request #${openRepair.github_number}: ${openRepair.url}`
+        if (existing === undefined) {
+          database.prepare(`
+            INSERT INTO tasks (id, subject_id, revision_id, kind, state_tag, evidence, updated_at)
+            VALUES (?, ?, ?, 'baseline_repair', 'Completed', ?, ?)
+          `).run(taskId, row.subject_id, row.revision_id, evidence, input.at)
+          recordTransition(database, { taskId, from: null, to: 'Completed', reason: 'Recovered from GitHub.', fence: 0, at: input.at })
+        }
+        else if (existing.state_tag === 'Queued' || existing.state_tag === 'ActionRequired' || existing.state_tag === 'Failed' || existing.state_tag === 'Superseded') {
+          database.prepare(`
+            UPDATE tasks
+            SET state_tag = 'Completed', reason = NULL, evidence = ?, worker_id = NULL,
+              command_id = NULL, lease_expires_at = NULL, updated_at = ?
+            WHERE id = ? AND state_tag = ?
+          `).run(evidence, input.at, taskId, existing.state_tag)
+          recordTransition(database, { taskId, from: existing.state_tag, to: 'Completed', reason: 'Recovered from GitHub.', fence: existing.fence, at: input.at })
+        }
+        database.exec('COMMIT')
+        return { _tag: 'Existing', taskId }
+      }
       if (existing !== undefined && existing.state_tag !== 'Failed' && existing.state_tag !== 'Superseded') {
         database.exec('COMMIT')
         return { _tag: 'Existing', taskId }
@@ -5947,6 +6038,30 @@ export function openJournalStore(
       `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
+        resolveTaskIncidents(database, input.taskId, input.at)
+      }
+      database.exec('COMMIT')
+      return result.changes === 1
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const supersedeTask: JournalStore['supersedeTask'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const result = database.prepare(`
+        UPDATE tasks
+        SET state_tag = 'Superseded', reason = ?, evidence = NULL, worker_id = NULL,
+          command_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          AND lease_expires_at > ?
+          AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id)
+      `).run(input.reason, input.at, input.taskId, input.workerId, input.fence, input.at)
+      if (result.changes === 1) {
+        recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Superseded', reason: input.reason, fence: input.fence, at: input.at })
         resolveTaskIncidents(database, input.taskId, input.at)
       }
       database.exec('COMMIT')
@@ -7093,17 +7208,6 @@ export function openJournalStore(
     }
   }
 
-  const isBaselineRepairPullRequest: JournalStore['isBaselineRepairPullRequest'] = (repository, headRef) => database.prepare(`
-    SELECT 1
-    FROM publication_commands
-    JOIN tasks ON tasks.id = publication_commands.task_id
-    JOIN subjects ON subjects.id = tasks.subject_id
-    JOIN repositories ON repositories.id = subjects.repository_id
-    WHERE repositories.github = ? AND publication_commands.head_ref = ?
-      AND tasks.kind = 'baseline_repair' AND publication_commands.state_tag = 'Published'
-    LIMIT 1
-  `).get(repository, headRef) !== undefined
-
   const listOpenAgentPullRequests: JournalStore['listOpenAgentPullRequests'] = repository => (database.prepare(`
     SELECT
       subjects.github_number AS pull_request_number,
@@ -7208,7 +7312,6 @@ export function openJournalStore(
 
   return {
     approveIssueWork,
-    isBaselineRepairPullRequest,
     isIssueWorkApprovalReady,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
@@ -7236,6 +7339,7 @@ export function openJournalStore(
     close: () => database.close(),
     closeMissingItems,
     completeTask,
+    supersedeTask,
     completeWorkerTask,
     completeIssueTriageComment,
     completePublication,

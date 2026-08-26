@@ -7,6 +7,7 @@ import type { AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, R
 import type { BaselineRepairWorktreeManager } from './worktree.ts'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { runAgentTurn } from './agent-turn.ts'
+import { withBaselineRepairMarker } from './baseline-repair-state.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
@@ -192,14 +193,14 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       // A Baseline repair exists for one red base commit. If that commit moved on,
       // or its CI went green, there is nothing left to repair.
       if (snapshot.value.pullRequest.baseSha !== task.pullRequest.baseSha)
-        return ok({ _tag: 'Obsolete', evidence: `The pull request now builds on ${snapshot.value.pullRequest.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
+        return ok({ _tag: 'Superseded', reason: `The pull request now builds on ${snapshot.value.pullRequest.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
       if (checks.length === 0)
-        return ok({ _tag: 'Obsolete', evidence: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
+        return ok({ _tag: 'Superseded', reason: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, signal)
       if (prepared._tag === 'Err')
         return prepared
       if (prepared.value.headSha !== task.pullRequest.baseSha)
-        return ok({ _tag: 'Obsolete', evidence: `The default branch moved to ${prepared.value.headSha}. This repair targeted ${task.pullRequest.baseSha}.` })
+        return ok({ _tag: 'Superseded', reason: `The default branch moved to ${prepared.value.headSha}. This repair targeted ${task.pullRequest.baseSha}.` })
       const ready = progress({ percent: 35, label: 'Git worktree ready' })
       if (ready._tag === 'Err')
         return ready
@@ -252,7 +253,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           taskKind: 'baseline_repair',
           pullRequestNumber: task.pullRequestNumber,
           pullRequestTitle: response.pullRequestTitle,
-          pullRequestBody: withDisclosure(response.pullRequestBody),
+          pullRequestBody: withBaselineRepairMarker(withDisclosure(response.pullRequestBody)),
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
           // A Baseline repair fixes the default branch, so it never stacks.

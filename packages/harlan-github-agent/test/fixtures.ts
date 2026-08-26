@@ -65,6 +65,7 @@ export function pullRequestItem(overrides: Partial<GitHubPullRequestItem> = {}):
     headRef: 'fix/broken-thing',
     maintainerCanModify: true,
     mergeState: 'conflicting',
+    purpose: { _tag: 'Change' },
     priorAutomatedReview: { _tag: 'None' },
     ...overrides,
   }

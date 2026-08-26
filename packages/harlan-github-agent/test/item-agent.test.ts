@@ -80,7 +80,6 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
@@ -168,7 +167,6 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
@@ -264,7 +262,6 @@ describe('subject Workers', () => {
         },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
@@ -368,7 +365,6 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A wrong premise must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
@@ -481,7 +477,6 @@ describe('subject Workers', () => {
           }]
         },
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
@@ -526,6 +521,7 @@ describe('subject Workers', () => {
   it('waits for Baseline repair without starting a review agent', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let baselineQueued = false
+    let published = ''
     const capture: ProviderCapture = { requests: [] }
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
@@ -555,7 +551,6 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => {
           baselineQueued = true
@@ -568,7 +563,11 @@ describe('subject Workers', () => {
         updateAgentProgress: () => true,
       },
       status: {
-        publish: () => Promise.reject(new Error('Review must not publish a status.')),
+        publish: (_task, phase, body) => {
+          expect(phase).toBe('terminal')
+          published = body
+          return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
       },
       triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
       workspaces: {
@@ -593,6 +592,9 @@ describe('subject Workers', () => {
 
     expect(result).toEqual(ok({ evidence: 'Waiting for Baseline repair baseline-task.' }))
     expect(baselineQueued).toBe(true)
+    expect(published).toContain('### 🤖 WAITING')
+    expect(published).toContain('WaitingForBaselineRepair')
+    expect(published).toContain(pullRequest.baseSha)
   })
 
   it('reviews the pull request anyway when policy does not authorize Baseline repair', async () => {
@@ -634,7 +636,6 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => ({
           _tag: 'NotAuthorized',
@@ -720,7 +721,6 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => false,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('A stacked pull request must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
@@ -802,7 +802,6 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        isBaselineRepairPullRequest: () => true,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         queueBaselineRepairForReview: () => { throw new Error('A Baseline repair must not queue another Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
@@ -872,7 +871,6 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         getWorkerSession: () => 'poisoned-session',
-        isBaselineRepairPullRequest: () => false,
         saveWorkerSession: () => undefined,
         updateAgentProgress: () => true,
         recordReviewRun: () => { throw new Error('Unexpected review Attempt.') },

@@ -84,7 +84,6 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
-      isBaselineRepairPullRequest: () => false,
       recordIncident: (incident) => {
         incidents.push(incident)
         return { ...incident, id: 'incident-1', occurrences: 1, firstSeenAt: incident.at, lastSeenAt: incident.at } satisfies Incident

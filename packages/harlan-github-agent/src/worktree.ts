@@ -11,6 +11,7 @@ import { mkdir } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { StringDecoder } from 'node:string_decoder'
+import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
@@ -1295,6 +1296,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         expectedHeadSha: command.commitSha,
         title: command.pullRequestTitle,
         body: command.pullRequestBody,
+        ...(command.taskKind === 'baseline_repair' ? { labels: [BASELINE_REPAIR_LABEL_SPEC] } : {}),
       }, signal)
       return pullRequest._tag === 'Err'
         ? err(pullRequest.error.message)

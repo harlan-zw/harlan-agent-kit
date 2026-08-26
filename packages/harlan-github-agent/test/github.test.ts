@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { approvalLabels } from '../src/approval-labels.ts'
+import { BASELINE_REPAIR_MARKER, pullRequestPurpose } from '../src/baseline-repair-state.ts'
 import { isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from '../src/github.ts'
 
 describe('gitHub subjects', () => {
@@ -32,5 +33,33 @@ describe('gitHub subjects', () => {
   it('recognizes only exact Approval labels', () => {
     expect(approvalLabels(['HARLAN-AGENT-REVIEW', 'bug'])).toEqual(['review'])
     expect(approvalLabels(['harlan-agent-review-later'])).toEqual([])
+  })
+
+  it.each([
+    ['marked body', BASELINE_REPAIR_MARKER, [], 'fix/baseline-ci-abcdef012345'],
+    ['durable label', '', ['harlan-agent-baseline-repair'], 'fix/baseline-ci-abcdef012345'],
+    ['legacy branch', '', [], 'fix/baseline-ci-abcdef012345'],
+  ])('recovers Baseline repair purpose from a %s', (_name, body, labels, headRef) => {
+    expect(pullRequestPurpose({
+      actorLogin: 'harlan-github-agent[bot]',
+      authorLogin: 'harlan-github-agent[bot]',
+      body,
+      headRef,
+      headRepository: 'harlan-zw/example',
+      labels,
+      repository: 'harlan-zw/example',
+    })).toEqual({ _tag: 'BaselineRepair', baseShaPrefix: 'abcdef012345' })
+  })
+
+  it('does not trust a Baseline repair marker from another author', () => {
+    expect(pullRequestPurpose({
+      actorLogin: 'harlan-github-agent[bot]',
+      authorLogin: 'contributor',
+      body: BASELINE_REPAIR_MARKER,
+      headRef: 'fix/baseline-ci-abcdef012345',
+      headRepository: 'harlan-zw/example',
+      labels: ['harlan-agent-baseline-repair'],
+      repository: 'harlan-zw/example',
+    })).toEqual({ _tag: 'Change' })
   })
 })

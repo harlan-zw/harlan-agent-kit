@@ -78,7 +78,7 @@ describe('task scheduler', () => {
     store.close()
   })
 
-  it('completes a Task whose work the world already did', async () => {
+  it('supersedes a Task whose work the world already did', async () => {
     const store = openJournalStore(':memory:')
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     store.recordObservation({
@@ -94,14 +94,14 @@ describe('task scheduler', () => {
       onError: (error) => { throw error },
       permits: createAgentPermitPool(1),
       store,
-      worker: { run: () => Promise.resolve(ok({ _tag: 'Obsolete', evidence: 'The conflict resolved itself.' })) },
+      worker: { run: () => Promise.resolve(ok({ _tag: 'Superseded', reason: 'The conflict resolved itself.' })) },
       workerId: 'worker-1',
     })
 
     await scheduler.runNow()
 
     expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').tasks[0]?.state)
-      .toEqual({ _tag: 'Completed', evidence: 'The conflict resolved itself.' })
+      .toEqual({ _tag: 'Superseded', reason: 'The conflict resolved itself.' })
     await scheduler.stop()
     store.close()
   })
