@@ -149,7 +149,7 @@ export type IssueWorkApprovalResult
     | { _tag: 'Duplicate', taskId: string }
     | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'TriageRequired' | 'NotAuthorized' } }
 
-export type ReviewRerunSource = 'dashboard' | 'github_comment'
+export type ReviewRerunSource = 'dashboard' | 'github_comment' | 'repair_dispute'
 
 export type ReviewRerunRejection
   = | { _tag: 'ItemNotFound' }

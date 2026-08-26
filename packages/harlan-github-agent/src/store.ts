@@ -1197,7 +1197,7 @@ const reviewRerunMigration = `
   CREATE TABLE review_rerun_requests (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES worker_tasks(id),
-    source TEXT NOT NULL CHECK (source IN ('dashboard', 'github_comment')),
+    source TEXT NOT NULL CHECK (source IN ('dashboard', 'github_comment', 'repair_dispute')),
     requested_by TEXT NOT NULL,
     requested_at TEXT NOT NULL
   );
@@ -3276,6 +3276,22 @@ const narrowPublicationPermissionMigration = `
   PRAGMA user_version = 33;
 `
 
+const repairDisputeRerunMigration = `
+  ALTER TABLE review_rerun_requests RENAME TO review_rerun_requests_v33;
+  CREATE TABLE review_rerun_requests (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES worker_tasks(id),
+    source TEXT NOT NULL CHECK (source IN ('dashboard', 'github_comment', 'repair_dispute')),
+    requested_by TEXT NOT NULL,
+    requested_at TEXT NOT NULL
+  );
+  INSERT INTO review_rerun_requests (id, task_id, source, requested_by, requested_at)
+    SELECT id, task_id, source, requested_by, requested_at FROM review_rerun_requests_v33;
+  DROP TABLE review_rerun_requests_v33;
+  CREATE INDEX review_rerun_requests_task ON review_rerun_requests(task_id, requested_at);
+  PRAGMA user_version = 34;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3301,7 +3317,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 33)
+  if (version === 34)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3434,6 +3450,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 32) {
     applyMigration(database, narrowPublicationPermissionMigration)
+    version = 33
+  }
+  if (version === 33) {
+    applyMigration(database, repairDisputeRerunMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -4477,6 +4497,17 @@ export function openJournalStore(
         contentDigest,
         usage,
       )
+      const repairableFinding = input.findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
+      if (!repairableFinding) {
+        supersedeTasks(
+          database,
+          revision.subject_id,
+          input.completedAt,
+          'A fresh Review found no repairable finding.',
+          undefined,
+          'review_fix',
+        )
+      }
       database.exec('COMMIT')
       return { _tag: 'Inserted', reviewRunId: input.id }
     }

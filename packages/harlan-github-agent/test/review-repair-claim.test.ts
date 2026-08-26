@@ -125,6 +125,70 @@ describe('review Repair queue', () => {
     })._tag).toBe('Staged')
   })
 
+  it('retires a disputed Repair after a fresh Review finds no defect', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/disputed-finding')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
+    const queued = store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })
+    if (queued._tag !== 'Queued')
+      throw new Error(queued.reason)
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:05.500Z',
+      evidence: 'Queued Repair.',
+    })).toBe(true)
+    expect(store.needsAttentionTask({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:00:06.000Z',
+      reason: 'Repair disputed the finding.',
+      evidence: 'The query already has LIMIT 100.',
+    })).toBe(true)
+    expect(store.requestReviewRerun({
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId,
+      requestId: `repair-dispute:${repair.id}`,
+      source: 'repair_dispute',
+      requestedBy: 'review_fix',
+      at: '2026-08-13T01:00:06.500Z',
+    })._tag).toBe('Queued')
+    expect(store.claimNextAdversarialReviewTask('fresh-review-agent', '2026-08-13T01:00:06.750Z', 60_000)).not.toBeNull()
+
+    expect(store.recordReviewRun({
+      id: 'fresh-clean-review',
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId,
+      headSha: review.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'fresh-review-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:00:07.000Z',
+      completedAt: '2026-08-13T01:00:08.000Z',
+      gates: passedReviewGates(),
+      findings: [],
+    })._tag).toBe('Inserted')
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:09.000Z').tasks.find(task => task.id === repair.id)?.state).toEqual({
+      _tag: 'Superseded',
+      reason: 'A fresh Review found no repairable finding.',
+    })
+  })
+
   it('ends a review whose repair the controller may never publish', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'wip/unwritable-branch')
