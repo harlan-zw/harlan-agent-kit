@@ -318,6 +318,7 @@ export interface ConflictResolutionTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedConflictResolutionTask extends ConflictResolutionTask {
@@ -334,6 +335,7 @@ export interface ReviewFixTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedReviewFixTask extends ReviewFixTask {
@@ -362,6 +364,7 @@ export interface BaselineRepairTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedBaselineRepairTask extends BaselineRepairTask {
@@ -378,6 +381,7 @@ export interface AdversarialReviewTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedAdversarialReviewTask extends AdversarialReviewTask {
@@ -395,6 +399,7 @@ export interface IssueTriageTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedIssueTriageTask extends IssueTriageTask {
@@ -411,6 +416,7 @@ export interface IssueWorkTask {
   revisionId: string
   state: TaskState
   updatedAt: string
+  recoveryAttempts?: number
 }
 
 export interface ClaimedIssueWorkTask extends IssueWorkTask {
@@ -652,6 +658,7 @@ export type OpencodeAgentModel
     | 'opencode-go/glm-5.1'
     | 'opencode-go/glm-5.2'
     | 'opencode-go/glm-5.3'
+    | 'opencode-go/glm-5.3-flash'
     | 'opencode-go/gpt-5.6-luna'
     | 'opencode-go/grok-4.5'
     | 'opencode-go/hy3'
@@ -662,7 +669,6 @@ export type OpencodeAgentModel
     | 'opencode-go/mimo-v2.5-pro'
     | 'opencode-go/minimax-m2.7'
     | 'opencode-go/minimax-m3'
-    | 'opencode-go/ox-alpha-free'
     | 'opencode-go/qwen3.6-plus'
     | 'opencode-go/qwen3.7-max'
     | 'opencode-go/qwen3.7-plus'
