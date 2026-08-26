@@ -271,6 +271,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           at: now().toISOString(),
         })
       },
+      onProgressPublishSuccess: (task: ClaimedAgentTask) => {
+        store.resolveIncidents(
+          { _tag: 'Task', taskId: task.id, repository: task.repository, itemNumber: null },
+          now().toISOString(),
+          'review_status_comment',
+        )
+      },
       preflightRepair: (repository: string, signal: AbortSignal) => preflightGitHubWriteAccess(tokens, repository, ['contents_write'], signal),
       store,
       runtime,

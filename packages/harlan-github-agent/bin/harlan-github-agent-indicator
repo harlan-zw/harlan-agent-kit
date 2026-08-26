@@ -395,6 +395,7 @@ def open_agent_watch(agent):
         '-e',
         sys.executable,
         str(WATCHER),
+        agent['provider'],
         session['id'],
     ], start_new_session=True)
 
