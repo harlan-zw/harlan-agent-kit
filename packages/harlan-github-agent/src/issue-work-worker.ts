@@ -100,6 +100,40 @@ function preservesTemplate(body: string, template: PullRequestTemplate): boolean
   })
 }
 
+function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: PullRequestTemplate): ImplementedAgentResponse {
+  const issueTitle = cleanLine(task.issue.title)
+  const title = /^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/.test(issueTitle)
+    && issueTitle.length < 70
+    ? issueTitle
+    : `fix: resolve issue #${task.issueNumber}`
+  const body = template._tag === 'Found'
+    ? `${template.body.trimEnd()}\n\nCloses #${task.issueNumber}.`
+    : `### 🔗 Linked issue
+
+Closes #${task.issueNumber}.
+
+### ❓ Type of change
+
+- [ ] 📖 Documentation
+- [x] 🐞 Bug fix
+- [ ] 👌 Enhancement
+- [ ] ✨ New feature
+- [ ] 🧹 Chore
+- [ ] ⚠️ Breaking change
+
+### 📚 Description
+
+Implements ${task.repository}#${task.issueNumber}.`
+  return {
+    outcome: 'implemented',
+    summary: `Implemented ${task.repository}#${task.issueNumber}.`,
+    checks: [],
+    commitMessage: title,
+    pullRequestTitle: title,
+    pullRequestBody: withAiDisclosure(body),
+  }
+}
+
 function parseAgentResponse(text: string, issueNumber: number, template: PullRequestTemplate): Promise<Result<AgentResponse, string>> {
   return Promise.resolve(text)
     .then(value => JSON.parse(value) as AgentResponsePayload)
@@ -271,10 +305,18 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (turn._tag === 'Err')
         return turn
       const parsed = await parseAgentResponse(turn.value.response, task.issueNumber, template.value)
-      if (parsed._tag === 'Err')
-        return parsed
-      if (parsed.value.outcome === 'blocked')
-        return ok({ _tag: 'ActionRequired', reason: cleanLine(parsed.value.summary), evidence: JSON.stringify(parsed.value) })
+      // A bad metadata envelope must not discard a finished patch. Review and
+      // Repair own code quality after publication, so the controller supplies
+      // safe PR metadata and keeps the Agent's work moving.
+      let response: ImplementedAgentResponse
+      if (parsed._tag === 'Err') {
+        response = controllerIssueMetadata(task, template.value)
+      }
+      else {
+        if (parsed.value.outcome === 'blocked')
+          return ok({ _tag: 'ActionRequired', reason: cleanLine(parsed.value.summary), evidence: JSON.stringify(parsed.value) })
+        response = parsed.value
+      }
 
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')
@@ -298,7 +340,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (frozen.value.state !== 'open' || frozen.value.updatedAt !== snapshot.value.updatedAt)
         return err('The issue changed before the controller committed the fix.')
 
-      const committed = await options.worktrees.commit(task, stacked.value.workspace, stacked.value.patch, parsed.value.commitMessage, signal)
+      const committed = await options.worktrees.commit(task, stacked.value.workspace, stacked.value.patch, response.commitMessage, signal)
       if (committed._tag === 'Err')
         return committed
       return ok({
@@ -307,8 +349,8 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           _tag: 'OpenPullRequest',
           taskKind: 'issue_work',
           issueNumber: task.issueNumber,
-          pullRequestTitle: parsed.value.pullRequestTitle,
-          pullRequestBody: parsed.value.pullRequestBody,
+          pullRequestTitle: response.pullRequestTitle,
+          pullRequestBody: response.pullRequestBody,
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
           baseRef: stacked.value.base.ref,
