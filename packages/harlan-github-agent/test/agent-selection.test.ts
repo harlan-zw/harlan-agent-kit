@@ -33,10 +33,10 @@ describe('agent selection parsing', () => {
     expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'max' } })
   })
 
-  it('accepts Ox Alpha Free from OpenCode Go', () => {
-    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/ox-alpha-free', reasoningEffort: 'high' })
+  it('accepts GLM 5.3 Flash from OpenCode Go', () => {
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/glm-5.3-flash', reasoningEffort: 'high' })
 
-    expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/ox-alpha-free', reasoningEffort: 'high' } })
+    expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/glm-5.3-flash', reasoningEffort: 'high' } })
   })
 
   it('rejects a model that belongs to the other provider', () => {

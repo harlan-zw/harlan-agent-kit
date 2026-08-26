@@ -525,6 +525,47 @@ describe('recovery budget after a GitHub outage', () => {
     expect(store.retryRecoverableWorkerFailures('2026-08-18T12:00:00.000Z')).toBe(1)
   })
 
+  it('reports one shared Incident when one Agent provider fails across Tasks', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    for (const number of [24, 25]) {
+      store.recordObservation({
+        externalId: `provider-outage-pr-${number}`,
+        observedAt: '2026-08-18T00:00:00.000Z',
+        source: 'poll',
+        subject: pullRequestItem({ number, mergeState: 'clean' }),
+      })
+    }
+
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      const at = `2026-08-18T00:00:0${attempt}.000Z`
+      const task = store.claimNextAdversarialReviewTask(`provider-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected provider failure ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'The opencode session failed: Unexpected server error.',
+      })
+    }
+
+    expect(store.listIncidents()).toMatchObject([{
+      scope: { _tag: 'Service' },
+      kind: 'agent_provider',
+      operation: 'agent_provider',
+      occurrences: 2,
+      recovery: { _tag: 'Retrying' },
+    }])
+    expect(store.getDashboardSnapshot('2026-08-18T00:00:07.000Z').queue
+      .filter(entry => entry.number === 24 || entry.number === 25)
+      .map(entry => entry.state)).toEqual([
+      { _tag: 'Pending', reason: 'The opencode session failed: Unexpected server error. The controller will retry.' },
+      { _tag: 'Pending', reason: 'The opencode session failed: Unexpected server error. The controller will retry.' },
+    ])
+  })
+
   it('frees backed-off provider failures after another Agent completes', () => {
     const store = storeWithProviderFailureAtRecoveryLimit()
     expect(store.listIncidents()[0]?.recovery).toEqual(expect.objectContaining({ _tag: 'Retrying' }))
