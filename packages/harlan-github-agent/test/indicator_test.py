@@ -2,6 +2,7 @@ import importlib.machinery
 import importlib.util
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -34,6 +35,58 @@ watch = load_watch()
 
 
 class RunnerActivityTest(unittest.TestCase):
+    def test_parses_named_runner_hosts_for_future_balancing(self):
+        self.assertEqual(indicator.parse_runner_hosts(
+            'Hogwild=ssh://hogwild,Desktop=unix:///var/run/docker.sock',
+        ), [
+            {'name': 'Hogwild', 'dockerHost': 'ssh://hogwild'},
+            {'name': 'Desktop', 'dockerHost': 'unix:///var/run/docker.sock'},
+        ])
+
+    def test_keeps_runner_hosts_independent_when_one_is_unavailable(self):
+        def run(command, **_options):
+            docker_host = command[command.index('--host') + 1]
+            if docker_host == 'unix:///var/run/docker.sock':
+                raise RuntimeError('Desktop Docker is unavailable')
+            if 'ps' in command:
+                return subprocess.CompletedProcess(command, 0, stdout=(
+                    '{"ID":"runner-1","State":"running","Status":"Up 10 minutes",'
+                    '"Labels":"com.harlanzw.desktop-runner.repository=harlan-zw/example"}\n'
+                ), stderr='')
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='2026-08-26T09:47:07Z: Listening for Jobs\n',
+                stderr='',
+            )
+
+        hosts = indicator.parse_runner_hosts(
+            'Hogwild=ssh://hogwild,Desktop=unix:///var/run/docker.sock',
+        )
+        with patch.object(indicator.subprocess, 'run', side_effect=run):
+            result = indicator.request_runner_hosts(hosts)
+
+        self.assertEqual(result, [
+            {
+                '_tag': 'Available',
+                'name': 'Hogwild',
+                'runners': [{
+                    'ID': 'runner-1',
+                    'State': 'running',
+                    'Status': 'Up 10 minutes',
+                    'Labels': 'com.harlanzw.desktop-runner.repository=harlan-zw/example',
+                    'Activity': {'_tag': 'Idle'},
+                    'RunnerLabels': {'com.harlanzw.desktop-runner.repository': 'harlan-zw/example'},
+                    'Host': 'Hogwild',
+                }],
+            },
+            {
+                '_tag': 'Unavailable',
+                'name': 'Desktop',
+                'message': 'Desktop Docker is unavailable',
+            },
+        ])
+
     def test_reports_idle_runner(self):
         self.assertEqual(indicator.runner_activity(
             {'State': 'running', 'Status': 'Up 10 minutes'},
@@ -61,6 +114,21 @@ class RunnerActivityTest(unittest.TestCase):
         self.assertEqual(
             indicator.github_actions_status_label(runners, None),
             '🟢 2 self-hosted runners · 1 running · 1 idle',
+        )
+
+    def test_summarises_each_host_separately(self):
+        host = {
+            '_tag': 'Available',
+            'name': 'Hogwild',
+            'runners': [
+                {'Activity': {'_tag': 'Running'}},
+                {'Activity': {'_tag': 'Idle'}},
+            ],
+        }
+
+        self.assertEqual(
+            indicator.runner_host_status_label(host),
+            '🟢 Hogwild · 2 self-hosted runners · 1 running · 1 idle',
         )
 
     def test_reports_runner_discovery_without_changing_agent_state(self):
