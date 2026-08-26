@@ -34,6 +34,18 @@ def load_watch():
 watch = load_watch()
 
 
+class StubIndicator:
+    def __init__(self):
+        self.menus = []
+
+    def set_menu(self, menu):
+        self.menus.append(menu)
+
+
+def menu_labels(menu):
+    return [child.get_label() for child in menu.get_children()]
+
+
 class RunnerActivityTest(unittest.TestCase):
     def test_parses_named_runner_hosts_for_future_balancing(self):
         self.assertEqual(indicator.parse_runner_hosts(
@@ -129,6 +141,16 @@ class RunnerActivityTest(unittest.TestCase):
         self.assertEqual(
             indicator.runner_host_status_label(host),
             '🟢 Hogwild · 2 self-hosted runners · 1 running · 1 idle',
+        )
+
+    def test_appends_the_failure_message_to_an_unavailable_runner_host(self):
+        self.assertEqual(
+            indicator.runner_host_status_label({
+                '_tag': 'Unavailable',
+                'name': 'Hogwild',
+                'message': 'ssh://hogwild refused',
+            }),
+            '🔴 Hogwild · unavailable · ssh://hogwild refused',
         )
 
     def test_reports_runner_discovery_without_changing_agent_state(self):
@@ -283,6 +305,29 @@ class IndicatorDisplayTest(unittest.TestCase):
             indicator.harlan_github_agent_status_label(dashboard, [], None),
             '🔴 Action required · Queue empty',
         )
+
+    def test_treats_an_all_unavailable_host_list_as_an_error_state(self):
+        sources = indicator.read_system_sources(
+            lambda: {'status': 'ready'},
+            lambda: [{'_tag': 'Unavailable', 'name': 'Hogwild', 'message': 'ssh://hogwild refused'}],
+        )
+        stub = StubIndicator()
+
+        indicator.build_menu(
+            stub,
+            sources,
+            None,
+            None,
+            lambda: None,
+            lambda *_args: None,
+            lambda *_args: None,
+            lambda *_args: None,
+        )
+        labels = menu_labels(stub.menus[0])
+
+        self.assertIn('🔴 Status unavailable', labels)
+        self.assertNotIn('⚪ No self-hosted runners found', labels)
+        self.assertIn('🔴 Hogwild · unavailable · ssh://hogwild refused', labels)
 
     def test_opens_a_read_only_watch_terminal_for_the_exact_session(self):
         agent = {
