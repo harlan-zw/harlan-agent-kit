@@ -40,6 +40,63 @@ describe('incident log', () => {
     expect(store.listIncidents().map(incident => incident.kind).sort()).toEqual(['github_access', 'rate_limit'])
   })
 
+  it('clears only the service operation that recovered', () => {
+    const store = createStore()
+    store.recordIncident({
+      scope: { _tag: 'Service' },
+      kind: 'network',
+      severity: 'warning',
+      operation: 'review_rerun',
+      message: 'fetch failed',
+      recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: '2026-08-18T00:01:00.000Z' },
+      at: '2026-08-18T00:01:00.000Z',
+    })
+    store.recordIncident({
+      scope: { _tag: 'Service' },
+      kind: 'network',
+      severity: 'warning',
+      operation: 'pull_request_status',
+      message: 'fetch failed',
+      recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: '2026-08-18T00:01:00.000Z' },
+      at: '2026-08-18T00:01:00.000Z',
+    })
+
+    store.resolveIncidents({ _tag: 'Service' }, '2026-08-18T00:02:00.000Z', 'review_rerun')
+
+    expect(store.listIncidents().map(incident => incident.operation)).toEqual(['pull_request_status'])
+  })
+
+  it('keeps the current service failure while clearing the prior failure', () => {
+    const store = createStore()
+    for (const [message, at] of [
+      ['first failure', '2026-08-18T00:01:00.000Z'],
+      ['current failure', '2026-08-18T00:02:00.000Z'],
+      ['current failure', '2026-08-18T00:03:00.000Z'],
+    ] as const) {
+      store.recordIncident({
+        scope: { _tag: 'Service' },
+        kind: 'network',
+        severity: 'warning',
+        operation: 'review_rerun',
+        message,
+        recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: at },
+        at,
+      })
+    }
+
+    store.resolveIncidents(
+      { _tag: 'Service' },
+      '2026-08-18T00:03:00.000Z',
+      'review_rerun',
+      ['current failure'],
+    )
+
+    expect(store.listIncidents()).toMatchObject([{
+      message: 'current failure',
+      occurrences: 2,
+    }])
+  })
+
   it('clears a repository incident once the repository polls cleanly', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
@@ -434,6 +491,130 @@ describe('recovery budget after a GitHub outage', () => {
 })
 
 describe('stale task incidents', () => {
+  it('restores a missing incident for the current failed task', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'missing-incident-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    let taskId = ''
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextAdversarialReviewTask(`worker-${attempt}`, `2026-08-18T00:00:0${attempt}.000Z`, 10_000)
+      if (task === null)
+        throw new Error(`Expected failure attempt ${attempt}.`)
+      taskId = task.id
+      store.failWorkerTask({
+        taskId,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-18T00:00:0${attempt}.000Z`,
+        reason: 'The GitHub App needs Contents write permission.',
+      })
+    }
+    store.resolveIncidents({ _tag: 'Task', taskId, repository: 'harlan-zw/example', itemNumber: 24 }, '2026-08-18T00:00:04.000Z')
+    expect(store.listIncidents()).toEqual([])
+
+    store.resolveStaleTaskIncidents('2026-08-18T00:00:05.000Z')
+
+    expect(store.listIncidents()).toMatchObject([{
+      message: 'The GitHub App needs Contents write permission.',
+      scope: { _tag: 'Task', taskId },
+    }])
+  })
+
+  it('closes an incident that no longer matches the task failure', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'old-incident-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    let taskId = ''
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextAdversarialReviewTask(`worker-${attempt}`, `2026-08-18T00:00:0${attempt}.000Z`, 10_000)
+      if (task === null)
+        throw new Error(`Expected failure attempt ${attempt}.`)
+      taskId = task.id
+      store.failWorkerTask({
+        taskId,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-18T00:00:0${attempt}.000Z`,
+        reason: 'The current failure.',
+      })
+    }
+    store.recordIncident({
+      scope: { _tag: 'Task', taskId, repository: 'harlan-zw/example', itemNumber: 24 },
+      kind: 'policy',
+      severity: 'error',
+      operation: 'adversarial_review',
+      message: 'An old failure.',
+      recovery: { _tag: 'ActionRequired' },
+      at: '2026-08-18T00:00:04.000Z',
+    })
+    expect(store.listIncidents()).toHaveLength(2)
+
+    expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:05.000Z')).toBe(1)
+
+    expect(store.listIncidents()).toMatchObject([{ message: 'The current failure.' }])
+  })
+
+  it('keeps only the current failure for one task', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'changed-failure-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextAdversarialReviewTask(`worker-a-${attempt}`, `2026-08-18T00:00:0${attempt}.000Z`, 10_000)
+      if (task === null)
+        throw new Error(`Expected first failure attempt ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-18T00:00:0${attempt}.000Z`,
+        reason: 'fetch failed',
+      })
+    }
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T00:00:05.000Z')).toBe(1)
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextAdversarialReviewTask(`worker-b-${attempt}`, `2026-08-18T01:00:0${attempt}.000Z`, 10_000)
+      if (task === null)
+        throw new Error(`Expected second failure attempt ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-18T01:00:0${attempt}.000Z`,
+        reason: 'The agent returned malformed review JSON.',
+      })
+    }
+
+    expect(store.listIncidents()).toMatchObject([{
+      kind: 'agent_result',
+      message: 'The agent returned malformed review JSON.',
+    }])
+  })
+
+  it('clears incidents for a repository removed from the service', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordPollFailure('harlan-zw/example', '2026-08-18T00:01:00.000Z', 'fetch failed')
+
+    store.syncRepositories([], '2026-08-18T00:02:00.000Z')
+
+    expect(store.listIncidents()).toEqual([])
+  })
+
   it('closes an incident once a newer revision supersedes its task', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')

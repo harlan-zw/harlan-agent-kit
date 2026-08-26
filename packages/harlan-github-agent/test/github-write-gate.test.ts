@@ -1,67 +1,90 @@
-import type { GitHubAgentSource } from '../src/github-agent-source.ts'
+import type { GitHubRepositoryAccess } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { createGitHubWriteGate, repositoryQuarantineReason } from '../src/github-write-gate.ts'
-import { ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
-
-function source(calls: string[]): GitHubAgentSource {
-  const record = (name: string) => {
-    calls.push(name)
-    return Promise.resolve(ok({ commentId: 1, url: 'url' }))
-  }
-  return {
-    consumeApprovalLabel: () => {
-      calls.push('consumeApprovalLabel')
-      return Promise.resolve(ok(undefined))
-    },
-    ensureApprovalLabel: () => {
-      calls.push('ensureApprovalLabel')
-      return Promise.resolve(ok(undefined))
-    },
-    upsertIssueTriageComment: () => record('upsertIssueTriageComment'),
-    upsertReviewStatus: () => record('upsertReviewStatus'),
-  } as unknown as GitHubAgentSource
-}
+import { createGitHubWriteGate, repositoryQuarantineReason, withGitHubWritePreflight } from '../src/github-write-gate.ts'
+import { err, ok } from '../src/result.ts'
 
 describe('gitHub write gate', () => {
-  it('refuses every write to a repository nobody enabled writes for', async () => {
-    const calls: string[] = []
+  it('refuses every write credential to a repository nobody enabled', async () => {
+    const requested: GitHubRepositoryAccess[] = []
     const refused: string[] = []
     const gate = createGitHubWriteGate({
       mayWrite: () => false,
       onRefused: github => refused.push(github),
-      source: source(calls),
+      source: {
+        getToken: (_repository, access) => {
+          requested.push(access)
+          return Promise.resolve(ok({ token: 'token', expiresAt: '2126-01-01T00:00:00.000Z' }))
+        },
+        invalidate: () => undefined,
+      },
     })
-    const repository = repositoryMapping()
-    const signal = new AbortController().signal
 
-    const results = [
-      await gate.upsertReviewStatus(repository, 1, null, 'body', false, signal),
-      await gate.upsertIssueTriageComment(repository, 1, null, 'body', signal),
-      await gate.ensureApprovalLabel(repository, 'harlan-agent-review', signal),
-      await gate.consumeApprovalLabel(repository, 'pull_request', 1, 'harlan-agent-review', signal),
-    ]
+    const results = await Promise.all([
+      gate.getToken('harlan-zw/example', 'item_write'),
+      gate.getToken('harlan-zw/example', 'contents_write'),
+    ])
 
-    expect(results).toEqual(Array.from({ length: 4 }, () => ({
+    expect(results).toEqual(Array.from({ length: 2 }, () => ({
       _tag: 'Err',
-      error: repositoryQuarantineReason('harlan-zw/example'),
+      error: {
+        repository: 'harlan-zw/example',
+        message: repositoryQuarantineReason('harlan-zw/example'),
+      },
     })))
-    expect(calls).toEqual([])
-    expect(refused).toEqual(Array.from({ length: 4 }).fill('harlan-zw/example'))
+    expect(requested).toEqual([])
+    expect(refused).toEqual(['harlan-zw/example', 'harlan-zw/example'])
   })
 
-  it('passes every write through once a person enables the repository', async () => {
-    const calls: string[] = []
+  it('passes reads and trusted writes through unchanged', async () => {
+    const requested: GitHubRepositoryAccess[] = []
     const gate = createGitHubWriteGate({
       mayWrite: github => github === 'harlan-zw/example',
       onRefused: () => { throw new Error('An enabled repository must not be refused.') },
-      source: source(calls),
+      source: {
+        getToken: (_repository, access) => {
+          requested.push(access)
+          return Promise.resolve(ok({ token: access, expiresAt: '2126-01-01T00:00:00.000Z' }))
+        },
+        invalidate: () => undefined,
+      },
     })
-    const signal = new AbortController().signal
 
-    await gate.upsertReviewStatus(repositoryMapping(), 1, null, 'body', false, signal)
-    await gate.ensureApprovalLabel(repositoryMapping(), 'harlan-agent-review', signal)
+    expect(await gate.getToken('outside/example', 'read')).toEqual(ok({
+      token: 'read',
+      expiresAt: '2126-01-01T00:00:00.000Z',
+    }))
+    expect(await gate.getToken('harlan-zw/example', 'item_write')).toEqual(ok({
+      token: 'item_write',
+      expiresAt: '2126-01-01T00:00:00.000Z',
+    }))
+    expect(requested).toEqual(['read', 'item_write'])
+  })
 
-    expect(calls).toEqual(['upsertReviewStatus', 'ensureApprovalLabel'])
+  it('stops before agent work when GitHub refuses required access', async () => {
+    const requested: GitHubRepositoryAccess[] = []
+    let runs = 0
+    const worker = withGitHubWritePreflight({
+      accesses: ['item_write', 'contents_write'],
+      source: {
+        getToken: (repository, access) => {
+          requested.push(access)
+          return Promise.resolve(access === 'contents_write'
+            ? err({ repository, message: 'The GitHub App needs Contents write permission.' })
+            : ok({ token: access, expiresAt: '2126-01-01T00:00:00.000Z' }))
+        },
+        invalidate: () => undefined,
+      },
+      worker: {
+        run: () => {
+          runs += 1
+          return Promise.resolve(ok({ evidence: 'Agent ran.' }))
+        },
+      },
+    })
+
+    expect(await worker.run({ repository: 'harlan-zw/example' }, new AbortController().signal))
+      .toEqual(err('The GitHub App needs Contents write permission.'))
+    expect(requested).toEqual(['item_write', 'contents_write'])
+    expect(runs).toBe(0)
   })
 })

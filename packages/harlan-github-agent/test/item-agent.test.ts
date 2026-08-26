@@ -75,6 +75,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
@@ -162,6 +163,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('A second comment must not be posted.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
@@ -254,6 +256,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => {
           queued = true
@@ -360,6 +363,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('A wrong premise must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
@@ -454,6 +458,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => {
           // The store refuses once the reused identity matches its guard.
@@ -545,6 +550,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent Repair work.') },
         getRepairedHeadFindings: () => [],
@@ -623,6 +629,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
@@ -708,6 +715,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
@@ -789,6 +797,7 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
