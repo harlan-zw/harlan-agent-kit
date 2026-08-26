@@ -193,6 +193,7 @@ def read_runner_source(fetch_runner_hosts):
 
 
 WORKFLOW_RUNS_PAGE_SIZE = 50
+WORKFLOW_JOBS_PAGE_SIZE = 100
 
 
 def github_api(path):
@@ -224,6 +225,19 @@ def collect_workflow_jobs(repository, runs, fetch_jobs):
     return jobs
 
 
+def request_run_jobs(repository, run_id):
+    jobs = []
+    page = 1
+    while True:
+        fetched = github_api(
+            f'repos/{repository}/actions/runs/{run_id}/jobs?page={page}&per_page={WORKFLOW_JOBS_PAGE_SIZE}',
+        ).get('jobs', [])
+        jobs.extend(fetched)
+        if len(fetched) < WORKFLOW_JOBS_PAGE_SIZE:
+            return jobs
+        page += 1
+
+
 def request_workflow_jobs(repositories, on_error=None):
     jobs = []
     for repository in repositories:
@@ -237,9 +251,7 @@ def request_workflow_jobs(repositories, on_error=None):
                     jobs.extend(collect_workflow_jobs(
                         repository,
                         runs,
-                        lambda run_id, current=repository: github_api(
-                            f'repos/{current}/actions/runs/{run_id}/jobs',
-                        ).get('jobs', []),
+                        lambda run_id, current=repository: request_run_jobs(current, run_id),
                     ))
                     if len(runs) < WORKFLOW_RUNS_PAGE_SIZE:
                         break

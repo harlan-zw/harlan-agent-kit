@@ -280,6 +280,43 @@ class RunnerActivityTest(unittest.TestCase):
             'url': 'https://github.com/job/99',
         }])
 
+    def test_follows_pagination_for_jobs_within_one_run(self):
+        requests = []
+
+        def job(index):
+            return {
+                'name': f'test {index}',
+                'status': 'in_progress',
+                'labels': ['self-hosted'],
+                'html_url': f'https://github.com/job/{index}',
+            }
+
+        def fake_github_api(path):
+            requests.append(path)
+            if path == 'repos/harlan-zw/example/actions/runs?status=queued&page=1&per_page=50':
+                return {'workflow_runs': [
+                    {'id': 7, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/7'},
+                ]}
+            if path == 'repos/harlan-zw/example/actions/runs?status=in_progress&page=1&per_page=50':
+                return {'workflow_runs': []}
+            if path == 'repos/harlan-zw/example/actions/runs/7/jobs?page=1&per_page=100':
+                return {'jobs': [job(index) for index in range(100)]}
+            if path == 'repos/harlan-zw/example/actions/runs/7/jobs?page=2&per_page=100':
+                return {'jobs': [job(index) for index in range(100, 135)]}
+            raise AssertionError(f'unexpected GitHub API request {path}')
+
+        with patch.object(runner_indicator, 'github_api', side_effect=fake_github_api):
+            jobs = runner_indicator.request_workflow_jobs(['harlan-zw/example'])
+
+        self.assertEqual(len(jobs), 135)
+        self.assertEqual(
+            [path for path in requests if '/jobs' in path],
+            [
+                'repos/harlan-zw/example/actions/runs/7/jobs?page=1&per_page=100',
+                'repos/harlan-zw/example/actions/runs/7/jobs?page=2&per_page=100',
+            ],
+        )
+
     def test_stops_a_remote_runner_service_without_waiting_for_jobs(self):
         commands = []
         host = runner_indicator.parse_runner_hosts(
