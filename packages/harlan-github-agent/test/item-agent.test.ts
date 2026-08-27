@@ -916,9 +916,9 @@ describe('subject Workers', () => {
     })
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium', sessionId: null })])
     expect(triageBody).toBe(`<!-- harlan-agent-kit:issue-triage -->
-### 🤖 Issue triage
+### 🤖 ISSUE TRIAGE
 
-> Harlan Agent Kit posted this automated triage. It is not Harlan's personal assessment or commitment.
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated triage. It is not Harlan's personal assessment or commitment. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).
 
 - **Validity:** Valid
 - **Difficulty:** 2/5

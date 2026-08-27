@@ -4,7 +4,7 @@ import type { JournalStore } from './store.ts'
 import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 
 export interface ApprovalController {
   reconcile: (repository: RepositoryMapping, subject: GitHubItem, revisionId: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -21,7 +21,7 @@ function approvalPrompt(label: string, headSha: string): string {
 <!-- reviewed-sha: ${headSha} -->
 ### 🤖 REVIEW PAUSED
 
-> Harlan GitHub Agent posted this automated comment. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).
+${automatedDisclosure({ kind: 'status' })}
 
 This pull request is from an outside contributor. Add the \`${label}\` label to approve automated review and verified repairs for head commit \`${headSha.slice(0, 12)}\`.`
 }
