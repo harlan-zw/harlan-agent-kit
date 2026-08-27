@@ -32,6 +32,11 @@ webhook:
   secret_path: /home/harlan/.config/harlan-github-agent/webhook-secret
 storage:
   path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
+# What may start work on this machine. Defaults to every trigger.
+# An always-on second machine runs [routine] while the desktop keeps [github].
+# The two sets never overlap, so neither machine can claim the other's task and
+# they need no lock between them.
+triggers: [github, routine]
 mutations_enabled: false
 # The controller merges a pull request labelled harlan-agent-auto-merge after a
 # READY review at or above minimum_confidence. Everything else waits for Harlan.

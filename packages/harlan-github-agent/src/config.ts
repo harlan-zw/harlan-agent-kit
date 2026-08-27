@@ -1,7 +1,7 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -283,6 +283,38 @@ export async function loadWebhookSecret(path: string): Promise<Result<string, Co
     }]))
 }
 
+const SERVICE_TRIGGERS: readonly ServiceTrigger[] = ['github', 'routine']
+
+/**
+ * Which triggers this machine answers. Every trigger unless the file narrows it.
+ *
+ * A second machine set to `[routine]` runs the scheduled work while the desktop
+ * keeps `[github]`. Neither can claim the other's Task, so the two need no lock.
+ */
+function serviceTriggers(source: UnknownRecord, issues: ConfigIssue[]): readonly ServiceTrigger[] | undefined {
+  const value = source.triggers
+  if (value === undefined)
+    return SERVICE_TRIGGERS
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({ path: '$.triggers', message: 'Expected at least one trigger.' })
+    return undefined
+  }
+  const triggers: ServiceTrigger[] = []
+  for (const entry of value) {
+    const trigger = SERVICE_TRIGGERS.find(candidate => candidate === entry)
+    if (trigger === undefined) {
+      issues.push({ path: '$.triggers', message: 'Expected github or routine.' })
+      return undefined
+    }
+    if (triggers.includes(trigger)) {
+      issues.push({ path: '$.triggers', message: 'List every trigger once.' })
+      return undefined
+    }
+    triggers.push(trigger)
+  }
+  return triggers
+}
+
 function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[]): RepositoryMapping | undefined {
   const path = `$.repositories[${index}]`
   if (!isRecord(value)) {
@@ -404,6 +436,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   const issues: ConfigIssue[] = []
   const agent = agentSettings(document.value, issues)
   const webhook = webhookConfig(document.value, issues)
+  const triggers = serviceTriggers(document.value, issues)
   const github = requiredRecord(document.value, 'github', '$', issues)
   const server = requiredRecord(document.value, 'server', '$', issues)
   const storage = requiredRecord(document.value, 'storage', '$', issues)
@@ -503,6 +536,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     issues.length > 0
     || agent === undefined
     || webhook === undefined
+    || triggers === undefined
     || host === undefined
     || appId === undefined
     || privateKeyPath === undefined
@@ -526,6 +560,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     github: { appId, privateKeyPath, allowedOwners },
     server: { host, port, allowedOrigin },
     webhook,
+    triggers,
     storage: { path: storagePath },
     trustedCheckoutRoots,
     mutationsEnabled,

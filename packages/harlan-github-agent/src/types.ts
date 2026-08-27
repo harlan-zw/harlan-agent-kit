@@ -47,6 +47,19 @@ export type WebhookConfig
   = | { _tag: 'Disabled' }
     | { _tag: 'Enabled', host: string, port: number, secretPath: string }
 
+/**
+ * What may start work on this machine.
+ *
+ * `github` covers everything a GitHub observation starts: review, repair,
+ * conflicts, issue triage, and issue work. `routine` covers everything a clock
+ * starts.
+ *
+ * Two machines running disjoint triggers need no lock and no protocol, because
+ * no Task is ever visible to both. That is what lets an always-on machine run
+ * the scheduled work while the desktop keeps the interactive work.
+ */
+export type ServiceTrigger = 'github' | 'routine'
+
 export interface AgentConfig {
   agent: {
     provider: AgentProviderName
@@ -72,6 +85,8 @@ export interface AgentConfig {
     port: number
     allowedOrigin: string
   }
+  /** Which triggers this machine answers. Defaults to every trigger. */
+  triggers: readonly ServiceTrigger[]
   /**
    * The GitHub webhook listener.
    *
