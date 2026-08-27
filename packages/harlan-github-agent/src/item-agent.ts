@@ -520,13 +520,38 @@ function headChecksGate(checks: PullRequestReviewSnapshot['checks'], required: R
   return { state: { _tag: 'Passed', evidence: checkEvidence }, reported }
 }
 
+/** GitHub has no CI signal to wait for on either side of this change. */
+function githubCiAbsent(snapshot: PullRequestReviewSnapshot): boolean {
+  return snapshot.requiredChecks._tag === 'None'
+    && snapshot.baseChecks._tag === 'Available'
+    && snapshot.baseChecks.checks.length === 0
+    && snapshot.checks._tag === 'Available'
+    && snapshot.checks.checks.length === 0
+}
+
 /**
  * A Baseline repair pull request exists because the default branch CI fails, so
  * its own review reads head CI alone. Every other review waits for a green base.
+ * If GitHub names no required checks and reports none for both commits, no
+ * future CI result can resolve the gate. The Review verification gate owns the
+ * local proof in that repository.
  */
 function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): CiGateResult {
   if (repairsBaseline)
     return headChecksGate(snapshot.checks, snapshot.requiredChecks)
+  if (githubCiAbsent(snapshot)) {
+    return {
+      state: {
+        _tag: 'Passed',
+        evidence: [evidence('github-ci', JSON.stringify({
+          baseChecks: snapshot.baseChecks,
+          checks: snapshot.checks,
+          requiredChecks: snapshot.requiredChecks,
+        }))],
+      },
+      reported: [],
+    }
+  }
   const base = checksGate(snapshot.baseChecks, 'base-ci', 'Pending')
   if (base._tag !== 'Passed')
     return { state: base, reported: [] }
