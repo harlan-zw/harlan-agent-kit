@@ -2,7 +2,7 @@ import type { GitHubAgentSource, PublishedReviewStatus } from './github-agent-so
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ReviewStatusTaskPhase } from './types.ts'
-import { formatPhaseDuration, formatProgressBar } from './agent-progress.ts'
+import { formatPhaseDuration } from './agent-progress.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { updatedAtLabel } from './text.ts'
@@ -38,8 +38,6 @@ function repairProgressComment(headSha: string, progress: AgentProgress, at: str
 ### 🤖 REPAIR · ${progress.label}${formatPhaseDuration(progress.since, at)}
 
 ${automatedDisclosure({ kind: 'repair update', updatedAt: updatedAtLabel(at) })}
-
-\`${formatProgressBar(progress.percent)}\`
 
 Next: ${next}`
 }

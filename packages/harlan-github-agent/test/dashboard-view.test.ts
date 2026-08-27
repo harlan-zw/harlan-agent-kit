@@ -1,6 +1,7 @@
 import type { ActiveAgent, DashboardTask, Incident, QueueEntry, ReviewAgent, Routine, RoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import {
+  activeAgentActivity,
   activeEntries,
   agentProfileState,
   agentStartState,
@@ -467,6 +468,44 @@ describe('stalled progress', () => {
 
     expect(isProgressStalled(agent, now)).toBe(false)
     expect(stalledLabel(agent, now)).toBe('No progress for 1m')
+  })
+})
+
+describe('activeAgentActivity', () => {
+  it('shows the current command from structured Agent activity', () => {
+    expect(activeAgentActivity(activeAgent({
+      activity: [{
+        _tag: 'Command',
+        at: '2026-08-14T11:59:00.000Z',
+        command: 'pnpm test',
+        output: '',
+        exitCode: null,
+      }],
+    }))).toEqual({
+      at: '2026-08-14T11:59:00.000Z',
+      text: 'Running pnpm test',
+      tone: 'muted',
+    })
+  })
+
+  it('names a failed command without hiding what ran', () => {
+    expect(activeAgentActivity(activeAgent({
+      activity: [{
+        _tag: 'Command',
+        at: '2026-08-14T11:59:00.000Z',
+        command: 'pnpm typecheck',
+        output: 'failed',
+        exitCode: 1,
+      }],
+    }))).toEqual({
+      at: '2026-08-14T11:59:00.000Z',
+      text: 'Command failed: pnpm typecheck',
+      tone: 'error',
+    })
+  })
+
+  it('stays absent until the Agent reports structured activity', () => {
+    expect(activeAgentActivity(activeAgent())).toBeUndefined()
   })
 })
 

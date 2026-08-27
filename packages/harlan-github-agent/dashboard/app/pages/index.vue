@@ -2,6 +2,7 @@
 import type { ActiveAgent, AgentRole, QueueEntry } from '../../../src/types.ts'
 import { useEventListener } from '@vueuse/core'
 import {
+  activeAgentActivity,
   activeAgentProgress,
   activeAgentRole,
   activeEntries,
@@ -110,6 +111,7 @@ function matchesFilter(work: AgentRole | undefined): boolean {
 
 const needsYou = computed(() => decisions.value.filter(entry => matchesFilter(queueWork(entry))))
 const running = computed(() => activeAgents.value.filter(agent => matchesFilter(agent.role)))
+const runningActivity = computed(() => new Map(running.value.map(agent => [agent.id, activeAgentActivity(agent)])))
 const runningWithoutAgent = computed(() => activeEntries(snapshot.value.queue, activeAgents.value).filter(entry => matchesFilter(queueWork(entry))))
 const visibleQueued = computed(() => queuedEntries(snapshot.value.queue).filter(entry => matchesFilter(queueWork(entry))))
 
@@ -700,6 +702,20 @@ useHead({
 
             <p class="mt-2.5 line-clamp-2 text-sm text-muted" :aria-label="`${activeAgentRole(agent)} current phase`">
               {{ activeAgentProgress(agent) }}
+            </p>
+            <p
+              v-if="runningActivity.get(agent.id)"
+              class="mt-1.5 flex min-w-0 items-center justify-between gap-2 font-mono text-xs"
+            >
+              <span
+                class="min-w-0 truncate"
+                :class="runningActivity.get(agent.id)?.tone === 'error' ? 'status-error' : 'text-dimmed'"
+              >
+                {{ runningActivity.get(agent.id)?.text }}
+              </span>
+              <time class="shrink-0 text-dimmed" :datetime="runningActivity.get(agent.id)?.at">
+                {{ relativeTime(runningActivity.get(agent.id)?.at ?? agent.updatedAt) }}
+              </time>
             </p>
             <!-- Only appears once silence is long enough to mean something. -->
             <p v-if="isProgressStalled(agent, now)" class="status-warning mt-1.5 font-mono text-xs">

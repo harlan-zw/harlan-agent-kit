@@ -49,6 +49,7 @@ describe('stoppedReviewComment', () => {
     expect(body).toContain('### 🤖 STOPPED')
     expect(body).toContain('The pull request is not ready for review.')
     expect(body).not.toContain('REVIEWING')
+    expect(body).not.toMatch(/[▓░]|\b\d+%/)
   })
 
   it('replaces Repair progress with BLOCKED and every exact finding', () => {

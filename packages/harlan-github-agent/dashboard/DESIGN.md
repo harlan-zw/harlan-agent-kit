@@ -78,7 +78,7 @@ right, on one board. The last two are reference, so they are their own pages.
 | --- | --- | --- |
 | **Needs you** | Does anything need me? | Amber bordered and tinted cards, solid primary action. A muted line when empty; the column keeps its slot so the board never reflows. |
 | **Up next** | What is coming? | Elevated cards, dimmed position numeral. A **Waiting** group below it, dashed borders, holds work blocked outside the engine. |
-| **Running** | What is running? | Elevated cards, live dot, progress bar, terminal behind a disclosure. |
+| **Running** | What is running? | Elevated cards, live dot, current phase and activity, terminal behind a disclosure. |
 | **Done** | What just happened? | Recessive cards, outcome badge leading, eight at most, then a link to History. |
 
 Two pages carry what the board cannot hold:
@@ -234,8 +234,8 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 - The status bar states only what is not the default. It said "agents running" beside "0/4 agents", which reads as a contradiction. Pause and manual selection speak; running and auto stay quiet.
 - A dismissed item leaves the board entirely and reappears only under `Dismissed` on Watching. A greyed row on the board would keep costing the attention the Dismissal was meant to reclaim, and `Restore` is rare enough to live one page away.
 - The content security policy allows `github.com` and `avatars.githubusercontent.com` under `img-src`. Without it every avatar falls back to a monogram, which is the one thing the cards are built around.
-- A running card shows work, elapsed time, author, subject, and current phase. The terminal and session identifier stay behind a disclosure.
-- Agent percentages are milestones, not completion estimates. Never show them as progress bars or completion percentages.
+- A running card shows work, elapsed time, author, subject, current phase, and latest activity. The terminal and session identifier stay behind a disclosure.
+- Agent percentages are internal milestone ranks. User surfaces show phase, activity, and elapsed time instead.
 - Work the Queue calls Active with no agent session yet still lands in Running, so a task cannot vanish between starting and reporting.
 - The status bar carries only live state: connection, agent capacity, whether GitHub writes are enabled, and repository failures. Fixed configuration sits in the footer.
 - Queue order reflects engine priority. Position is always visible.

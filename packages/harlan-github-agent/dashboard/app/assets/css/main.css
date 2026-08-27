@@ -124,30 +124,6 @@ body {
   color: color-mix(in oklab, var(--status-color), white 65%);
 }
 
-progress {
-  appearance: none;
-  border: 0;
-  border-radius: 999px;
-  background: var(--ui-bg-muted);
-  block-size: 0.25rem;
-}
-
-progress::-webkit-progress-bar {
-  border-radius: 999px;
-  background: var(--ui-bg-muted);
-}
-
-progress::-webkit-progress-value {
-  border-radius: 999px;
-  background: var(--ui-primary);
-  transition: inline-size 200ms ease-out;
-}
-
-progress::-moz-progress-bar {
-  border-radius: 999px;
-  background: var(--ui-primary);
-}
-
 /* Zone markers. Headings recede to a rule so the data below them carries the weight. */
 .zone-header {
   display: flex;

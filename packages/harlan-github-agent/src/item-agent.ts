@@ -21,7 +21,7 @@ import type {
 } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { formatPhaseDuration, formatProgressBar } from './agent-progress.ts'
+import { formatPhaseDuration } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
@@ -695,8 +695,6 @@ function progressComment(headSha: string, progress: AgentProgress, at: string): 
 
 ${automatedDisclosure({ kind: 'review', updatedAt: updatedAtLabel(at) })}
 
-\`${formatProgressBar(progress.percent)}\`
-
 Next: ${progress.percent >= 90 ? 'Post the review comment.' : progress.percent >= 85 ? 'Check the head commit and CI.' : progress.percent >= 70 ? 'Verify findings or fixes.' : progress.percent >= 55 ? 'Finish checking the changed files and docs.' : progress.percent >= 35 ? 'Review the diff.' : 'Create a Git worktree.'}`
 }
 
@@ -708,8 +706,6 @@ function baselineWaitingComment(headSha: string, baseSha: string, at: string): s
 ### 🤖 WAITING
 
 ${automatedDisclosure({ kind: 'status', updatedAt: updatedAtLabel(at) })}
-
-\`${formatProgressBar(100)}\`
 
 Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
 
@@ -736,7 +732,7 @@ export function terminalComment(headSha: string, gates: ReviewGates, findings: R
       ? `- **Dismissal recommended:** ${cleanLine(finding.summary)}. Next: ${cleanLine(finding.nextAction)}`
       : `- **Open:** ${cleanLine(finding.summary)}. Next: ${cleanLine(finding.nextAction)}`)
   const checkLines = reportedChecks.map(line => `- **Reported:** ${cleanLine(line)}`)
-  return [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, `### 🤖 ${heading}`, '', disclosure, '', `\`${formatProgressBar(100)}\``, ...[...findingLines, ...checkLines].flatMap(line => ['', line])].join('\n')
+  return [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, `### 🤖 ${heading}`, '', disclosure, ...[...findingLines, ...checkLines].flatMap(line => ['', line])].join('\n')
 }
 
 function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, progress: AgentProgress): Result<void, string> {

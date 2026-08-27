@@ -80,6 +80,7 @@ describe('review status controller', () => {
 
     expect(read().replaced).toBe(true)
     expect(read().body).toContain('### 🤖 REPAIR · Git worktree ready')
+    expect(read().body).not.toMatch(/[▓░]|\b\d+%/)
   })
 
   it('says how long one phase has run, so a slow agent reads as alive', async () => {
