@@ -68,6 +68,8 @@ import type {
   RoutineSpecEntry,
   SelectionMode,
   StoredAgentControl,
+  SupersedeReviewRunInput,
+  SupersedeReviewRunResult,
   TaskState,
 } from './types.ts'
 import type { AgentWorktreeLease } from './worktree.ts'
@@ -408,6 +410,57 @@ export interface StoppedReview {
   findings: ReviewFinding[]
 }
 
+/**
+ * A finished Review whose only unsettled gate is CI.
+ *
+ * The agent already answered for this head commit. Only the CI read can still
+ * change, so the sweep carries everything needed to restate the same verdict
+ * against a fresh one, without starting a second agent turn.
+ */
+export interface CiPendingReview {
+  reviewRunId: string
+  repository: string
+  pullRequestNumber: number
+  revisionId: string
+  headSha: string
+  provider: AgentProviderName | 'claude'
+  sessionId: string
+  model: string
+  agentVersion: string
+  skillDigest: string
+  startedAt: string
+  completedAt: string
+  usage: AgentTokenUsage
+  gates: ReviewGates
+  findings: ReviewFinding[]
+  /** The agent's own score, kept whatever the gates said. */
+  confidence: number | undefined
+  commentId: number
+  /** What the canonical comment holds now, so the edit can compare and swap. */
+  publishedBody: string
+}
+
+interface CiPendingReviewRow {
+  review_run_id: string
+  repository: string
+  github_number: number
+  revision_id: string
+  head_sha: string
+  provider: AgentProviderName | 'claude'
+  session_id: string
+  model: string
+  agent_version: string
+  skill_digest: string
+  started_at: string
+  completed_at: string
+  usage: string
+  gates: string
+  findings: string
+  confidence: number | null
+  github_comment_id: number
+  published_body: string
+}
+
 interface QueuedReviewStatusRow {
   task_id: string
   task_kind: 'adversarial_review' | 'review_fix'
@@ -621,6 +674,7 @@ export interface JournalStore {
    */
   listQueuedReviewStatuses: () => QueuedReviewStatus[]
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
+  listCiPendingReviews: () => CiPendingReview[]
   listStoppedReviews: () => StoppedReview[]
   /**
    * Records the Approval prompt comment, so a sweep can correct it later.
@@ -713,6 +767,14 @@ export interface JournalStore {
   resolveIncidents: (scope: IncidentScope, at: string, operation?: string, exceptMessages?: readonly string[]) => number
   listIncidents: () => Incident[]
   recordReviewRun: (input: RecordReviewRunInput) => RecordReviewRunResult
+  /**
+   * Inserts the settled answer for a Review run that only CI still held back.
+   *
+   * The settled run links to the run it supersedes, so one agent turn keeps
+   * exactly one entry on the dashboard and in usage. Answers `AlreadySuperseded`
+   * once the parent run has its settlement, which makes a replayed sweep inert.
+   */
+  supersedeReviewRun: (input: SupersedeReviewRunInput) => SupersedeReviewRunResult
   recordReviewPublication: (input: RecordReviewPublicationInput) => RecordReviewPublicationResult
   requestReviewRerun: (input: {
     repository: string
@@ -2143,8 +2205,6 @@ function reviewOutcome(input: RecordReviewRunInput): ReviewOutcome | { _tag: 'Re
     return { _tag: 'Rejected', reason: { _tag: 'InvalidEvidenceDigest', label: invalidEvidence.label } }
   if (input.findings.some(finding => finding._tag === 'Open') && tag !== 'Blocked')
     return { _tag: 'Rejected', reason: { _tag: 'OpenFindingRequiresBlocked' } }
-  if (tag !== 'Ready' && input.confidence !== undefined)
-    return { _tag: 'Rejected', reason: { _tag: 'ConfidenceRequiresReady' } }
   if (input.confidence !== undefined && (!Number.isInteger(input.confidence) || input.confidence < 0 || input.confidence > 100))
     return { _tag: 'Rejected', reason: { _tag: 'InvalidConfidence' } }
   // A Ready review without a confidence number is still a complete review. The
@@ -2192,11 +2252,12 @@ function agentTokenUsageFromJson(value: string): AgentTokenUsage {
 }
 
 function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]): ReviewRun {
+  // A waiting or blocked Review keeps its stored score, because the score
+  // describes the agent's reading and the outcome describes the gates. It is
+  // not published under those outcomes, so the domain outcome omits it.
   const outcome: ReviewOutcome = row.outcome_tag === 'Ready'
     ? row.confidence === null ? { _tag: 'Ready' } : { _tag: 'Ready', confidence: row.confidence }
     : { _tag: row.outcome_tag }
-  if (outcome._tag !== 'Ready' && row.confidence !== null)
-    throw new Error(`Review run ${row.id} has invalid confidence state.`)
   return {
     id: row.id,
     repository: row.repository,
@@ -3780,6 +3841,72 @@ const candidateIssueMigration = `
   PRAGMA user_version = 40;
 `
 
+/**
+ * Lets a Review run keep the agent's confidence score whatever the gates say.
+ *
+ * The score answers how sure the agent was about the change it read. The
+ * outcome answers whether every gate passed. Storing one only when the other
+ * said Ready threw the score away for a Review that waited on CI, and the CI
+ * re-gate then had nothing to publish once the base branch turned green.
+ */
+const reviewConfidenceMigration = `
+  DROP INDEX IF EXISTS review_runs_subject_completed;
+
+  CREATE TABLE review_runs_v41 (
+    id TEXT PRIMARY KEY,
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind = 'adversarial_review'),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'opencode', 'claude')),
+    session_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    skill_digest TEXT NOT NULL CHECK (length(skill_digest) = 64),
+    head_sha TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    gates TEXT NOT NULL CHECK (json_valid(gates)),
+    outcome_tag TEXT NOT NULL CHECK (outcome_tag IN ('Ready', 'Pending', 'Blocked')),
+    confidence INTEGER,
+    findings TEXT NOT NULL CHECK (json_valid(findings)),
+    content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+    usage TEXT NOT NULL DEFAULT '{"_tag":"Unavailable"}' CHECK (json_valid(usage)),
+    FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id),
+    CHECK (completed_at >= started_at),
+    CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 100)
+  );
+
+  -- Named columns only: a later rewind replays this migration against a
+  -- journal that already carries columns version 41 never saw.
+  INSERT INTO review_runs_v41 (
+    id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
+    skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
+    confidence, findings, content_digest, usage
+  ) SELECT
+    id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
+    skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
+    confidence, findings, content_digest, usage
+  FROM review_runs;
+  DROP TABLE review_runs;
+  ALTER TABLE review_runs_v41 RENAME TO review_runs;
+  CREATE INDEX review_runs_subject_completed ON review_runs(subject_id, completed_at DESC);
+
+  PRAGMA user_version = 41;
+`
+
+/**
+ * Names the run one CI re-gate settlement restates.
+ *
+ * The sweep used to insert its settled answer as an unrelated row, which
+ * counted one agent turn twice on the dashboard and in usage. Linking the
+ * settlement to the run it supersedes keeps every later read counting once.
+ */
+const reviewSettlementMigration = `
+  ALTER TABLE review_runs ADD COLUMN supersedes_review_run_id TEXT NULL REFERENCES review_runs(id);
+
+  PRAGMA user_version = 42;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3805,7 +3932,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 40)
+  if (version === 42)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3966,6 +4093,14 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 39) {
     applyMigration(database, candidateIssueMigration)
+    version = 40
+  }
+  if (version === 40) {
+    applyForeignKeyMigration(database, reviewConfidenceMigration)
+    version = 41
+  }
+  if (version === 41) {
+    applyMigration(database, reviewSettlementMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -4165,6 +4300,10 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = review_runs.revision_id AND revisions.subject_id = subjects.id
     WHERE review_runs.kind = 'adversarial_review'
+      AND NOT EXISTS (
+        SELECT 1 FROM review_runs AS settled
+        WHERE settled.supersedes_review_run_id = review_runs.id
+      )
     ORDER BY review_runs.completed_at DESC, review_runs.id
     LIMIT 30
   `).all() as unknown as DashboardReviewRunRow[]
@@ -4184,6 +4323,10 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       SELECT review_runs.id
       FROM review_runs
       WHERE review_runs.kind = 'adversarial_review'
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS settled
+          WHERE settled.supersedes_review_run_id = review_runs.id
+        )
       ORDER BY review_runs.completed_at DESC, review_runs.id
       LIMIT 30
     )
@@ -5065,10 +5208,141 @@ export function openJournalStore(
         input.completedAt,
         gates,
         outcome._tag,
-        outcome._tag === 'Ready' ? outcome.confidence ?? null : null,
+        input.confidence ?? null,
         findings,
         contentDigest,
         usage,
+      )
+      const repairableFinding = input.findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
+      if (!repairableFinding) {
+        supersedeTasks(
+          database,
+          revision.subject_id,
+          input.completedAt,
+          'A fresh Review found no repairable finding.',
+          undefined,
+          'review_fix',
+        )
+      }
+      database.exec('COMMIT')
+      return { _tag: 'Inserted', reviewRunId: input.id }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const supersedeReviewRun: JournalStore['supersedeReviewRun'] = (input) => {
+    const outcome = reviewOutcome(input)
+    if (outcome._tag === 'Rejected')
+      return outcome
+
+    const revision = database.prepare(`
+      SELECT subjects.id AS subject_id, revisions.payload, repositories.policy_json,
+        EXISTS (
+          SELECT 1 FROM pull_request_approvals
+          WHERE subject_id = subjects.id AND revision_id = revisions.id AND kind = 'review'
+        ) AS review_approved
+      FROM revisions
+      JOIN subjects ON subjects.id = revisions.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ?
+        AND subjects.kind = 'pull_request' AND revisions.id = ?
+        AND subjects.current_revision_id = revisions.id
+    `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
+      subject_id: number
+      payload: string
+      policy_json: string
+      review_approved: number
+    } | undefined
+    const pullRequest = revision === undefined ? undefined : JSON.parse(revision.payload) as GitHubItem
+    if (revision === undefined || pullRequest?.kind !== 'pull_request' || pullRequest.headSha !== input.headSha)
+      return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
+    const mapping = JSON.parse(revision.policy_json) as RepositoryMapping
+    if (requiresPullRequestApproval(database, mapping, pullRequest.author) && revision.review_approved !== 1)
+      return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
+
+    const runUsage: AgentTokenUsage = input.usage ?? { _tag: 'Unavailable' }
+    const gates = JSON.stringify(input.gates)
+    const findings = JSON.stringify(input.findings)
+    const usage = JSON.stringify(runUsage)
+    const contentDigest = digest(JSON.stringify({
+      supersedesReviewRunId: input.supersedesReviewRunId,
+      repository: input.repository,
+      pullRequestNumber: input.pullRequestNumber,
+      revisionId: input.revisionId,
+      headSha: input.headSha,
+      provider: input.provider,
+      sessionId: input.sessionId,
+      model: input.model,
+      agentVersion: input.agentVersion,
+      skillDigest: input.skillDigest,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+      usage: runUsage,
+      gates: input.gates,
+      outcome,
+      findings: input.findings,
+    }))
+
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = database.prepare('SELECT content_digest FROM review_runs WHERE id = ?').get(input.id) as { content_digest: string } | undefined
+      if (existing !== undefined) {
+        database.exec('COMMIT')
+        return existing.content_digest === contentDigest
+          ? { _tag: 'Duplicate', reviewRunId: input.id }
+          : { _tag: 'Conflict', reviewRunId: input.id }
+      }
+      // Only a run nothing else settles yet can gain a settlement. A replayed
+      // sweep coins a fresh id, so its second answer lands here and stops.
+      const parent = database.prepare(`
+        SELECT 1 FROM review_runs
+        WHERE id = ? AND subject_id = ? AND revision_id = ? AND head_sha = ?
+          AND supersedes_review_run_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM review_runs AS settled
+            WHERE settled.supersedes_review_run_id = review_runs.id
+          )
+      `).get(
+        input.supersedesReviewRunId,
+        revision.subject_id,
+        input.revisionId,
+        input.headSha,
+      )
+      if (parent === undefined) {
+        const orphaned = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.supersedesReviewRunId)
+        database.exec('COMMIT')
+        return orphaned === undefined
+          ? { _tag: 'Rejected', reason: { _tag: 'RunNotFound' } }
+          : { _tag: 'Rejected', reason: { _tag: 'AlreadySuperseded' } }
+      }
+      database.prepare(`
+        INSERT INTO review_runs (
+          id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
+          skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
+          confidence, findings, content_digest, usage, supersedes_review_run_id
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.id,
+        revision.subject_id,
+        input.revisionId,
+        input.provider,
+        input.sessionId,
+        input.model,
+        input.agentVersion,
+        input.skillDigest,
+        input.headSha,
+        input.startedAt,
+        input.completedAt,
+        gates,
+        outcome._tag,
+        input.confidence ?? null,
+        findings,
+        contentDigest,
+        usage,
+        input.supersedesReviewRunId,
       )
       const repairableFinding = input.findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
       if (!repairableFinding) {
@@ -5180,6 +5454,10 @@ export function openJournalStore(
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS settled
+          WHERE settled.supersedes_review_run_id = review_runs.id
+        )
       ORDER BY review_runs.completed_at DESC, review_runs.id
       LIMIT 100
     `).all(repository, pullRequestNumber) as unknown as ReviewRunRow[]
@@ -7599,6 +7877,98 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * Every finished Review that only CI still holds back.
+   *
+   * The row is limited to the latest Review of the pull request's current
+   * revision, so a superseded verdict never gets restated and a slow run for
+   * an old head cannot outrank the current-head review. A live Review or
+   * Repair owns the canonical comment while it runs, so anything queued or
+   * running excludes the pull request here.
+   */
+  const listCiPendingReviews: JournalStore['listCiPendingReviews'] = () => (database.prepare(`
+    WITH ranked AS (
+      SELECT review_runs.*,
+        ROW_NUMBER() OVER (PARTITION BY review_runs.subject_id ORDER BY review_runs.completed_at DESC, review_runs.id DESC) AS run_rank
+      FROM review_runs
+      WHERE review_runs.revision_id = (
+          SELECT subjects.current_revision_id FROM subjects WHERE subjects.id = review_runs.subject_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS settled
+          WHERE settled.supersedes_review_run_id = review_runs.id
+        )
+    )
+    SELECT
+      ranked.id AS review_run_id,
+      repositories.github AS repository,
+      subjects.github_number,
+      ranked.revision_id,
+      ranked.head_sha,
+      ranked.provider,
+      ranked.session_id,
+      ranked.model,
+      ranked.agent_version,
+      ranked.skill_digest,
+      ranked.started_at,
+      ranked.completed_at,
+      ranked.usage,
+      ranked.gates,
+      ranked.findings,
+      ranked.confidence,
+      published.github_comment_id,
+      published.body AS published_body
+    FROM ranked
+    JOIN subjects ON subjects.id = ranked.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions AS current_revisions ON current_revisions.id = subjects.current_revision_id
+    JOIN review_publications AS published ON published.id = (
+      SELECT candidate.id FROM review_publications AS candidate
+      WHERE candidate.review_run_id = ranked.id AND candidate.result_tag = 'Published'
+      ORDER BY candidate.created_at DESC, candidate.id DESC
+      LIMIT 1
+    )
+    WHERE ranked.run_rank = 1
+      AND ranked.outcome_tag = 'Pending'
+      AND json_extract(ranked.gates, '$.ci._tag') = 'Pending'
+      AND repositories.enabled = 1
+      AND repositories.paused = 0
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      AND ranked.revision_id = subjects.current_revision_id
+      AND json_extract(current_revisions.payload, '$.state') = 'open'
+      AND json_extract(current_revisions.payload, '$.headSha') = ranked.head_sha
+      AND NOT EXISTS (
+        SELECT 1 FROM worker_tasks AS live
+        WHERE live.subject_id = ranked.subject_id AND live.kind = 'adversarial_review'
+          AND live.state_tag IN ('Queued', 'ActionRequired', 'Running')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM tasks AS repair
+        WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
+          AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+      )
+    ORDER BY repositories.github, subjects.github_number
+  `).all() as unknown as CiPendingReviewRow[]).map(row => ({
+    reviewRunId: row.review_run_id,
+    repository: row.repository,
+    pullRequestNumber: row.github_number,
+    revisionId: row.revision_id,
+    headSha: row.head_sha,
+    provider: row.provider,
+    sessionId: row.session_id,
+    model: row.model,
+    agentVersion: row.agent_version,
+    skillDigest: row.skill_digest,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    usage: agentTokenUsageFromJson(row.usage),
+    gates: JSON.parse(row.gates) as ReviewGates,
+    findings: JSON.parse(row.findings) as ReviewFinding[],
+    confidence: row.confidence ?? undefined,
+    commentId: row.github_comment_id,
+    publishedBody: row.published_body,
+  }))
+
   const listStoppedReviews: JournalStore['listStoppedReviews'] = () => (database.prepare(`
     WITH stopped AS (
       SELECT id, subject_id, revision_id, kind AS task_kind, state_tag, reason
@@ -8490,6 +8860,7 @@ export function openJournalStore(
     listActiveTaskLeases,
     listQueuedReviewStatuses,
     recordApprovalPromptComment,
+    listCiPendingReviews,
     listStoppedReviews,
     recordQueuedReviewStatus,
     isQueuedReviewStatus,
@@ -8553,6 +8924,7 @@ export function openJournalStore(
     recordPollFailure,
     recordPollSuccess,
     recordReviewRun,
+    supersedeReviewRun,
     recordReviewPublication,
     requestReviewRerun,
     resumeAgents,

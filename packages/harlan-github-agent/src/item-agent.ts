@@ -601,16 +601,26 @@ function headRepairsFailedBaseChecks(snapshot: PullRequestReviewSnapshot): boole
     && headCheck.conclusion === 'success'))
 }
 
+/**
+ * The merge gate one pull request read produces.
+ *
+ * GitHub computes mergeability whenever the branch graph moves, so the same
+ * answer belongs to whichever gate reads a snapshot and to no other gate.
+ */
+function mergeGate(pullRequest: GitHubPullRequestItem): ReviewGateState {
+  return pullRequest.mergeState === 'clean'
+    ? { _tag: 'Passed', evidence: [evidence('mergeability', 'clean')] }
+    : pullRequest.mergeState === 'unknown'
+      ? { _tag: 'Pending', reason: 'GitHub has not resolved mergeability.', evidence: [evidence('mergeability', 'unknown')] }
+      : { _tag: 'Failed', reason: 'The pull request has merge conflicts.', evidence: [evidence('mergeability', 'conflicting')] }
+}
+
 function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean): { gates: ReviewGates, reportedChecks: string[] } {
   const findings = response.findings
   const ci = ciGate(snapshot, repairsBaseline)
   const gates: ReviewGates = {
     head: { _tag: 'Passed', evidence: [evidence('head', snapshot.pullRequest.headSha)] },
-    merge: snapshot.pullRequest.mergeState === 'clean'
-      ? { _tag: 'Passed', evidence: [evidence('mergeability', 'clean')] }
-      : snapshot.pullRequest.mergeState === 'unknown'
-        ? { _tag: 'Pending', reason: 'GitHub has not resolved mergeability.', evidence: [evidence('mergeability', 'unknown')] }
-        : { _tag: 'Failed', reason: 'The pull request has merge conflicts.', evidence: [evidence('mergeability', 'conflicting')] },
+    merge: mergeGate(snapshot.pullRequest),
     metadata: gate(response.metadata, 'metadata'),
     review: findings.length > 0
       ? { _tag: 'Failed', reason: findings[0]?.summary ?? 'Material findings remain.', evidence: [evidence('review', response.review.evidence)] }
@@ -619,6 +629,34 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
     ci: ci.state,
   }
   return { gates, reportedChecks: ci.reported }
+}
+
+/**
+ * The gates a fresh CI read produces for a verdict the agent already reached.
+ *
+ * Every gate but `ci` and `merge` answers for one head commit, so a finished
+ * Review keeps its own answer. The CI gate answers for a moment instead: a base
+ * branch whose deploy was still running when the Review ran turns green minutes
+ * later, and nothing in the pull request payload moves when it does. That left
+ * one healthy pull request reading PENDING for three hours on 2026-08-27, until
+ * an unrelated push to the default branch happened to start a second review.
+ *
+ * The merge gate answers for the live pull request too. A Review read
+ * mergeability while GitHub had not resolved it and froze Pending; once GitHub
+ * reported clean nothing recomputed that gate, so reviewOutcome kept returning
+ * PENDING and auto merge stalled forever. Recomputing both gates settles the
+ * verdict with no second agent turn.
+ */
+export function regateReviewCi(
+  gates: ReviewGates,
+  snapshot: PullRequestReviewSnapshot,
+  mapping: RepositoryMapping,
+): { gates: ReviewGates, reportedChecks: string[] } {
+  const repairsBaseline = snapshot.pullRequest.purpose._tag === 'BaselineRepair'
+    || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
+  const ci = ciGate(snapshot, repairsBaseline)
+  const merge = mergeGate(snapshot.pullRequest)
+  return { gates: { ...gates, ci: ci.state, merge }, reportedChecks: ci.reported }
 }
 
 /**
@@ -664,7 +702,7 @@ Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
 Next: merge or repair the marked Baseline repair pull request.`
 }
 
-function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
+export function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const reason = result === 'PENDING'
@@ -964,7 +1002,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // A READY review whose every gate passed is a complete result. A missing
       // confidence number is a gap in the report, not a reason to discard the
       // review, so the comment omits the score instead.
-      const confidence = outcome === 'READY' && response.confidence !== null ? response.confidence : undefined
+      //
+      // The score is stored whatever the outcome, because it answers how sure
+      // the agent was, not whether the gates passed. A review that waits on CI
+      // keeps it, so the CI re-gate can publish it once the gate settles.
+      const reportedConfidence = response.confidence ?? undefined
+      const confidence = outcome === 'READY' ? reportedConfidence : undefined
       let findings: ReviewFinding[] = response.findings.map(finding => ({
         _tag: 'Open',
         summary: finding.summary,
@@ -995,7 +1038,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         completedAt,
         usage: turn.value.usage,
         gates,
-        ...(confidence === undefined ? {} : { confidence }),
+        ...(reportedConfidence === undefined ? {} : { confidence: reportedConfidence }),
         findings,
       })
       if (recorded._tag === 'Rejected')

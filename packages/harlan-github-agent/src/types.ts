@@ -331,8 +331,7 @@ export interface RecordReviewPublicationInput {
 }
 
 export type RecordReviewRunRejection
-  = | { _tag: 'ConfidenceRequiresReady' }
-    | { _tag: 'InvalidConfidence' }
+  = | { _tag: 'InvalidConfidence' }
     | { _tag: 'InvalidEvidenceDigest', label: string }
     | { _tag: 'OpenFindingRequiresBlocked' }
     | { _tag: 'ReviewApprovalRequired' }
@@ -343,6 +342,32 @@ export type RecordReviewRunResult
     | { _tag: 'Duplicate', reviewRunId: string }
     | { _tag: 'Conflict', reviewRunId: string }
     | { _tag: 'Rejected', reason: RecordReviewRunRejection }
+
+/**
+ * One CI re-gate settlement for a Review run that only CI held back.
+ *
+ * The settlement carries the restated answer of the same agent turn and links
+ * to the run it supersedes, so the journal counts that turn once.
+ */
+export interface SupersedeReviewRunInput extends RecordReviewRunInput {
+  /** The Review run whose only unsettled gate was CI. */
+  supersedesReviewRunId: string
+}
+
+export type SupersedeReviewRunRejection
+  = | { _tag: 'InvalidConfidence' }
+    | { _tag: 'InvalidEvidenceDigest', label: string }
+    | { _tag: 'OpenFindingRequiresBlocked' }
+    | { _tag: 'ReviewApprovalRequired' }
+    | { _tag: 'RevisionMismatch' }
+    | { _tag: 'RunNotFound' }
+    | { _tag: 'AlreadySuperseded' }
+
+export type SupersedeReviewRunResult
+  = | { _tag: 'Inserted', reviewRunId: string }
+    | { _tag: 'Duplicate', reviewRunId: string }
+    | { _tag: 'Conflict', reviewRunId: string }
+    | { _tag: 'Rejected', reason: SupersedeReviewRunRejection }
 
 export type RecordReviewPublicationResult
   = | { _tag: 'Inserted', publicationId: string }
