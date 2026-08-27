@@ -4,6 +4,7 @@ import type { AgentProviderName } from './agent-provider.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { Result } from './result.ts'
+import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAgentTask, RepositoryMapping, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
@@ -75,6 +76,24 @@ export interface StartAgentServiceOptions {
   gitIdentity: GitIdentity
   logger: Pick<ConsolaInstance, 'error' | 'info'>
   now?: () => Date
+}
+
+/** Records the repository observation that replaces GitHub polling on a Routine-only host. */
+export function recordRoutineOnlyRepositoryHealth(input: {
+  at: string
+  outcome: RoutineSyncOutcome
+  repository: string
+  store: Pick<JournalStore, 'recordPollFailure' | 'recordPollSuccess'>
+}): void {
+  if (input.outcome._tag === 'Unread') {
+    input.store.recordPollFailure(
+      input.repository,
+      input.at,
+      `The Routine spec could not be read. ${input.outcome.reason}`,
+    )
+    return
+  }
+  input.store.recordPollSuccess(input.repository, input.at)
 }
 
 function recordServiceIncident(
@@ -699,6 +718,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         if (outcome._tag === 'Synced' && outcome.routines.length > 0)
           options.logger.info(`${repository}: ${outcome.routines.length} routines declared.`)
       })
+      if (!config.triggers.includes('github')) {
+        const observedAt = now().toISOString()
+        syncedRoutines.forEach(({ repository, outcome }) => recordRoutineOnlyRepositoryHealth({
+          at: observedAt,
+          outcome,
+          repository,
+          store,
+        }))
+      }
       recordPassIncidents('routine_spec', routineFailures)
 
       // Candidate issues are filed on the same pass, a few at a time. A scan

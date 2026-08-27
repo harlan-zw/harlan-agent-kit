@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseConfigText } from '../src/config.ts'
+import { recordRoutineOnlyRepositoryHealth } from '../src/service.ts'
 
 const base = `
 github:
@@ -60,5 +61,37 @@ describe('which triggers one machine answers', () => {
     const parsed = parse('triggers: [routine, routine]\n')
 
     expect(parsed).toEqual({ _tag: 'Err', error: [{ path: '$.triggers', message: 'List every trigger once.' }] })
+  })
+
+  it('becomes ready after a Routine-only repository sync', () => {
+    const observations: string[] = []
+
+    recordRoutineOnlyRepositoryHealth({
+      at: '2026-08-28T01:00:00.000Z',
+      outcome: { _tag: 'Synced', routines: [] },
+      repository: 'harlan-zw/example',
+      store: {
+        recordPollFailure: () => observations.push('failure'),
+        recordPollSuccess: repository => observations.push(`success:${repository}`),
+      },
+    })
+
+    expect(observations).toEqual(['success:harlan-zw/example'])
+  })
+
+  it('reports an unreadable Routine spec as repository failure', () => {
+    const observations: string[] = []
+
+    recordRoutineOnlyRepositoryHealth({
+      at: '2026-08-28T01:00:00.000Z',
+      outcome: { _tag: 'Unread', reason: 'GitHub timed out.' },
+      repository: 'harlan-zw/example',
+      store: {
+        recordPollFailure: (repository, _at, reason) => observations.push(`failure:${repository}:${reason}`),
+        recordPollSuccess: () => observations.push('success'),
+      },
+    })
+
+    expect(observations).toEqual(['failure:harlan-zw/example:The Routine spec could not be read. GitHub timed out.'])
   })
 })
