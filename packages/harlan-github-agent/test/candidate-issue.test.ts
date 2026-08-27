@@ -67,6 +67,7 @@ function seed(store: ReturnType<typeof openJournalStore>): void {
 function publisher(calls: Array<{ title: string, labels?: readonly string[] }>): GitHubIssuePublisher {
   return {
     findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+    createComment: async () => ok({ id: 1 }),
     createIssue: async (input) => {
       calls.push({ title: input.title, ...(input.labels === undefined ? {} : { labels: input.labels }) })
       return ok({ number: 100 + calls.length, url: `https://github.com/harlan-zw/example/issues/${100 + calls.length}` })
@@ -205,6 +206,7 @@ describe('filing the issues Candidates propose', () => {
       })
       const refusing = {
         findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+        createComment: async () => ok({ id: 1 }),
         createIssue: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
       }
       const controller = createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })
@@ -243,6 +245,7 @@ describe('filing the issues Candidates propose', () => {
           ghost = { number: 7, url: 'https://github.com/harlan-zw/example/issues/7' }
           return { _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'The request timed out.' } }
         },
+        createComment: async () => ok({ id: 1 }),
       }
       const controller = createCandidateIssueController({ github: ambiguous, now, store, workerId: 'controller-1' })
 
@@ -267,6 +270,7 @@ describe('filing the issues Candidates propose', () => {
       })
       const refusing = {
         findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+        createComment: async () => ok({ id: 1 }),
         createIssue: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
       }
       const controller = createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })

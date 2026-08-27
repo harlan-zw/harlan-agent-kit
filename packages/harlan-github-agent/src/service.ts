@@ -47,6 +47,7 @@ import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
 import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
+import { createRoutineReportController } from './routine-report-controller.ts'
 import { createRoutineScanWorker } from './routine-worker.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
@@ -590,6 +591,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store,
     workerId: randomUUID(),
   })
+  const routineReports = createRoutineReportController({
+    github: createGitHubIssuePublisher({ tokens: routedTokens }),
+    now,
+    store,
+    workerId: randomUUID(),
+  })
   const poller = createPoller({
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
@@ -656,6 +663,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a routine proposal.`)
         })
         recordPassIncidents('candidate_issue', filed.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+
+        const reported = await routineReports.publishPending(signal)
+        recordPassIncidents('routine_report', reported.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       }
 
       if (config.mutationsEnabled && config.triggers.includes('routine')) {

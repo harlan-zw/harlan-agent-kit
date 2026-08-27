@@ -21,6 +21,7 @@ import type {
   ClaimedPublicationCommand,
   ClaimedReviewFixTask,
   ClaimedReviewStatusCommand,
+  ClaimedRoutineReportCommand,
   ClaimedRoutineRun,
   ConflictResolutionTask,
   DashboardAgent,
@@ -63,6 +64,7 @@ import type {
   ReviewRun,
   ReviewStatusTaskPhase,
   Routine,
+  RoutineReportCommand,
   RoutineRun,
   RoutineRunState,
   RoutineSpecEntry,
@@ -618,6 +620,11 @@ export interface JournalStore {
   claimNextCandidateIssue: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedCandidateIssueCommand | null
   completeCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, issueNumber: number, url: string }) => boolean
   failCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
+  /** Requests the run log entry for one run. Answers false when it already exists. */
+  stageRoutineReport: (input: { command: RoutineReportCommand, at: string }) => boolean
+  claimNextRoutineReport: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineReportCommand | null
+  completeRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, trackingIssueNumber: number }) => boolean
+  failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -3907,6 +3914,51 @@ const reviewSettlementMigration = `
   PRAGMA user_version = 42;
 `
 
+/**
+ * Adds the run log: one tracking issue per Routine, one comment per run.
+ *
+ * A Routine that found nothing, or that was skipped, writes no Candidate and so
+ * left no trace at all. A quiet morning read exactly like a broken one. The
+ * tracking issue is where every run says what it did, including the runs that
+ * did nothing.
+ *
+ * The issue number lives on the Routine because the issue outlives every run.
+ */
+const routineRunLogMigration = `
+  ALTER TABLE routines ADD COLUMN tracking_issue_number INTEGER;
+
+  CREATE TABLE routine_report_commands (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES routine_runs(id) ON DELETE CASCADE,
+    repository TEXT NOT NULL,
+    routine_name TEXT NOT NULL,
+    body TEXT NOT NULL CHECK (body != ''),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Failed')),
+    reason TEXT,
+    github_comment_id INTEGER,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    -- One report per run. A retry can never say the same morning twice.
+    UNIQUE (run_id),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (state_tag != 'Failed' OR reason IS NOT NULL),
+    CHECK (state_tag != 'Published' OR github_comment_id IS NOT NULL)
+  );
+
+  CREATE INDEX routine_report_commands_state ON routine_report_commands(state_tag, updated_at);
+
+  PRAGMA user_version = 43;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3932,7 +3984,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 42)
+  if (version === 43)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4101,6 +4153,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 41) {
     applyMigration(database, reviewSettlementMigration)
+    version = 42
+  }
+  if (version === 42) {
+    applyMigration(database, routineRunLogMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -8263,6 +8319,7 @@ export function openJournalStore(
     enabled: number
     spec_sha: string
     last_run_at: string | null
+    tracking_issue_number: number | null
     updated_at: string
   }
 
@@ -8276,6 +8333,7 @@ export function openJournalStore(
     enabled: row.enabled === 1,
     specSha: row.spec_sha,
     lastRunAt: row.last_run_at,
+    trackingIssueNumber: row.tracking_issue_number,
     updatedAt: row.updated_at,
   })
 
@@ -8838,6 +8896,142 @@ export function openJournalStore(
     `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
   }
 
+  const stageRoutineReport: JournalStore['stageRoutineReport'] = input => database.prepare(`
+    INSERT INTO routine_report_commands (
+      id, routine_id, run_id, repository, routine_name, body, state_tag, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+    ON CONFLICT (run_id) DO NOTHING
+  `).run(
+    input.command.id,
+    input.command.routineId,
+    input.command.runId,
+    input.command.repository,
+    input.command.routineName,
+    input.command.body,
+    input.at,
+    input.at,
+  ).changes === 1
+
+  const claimNextRoutineReport: JournalStore['claimNextRoutineReport'] = (workerId, now, leaseMilliseconds) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      database.prepare(`
+        UPDATE routine_report_commands
+        SET state_tag = 'Pending', worker_id = NULL, lease_expires_at = NULL,
+          fence = fence + 1, updated_at = ?
+        WHERE state_tag = 'Running' AND lease_expires_at <= ?
+      `).run(now, now)
+
+      const row = database.prepare(`
+        SELECT
+          routine_report_commands.id,
+          routine_report_commands.routine_id,
+          routine_report_commands.run_id,
+          routine_report_commands.repository,
+          routine_report_commands.routine_name,
+          routine_report_commands.body,
+          routine_report_commands.fence,
+          routines.tracking_issue_number,
+          repositories.policy_json
+        FROM routine_report_commands
+        JOIN routines ON routines.id = routine_report_commands.routine_id
+        JOIN repositories ON repositories.github = routine_report_commands.repository
+        WHERE routine_report_commands.state_tag = 'Pending'
+          AND repositories.enabled = 1
+          AND repositories.writes_enabled = 1
+        ORDER BY routine_report_commands.created_at, routine_report_commands.id
+        LIMIT 1
+      `).get() as unknown as {
+        id: string
+        routine_id: string
+        run_id: string
+        repository: string
+        routine_name: string
+        body: string
+        fence: number
+        tracking_issue_number: number | null
+        policy_json: string
+      } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return null
+      }
+
+      const fence = row.fence + 1
+      const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()
+      const claimed = database.prepare(`
+        UPDATE routine_report_commands
+        SET state_tag = 'Running', worker_id = ?, lease_expires_at = ?, fence = ?,
+          attempts = attempts + 1, updated_at = ?
+        WHERE id = ? AND state_tag = 'Pending' AND fence = ?
+      `).run(workerId, leaseExpiresAt, fence, now, row.id, row.fence).changes === 1
+      database.exec('COMMIT')
+      if (!claimed)
+        return null
+      return {
+        id: row.id,
+        routineId: row.routine_id,
+        runId: row.run_id,
+        repository: row.repository,
+        routineName: row.routine_name as ClaimedRoutineReportCommand['routineName'],
+        repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
+        body: row.body,
+        trackingIssueNumber: row.tracking_issue_number,
+        fence,
+        workerId,
+      }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * Records the published report, and the issue every later run reports to.
+   *
+   * The issue number is written here rather than when the issue is created, so
+   * a run that opened the issue and then failed to comment leaves no Routine
+   * pointing at an issue with nothing in it.
+   */
+  const completeRoutineReport: JournalStore['completeRoutineReport'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE routine_report_commands
+        SET state_tag = 'Published', github_comment_id = ?, reason = NULL,
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(input.commentId, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        database.prepare(`
+          UPDATE routines SET tracking_issue_number = ?, updated_at = ?
+          WHERE id = (SELECT routine_id FROM routine_report_commands WHERE id = ?)
+        `).run(input.trackingIssueNumber, input.at, input.commandId)
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const failRoutineReport: JournalStore['failRoutineReport'] = (input) => {
+    const row = database.prepare('SELECT attempts, max_attempts FROM routine_report_commands WHERE id = ?')
+      .get(input.commandId) as unknown as { attempts: number, max_attempts: number } | undefined
+    if (row === undefined)
+      return false
+    const retrying = row.attempts < row.max_attempts
+    return database.prepare(`
+      UPDATE routine_report_commands
+      SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+    `).run(retrying ? 'Pending' : 'Failed', input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+  }
+
   return {
     approveIssueWork,
     syncRoutines,
@@ -8851,6 +9045,10 @@ export function openJournalStore(
     claimNextCandidateIssue,
     completeCandidateIssue,
     failCandidateIssue,
+    stageRoutineReport,
+    claimNextRoutineReport,
+    completeRoutineReport,
+    failRoutineReport,
     claimNextRoutineRun,
     heartbeatRoutineRun,
     completeRoutineRun,
