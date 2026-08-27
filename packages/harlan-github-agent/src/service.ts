@@ -594,15 +594,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
     poll: async (signal) => {
       const recordPassIncidents = createPassIncidentRecorder({ store, now, signal })
-      const results = await reconcileAllRepositories(config.repositories, {
-        ...(mutationSchedulers === undefined
-          ? {}
-          : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge }),
-        github,
-        store,
-        now,
-        signal,
-      })
+      const results = !config.triggers.includes('github')
+        ? []
+        : await reconcileAllRepositories(config.repositories, {
+            ...(mutationSchedulers === undefined
+              ? {}
+              : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge }),
+            github,
+            store,
+            now,
+            signal,
+          })
       if (signal.aborted)
         return
       results.forEach((result) => {
@@ -624,12 +626,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // that observes GitHub. A repository declares its own schedule, and the
       // spec is read at the default branch commit only.
       const routineFailures: string[] = []
-      const syncedRoutines = await Promise.all(config.repositories
-        .filter(repository => repository.enabled)
-        .map(async repository => ({
-          repository: repository.github,
-          outcome: await syncRepositoryRoutines(repository, { github, store, now, signal }),
-        })))
+      const syncedRoutines = !config.triggers.includes('routine')
+        ? []
+        : await Promise.all(config.repositories
+            .filter(repository => repository.enabled)
+            .map(async repository => ({
+              repository: repository.github,
+              outcome: await syncRepositoryRoutines(repository, { github, store, now, signal }),
+            })))
       if (signal.aborted)
         return
       syncedRoutines.forEach(({ repository, outcome }) => {
@@ -644,7 +648,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
 
       // Candidate issues are filed on the same pass, a few at a time. A scan
       // that found twenty proposals must not open twenty issues at once.
-      if (config.mutationsEnabled) {
+      if (config.mutationsEnabled && config.triggers.includes('routine')) {
         const filed = await candidateIssues.publishPending(signal)
         filed.forEach((result) => {
           if (result._tag === 'Ok')
@@ -653,12 +657,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         recordPassIncidents('candidate_issue', filed.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       }
 
-      if (config.mutationsEnabled) {
+      if (config.mutationsEnabled && config.triggers.includes('routine')) {
         const planned = planRoutineRuns({ now, store })
         planned.opened.forEach(run => options.logger.info(`${run.repository}: queued the ${run.name} routine for ${run.scheduledFor}.`))
         planned.skipped.forEach(run => options.logger.info(`${run.repository}: skipped the ${run.name} routine due at ${run.scheduledFor}.`))
       }
 
+      // Everything below answers a GitHub observation, so a routines-only
+      // machine skips it and never reads or writes another machine's work.
+      if (!config.triggers.includes('github'))
+        return
       const reruns = await syncOpenReviewRerunRequests(config.repositories, {
         allowedAuthors: config.github.allowedOwners,
         github,
@@ -854,17 +862,30 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         return null
       })
 
-  poller.start()
-  externalPoller.start()
+  // A machine answers only the triggers its configuration names. Starting a
+  // scheduler it does not own is what would let two machines claim one Task.
+  const answers = (trigger: 'github' | 'routine'): boolean => config.triggers.includes(trigger)
+  if (answers('github') || answers('routine'))
+    poller.start()
+  if (answers('github'))
+    externalPoller.start()
   worktreeSweeper.start()
-  mutationSchedulers?.tasks.start()
-  mutationSchedulers?.baselineRepairs.start()
-  mutationSchedulers?.issueWork.start()
-  mutationSchedulers?.publications.start()
-  mutationSchedulers?.repairs.forEach(scheduler => scheduler.start())
-  mutationSchedulers?.reviews.forEach(scheduler => scheduler.start())
-  mutationSchedulers?.issues.start()
-  mutationSchedulers?.routines.start()
+  if (answers('github'))
+    mutationSchedulers?.tasks.start()
+  if (answers('github'))
+    mutationSchedulers?.baselineRepairs.start()
+  if (answers('github'))
+    mutationSchedulers?.issueWork.start()
+  if (answers('github'))
+    mutationSchedulers?.publications.start()
+  if (answers('github'))
+    mutationSchedulers?.repairs.forEach(scheduler => scheduler.start())
+  if (answers('github'))
+    mutationSchedulers?.reviews.forEach(scheduler => scheduler.start())
+  if (answers('github'))
+    mutationSchedulers?.issues.start()
+  if (answers('routine'))
+    mutationSchedulers?.routines.start()
 
   return {
     server,
