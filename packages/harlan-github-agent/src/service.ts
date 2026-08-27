@@ -44,6 +44,7 @@ import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
 import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
+import { createRoutineScanWorker } from './routine-worker.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
@@ -409,6 +410,32 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             validateMapping,
             worktrees: baselineWorktrees,
           }),
+        }),
+        workerId: randomUUID(),
+      }),
+      routines: createWorkerTaskScheduler({
+        canClaim,
+        claim: store.claimNextRoutineRun,
+        complete: store.completeRoutineRun,
+        fail: store.failRoutineRun,
+        heartbeat: store.heartbeatRoutineRun,
+        intervalMilliseconds: 5_000,
+        // A scan reads a whole repository, so it gets the same room as a review.
+        leaseMilliseconds: 45 * 60_000,
+        now,
+        onError: error => options.logger.error(error),
+        onTaskSettled: activityLog.clear,
+        permits,
+        // A scan is read only, so it needs no write access to start.
+        worker: createRoutineScanWorker({
+          logger: {
+            error: message => options.logger.error(message),
+            info: message => options.logger.info(message),
+          },
+          now,
+          runtime,
+          store,
+          workspaces,
         }),
         workerId: randomUUID(),
       }),
@@ -782,6 +809,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   mutationSchedulers?.repairs.forEach(scheduler => scheduler.start())
   mutationSchedulers?.reviews.forEach(scheduler => scheduler.start())
   mutationSchedulers?.issues.start()
+  mutationSchedulers?.routines.start()
 
   return {
     server,
@@ -799,6 +827,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.reviews.map(scheduler => scheduler.stop()) ?? []),
         mutationSchedulers?.issues.stop() ?? Promise.resolve(),
+        mutationSchedulers?.routines.stop() ?? Promise.resolve(),
       ])
       dashboardShutdown.abort()
       await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])

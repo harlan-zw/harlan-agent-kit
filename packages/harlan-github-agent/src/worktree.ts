@@ -3,7 +3,7 @@ import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
 import type { Result } from './result.ts'
-import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, PullRequestBase } from './types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -84,6 +84,8 @@ export interface AgentWorkspaceManager {
   prepareFix: (task: ClaimedReviewFixTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   prepareIssue: (task: ClaimedIssueTriageTask | ClaimedIssueWorkTask, base: PullRequestBase, signal: AbortSignal) => Promise<Result<PreparedIssueWorkspace, string>>
   prepareReview: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  /** A Routine scan reads the default branch. It never starts from a pull request head. */
+  prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
@@ -732,7 +734,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
 
 export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOptions): AgentWorkspaceManager {
   async function prepareRepository(
-    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask,
+    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun,
     label: string,
     refs: string[],
     headRef: string,
@@ -759,6 +761,20 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
   }
 
   return {
+    async prepareRoutine(task, signal) {
+      // A Routine scans what is merged, so it starts from the default branch
+      // and never from a pull request head. Reading unmerged work would let a
+      // pull request steer what the next scan proposes.
+      const baseRef = `refs/harlan-github-agent/routines/${task.name}`
+      return prepareRepository(
+        task,
+        `routine-${task.name}-${task.scheduledFor.slice(0, 10)}`,
+        [`+refs/heads/${task.repositoryMapping.defaultBranch}:${baseRef}`],
+        baseRef,
+        signal,
+      )
+    },
+
     async prepareBaseline(task, signal) {
       const baseRef = `refs/harlan-github-agent/baselines/${task.pullRequest.baseSha}`
       const prepared = await prepareRepository(
