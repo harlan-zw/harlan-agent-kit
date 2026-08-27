@@ -87,7 +87,7 @@ curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://har
 
 The controller creates every agent worktree from its mapped repository checkout with `wt`. The global Worktrunk configuration places it beside the checkout as `<repo>.<branch-slug>`. Workers must not create, enter, or remove worktrees themselves.
 
-The mapped checkout is a read-only control checkout. Never run an Agent there. Worktrunk fetches and fast-forwards it to `origin/main` before it prepares the task worktree. Treat a blocked primary check as a repository incident. Preserve its local changes for human recovery.
+The mapped checkout is a read-only control checkout. Never run an Agent there. Worktrunk fetches and prunes `origin`, then fast-forwards primary `main` to `origin/main`. The task worktree may use an exact pull request, stack parent, or recovery commit as its base. Treat a blocked primary check as a repository incident. Preserve its local changes for human recovery.
 
 Worktrunk completes its blocking `pre-start` hook before the controller starts an Agent.
 For pnpm repositories, this prepares an isolated `node_modules` from the new worktree's lockfile.

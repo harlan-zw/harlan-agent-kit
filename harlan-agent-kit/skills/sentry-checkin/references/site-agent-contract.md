@@ -8,7 +8,7 @@ Own one site from frozen Sentry snapshot through one verified PR. Do not delegat
 2. Inspect the primary checkout status without changing it. Keep it clean on `main`, equal to `origin/main`.
 3. Follow the [worktree isolation contract](../../../references/worktree-isolation.md). The primary checkout stays read only.
 4. Run `wt list --format=json`. Reuse an open `fix/sentry-checkin-*` worktree only when it targets the same frozen issues.
-5. Otherwise run `wt switch --create fix/sentry-checkin-YYYYMMDD-SITE --base origin/main`. Read its absolute `path` from the JSON and pass it as `workdir` to every later command. Acquire its atomic claim before editing.
+5. Otherwise choose the intended base and run `wt switch --create fix/sentry-checkin-YYYYMMDD-SITE --base BASE`. Read its absolute `path` from the JSON and pass it as `workdir` to every later command. Acquire its atomic claim before editing.
 
 All fixes, tests, commits, and PR actions for this site happen in the selected task checkout or worktree. Never use a checkout owned by another active task. Never create a worktree per issue.
 

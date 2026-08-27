@@ -20,7 +20,7 @@ Example: branch `fix/auth` in `~/pkg/app` resolves to `~/pkg/app.fix-auth`. Neve
 
 `harlan-github-agent` follows the same contract. It creates each agent worktree from the configured repository checkout with `wt`.
 
-The global `pre-switch` hook protects the primary checkout before every Worktrunk switch. It requires `main`, a clean worktree, and an `origin` remote. It fetches `origin/main`, then fast-forwards local `main`. A fetch failure, local commit, divergent branch, or dirty file stops the switch.
+The global `pre-switch` hook protects the primary checkout before every Worktrunk switch. It requires `main`, a clean worktree, and an `origin` remote. It fetches and prunes every `origin` ref, then fast-forwards local `main` to `origin/main`. A fetch failure, local commit, divergent branch, or dirty file stops the switch.
 
 ## Prepared worktrees
 
@@ -62,11 +62,13 @@ Do not share its cache directory across different worktree paths.
 | Action | Command |
 | --- | --- |
 | List worktrees and absolute paths | `wt list --format=json` |
-| Create from the current default branch | `wt switch --create <branch> --base origin/main` |
+| Create from the chosen base | `wt switch --create <branch> --base <base>` |
 | Enter an existing worktree | `wt switch <branch>` |
 | Remove after merge | `wt remove <branch>` |
 
 Read the absolute `path` from `wt list --format=json`. Pass that path as the working directory to every later command. Never force removal with `--force` or `--force-delete`.
+
+Choose the base independently from the primary checkout. Use `origin/main` for independent work. For stacked work, use `origin/<parent-branch>` when its current remote tip is the intended parent. Use an exact parent SHA when the task freezes that parent commit. The primary checkout stays on `main` for every choice.
 
 ## Claim interface
 
@@ -90,7 +92,7 @@ Run `acquire` again before each mutation phase and at least every five minutes t
 
 Use the primary checkout only for read-only work and Worktrunk commands. Do not acquire it for mutation.
 
-Before mutation, run `wt list --format=json`. If one worktree already belongs to this task, acquire and reuse it. Otherwise create one with `wt switch --create <branch> --base origin/main`, then acquire it. A pull request or recovery task may use its exact frozen base instead of `origin/main`.
+Before mutation, run `wt list --format=json`. If one worktree already belongs to this task, acquire and reuse it. Otherwise choose the task base, create one with `wt switch --create <branch> --base <base>`, then acquire it.
 
 A live claim in another worktree still proves concurrent repository work. A stale claim or an unclaimed worktree does not.
 

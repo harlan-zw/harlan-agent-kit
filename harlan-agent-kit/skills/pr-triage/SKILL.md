@@ -17,7 +17,7 @@ An existing worktree alone does not prove another agent is active.
 
 `wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
 
-Discovery stays read only and may use the primary checkout. Every Repair uses a task-owned worktree. Run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base origin/main`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+Discovery stays read only and may use the primary checkout. Every Repair uses a task-owned worktree. Run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
 
 ## Load contracts
 

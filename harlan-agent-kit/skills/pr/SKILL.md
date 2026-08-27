@@ -78,9 +78,10 @@ Keep the primary checkout read only. Every mutation uses a task-owned `wt` workt
 1. Run `wt list --format=json`.
 2. Reuse this task's existing worktree with `wt switch BRANCH` when one exists.
 3. Otherwise derive a branch name such as `feat/add-widget` or `fix/login-bug`.
-4. Create it with `wt switch --create BRANCH --base origin/main`. Use an exact frozen base only when the task requires one.
-5. Run `wt list --format=json` again. Read the branch's absolute `path`.
-6. Pass that path as `workdir` to every later command, including CI repairs.
+4. Choose `BASE`. Use `origin/main` for independent work. Use `origin/PARENT` or the exact parent SHA for stacked work.
+5. Create it with `wt switch --create BRANCH --base BASE`.
+6. Run `wt list --format=json` again. Read the branch's absolute `path`.
+7. Pass that path as `workdir` to every later command, including CI repairs.
 
 If this task's changes already exist in the primary checkout, leave that checkout untouched. List every verified task-owned path. Export `git diff --cached --binary -- PATHS` and `git diff --binary -- PATHS` separately. Apply the cached patch with `git apply --index`, then apply the unstaged patch. Copy owned untracked files individually. Compare every owned source path with its destination before continuing. Never reset, clean, stash, or overwrite the source checkout.
 
