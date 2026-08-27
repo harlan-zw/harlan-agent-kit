@@ -6,7 +6,7 @@ import type { GitHubUserAccess } from './github-user-access.ts'
 import type { Result } from './result.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { JournalStore } from './store.ts'
-import type { ClaimedAgentTask, RepositoryMapping, ValidatedAgentConfig } from './types.ts'
+import type { ClaimedAgentTask, DashboardSnapshot, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createAgentActivityLog } from './agent-activity.ts'
@@ -94,6 +94,16 @@ export function recordRoutineOnlyRepositoryHealth(input: {
     return
   }
   input.store.recordPollSuccess(input.repository, input.at)
+}
+
+/** Omits Routine history when this service does not answer the Routine trigger. */
+export function dashboardSnapshotForTriggers(
+  snapshot: DashboardSnapshot,
+  triggers: readonly ServiceTrigger[],
+): DashboardSnapshot {
+  return triggers.includes('routine')
+    ? snapshot
+    : { ...snapshot, routines: [], routineRuns: [] }
 }
 
 function recordServiceIncident(
@@ -909,7 +919,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
       getDashboardSnapshot: (at) => {
-        const snapshot = pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot()))
+        const snapshot = dashboardSnapshotForTriggers(
+          pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),
+          config.triggers,
+        )
         const providerCapacities = AGENT_PROVIDER_NAMES.map(provider => ({
           provider,
           capacity: capacity.read(provider),
