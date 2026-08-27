@@ -43,6 +43,7 @@ import { createReviewFixWorker } from './review-fix-worker.ts'
 import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
+import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
@@ -566,6 +567,34 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         if (retried > 0)
           options.logger.info(`Requeued ${retried} tasks after recoverable failures.`)
       }
+      // Routines answer a clock, so they are read and planned on the same pass
+      // that observes GitHub. A repository declares its own schedule, and the
+      // spec is read at the default branch commit only.
+      const routineFailures: string[] = []
+      const syncedRoutines = await Promise.all(config.repositories
+        .filter(repository => repository.enabled)
+        .map(async repository => ({
+          repository: repository.github,
+          outcome: await syncRepositoryRoutines(repository, { github, store, now, signal }),
+        })))
+      if (signal.aborted)
+        return
+      syncedRoutines.forEach(({ repository, outcome }) => {
+        if (outcome._tag === 'Refused')
+          routineFailures.push(`${repository}: the Routine spec was refused. ${outcome.reason}`)
+        if (outcome._tag === 'Unread')
+          routineFailures.push(`${repository}: the Routine spec could not be read. ${outcome.reason}`)
+        if (outcome._tag === 'Synced' && outcome.routines.length > 0)
+          options.logger.info(`${repository}: ${outcome.routines.length} routines declared.`)
+      })
+      replaceServiceIncidents(store, now().toISOString(), 'routine_spec', routineFailures)
+
+      if (config.mutationsEnabled) {
+        const planned = planRoutineRuns({ now, store })
+        planned.opened.forEach(run => options.logger.info(`${run.repository}: queued the ${run.name} routine for ${run.scheduledFor}.`))
+        planned.skipped.forEach(run => options.logger.info(`${run.repository}: skipped the ${run.name} routine due at ${run.scheduledFor}.`))
+      }
+
       const reruns = await syncOpenReviewRerunRequests(config.repositories, {
         allowedAuthors: config.github.allowedOwners,
         github,

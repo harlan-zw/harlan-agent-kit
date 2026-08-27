@@ -3,6 +3,7 @@ import type { AutoMergeMethod } from './auto-merge.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { Result } from './result.ts'
 import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping } from './types.ts'
+import { Buffer } from 'node:buffer'
 import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { pullRequestPurpose } from './baseline-repair-state.ts'
@@ -11,6 +12,7 @@ import { currentBaseSha } from './github-base.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { isReviewRerunCommand } from './review-rerun.ts'
+import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 
 export interface GitHubReadError {
   repository: string
@@ -31,7 +33,19 @@ export interface GitHubSource {
   getPullRequest: (repository: RepositoryMapping, number: number, signal?: AbortSignal) => Promise<Result<GitHubPullRequestItem, GitHubReadError>>
   listOpenItems: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<GitHubItem[], GitHubReadError>>
   listReviewRerunRequests: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<GitHubReviewRerunRequest[], GitHubReadError>>
+  /** Reads the Routine spec from the default branch, with the commit it came from. */
+  readRoutineSpec: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<RoutineSpecSource, GitHubReadError>>
 }
+
+/**
+ * One repository's Routine spec as GitHub holds it.
+ *
+ * `Absent` is the normal answer. Most repositories declare no Routines, and a
+ * missing file is not a fault.
+ */
+export type RoutineSpecSource
+  = | { _tag: 'Absent', specSha: string }
+    | { _tag: 'Present', specSha: string, text: string }
 
 export interface GitHubSourceOptions {
   tokens: GitHubTokenProvider
@@ -176,6 +190,48 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
   }
 
   return {
+    readRoutineSpec: async (repository, signal) => {
+      const { owner, repo } = repositoryParts(repository.github)
+      const octokit = await client(repository.github, signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const request = signal === undefined ? {} : { request: { signal } }
+      // The spec is read at the default branch commit and never at a pull
+      // request head. A pull request that could change the schedule could
+      // schedule local agent work, so its head is never consulted.
+      return currentBaseSha(octokit.value, owner, repo, repository.defaultBranch, signal)
+        .then(async (specSha): Promise<Result<RoutineSpecSource, GitHubReadError>> => {
+          const content = await octokit.value.rest.repos.getContent({
+            owner,
+            repo,
+            path: ROUTINE_SPEC_PATH,
+            ref: specSha,
+            ...request,
+          }).catch((error: unknown) => {
+            if (errorStatus(error) === 404)
+              return null
+            throw error
+          })
+          if (content === null)
+            return ok({ _tag: 'Absent', specSha })
+          const data = content.data as { type?: string, content?: string, encoding?: string }
+          if (data.type !== 'file' || typeof data.content !== 'string')
+            return err({ repository: repository.github, message: `${ROUTINE_SPEC_PATH} is not a file.` })
+          return ok({
+            _tag: 'Present',
+            specSha,
+            text: Buffer.from(data.content, data.encoding === 'base64' ? 'base64' : 'utf8').toString('utf8'),
+          })
+        })
+        .catch((error: unknown): Result<RoutineSpecSource, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({
+            repository: repository.github,
+            message: error instanceof Error ? error.message : 'GitHub request failed.',
+            ...(status === undefined ? {} : { status }),
+          })
+        })
+    },
     isBranchProtected: async (repository, branch, signal) => {
       const { owner, repo } = repositoryParts(repository.github)
       const octokit = await client(repository.github, signal)
