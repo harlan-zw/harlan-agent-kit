@@ -14,6 +14,8 @@ export const CODEX_AGENT_PROFILE = {
     issue_triage: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
     issue_work: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
     review_fix: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
+    routine_scan: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
+    routine_fix: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
   },
 } as const satisfies AgentProfile
 
@@ -29,6 +31,8 @@ export const OPENCODE_AGENT_PROFILE = {
     issue_triage: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
     issue_work: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
     review_fix: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    routine_scan: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    routine_fix: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
   },
 } as const satisfies AgentProfile
 
@@ -46,6 +50,8 @@ export const AGENT_ROLES = [
   'issue_triage',
   'issue_work',
   'review_fix',
+  'routine_scan',
+  'routine_fix',
 ] as const satisfies readonly AgentRole[]
 
 /** Every model an Agent provider answers with, in the order the controls list them. */

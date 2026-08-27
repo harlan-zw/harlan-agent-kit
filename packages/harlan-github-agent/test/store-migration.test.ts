@@ -17,11 +17,19 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+/** Rewinds past the Routine tables, which every version below 38 predates. */
+function dropRoutines(database: DatabaseSync): void {
+  database.exec('DROP TABLE IF EXISTS candidates')
+  database.exec('DROP TABLE IF EXISTS routine_runs')
+  database.exec('DROP TABLE IF EXISTS routines')
+}
+
 /** Every rewind here predates the newest schema, so its additions have to go too. */
 function dropSelectionMode(database: DatabaseSync): void {
   database.exec('ALTER TABLE agent_control DROP COLUMN selection_mode')
   database.exec('DROP TABLE item_dismissals')
   database.exec('ALTER TABLE repositories DROP COLUMN writes_enabled')
+  dropRoutines(database)
 }
 
 /**
@@ -204,6 +212,7 @@ function journalAtVersion30(path: string): void {
     }),
     'a'.repeat(64),
   )
+  dropRoutines(database)
   database.exec('PRAGMA user_version = 30')
   database.close()
 }
@@ -273,6 +282,7 @@ describe('installation permission recovery migration', () => {
     store.close()
 
     const oldJournal = new DatabaseSync(path)
+    dropRoutines(oldJournal)
     oldJournal.exec('PRAGMA user_version = 32')
     oldJournal.close()
 
@@ -325,6 +335,7 @@ describe('provider session recovery migration', () => {
     store.close()
 
     const oldJournal = new DatabaseSync(path)
+    dropRoutines(oldJournal)
     oldJournal.exec('PRAGMA user_version = 34')
     oldJournal.close()
 
@@ -357,7 +368,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(37)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(38)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

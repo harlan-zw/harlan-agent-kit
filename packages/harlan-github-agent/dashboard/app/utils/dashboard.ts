@@ -345,6 +345,8 @@ const workChips: Record<AgentRole, WorkChip> = {
   baseline_repair: { label: 'Baseline', icon: 'i-lucide-heart-pulse' },
   issue_triage: { label: 'Triage', icon: 'i-lucide-inbox' },
   issue_work: { label: 'Issue work', icon: 'i-lucide-hammer' },
+  routine_scan: { label: 'Routine scan', icon: 'i-lucide-radar' },
+  routine_fix: { label: 'Routine fix', icon: 'i-lucide-clock-arrow-up' },
 }
 
 export const workChipEntries: Array<[AgentRole, WorkChip]> = Object.entries(workChips) as Array<[AgentRole, WorkChip]>
