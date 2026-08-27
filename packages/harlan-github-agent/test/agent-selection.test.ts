@@ -66,7 +66,7 @@ describe('agent selection parsing', () => {
   it('rejects a body that names no selection state', () => {
     const parsed = parseAgentSelection({ provider: 'codex', model: null })
 
-    expect(parsed).toEqual({ _tag: 'Err', error: 'Pin an Agent provider, or follow the configuration.' })
+    expect(parsed).toEqual({ _tag: 'Err', error: 'Pin an Agent provider, select automatic, or follow the configuration.' })
   })
 
   it('rejects a body that is not an object', () => {
@@ -113,7 +113,7 @@ describe('agent runtime source', () => {
     expect(before.provider).toBe(codexProvider)
     expect(before.profile.roles.issue_triage.model).toBe('gpt-5.6-terra')
     expect(after.provider).toBe(opencodeProvider)
-    expect(after.profile.roles.issue_triage.model).toBe('opencode-go/deepseek-v4-flash')
+    expect(after.profile.roles.issue_triage.model).toBe('zai-coding-plan/glm-5.3-flash')
   })
 })
 

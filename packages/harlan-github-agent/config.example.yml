@@ -1,9 +1,19 @@
 # Agent provider the service starts with. Codex is the default.
-# opencode runs opencode-go/deepseek-v4-flash at the high reasoning effort.
+# opencode runs zai-coding-plan/glm-5.3-flash at the high reasoning effort.
 # The dashboard and the tray switch the Agent selection without a restart.
 # A switch overrides this value and survives a restart.
 agent:
   provider: codex
+  # Automatic Agent selection walks these in order and takes the first with
+  # capacity above its reserve. Switch it on from the dashboard or the tray.
+  # opencode answers on the GLM Coding Plan, so the fleet prefers it.
+  order: [opencode, codex]
+  # The share of each provider's published window unattended work never spends.
+  # Codex publishes a seven-day window. opencode publishes the GLM Coding Plan
+  # five-hour and weekly windows, read with the key opencode already holds.
+  reserve_percent:
+    codex: 20
+    opencode: 50
 github:
   app_id: 12345
   private_key_path: /home/harlan/.config/harlan-github-agent/app.pem

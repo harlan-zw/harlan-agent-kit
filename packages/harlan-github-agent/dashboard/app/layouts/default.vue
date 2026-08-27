@@ -77,6 +77,8 @@ const profileState = computed(() => agentProfileState(snapshot.value, loading.va
  * Switching the provider clears the model and the reasoning effort, because a
  * model belongs to one provider and the service refuses the other provider's.
  * Follow configuration hands the whole choice back to the configuration file.
+ * Automatic hands it to remaining capacity, so the provider with room answers
+ * the next turn and the reserve stays for interactive work.
  */
 const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
   if (profileState.value._tag !== 'Available')
@@ -95,8 +97,15 @@ const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
         label: 'Follow configuration',
         icon: 'i-lucide-file-cog',
         type: 'checkbox',
-        checked: pinned === null,
+        checked: selection._tag === 'FollowsConfiguration',
         onUpdateChecked: () => switchAgent({ _tag: 'FollowsConfiguration' }),
+      },
+      {
+        label: 'Automatic',
+        icon: 'i-lucide-gauge',
+        type: 'checkbox',
+        checked: selection._tag === 'Automatic',
+        onUpdateChecked: () => switchAgent({ _tag: 'Automatic', order: [...AGENT_PROVIDER_NAMES] }),
       },
       ...AGENT_PROVIDER_NAMES.map(candidate => ({
         label: providerLabels[candidate],

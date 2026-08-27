@@ -46,6 +46,17 @@ export interface ExternalRepositoryWatch {
 export interface AgentConfig {
   agent: {
     provider: AgentProviderName
+    /**
+     * The share of each Agent provider's published window unattended work never
+     * spends, per provider.
+     *
+     * Overnight Routines and unattended reviews can drain a subscription week
+     * before the workday starts. This keeps the last share for Harlan's own
+     * terminal, which the service cannot see and must not compete with.
+     */
+    reservePercent: Record<AgentProviderName, number>
+    /** Agent providers automatic selection walks, in preference order. */
+    order: readonly AgentProviderName[]
   }
   github: {
     appId: number
@@ -647,11 +658,20 @@ export type CodexAgentModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna'
 /**
  * Models opencode can answer with.
  *
- * The `opencode/` models are the free tier. They keep answering after the
- * metered `opencode-go/` subscription reaches its weekly limit.
+ * `zai-coding-plan/` runs on the GLM Coding Plan, which publishes a real quota
+ * and is the route the service prefers. `opencode-go/` is metered per token.
+ * The `opencode/` models are the free tier, and they keep answering after
+ * everything above has reached its limit.
  */
 export type OpencodeAgentModel
-  = 'opencode/big-pickle'
+  = 'zai-coding-plan/glm-4.7'
+    | 'zai-coding-plan/glm-5-turbo'
+    | 'zai-coding-plan/glm-5.2'
+    | 'zai-coding-plan/glm-5.2-highspeed'
+    | 'zai-coding-plan/glm-5.3'
+    | 'zai-coding-plan/glm-5.3-flash'
+    | 'zai-coding-plan/glm-5.3-highspeed'
+    | 'opencode/big-pickle'
     | 'opencode/deepseek-v4-flash-free'
     | 'opencode/hy3-free'
     | 'opencode/laguna-s-2.1-free'
@@ -707,6 +727,29 @@ export interface PinnedAgentSelection {
 }
 
 /**
+ * What one Agent provider's weekly subscription window has left.
+ *
+ * `Unpublished` and `Unavailable` are different answers. opencode publishes no
+ * quota at all, so it is always `Unpublished` and never reads as a fault. Codex
+ * publishes one, so a failed read is `Unavailable` and worth an Incident.
+ */
+export type ProviderCapacity
+  = | { _tag: 'Unpublished' }
+    | { _tag: 'Unavailable', reason: string }
+    | { _tag: 'Available', usedPercent: number, resetsAt: string }
+
+/**
+ * The Agent providers automatic selection walks, in preference order.
+ *
+ * The first provider with capacity above the reserve answers the next turn.
+ * When none has capacity the service stops claiming new agent Tasks, rather
+ * than starting work it cannot pay for.
+ */
+export interface AutomaticAgentSelection {
+  order: readonly AgentProviderName[]
+}
+
+/**
  * One durable Agent selection.
  *
  * `FollowsConfiguration` is a value, so returning to the configuration file is
@@ -715,6 +758,7 @@ export interface PinnedAgentSelection {
 export type AgentSelection
   = | { _tag: 'FollowsConfiguration' }
     | ({ _tag: 'Pinned' } & PinnedAgentSelection)
+    | ({ _tag: 'Automatic' } & AutomaticAgentSelection)
 
 export type QueueState
   = | { _tag: 'Active', work: AgentRole }

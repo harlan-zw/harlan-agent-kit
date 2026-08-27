@@ -17,18 +17,18 @@ export const CODEX_AGENT_PROFILE = {
   },
 } as const satisfies AgentProfile
 
-/** DeepSeek V4 Flash answers every role at its highest reasoning effort. */
+/** GLM 5.3 Flash on the GLM Coding Plan answers every role at its highest reasoning effort. */
 export const OPENCODE_AGENT_PROFILE = {
   provider: 'opencode',
   authentication: 'opencode-go',
   maximumActiveAgents: 4,
   roles: {
-    adversarial_review: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    baseline_repair: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    conflict_resolution: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    issue_triage: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    issue_work: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    review_fix: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
+    adversarial_review: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    baseline_repair: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    conflict_resolution: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    issue_triage: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    issue_work: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    review_fix: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
   },
 } as const satisfies AgentProfile
 
@@ -52,6 +52,13 @@ export const AGENT_ROLES = [
 export const AGENT_MODELS = {
   codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   opencode: [
+    'zai-coding-plan/glm-5.3-flash',
+    'zai-coding-plan/glm-5.3',
+    'zai-coding-plan/glm-5.3-highspeed',
+    'zai-coding-plan/glm-5.2',
+    'zai-coding-plan/glm-5.2-highspeed',
+    'zai-coding-plan/glm-5-turbo',
+    'zai-coding-plan/glm-4.7',
     'opencode/big-pickle',
     'opencode/deepseek-v4-flash-free',
     'opencode/hy3-free',
@@ -107,15 +114,50 @@ export function providerAgentSelection(provider: AgentProviderName): PinnedAgent
   return { provider, model: null, reasoningEffort: null }
 }
 
+/** Picks the Agent provider automatic selection uses, or null when none may spend. */
+export type AgentProviderChooser = (order: readonly AgentProviderName[]) => AgentProviderName | null
+
 /**
  * Reads the Agent provider, model, and reasoning effort in force right now.
  *
  * If the Agent selection follows the configuration, the configuration decides.
  * The service reads its configuration file at every start, so a cleared
  * selection follows the file again after a restart.
+ *
+ * Automatic selection asks the chooser which provider still has capacity. It
+ * falls back to the first provider in preference order when none has, so this
+ * function stays total. Nothing runs on that fallback, because the capacity
+ * gate stops the schedulers claiming a new agent Task at the same moment.
  */
-export function resolveAgentSelection(selection: AgentSelection, configured: PinnedAgentSelection): PinnedAgentSelection {
-  return selection._tag === 'Pinned' ? selection : configured
+export function resolveAgentSelection(
+  selection: AgentSelection,
+  configured: PinnedAgentSelection,
+  chooseProvider?: AgentProviderChooser,
+): PinnedAgentSelection {
+  if (selection._tag === 'Pinned')
+    return selection
+  if (selection._tag === 'FollowsConfiguration')
+    return configured
+  const chosen = chooseProvider?.(selection.order) ?? selection.order[0] ?? configured.provider
+  return providerAgentSelection(chosen)
+}
+
+/** Reads one preference order, rejecting an unknown or repeated Agent provider. */
+function parseProviderOrder(value: unknown): Result<readonly AgentProviderName[], string> {
+  if (value === undefined || value === null)
+    return ok(AGENT_PROVIDER_NAMES)
+  if (!Array.isArray(value) || value.length === 0)
+    return err('List at least one Agent provider in preference order.')
+  const order: AgentProviderName[] = []
+  for (const candidate of value) {
+    const provider = AGENT_PROVIDER_NAMES.find(name => name === candidate)
+    if (provider === undefined)
+      return err('Select codex or opencode as the Agent provider.')
+    if (order.includes(provider))
+      return err('List every Agent provider once.')
+    order.push(provider)
+  }
+  return ok(order)
 }
 
 /**
@@ -130,8 +172,12 @@ export function parseAgentSelection(value: unknown): Result<AgentSelection, stri
   const body = value as Record<string, unknown>
   if (body._tag === 'FollowsConfiguration')
     return ok({ _tag: 'FollowsConfiguration' })
+  if (body._tag === 'Automatic') {
+    const order = parseProviderOrder(body.order)
+    return order._tag === 'Err' ? order : ok({ _tag: 'Automatic', order: order.value })
+  }
   if (body._tag !== 'Pinned')
-    return err('Pin an Agent provider, or follow the configuration.')
+    return err('Pin an Agent provider, select automatic, or follow the configuration.')
   const provider = AGENT_PROVIDER_NAMES.find(candidate => candidate === body.provider)
   if (provider === undefined)
     return err('Select codex or opencode as the Agent provider.')
@@ -171,6 +217,8 @@ export function resolveAgentProfile(selection: PinnedAgentSelection, maximumActi
 }
 
 export interface AgentRuntimeSourceOptions {
+  /** Picks the provider automatic selection uses. Omitted keeps preference order. */
+  chooseProvider?: AgentProviderChooser
   /** The Agent provider the configuration file names, read at every start. */
   configuredProvider: AgentProviderName
   maximumActiveAgents: number
@@ -187,7 +235,7 @@ export interface AgentRuntimeSourceOptions {
 export function createAgentRuntimeSource(options: AgentRuntimeSourceOptions): AgentRuntimeSource {
   const configured = providerAgentSelection(options.configuredProvider)
   return () => {
-    const selection = resolveAgentSelection(options.selection(), configured)
+    const selection = resolveAgentSelection(options.selection(), configured, options.chooseProvider)
     return {
       profile: resolveAgentProfile(selection, options.maximumActiveAgents),
       provider: options.providers[selection.provider],

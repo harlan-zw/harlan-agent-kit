@@ -146,22 +146,78 @@ function takeOwnership(source: UnknownRecord, path: string, repositoryOwnership:
   }
 }
 
+/**
+ * The share of each provider's published window unattended work never spends.
+ *
+ * Codex keeps twenty percent, which on a seven-day window is over a day of
+ * interactive work. The GLM Coding Plan keeps half, because the fleet is meant
+ * to live there and Harlan still codes against the same plan.
+ */
+const DEFAULT_RESERVE_PERCENT: Record<AgentProviderName, number> = {
+  codex: 20,
+  opencode: 50,
+}
+
+/** opencode answers on the GLM Coding Plan, so the fleet prefers it. */
+const DEFAULT_PROVIDER_ORDER: readonly AgentProviderName[] = ['opencode', 'codex']
+
+function reservePercent(value: unknown, issues: ConfigIssue[]): Record<AgentProviderName, number> | undefined {
+  if (value === undefined)
+    return DEFAULT_RESERVE_PERCENT
+  if (!isRecord(value)) {
+    issues.push({ path: '$.agent.reserve_percent', message: 'Expected a percent for each Agent provider.' })
+    return undefined
+  }
+  const unknownKey = Object.keys(value).find(key => providerName(key) === undefined)
+  if (unknownKey !== undefined) {
+    issues.push({ path: `$.agent.reserve_percent.${unknownKey}`, message: 'Expected codex or opencode.' })
+    return undefined
+  }
+  const reserve = { ...DEFAULT_RESERVE_PERCENT }
+  for (const [provider, percent] of Object.entries(value)) {
+    if (typeof percent !== 'number' || !Number.isInteger(percent) || percent < 0 || percent >= 100) {
+      issues.push({ path: `$.agent.reserve_percent.${provider}`, message: 'Expected a whole percent from 0 to 99.' })
+      return undefined
+    }
+    reserve[provider as AgentProviderName] = percent
+  }
+  return reserve
+}
+
+function providerName(value: unknown): AgentProviderName | undefined {
+  return value === 'codex' || value === 'opencode' ? value : undefined
+}
+
 /** Defaults to Codex, so an existing configuration keeps its current agent. */
-function agentProvider(source: UnknownRecord, issues: ConfigIssue[]): AgentProviderName | undefined {
+function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfig['agent'] | undefined {
   const agent = source.agent
   if (agent === undefined)
-    return 'codex'
+    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: DEFAULT_PROVIDER_ORDER }
   if (!isRecord(agent)) {
     issues.push({ path: '$.agent', message: 'Expected an object.' })
     return undefined
   }
-  const provider = agent.provider
-  if (provider === undefined)
-    return 'codex'
-  if (provider === 'codex' || provider === 'opencode')
-    return provider
 
-  issues.push({ path: '$.agent.provider', message: 'Expected codex or opencode.' })
+  const provider = agent.provider === undefined ? 'codex' : providerName(agent.provider)
+  if (provider === undefined)
+    issues.push({ path: '$.agent.provider', message: 'Expected codex or opencode.' })
+
+  const reserve = reservePercent(agent.reserve_percent, issues)
+
+  const orderValue = agent.order
+  const order = orderValue === undefined
+    ? DEFAULT_PROVIDER_ORDER
+    : Array.isArray(orderValue) && orderValue.length > 0
+      && orderValue.every(entry => providerName(entry) !== undefined)
+      && new Set(orderValue).size === orderValue.length
+      ? orderValue as AgentProviderName[]
+      : undefined
+  if (order === undefined)
+    issues.push({ path: '$.agent.order', message: 'Expected each Agent provider once, in preference order.' })
+
+  if (provider === undefined || reserve === undefined || order === undefined)
+    return undefined
+  return { provider, reservePercent: reserve, order }
 }
 
 function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[]): RepositoryMapping | undefined {
@@ -283,7 +339,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     return err([{ path: '$', message: 'Expected an object.' }])
 
   const issues: ConfigIssue[] = []
-  const provider = agentProvider(document.value, issues)
+  const agent = agentSettings(document.value, issues)
   const github = requiredRecord(document.value, 'github', '$', issues)
   const server = requiredRecord(document.value, 'server', '$', issues)
   const storage = requiredRecord(document.value, 'storage', '$', issues)
@@ -381,7 +437,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   if (
     issues.length > 0
-    || provider === undefined
+    || agent === undefined
     || host === undefined
     || appId === undefined
     || privateKeyPath === undefined
@@ -401,7 +457,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   }
 
   return ok({
-    agent: { provider },
+    agent,
     github: { appId, privateKeyPath, allowedOwners },
     server: { host, port, allowedHost },
     storage: { path: storagePath },
