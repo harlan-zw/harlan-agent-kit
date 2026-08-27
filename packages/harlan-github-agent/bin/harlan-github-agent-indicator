@@ -4,14 +4,13 @@ import base64
 import fcntl
 import json
 import os
-import selectors
-import sqlite3
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 import gi
@@ -26,19 +25,10 @@ DASHBOARD_ORIGIN = DASHBOARD_URL.rstrip('/')
 PASSWORD_FILE = Path.home() / '.config/harlan-github-agent/dashboard-password'
 APP_ICON = Path(__file__).resolve().parent.parent / 'assets/github-app-icon.png'
 WATCHER = Path(__file__).resolve().parent / 'harlan-github-agent-watch'
-WEEKLY_LIMIT_MINS = 7 * 24 * 60
-WEEKLY_SECONDS = 7 * 24 * 60 * 60
-CODEX_LIMIT_REFRESH_SECONDS = 60
-OPENCODE_DATABASE = Path.home() / '.local/share/opencode/opencode.db'
 PROVIDER_LABELS = {
     'codex': 'Codex',
     'opencode': 'opencode',
 }
-AGENT_MODELS = {
-    'codex': ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
-    'opencode': ['opencode-go/deepseek-v4-flash', 'opencode-go/deepseek-v4-pro'],
-}
-REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
 PROVIDER_DEFAULT_LABEL = 'Provider default'
 FOLLOW_CONFIGURATION_LABEL = 'Follow configuration'
 AUTOMATIC_LABEL = 'Automatic'
@@ -178,18 +168,22 @@ def selection_marker(selected):
     return '●' if selected else '○'
 
 
-def agent_selection_choices(selection, provider):
+def agent_selection_choices(dashboard):
     """Lists every Agent provider, model, and reasoning effort the menu offers.
 
     Switching the provider clears the model and the reasoning effort, because a
     model belongs to one provider and the service refuses the other provider's.
     Follow configuration gives the whole choice back to the configuration file.
 
-    `provider` is the Agent provider in force. While the selection follows the
-    configuration, that provider owns the models the menu lists.
+    The dashboard owns the current provider and every supported option. While
+    the selection follows configuration, that provider owns the model list.
     """
+    selection = agent_selection(dashboard)
+    provider = active_provider(dashboard)
     if selection is None or provider is None:
         return []
+    models = dashboard.get('agentModels') or {}
+    reasoning_efforts = dashboard.get('reasoningEfforts') or []
     pinned = selection if selection.get('_tag') == 'Pinned' else None
 
     def choice(label, selected, chosen):
@@ -210,7 +204,7 @@ def agent_selection_choices(selection, provider):
     choices.append(choice(
         AUTOMATIC_LABEL,
         selection.get('_tag') == 'Automatic',
-        {'_tag': 'Automatic', 'order': list(AGENT_MODELS)},
+        {'_tag': 'Automatic', 'order': dashboard.get('agentProviderOrder') or list(models)},
     ))
     choices.extend(
         choice(
@@ -218,27 +212,27 @@ def agent_selection_choices(selection, provider):
             pinned is not None and pinned['provider'] == candidate,
             {'_tag': 'Pinned', 'provider': candidate, 'model': None, 'reasoningEffort': None},
         )
-        for candidate in AGENT_MODELS
+        for candidate in models
     )
 
     choices.append({'_tag': 'Separator'})
     choices.append({'_tag': 'Heading', 'label': 'Model'})
     choices.extend(
         choice(candidate or PROVIDER_DEFAULT_LABEL, model == candidate, pin(candidate, effort))
-        for candidate in [None, *AGENT_MODELS.get(provider, [])]
+        for candidate in [None, *models.get(provider, [])]
     )
 
     choices.append({'_tag': 'Separator'})
     choices.append({'_tag': 'Heading', 'label': 'Reasoning effort'})
     choices.extend(
         choice(candidate or PROVIDER_DEFAULT_LABEL, effort == candidate, pin(model, candidate))
-        for candidate in [None, *REASONING_EFFORTS]
+        for candidate in [None, *reasoning_efforts]
     )
     return choices
 
 
 def agent_selection_items(dashboard, select_agent):
-    choices = agent_selection_choices(agent_selection(dashboard), active_provider(dashboard))
+    choices = agent_selection_choices(dashboard)
     if not choices:
         return [menu_item('Agent selection unavailable', enabled=False)]
     items = []
@@ -254,72 +248,12 @@ def agent_selection_items(dashboard, select_agent):
     return items
 
 
-def opencode_usage(now=None, database=OPENCODE_DATABASE):
-    """opencode publishes no quota, so report what its own store knows: spend."""
-    since = int(((time.time() if now is None else now) - WEEKLY_SECONDS) * 1000)
-    connection = sqlite3.connect(f'file:{database}?mode=ro', uri=True, timeout=2)
+def reset_countdown(resets_at, now=None):
     try:
-        row = connection.execute(
-            """
-            SELECT
-              COUNT(*),
-              COALESCE(SUM(COALESCE(json_extract(data, '$.cost'), 0)), 0),
-              COALESCE(SUM(
-                COALESCE(json_extract(data, '$.tokens.input'), 0)
-                + COALESCE(json_extract(data, '$.tokens.output'), 0)
-              ), 0)
-            FROM message
-            WHERE json_extract(data, '$.role') = 'assistant' AND time_created > ?
-            """,
-            (since,),
-        ).fetchone()
-    finally:
-        connection.close()
-    return {'_tag': 'Available', 'turns': row[0], 'cost': row[1], 'tokens': row[2]}
-
-
-def format_tokens(tokens):
-    if tokens >= 1_000_000:
-        return f'{tokens / 1_000_000:.1f}M'
-    if tokens >= 1_000:
-        return f'{tokens / 1_000:.1f}K'
-    return str(int(tokens))
-
-
-def opencode_usage_label(usage):
-    if usage is None:
-        return 'Weekly opencode usage · Loading…'
-    if usage.get('_tag') != 'Available':
-        return 'Weekly opencode usage unavailable'
-    return (
-        f"Weekly opencode usage · ${usage['cost']:.2f} · "
-        f"{format_tokens(usage['tokens'])} tokens · {usage['turns']} turns"
-    )
-
-
-def weekly_codex_limit(response):
-    limits = response.get('rateLimitsByLimitId', {}).get('codex') or response.get('rateLimits', {})
-    window = next((
-        candidate
-        for candidate in (limits.get('primary'), limits.get('secondary'))
-        if candidate is not None and candidate.get('windowDurationMins') == WEEKLY_LIMIT_MINS
-    ), None)
-    if window is None or not isinstance(window.get('usedPercent'), (int, float)) or not isinstance(window.get('resetsAt'), (int, float)):
-        return {'_tag': 'Unavailable'}
-    return {
-        '_tag': 'Available',
-        'usedPercent': window['usedPercent'],
-        'resetsAt': window['resetsAt'],
-    }
-
-
-def codex_limit_label(limit, now=None):
-    if limit is None:
-        return 'Weekly Codex limit · Loading…'
-    if limit.get('_tag') != 'Available':
-        return 'Weekly Codex limit unavailable'
-    remaining = max(0, min(100, int(100 - limit['usedPercent'] + 0.5)))
-    seconds = max(0, int(limit['resetsAt'] - (time.time() if now is None else now)))
+        reset = datetime.fromisoformat(resets_at.replace('Z', '+00:00')).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+    seconds = max(0, int(reset - (time.time() if now is None else now)))
     days, day_seconds = divmod(seconds, 86400)
     hours, hour_seconds = divmod(day_seconds, 3600)
     minutes = hour_seconds // 60
@@ -331,67 +265,28 @@ def codex_limit_label(limit, now=None):
         reset = f'{minutes}m'
     else:
         reset = 'now'
-    return f'Weekly Codex limit · {remaining}% left · resets in {reset}'
+    return reset
 
 
-def request_codex_limit(timeout=10):
-    process = subprocess.Popen(
-        ['codex', 'app-server'],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        bufsize=1,
-    )
-    selector = selectors.DefaultSelector()
-    try:
-        selector.register(process.stdout, selectors.EVENT_READ)
-
-        def send(message):
-            process.stdin.write(f'{json.dumps(message, separators=(",", ":"))}\n')
-            process.stdin.flush()
-
-        send({
-            'method': 'initialize',
-            'id': 0,
-            'params': {
-                'clientInfo': {
-                    'name': 'harlan_github_agent_indicator',
-                    'title': 'Harlan GitHub Agent Indicator',
-                    'version': '0.1.0',
-                },
-            },
-        })
-        deadline = time.monotonic() + timeout
-        initialized = False
-        while time.monotonic() < deadline:
-            events = selector.select(deadline - time.monotonic())
-            if not events:
-                break
-            line = process.stdout.readline()
-            if not line:
-                break
-            message = json.loads(line)
-            if message.get('id') == 0 and not initialized:
-                if 'error' in message:
-                    raise RuntimeError(message['error'].get('message', 'Codex initialization failed.'))
-                initialized = True
-                send({'method': 'initialized', 'params': {}})
-                send({'method': 'account/rateLimits/read', 'id': 1})
-            if message.get('id') == 1:
-                if 'error' in message:
-                    raise RuntimeError(message['error'].get('message', 'Codex limits are unavailable.'))
-                return weekly_codex_limit(message.get('result', {}))
-        raise TimeoutError('Codex limits request timed out.')
-    finally:
-        selector.close()
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=1)
+def provider_capacity_labels(dashboard, now=None):
+    labels = []
+    for entry in dashboard.get('providerCapacities', []):
+        provider = entry.get('provider')
+        label = 'Weekly Codex limit' if provider == 'codex' else PROVIDER_LABELS.get(provider, provider or 'Agent provider')
+        capacity = entry.get('capacity', {})
+        if capacity.get('_tag') == 'Unavailable':
+            labels.append(f"{label} · unavailable · {capacity.get('reason', 'The limit could not load.')}")
+            continue
+        if capacity.get('_tag') != 'Available':
+            labels.append(f'{label} · limit not published')
+            continue
+        remaining = max(0, min(100, round(100 - capacity.get('usedPercent', 100), 1)))
+        reserve = entry.get('reservePercent', 0)
+        reserve_label = f'{reserve}% Reserve' + (' reached' if remaining <= reserve else '')
+        reset = reset_countdown(capacity.get('resetsAt'), now)
+        reset_label = '' if reset is None else f' · resets in {reset}'
+        labels.append(f'{label} · {remaining:g}% left · {reserve_label}{reset_label}')
+    return labels
 
 
 def open_url(url):
@@ -517,7 +412,7 @@ def queue_count_label(queue):
 def dashboard_attention(dashboard):
     incidents = dashboard.get('incidents', [])
     queue = dashboard.get('queue', [])
-    if dashboard.get('status') == 'degraded' or any(
+    if any(
         incident.get('recovery', {}).get('_tag') in ('Exhausted', 'ActionRequired')
         for incident in incidents
     ) or any(entry.get('state', {}).get('_tag') == 'ActionRequired' for entry in queue):
@@ -529,8 +424,10 @@ def dashboard_attention(dashboard):
     )
     if approvals > 0:
         return {'_tag': 'ApprovalRequired', 'count': approvals}
-    if incidents:
+    if incidents or dashboard.get('status') == 'degraded' or dashboard.get('agentStart', {}).get('_tag') == 'CapacityUnavailable':
         return {'_tag': 'Retrying'}
+    if dashboard.get('agentStart', {}).get('_tag') == 'ReserveReached':
+        return {'_tag': 'ReserveReached'}
     return {'_tag': 'Clear'}
 
 
@@ -555,6 +452,8 @@ def indicator_summary(dashboard, agents, error):
         return ('🟡', f'{approvals} · {queue_label}')
     if attention['_tag'] == 'Retrying':
         return ('🟠', f'Harlan GitHub Agent retrying · {queue_label}')
+    if attention['_tag'] == 'ReserveReached':
+        return ('🟡', f'Reserve reached · {queue_label}')
 
     marker = f'🟢 {len(agents)}' if agents else '⚪'
     title = ' · '.join((counted(len(agents), 'agent running', 'agents running'), queue_label))
@@ -580,6 +479,8 @@ def harlan_github_agent_status_label(dashboard, agents, error):
         return f'🟡 {approvals} · {queue_label}'
     if attention['_tag'] == 'Retrying':
         return f'🟠 Retrying · {queue_label}'
+    if attention['_tag'] == 'ReserveReached':
+        return f'🟡 Reserve reached · {queue_label}'
     if agents:
         running = counted(len(agents), 'agent running', 'agents running')
         return f'🟢 {running} · {queue_label}'
@@ -618,11 +519,7 @@ def incident_url(incident):
     return None if repository is None else f'https://github.com/{repository}'
 
 
-def usage_label(dashboard, usage):
-    return opencode_usage_label(usage) if active_provider(dashboard) == 'opencode' else codex_limit_label(usage)
-
-
-def build_menu(indicator, sources, usage, action_error, refresh, set_agent_control, eject_agent, select_agent):
+def build_menu(indicator, sources, action_error, refresh, set_agent_control, eject_agent, select_agent):
     menu = Gtk.Menu()
     dashboard_source = sources['harlanGithubAgent']
     dashboard = source_dashboard(sources)
@@ -638,7 +535,8 @@ def build_menu(indicator, sources, usage, action_error, refresh, set_agent_contr
     menu.append(menu_item('Open dashboard', DASHBOARD_URL))
 
     if dashboard is not None:
-        menu.append(menu_item(usage_label(dashboard, usage), enabled=False))
+        for capacity_label in provider_capacity_labels(dashboard):
+            menu.append(menu_item(capacity_label, enabled=False))
         agent_control = dashboard.get('agentControl', {'_tag': 'Running'})
         selection_label = selection_mode_label(dashboard)
         if selection_label is not None:
@@ -719,9 +617,7 @@ def main():
     indicator.set_title('Harlan GitHub Agent')
     refreshing = {'active': False}
     pending_action = {'value': None}
-    usage_cache = {'value': None, 'updatedAt': 0.0, 'provider': None}
-
-    def apply_state(sources, usage, control_error):
+    def apply_state(sources, control_error):
         refreshing['active'] = False
         dashboard = source_dashboard(sources)
         agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
@@ -731,7 +627,7 @@ def main():
         indicator.set_label(label, '🟢 99')
         indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
         indicator.set_title(title)
-        build_menu(indicator, sources, usage, control_error, refresh, set_agent_control, eject_agent, select_agent)
+        build_menu(indicator, sources, control_error, refresh, set_agent_control, eject_agent, select_agent)
         if pending_action['value'] is not None:
             refresh()
         return False
@@ -751,17 +647,7 @@ def main():
             except Exception as caught:
                 control_error = f"{action['label']} failed: {caught}"
         sources = read_system_sources(request_dashboard)
-        dashboard = source_dashboard(sources)
-        provider = active_provider(dashboard)
-        stale = time.monotonic() - usage_cache['updatedAt'] >= CODEX_LIMIT_REFRESH_SECONDS
-        if provider is not None and (stale or usage_cache['provider'] != provider):
-            try:
-                usage_cache['value'] = opencode_usage() if provider == 'opencode' else request_codex_limit()
-            except Exception:
-                usage_cache['value'] = {'_tag': 'Unavailable'}
-            usage_cache['provider'] = provider
-            usage_cache['updatedAt'] = time.monotonic()
-        GLib.idle_add(apply_state, sources, usage_cache['value'], control_error)
+        GLib.idle_add(apply_state, sources, control_error)
 
     def refresh(*_args):
         if refreshing['active']:
@@ -794,7 +680,7 @@ def main():
         }
         return refresh()
 
-    build_menu(indicator, loading_system_sources(), None, None, refresh, set_agent_control, eject_agent, select_agent)
+    build_menu(indicator, loading_system_sources(), None, refresh, set_agent_control, eject_agent, select_agent)
     refresh()
     GLib.timeout_add_seconds(5, refresh)
     Gtk.main()

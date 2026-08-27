@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -57,6 +58,19 @@ class StubIndicator:
 
 def menu_labels(menu):
     return [child.get_label() for child in menu.get_children()]
+
+
+def selection_dashboard(selection, provider):
+    return {
+        'agentSelection': selection,
+        'agentProfile': {'provider': provider},
+        'agentProviderOrder': ['opencode', 'codex'],
+        'agentModels': {
+            'codex': ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+            'opencode': ['zai-coding-plan/glm-5.3-flash'],
+        },
+        'reasoningEfforts': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    }
 
 
 class RunnerActivityTest(unittest.TestCase):
@@ -386,22 +400,25 @@ class RunnerActivityTest(unittest.TestCase):
 
 
 class IndicatorDisplayTest(unittest.TestCase):
-    def test_shows_remaining_weekly_codex_limit_and_reset(self):
-        resets_at = 1787196635
-        result = indicator.weekly_codex_limit({
-            'rateLimitsByLimitId': {
-                'codex': {
-                    'primary': {'usedPercent': 10, 'windowDurationMins': 300, 'resetsAt': 1786700000},
-                    'secondary': {'usedPercent': 89, 'windowDurationMins': 10080, 'resetsAt': resets_at},
-                },
+    def test_shows_every_provider_limit_from_the_dashboard(self):
+        now = datetime(2026, 8, 28, tzinfo=timezone.utc).timestamp()
+        dashboard = {'providerCapacities': [
+            {
+                'provider': 'codex',
+                'reservePercent': 20,
+                'capacity': {'_tag': 'Available', 'usedPercent': 86, 'resetsAt': '2026-08-29T00:00:00.000Z'},
             },
-        })
+            {
+                'provider': 'opencode',
+                'reservePercent': 50,
+                'capacity': {'_tag': 'Available', 'usedPercent': 12, 'resetsAt': '2026-08-28T02:00:00.000Z'},
+            },
+        ]}
 
-        self.assertEqual(result, {'_tag': 'Available', 'usedPercent': 89, 'resetsAt': resets_at})
-        self.assertEqual(
-            indicator.codex_limit_label(result, resets_at - 5 * 86400 - 18 * 3600),
-            'Weekly Codex limit · 11% left · resets in 5d 18h',
-        )
+        self.assertEqual(indicator.provider_capacity_labels(dashboard, now), [
+            'Weekly Codex limit · 14% left · 20% Reserve reached · resets in 1d 0h',
+            'opencode · 88% left · 50% Reserve · resets in 2h 0m',
+        ])
 
     def test_uses_minimal_coloured_state_markers(self):
         self.assertEqual(indicator.queue_state({'state': {'_tag': 'Active'}}), '🟢 Running')
@@ -519,6 +536,18 @@ class IndicatorDisplayTest(unittest.TestCase):
             '🔴 Action required · Queue empty',
         )
 
+    def test_reports_a_reached_reserve_as_normal_system_state(self):
+        dashboard = {
+            'status': 'ready',
+            'agentStart': {'_tag': 'ReserveReached'},
+            'agentControl': {'_tag': 'Running'},
+            'queue': [{}, {}],
+            'incidents': [],
+        }
+
+        self.assertEqual(indicator.dashboard_attention(dashboard), {'_tag': 'ReserveReached'})
+        self.assertEqual(indicator.indicator_summary(dashboard, [], None), ('🟡', 'Reserve reached · 2 in Queue'))
+
     def test_treats_an_all_unavailable_host_list_as_an_error_state(self):
         source = runner_indicator.read_runner_source(
             lambda: [{'_tag': 'Unavailable', 'name': 'Hogwild', 'message': 'ssh://hogwild refused'}],
@@ -579,7 +608,6 @@ class IndicatorDisplayTest(unittest.TestCase):
         indicator.build_menu(
             stub,
             sources,
-            None,
             None,
             lambda: None,
             lambda *_args: None,
@@ -705,29 +733,29 @@ class AgentSelectionTest(unittest.TestCase):
         self.assertIsNone(indicator.agent_selection({}))
 
     def test_marks_the_current_provider_model_and_reasoning_effort(self):
-        choices = indicator.agent_selection_choices({
+        choices = indicator.agent_selection_choices(selection_dashboard({
             '_tag': 'Pinned',
             'provider': 'opencode',
-            'model': 'opencode-go/deepseek-v4-pro',
+            'model': 'zai-coding-plan/glm-5.3-flash',
             'reasoningEffort': None,
-        }, 'opencode')
+        }, 'opencode'))
         selected = [entry['label'] for entry in choices if entry['_tag'] == 'Choice' and entry['selected']]
 
-        self.assertEqual(selected, ['opencode', 'opencode-go/deepseek-v4-pro', 'Provider default'])
+        self.assertEqual(selected, ['opencode', 'zai-coding-plan/glm-5.3-flash', 'Provider default'])
 
     def test_marks_following_the_configuration(self):
-        choices = indicator.agent_selection_choices({'_tag': 'FollowsConfiguration'}, 'codex')
+        choices = indicator.agent_selection_choices(selection_dashboard({'_tag': 'FollowsConfiguration'}, 'codex'))
         selected = [entry['label'] for entry in choices if entry['_tag'] == 'Choice' and entry['selected']]
 
         self.assertEqual(selected, ['Follow configuration', 'Provider default', 'Provider default'])
 
     def test_offers_a_way_back_to_the_configuration(self):
-        choices = indicator.agent_selection_choices({
+        choices = indicator.agent_selection_choices(selection_dashboard({
             '_tag': 'Pinned',
             'provider': 'opencode',
-            'model': 'opencode-go/deepseek-v4-pro',
+            'model': 'zai-coding-plan/glm-5.3-flash',
             'reasoningEffort': 'high',
-        }, 'opencode')
+        }, 'opencode'))
         follow = next(
             entry for entry in choices
             if entry['_tag'] == 'Choice' and entry['label'] == 'Follow configuration'
@@ -736,24 +764,41 @@ class AgentSelectionTest(unittest.TestCase):
         self.assertEqual(follow['selection'], {'_tag': 'FollowsConfiguration'})
         self.assertFalse(follow['selected'])
 
+    def test_automatic_uses_the_configured_provider_order(self):
+        choices = indicator.agent_selection_choices(selection_dashboard({
+            '_tag': 'Pinned',
+            'provider': 'codex',
+            'model': None,
+            'reasoningEffort': None,
+        }, 'codex'))
+        automatic = next(
+            entry for entry in choices
+            if entry['_tag'] == 'Choice' and entry['label'] == 'Automatic'
+        )
+
+        self.assertEqual(automatic['selection'], {
+            '_tag': 'Automatic',
+            'order': ['opencode', 'codex'],
+        })
+
     def test_lists_the_configured_provider_models_while_following_the_configuration(self):
-        choices = indicator.agent_selection_choices({'_tag': 'FollowsConfiguration'}, 'opencode')
+        choices = indicator.agent_selection_choices(selection_dashboard({'_tag': 'FollowsConfiguration'}, 'opencode'))
         models = [
             entry['selection']['model']
             for entry in choices
             if entry['_tag'] == 'Choice' and entry['selection'].get('_tag') == 'Pinned' and 'model' in entry['selection']
         ]
 
-        self.assertIn('opencode-go/deepseek-v4-pro', models)
+        self.assertIn('zai-coding-plan/glm-5.3-flash', models)
         self.assertNotIn('gpt-5.6-luna', models)
 
     def test_offers_only_the_models_of_the_selected_provider(self):
-        choices = indicator.agent_selection_choices({
+        choices = indicator.agent_selection_choices(selection_dashboard({
             '_tag': 'Pinned',
             'provider': 'codex',
             'model': None,
             'reasoningEffort': None,
-        }, 'codex')
+        }, 'codex'))
         models = [
             entry['selection']['model']
             for entry in choices
@@ -763,15 +808,15 @@ class AgentSelectionTest(unittest.TestCase):
         ]
 
         self.assertIn('gpt-5.6-luna', models)
-        self.assertNotIn('opencode-go/deepseek-v4-pro', models)
+        self.assertNotIn('zai-coding-plan/glm-5.3-flash', models)
 
     def test_switching_provider_clears_the_model_and_reasoning_effort(self):
-        choices = indicator.agent_selection_choices({
+        choices = indicator.agent_selection_choices(selection_dashboard({
             '_tag': 'Pinned',
             'provider': 'codex',
             'model': 'gpt-5.6-luna',
             'reasoningEffort': 'max',
-        }, 'codex')
+        }, 'codex'))
         opencode = next(
             entry for entry in choices
             if entry['_tag'] == 'Choice' and entry['label'] == 'opencode'
@@ -783,8 +828,8 @@ class AgentSelectionTest(unittest.TestCase):
         )
 
     def test_lists_nothing_without_a_selection(self):
-        self.assertEqual(indicator.agent_selection_choices(None, None), [])
-        self.assertEqual(indicator.agent_selection_choices({'_tag': 'FollowsConfiguration'}, None), [])
+        self.assertEqual(indicator.agent_selection_choices(None), [])
+        self.assertEqual(indicator.agent_selection_choices({}), [])
 
     def test_sends_authenticated_agent_switch_request(self):
         requests = []

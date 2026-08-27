@@ -10,12 +10,13 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createAgentActivityLog } from './agent-activity.ts'
 import { createAgentPermitPool } from './agent-permit-pool.ts'
-import { agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
+import { AGENT_PROVIDER_NAMES, agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
 import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
 import { createBaselineRepairWorker } from './baseline-repair-worker.ts'
+import { resolveAgentStartState } from './capacity.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
@@ -202,6 +203,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
 
   const configuredProfile = agentProfile(config.agent.provider)
   const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests)
+  // Capacity is normal System state now. Clear the legacy Incident once, so a
+  // service upgraded while every provider was at its Reserve does not keep it.
+  store.resolveIncidents({ _tag: 'Service' }, now().toISOString(), 'agent_capacity')
   // A weekly window moves over hours, so a reading minutes old still decides
   // correctly. Refreshing on its own interval keeps a subprocess out of the
   // path of every agent turn.
@@ -313,14 +317,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const selection = store.getAgentSelection()
       if (selection._tag !== 'Automatic')
         return true
-      const exhausted = chooseProvider(selection.order) === null
-      replaceServiceIncidents(
-        store,
-        now().toISOString(),
-        'agent_capacity',
-        exhausted ? ['No Agent provider has capacity above the reserve. New agent tasks wait for the window to reset.'] : [],
-      )
-      return !exhausted
+      return chooseProvider(selection.order) !== null
     }
     const validateMapping = async (mapping: RepositoryMapping) => {
       const validated = await validateRepositoryMappings({ ...config, repositories: [mapping] })
@@ -772,7 +769,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       approveIssueWork: store.approveIssueWork,
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
-      getDashboardSnapshot: at => pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),
+      getDashboardSnapshot: (at) => {
+        const snapshot = pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot()))
+        const providerCapacities = AGENT_PROVIDER_NAMES.map(provider => ({
+          provider,
+          capacity: capacity.read(provider),
+          reservePercent: config.agent.reservePercent[provider],
+        }))
+        const current = {
+          ...snapshot,
+          agentProviderOrder: config.agent.order,
+          providerCapacities,
+        }
+        return { ...current, agentStart: resolveAgentStartState(current) }
+      },
       listReviewRuns: store.listReviewRuns,
       pauseAgents: store.pauseAgents,
       requestReviewRerun: store.requestReviewRerun,

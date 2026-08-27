@@ -2,16 +2,19 @@ import type {
   ActiveAgent,
   AgentProfile,
   AgentRole,
+  AgentStartState,
   AgentTask,
   DashboardSnapshot,
   Incident,
   IncidentKind,
+  ProviderCapacityStatus,
   QueueEntry,
   RepositoryStatus,
   ReviewAgent,
   ReviewGateState,
   SelectionMode,
 } from '../../../src/types.ts'
+import { hasSpendableCapacity } from '../../../src/capacity.ts'
 
 /** A progress label older than this means the agent may be wedged, not working. */
 export const stalledProgressSeconds = 120
@@ -30,6 +33,53 @@ export function agentProfileState(snapshot: DashboardSnapshot, loading: boolean)
   if (snapshot.generatedAt.length > 0)
     return { _tag: 'Available', profile: snapshot.agentProfile }
   return loading ? { _tag: 'Loading' } : { _tag: 'Unavailable' }
+}
+
+/** Reads the controller's one reason queued work can or cannot start. */
+export function agentStartState(snapshot: DashboardSnapshot): AgentStartState {
+  return snapshot.agentStart
+}
+
+export interface ProviderCapacityPresentation {
+  label: string
+  value: string
+  detail: string
+  tone: StatusTone | 'neutral'
+}
+
+/** Human-readable live limit state for the System pane. */
+export function providerCapacityPresentation(entry: ProviderCapacityStatus): ProviderCapacityPresentation {
+  const label = entry.provider === 'codex' ? 'Weekly Codex limit' : 'opencode'
+  if (entry.capacity._tag === 'Unavailable') {
+    return { label, value: 'Unavailable', detail: entry.capacity.reason, tone: 'warning' }
+  }
+  if (entry.capacity._tag === 'Unpublished') {
+    return { label, value: 'Limit not published', detail: 'No Reserve applies', tone: 'neutral' }
+  }
+  const remaining = Math.max(0, Math.round((100 - entry.capacity.usedPercent) * 10) / 10)
+  const reserveReached = !hasSpendableCapacity(entry.capacity, entry.reservePercent)
+  return {
+    label,
+    value: `${remaining}% left`,
+    detail: `${entry.reservePercent}% Reserve${reserveReached ? ' reached' : ''}`,
+    tone: reserveReached ? 'warning' : 'success',
+  }
+}
+
+/** The highest priority System state visible at one glance. */
+export function systemState(snapshot: DashboardSnapshot): { label: string, tone: StatusTone } {
+  if (snapshot.incidents.some(incident => incident.recovery._tag !== 'Retrying'))
+    return { label: 'Action required', tone: 'error' }
+  if (snapshot.incidents.length > 0 || snapshot.status === 'degraded')
+    return { label: 'Retrying', tone: 'warning' }
+  if (snapshot.status === 'starting')
+    return { label: 'Starting', tone: 'warning' }
+  const start = agentStartState(snapshot)
+  if (start._tag === 'CapacityUnavailable')
+    return { label: 'Retrying', tone: 'warning' }
+  if (start._tag === 'ReserveReached')
+    return { label: 'Reserve reached', tone: 'warning' }
+  return { label: 'Healthy', tone: 'success' }
 }
 
 export const agentRoleLabels: Array<[AgentRole, string]> = [
@@ -109,8 +159,7 @@ export function workLabel(work: AgentRole): string {
 
 /** Whether the engine is currently allowed to start queued work. */
 export interface QueueContext {
-  agentsCanStart: boolean
-  agentsPaused: boolean
+  agentStart: AgentStartState
   openPullRequests: number
   maxOpenPullRequests: number
   selectionMode: SelectionMode
@@ -141,7 +190,13 @@ export function queueStateLabel(entry: QueueEntry, context: QueueContext): strin
     case 'Queued':
       if (isIssueWorkThrottled(entry, context))
         return 'Too many open pull requests'
-      return context.agentsCanStart ? 'Queued' : context.agentsPaused ? 'Agents paused' : 'Agents disabled'
+      if (context.agentStart._tag === 'Available')
+        return 'Queued'
+      if (context.agentStart._tag === 'Paused')
+        return 'Agents paused'
+      if (context.agentStart._tag === 'ReserveReached')
+        return 'Reserve reached'
+      return context.agentStart._tag === 'CapacityUnavailable' ? 'Agent provider unavailable' : 'Agents disabled'
     case 'Pending': return 'Pending'
   }
 }
@@ -167,11 +222,15 @@ export function queueDetail(entry: QueueEntry, context: QueueContext): string {
       if (isIssueWorkThrottled(entry, context)) {
         return `Issue work stops above ${context.maxOpenPullRequests} open pull requests, and ${context.openPullRequests} are open. Merge or close some to start it.`
       }
-      if (context.agentsCanStart)
+      if (context.agentStart._tag === 'Available')
         return `${workLabel(entry.state.work)} will start when an agent is free.`
-      return context.agentsPaused
-        ? 'Pause is on. Select Resume to start this Task.'
-        : 'GitHub writes are off. Enable them in the configuration, then restart the service.'
+      if (context.agentStart._tag === 'Paused')
+        return 'Pause is on. Select Resume to start this Task.'
+      if (context.agentStart._tag === 'ReserveReached')
+        return 'Every automatic Agent provider reached its Reserve. Work starts after a limit resets.'
+      if (context.agentStart._tag === 'CapacityUnavailable')
+        return 'Agent provider limits could not load. The controller will retry.'
+      return 'GitHub writes are off. Enable them in the configuration, then restart the service.'
     case 'Pending': return entry.state.reason
   }
 }

@@ -65,6 +65,10 @@ Harlan keeps it open on a second screen to watch a fleet of agents work his repo
 
 Everything else, meaning repository health and the open GitHub items being polled, is reference material. It is not an event, so it does not get event weight.
 
+The System pane precedes the pipeline. It always shows live Agent provider
+limits and Reserves. Unresolved Incidents join it. Reaching a Reserve is normal
+state, so it never appears as an Incident or asks Harlan to act.
+
 ## The Board Contract
 
 The first three questions are stages of one pipeline, so they are columns, left to
@@ -98,6 +102,7 @@ Rules that follow from this:
 - **An empty column says why it is empty.** Paused, writes off, and manual selection are three different causes with three different next steps, and one of them is a control, so the empty state carries a Resume button.
 - **No summary counter row.** Counts live in the zone headings. A separate tile row is a second navigation system competing with the sections it points at.
 - **Exceptions bubble up, detail stays down.** A repository that fails polling raises a red count on the Watching tab. The table itself stays on that page.
+- **System state stays typed.** Pause, disabled writes, unavailable limits, and a reached Reserve are different reasons work cannot start. Queue copy names the exact reason.
 
 ## Every Element Earns Its Place
 

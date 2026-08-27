@@ -11,6 +11,7 @@ import type {
 import { formatTimeAgo, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
 import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import {
+  agentStartState,
   decisionEntries,
   isSnapshotStale,
   taskNumber,
@@ -27,6 +28,11 @@ function emptySnapshot(): DashboardSnapshot {
     maxOpenPullRequests: 8,
     agentProfile: CODEX_AGENT_PROFILE,
     agentSelection: { _tag: 'FollowsConfiguration' },
+    agentStart: { _tag: 'WritesDisabled' },
+    agentProviderOrder: ['opencode', 'codex'],
+    agentModels: { codex: [], opencode: [] },
+    reasoningEfforts: [],
+    providerCapacities: [],
     agents: [],
     incidents: [],
     queue: [],
@@ -78,12 +84,12 @@ function createDashboard() {
 
   const activeAgents = computed(() => snapshot.value.agents.filter((agent): agent is ActiveAgent => agent._tag === 'ActiveAgent'))
   const reviewAgents = computed(() => snapshot.value.agents.filter((agent): agent is ReviewAgent => agent._tag === 'ReviewAgent'))
-  const agentsCanStart = computed(() => snapshot.value.mutationsEnabled && snapshot.value.agentControl._tag === 'Running')
+  const agentStart = computed(() => agentStartState(snapshot.value))
+  const agentsCanStart = computed(() => agentStart.value._tag === 'Available')
   const decisions = computed(() => decisionEntries(snapshot.value.queue))
   const unhealthyRepositories = computed(() => snapshot.value.repositories.filter(repository => repository.lastError !== null).length)
   const queueContext = computed(() => ({
-    agentsCanStart: agentsCanStart.value,
-    agentsPaused: snapshot.value.agentControl._tag === 'Paused',
+    agentStart: agentStart.value,
     openPullRequests: snapshot.value.openPullRequests,
     maxOpenPullRequests: snapshot.value.maxOpenPullRequests,
     selectionMode: snapshot.value.selectionMode,

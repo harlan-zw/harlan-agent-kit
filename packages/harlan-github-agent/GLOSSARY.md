@@ -139,8 +139,9 @@ Agent provider whose weekly window still has more than the Reserve left. A
 provider that publishes no quota always passes, because unknown is not empty.
 
 When no Agent provider may spend, the service stops claiming new agent Tasks and
-records one Incident. Active agents and controller Publications finish. This is
-the same stop Pause uses, decided by the account instead of by Harlan.
+shows `Reserve reached` in the System pane. Active agents and controller
+Publications finish. This is the same stop Pause uses, decided by the account
+instead of by Harlan. Reaching a Reserve is expected state, not an Incident.
 
 Automatic selection is durable. It survives a restart.
 
@@ -434,6 +435,8 @@ Use instead of needs attention, stuck, failed, blocked, or human required in das
 One named failure the controller observed, shown in the System pane.
 
 Repeats of the same failure raise the occurrence count on one Incident. An Incident closes on its own when the work behind it succeeds.
+
+An intentional shutdown never creates an Incident. Reaching a Reserve never creates one either. Both are normal controller state.
 
 `Incident` is GitHub's own word on their status page, where it carries the same meaning.
 

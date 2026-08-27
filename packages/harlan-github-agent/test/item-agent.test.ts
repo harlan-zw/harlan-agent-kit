@@ -63,9 +63,9 @@ describe('subject Workers', () => {
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          baseChecks: { _tag: 'Available', checks: [] },
           body: 'Fixes the bug.',
-          checks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          checks: { _tag: 'Available', checks: [] },
           comments: [],
           priorAutomatedReview: {
             _tag: 'Found',
