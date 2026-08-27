@@ -562,6 +562,24 @@ export interface ClaimedCandidateIssueCommand extends CandidateIssueCommand {
   workerId: string
 }
 
+/** One request to write what a Routine run did to its tracking issue. */
+export interface RoutineReportCommand {
+  id: string
+  routineId: string
+  runId: string
+  repository: string
+  routineName: RoutineName
+  body: string
+}
+
+/** One leased report, with the tracking issue it belongs to when one exists. */
+export interface ClaimedRoutineReportCommand extends RoutineReportCommand {
+  repositoryMapping: RepositoryMapping
+  trackingIssueNumber: number | null
+  fence: number
+  workerId: string
+}
+
 export interface Routine {
   id: string
   repository: string
@@ -573,6 +591,8 @@ export interface Routine {
   /** The default branch commit the spec was read from. */
   specSha: string
   lastRunAt: string | null
+  /** The issue every run of this Routine reports to, once one exists. */
+  trackingIssueNumber: number | null
   updatedAt: string
 }
 

@@ -6,6 +6,7 @@ import type { AgentWorkspaceManager } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
+import { routineReportCommand } from './routine-report-controller.ts'
 
 /**
  * What a scan turn must answer with.
@@ -118,7 +119,7 @@ export interface RoutineScanWorkerOptions {
   maximumChangedFiles?: number
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'listCandidates' | 'recordCandidates' | 'stageCandidateIssues'>
+  store: Pick<JournalStore, 'listCandidates' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareRoutine'>
 }
 
@@ -221,6 +222,18 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         `${dropped} over ${maximumChangedFiles} files`,
         `${requested} issues requested`,
       ].join(' | ')
+      // Every run writes its line, including the ones that found nothing. A
+      // quiet morning and a stopped scheduler must not read the same.
+      options.store.stageRoutineReport({
+        command: routineReportCommand({
+          repository: task.repository,
+          routineId: task.routineId,
+          routineName: task.name,
+          run: { id: task.id, scheduledFor: task.scheduledFor },
+          report: { _tag: 'Completed', evidence },
+        }),
+        at: options.now().toISOString(),
+      })
       options.logger.info(evidence)
       return ok({ evidence })
     },

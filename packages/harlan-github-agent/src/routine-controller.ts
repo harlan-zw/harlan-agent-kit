@@ -1,6 +1,7 @@
 import type { GitHubSource } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { RepositoryMapping, Routine, RoutineRun } from './types.ts'
+import { routineReportCommand } from './routine-report-controller.ts'
 import { dueRoutine, parseCron } from './routine-schedule.ts'
 import { parseRoutineSpec } from './routine-spec.ts'
 
@@ -92,7 +93,7 @@ export async function syncRepositoryRoutines(
 export interface RoutinePlanDependencies {
   catchUpMinutes?: number
   now: () => Date
-  store: Pick<JournalStore, 'listRoutines' | 'openRoutineRun' | 'skipRoutineRun'>
+  store: Pick<JournalStore, 'listRoutines' | 'openRoutineRun' | 'skipRoutineRun' | 'stageRoutineReport'>
 }
 
 export interface RoutinePlan {
@@ -157,10 +158,23 @@ export function planRoutineRuns(dependencies: RoutinePlanDependencies): RoutineP
       : dependencies.store.skipRoutineRun({ ...input, reason: due.missed })
     if (run === null)
       continue
-    if (due.missed === null)
+    if (due.missed === null) {
       opened.push(run)
-    else
-      skipped.push(run)
+      continue
+    }
+    // A skipped run reports too. A check-in that did not happen is exactly the
+    // thing a person needs told, and it leaves no other trace.
+    dependencies.store.stageRoutineReport({
+      command: routineReportCommand({
+        repository: routine.repository,
+        routineId: routine.id,
+        routineName: routine.name,
+        run: { id: run.id, scheduledFor: run.scheduledFor },
+        report: { _tag: 'Skipped', reason: due.missed },
+      }),
+      at: now.toISOString(),
+    })
+    skipped.push(run)
   }
 
   return { opened, skipped }

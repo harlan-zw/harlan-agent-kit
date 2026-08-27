@@ -428,6 +428,12 @@ export interface GitHubIssuePublisher {
     repository: RepositoryMapping
     fingerprint: string
   }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string } | null, GitHubReadError>>
+  /** Writes one comment, which is how a Routine run reports what it did. */
+  createComment: (input: {
+    repository: RepositoryMapping
+    issueNumber: number
+    body: string
+  }, signal?: AbortSignal) => Promise<Result<{ id: number }, GitHubReadError>>
 }
 
 export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOptions): GitHubIssuePublisher {
@@ -472,6 +478,29 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
           })
         })
     },
+    async createComment(input, signal) {
+      const octokit = await itemWriteClient(input.repository.github, signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(input.repository.github)
+      return octokit.value.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: input.issueNumber,
+        body: input.body,
+        ...(signal === undefined ? {} : { request: { signal } }),
+      })
+        .then(response => ok({ id: response.data.id }))
+        .catch((error: unknown): Result<{ id: number }, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({
+            repository: input.repository.github,
+            message: error instanceof Error ? error.message : 'GitHub refused the comment.',
+            ...(status === undefined ? {} : { status }),
+          })
+        })
+    },
+
     async findOpenIssueByFingerprint(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
       const octokit = await itemWriteClient(input.repository.github, signal)
