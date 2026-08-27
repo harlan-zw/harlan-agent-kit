@@ -20,9 +20,10 @@ Current:
 - safe merge conflict commits and pushes
 - two agent providers: [Codex](https://developers.openai.com/codex/sdk/) and [opencode](https://opencode.ai). Set `agent.provider` to `codex` or `opencode`
 - role-specific Codex profiles: `gpt-5.6-sol` with high reasoning for adversarial review, and `gpt-5.6-terra` with medium reasoning for other work
-- the opencode profile runs `opencode-go/deepseek-v4-flash` at the high reasoning effort for every role
+- the opencode profile runs `zai-coding-plan/glm-5.3-flash` at the high reasoning effort for every role
 - switch the Agent provider, model, and reasoning effort from the dashboard or the tray, with no restart
-- `Automatic` Agent selection picks the provider with capacity left, and keeps a reserve of the weekly Codex window for your own terminal
+- `Automatic` Agent selection picks the provider with capacity left, and keeps a reserve of each published window for your own terminal
+- opencode answers on the GLM Coding Plan with `zai-coding-plan/glm-5.3-flash`, and the service reads that plan's live quota
 - one global limit of three active agents across reviews, issue work, and pull request fixes
 - durable dashboard cancellation for active and queued tasks
 - read-only public issue watches outside the GitHub App installation
@@ -90,7 +91,11 @@ A conflict fix also requires an owned repository, an allowed pull request author
 
 Open `http://harlan-github-agent.local/`. Use `agent` as the dashboard username.
 
-Select `Automatic` in the Agent provider control to pick the provider by remaining capacity. It walks `agent.order` and takes the first provider whose weekly window has more than `agent.reserve_percent` left. Codex publishes a weekly window. opencode publishes none, so it always passes and never blocks a turn. When no provider may spend, the service stops claiming new agent tasks and records one incident. Active agents and publications finish.
+Select `Automatic` in the Agent provider control to pick the provider by remaining capacity. It walks `agent.order` and takes the first provider whose window has more than its `agent.reserve_percent` left.
+
+Codex publishes a seven-day window, read from `codex app-server`. opencode publishes the GLM Coding Plan windows, read from `https://api.z.ai/api/monitor/usage/quota/limit` with the key in `~/.config/opencode/opencode.json`. The plan publishes a five-hour window and a weekly one, and the fuller of the two decides, because a spent five-hour window stalls the fleet for hours whatever the week has left.
+
+A provider that publishes no quota always passes, so it never blocks a turn on an unknown figure. When no provider may spend, the service stops claiming new agent tasks and records one incident. Active agents and publications finish.
 
 Use the Agent provider control in the header to switch the Agent provider, model, or reasoning effort. A switch starts the next agent turn. An agent already running keeps the model it started with. Switching the provider returns the model and the reasoning effort to that provider's defaults.
 

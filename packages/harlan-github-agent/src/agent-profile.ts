@@ -17,18 +17,18 @@ export const CODEX_AGENT_PROFILE = {
   },
 } as const satisfies AgentProfile
 
-/** DeepSeek V4 Flash answers every role at its highest reasoning effort. */
+/** GLM 5.3 Flash on the GLM Coding Plan answers every role at its highest reasoning effort. */
 export const OPENCODE_AGENT_PROFILE = {
   provider: 'opencode',
   authentication: 'opencode-go',
   maximumActiveAgents: 4,
   roles: {
-    adversarial_review: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    baseline_repair: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    conflict_resolution: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    issue_triage: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    issue_work: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
-    review_fix: { model: 'opencode-go/deepseek-v4-flash', reasoningEffort: 'high' },
+    adversarial_review: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    baseline_repair: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    conflict_resolution: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    issue_triage: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    issue_work: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+    review_fix: { model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
   },
 } as const satisfies AgentProfile
 
@@ -52,6 +52,13 @@ export const AGENT_ROLES = [
 export const AGENT_MODELS = {
   codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   opencode: [
+    'zai-coding-plan/glm-5.3-flash',
+    'zai-coding-plan/glm-5.3',
+    'zai-coding-plan/glm-5.3-highspeed',
+    'zai-coding-plan/glm-5.2',
+    'zai-coding-plan/glm-5.2-highspeed',
+    'zai-coding-plan/glm-5-turbo',
+    'zai-coding-plan/glm-4.7',
     'opencode/big-pickle',
     'opencode/deepseek-v4-flash-free',
     'opencode/hy3-free',

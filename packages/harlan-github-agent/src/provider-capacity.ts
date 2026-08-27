@@ -3,10 +3,10 @@ import type { Readable, Writable } from 'node:stream'
 import type { AgentProviderName } from './agent-provider.ts'
 import type { ProviderCapacity } from './types.ts'
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { DatabaseSync } from 'node:sqlite'
 
 /**
  * One seven-day subscription window, in minutes.
@@ -146,41 +146,115 @@ export async function readCodexCapacity(options: CodexCapacityOptions = {}): Pro
   }
 }
 
-export const OPENCODE_DATABASE = join(homedir(), '.local', 'share', 'opencode', 'db.sqlite')
+/** Where opencode declares the GLM Coding Plan credential the service reads. */
+export const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
+
+export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit'
+
+interface ZaiLimit {
+  /** The window's allowance. Z.AI names this `usage`, and it is the ceiling. */
+  usage?: unknown
+  /** How much of the allowance this window has spent. */
+  currentValue?: unknown
+  nextResetTime?: unknown
+}
 
 /**
- * Reads what opencode has spent this week.
+ * Reads the tightest GLM Coding Plan window out of one quota response.
  *
- * opencode publishes no quota, so there is no percentage to compare a reserve
- * against. Spend is the only figure its own store knows, which is why opencode
- * capacity reads as `Unpublished` and never blocks a turn on its own. It leaves
- * the ladder when a turn fails naming its limit, not when a number is crossed.
+ * The plan publishes several windows at once: a five-hour credit window and a
+ * weekly one. Either can stop a turn, so the fullest window decides. Spending
+ * the whole five-hour window stalls the fleet for hours even with most of the
+ * week left, which reads as a broken service rather than a busy one.
+ *
+ * The percentage Z.AI sends is rounded, so this computes its own.
  */
-export function readOpencodeSpend(database: string = OPENCODE_DATABASE, now: Date = new Date()): { turns: number, cost: number } | null {
-  const since = now.getTime() - WEEKLY_WINDOW_MINUTES * 60_000
-  let connection: DatabaseSync
+export function zaiPlanCapacity(body: unknown): ProviderCapacity {
+  if (typeof body !== 'object' || body === null)
+    return { _tag: 'Unavailable', reason: 'The GLM Coding Plan answered no quota.' }
+  const data = (body as { data?: unknown }).data
+  const limits = typeof data === 'object' && data !== null ? (data as { limits?: unknown }).limits : undefined
+  if (!Array.isArray(limits) || limits.length === 0)
+    return { _tag: 'Unavailable', reason: 'The GLM Coding Plan answered no quota windows.' }
+
+  let tightest: { usedPercent: number, resetsAt: string } | null = null
+  for (const limit of limits as ZaiLimit[]) {
+    if (typeof limit?.usage !== 'number' || typeof limit.currentValue !== 'number' || limit.usage <= 0)
+      continue
+    const usedPercent = Math.max(0, Math.min(100, (limit.currentValue / limit.usage) * 100))
+    if (tightest !== null && usedPercent <= tightest.usedPercent)
+      continue
+    const resetsAt = typeof limit.nextResetTime === 'number'
+      ? new Date(limit.nextResetTime).toISOString()
+      : ''
+    tightest = { usedPercent, resetsAt }
+  }
+  return tightest === null
+    ? { _tag: 'Unavailable', reason: 'The GLM Coding Plan answered no readable quota window.' }
+    : { _tag: 'Available', ...tightest }
+}
+
+/**
+ * Reads the GLM Coding Plan credential opencode already holds.
+ *
+ * opencode owns this provider, so its configuration is the one place the key
+ * lives. Copying it into service configuration would give the same secret two
+ * homes and let them disagree.
+ */
+export function readZaiApiKey(configPath: string = OPENCODE_CONFIG_PATH): string | null {
   try {
-    connection = new DatabaseSync(database, { readOnly: true })
+    const raw = readFileSync(configPath, 'utf8')
+    const config = JSON.parse(raw) as {
+      provider?: Record<string, { options?: { apiKey?: unknown } }>
+    }
+    const key = config.provider?.['zai-coding-plan']?.options?.apiKey
+    return typeof key === 'string' && key.trim() !== '' ? key.trim() : null
   }
   catch {
-    // No opencode store means opencode has never run here. That is not a fault.
+    // No opencode configuration means the plan is not set up here. Not a fault.
     return null
   }
+}
+
+export interface ZaiCapacityOptions {
+  apiKey?: string | null
+  fetchQuota?: (apiKey: string, signal: AbortSignal) => Promise<unknown>
+  timeoutMilliseconds?: number
+}
+
+/** Asks the GLM Coding Plan what its windows have left. */
+export async function readZaiCapacity(options: ZaiCapacityOptions = {}): Promise<ProviderCapacity> {
+  const apiKey = options.apiKey === undefined ? readZaiApiKey() : options.apiKey
+  if (apiKey === null)
+    return { _tag: 'Unpublished' }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMilliseconds ?? 10_000)
+  timeout.unref()
   try {
-    const row = connection.prepare(`
-      SELECT
-        COUNT(*) AS turns,
-        COALESCE(SUM(COALESCE(json_extract(data, '$.cost'), 0)), 0) AS cost
-      FROM message
-      WHERE json_extract(data, '$.role') = 'assistant' AND time_created > ?
-    `).get(since) as { turns: number, cost: number } | undefined
-    return row === undefined ? null : { turns: row.turns, cost: row.cost }
+    const body = options.fetchQuota === undefined
+      ? await fetch(ZAI_QUOTA_URL, {
+          headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
+          signal: controller.signal,
+        }).then(async (response) => {
+          if (!response.ok)
+            throw new Error(`The GLM Coding Plan answered ${response.status}.`)
+          return response.json() as Promise<unknown>
+        })
+      : await options.fetchQuota(apiKey, controller.signal)
+    return zaiPlanCapacity(body)
   }
-  catch {
-    return null
+  catch (error) {
+    // Never let the key reach a log. Only the shape of the failure is reported.
+    return {
+      _tag: 'Unavailable',
+      reason: error instanceof Error && error.name === 'AbortError'
+        ? 'The GLM Coding Plan quota request timed out.'
+        : 'The GLM Coding Plan quota could not be read.',
+    }
   }
   finally {
-    connection.close()
+    clearTimeout(timeout)
   }
 }
 
@@ -208,9 +282,11 @@ export function hasSpendableCapacity(capacity: ProviderCapacity, reservePercent:
 export function chooseAgentProvider(input: {
   capacity: (provider: AgentProviderName) => ProviderCapacity
   order: readonly AgentProviderName[]
-  reservePercent: number
+  reservePercent: Record<AgentProviderName, number>
 }): AgentProviderName | null {
-  return input.order.find(provider => hasSpendableCapacity(input.capacity(provider), input.reservePercent)) ?? null
+  return input.order.find(
+    provider => hasSpendableCapacity(input.capacity(provider), input.reservePercent[provider]),
+  ) ?? null
 }
 
 export interface ProviderCapacitySource {
@@ -225,6 +301,7 @@ export interface ProviderCapacitySourceOptions {
   intervalMilliseconds?: number
   onError: (error: unknown) => void
   readCodex?: () => Promise<ProviderCapacity>
+  readOpencode?: () => Promise<ProviderCapacity>
 }
 
 /**
@@ -238,7 +315,9 @@ export interface ProviderCapacitySourceOptions {
 export function createProviderCapacitySource(options: ProviderCapacitySourceOptions): ProviderCapacitySource {
   const intervalMilliseconds = options.intervalMilliseconds ?? 5 * 60_000
   const readCodex = options.readCodex ?? (() => readCodexCapacity())
+  const readOpencode = options.readOpencode ?? (() => readZaiCapacity())
   let codex: ProviderCapacity = { _tag: 'Unavailable', reason: 'The Codex weekly window has not been read yet.' }
+  let opencode: ProviderCapacity = { _tag: 'Unavailable', reason: 'The GLM Coding Plan quota has not been read yet.' }
   let timer: NodeJS.Timeout | undefined
   let stopped = true
   let active: Promise<void> = Promise.resolve()
@@ -246,7 +325,14 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   const refresh = (): Promise<void> => {
     active = active
       .then(async () => {
-        codex = await readCodex()
+        // One failing provider must not stop the other being read, or a Codex
+        // outage would make opencode look exhausted and stop the fleet.
+        const [nextCodex, nextOpencode] = await Promise.all([
+          readCodex().catch(() => ({ _tag: 'Unavailable', reason: 'The Codex weekly window could not be read.' }) as ProviderCapacity),
+          readOpencode().catch(() => ({ _tag: 'Unavailable', reason: 'The GLM Coding Plan quota could not be read.' }) as ProviderCapacity),
+        ])
+        codex = nextCodex
+        opencode = nextOpencode
       })
       .catch(options.onError)
     return active
@@ -260,7 +346,7 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   }
 
   return {
-    read: provider => provider === 'codex' ? codex : { _tag: 'Unpublished' },
+    read: provider => provider === 'codex' ? codex : opencode,
     refresh,
     start: () => {
       if (!stopped)

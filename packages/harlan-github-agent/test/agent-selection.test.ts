@@ -113,7 +113,7 @@ describe('agent runtime source', () => {
     expect(before.provider).toBe(codexProvider)
     expect(before.profile.roles.issue_triage.model).toBe('gpt-5.6-terra')
     expect(after.provider).toBe(opencodeProvider)
-    expect(after.profile.roles.issue_triage.model).toBe('opencode-go/deepseek-v4-flash')
+    expect(after.profile.roles.issue_triage.model).toBe('zai-coding-plan/glm-5.3-flash')
   })
 })
 

@@ -6,8 +6,10 @@ import {
   chooseAgentProvider,
   createProviderCapacitySource,
   hasSpendableCapacity,
+  readZaiApiKey,
   WEEKLY_WINDOW_MINUTES,
   weeklyCodexCapacity,
+  zaiPlanCapacity,
 } from '../src/provider-capacity.ts'
 import { openJournalStore } from '../src/store.ts'
 
@@ -74,6 +76,11 @@ describe('spending a weekly window against the reserve', () => {
     expect(hasSpendableCapacity({ _tag: 'Unpublished' }, 20)).toBe(true)
   })
 
+  it('keeps half the GLM Coding Plan for interactive work', () => {
+    expect(hasSpendableCapacity({ _tag: 'Available', usedPercent: 49, resetsAt: '' }, 50)).toBe(true)
+    expect(hasSpendableCapacity({ _tag: 'Available', usedPercent: 51, resetsAt: '' }, 50)).toBe(false)
+  })
+
   it('refuses a published window it could not read', () => {
     expect(hasSpendableCapacity({ _tag: 'Unavailable', reason: 'timed out' }, 20)).toBe(false)
   })
@@ -87,7 +94,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: capacities({ _tag: 'Available', usedPercent: 10, resetsAt: '' }),
       order: ['codex', 'opencode'],
-      reservePercent: 20,
+      reservePercent: { codex: 20, opencode: 20 },
     })
 
     expect(chosen).toBe('codex')
@@ -97,7 +104,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: capacities({ _tag: 'Available', usedPercent: 85, resetsAt: '' }),
       order: ['codex', 'opencode'],
-      reservePercent: 20,
+      reservePercent: { codex: 20, opencode: 20 },
     })
 
     expect(chosen).toBe('opencode')
@@ -107,7 +114,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: () => ({ _tag: 'Unavailable', reason: 'unread' }),
       order: ['codex', 'opencode'],
-      reservePercent: 20,
+      reservePercent: { codex: 20, opencode: 20 },
     })
 
     expect(chosen).toBeNull()
@@ -117,7 +124,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: capacities({ _tag: 'Available', usedPercent: 0, resetsAt: '' }),
       order: ['opencode', 'codex'],
-      reservePercent: 20,
+      reservePercent: { codex: 20, opencode: 20 },
     })
 
     expect(chosen).toBe('opencode')
@@ -199,7 +206,7 @@ describe('resolving an automatic Agent selection', () => {
     const after = runtime()
 
     expect(before.profile.roles.adversarial_review.model).toBe('gpt-5.6-sol')
-    expect(after.profile.roles.adversarial_review.model).toBe('opencode-go/deepseek-v4-flash')
+    expect(after.profile.roles.adversarial_review.model).toBe('zai-coding-plan/glm-5.3-flash')
   })
 })
 
@@ -231,10 +238,23 @@ describe('storing an automatic Agent selection', () => {
 })
 
 describe('the capacity source', () => {
-  it('reports opencode as unpublished, because opencode publishes no quota', () => {
+  it('reports opencode as unavailable until the first plan reading lands', () => {
     const source = createProviderCapacitySource({ onError: () => undefined })
 
-    expect(source.read('opencode')).toEqual({ _tag: 'Unpublished' })
+    expect(source.read('opencode')).toMatchObject({ _tag: 'Unavailable' })
+  })
+
+  it('keeps reading opencode when Codex fails, so one outage stops nothing', async () => {
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      readCodex: () => Promise.reject(new Error('codex is down')),
+      readOpencode: async () => ({ _tag: 'Available', usedPercent: 12, resetsAt: '2026-09-01T00:00:00.000Z' }),
+    })
+
+    await source.refresh()
+
+    expect(source.read('codex')).toMatchObject({ _tag: 'Unavailable' })
+    expect(source.read('opencode')).toMatchObject({ _tag: 'Available', usedPercent: 12 })
   })
 
   it('reports Codex as unavailable until the first reading lands', () => {
@@ -251,6 +271,7 @@ describe('the capacity source', () => {
         reads += 1
         return { _tag: 'Available', usedPercent: 30, resetsAt: '2026-09-01T00:00:00.000Z' }
       },
+      readOpencode: async () => ({ _tag: 'Unpublished' }),
     })
 
     await source.refresh()
@@ -258,5 +279,67 @@ describe('the capacity source', () => {
     expect(source.read('codex')).toMatchObject({ _tag: 'Available', usedPercent: 30 })
     expect(source.read('codex')).toMatchObject({ _tag: 'Available', usedPercent: 30 })
     expect(reads).toBe(1)
+  })
+})
+
+describe('reading the GLM Coding Plan quota', () => {
+  /** The exact shape the plan answers with, taken from a live response. */
+  const liveQuota = {
+    code: 200,
+    data: {
+      level: 'max',
+      limits: [
+        { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 28_000, currentValue: 31, nextResetTime: 1_787_816_752_166 },
+        { type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 140_000, currentValue: 48, nextResetTime: 1_787_927_612_998 },
+      ],
+    },
+  }
+
+  it('computes its own percentage, because the plan rounds its one', () => {
+    expect(zaiPlanCapacity(liveQuota)).toMatchObject({ _tag: 'Available' })
+    const capacity = zaiPlanCapacity(liveQuota)
+    if (capacity._tag !== 'Available')
+      throw new Error('expected an available window')
+    // 31 of 28,000 in the five-hour window beats 48 of 140,000 in the week.
+    expect(capacity.usedPercent).toBeCloseTo((31 / 28_000) * 100, 6)
+  })
+
+  it('answers with the fullest window, so a spent five hours stops the fleet', () => {
+    const capacity = zaiPlanCapacity({
+      data: {
+        limits: [
+          { usage: 28_000, currentValue: 27_000, nextResetTime: 1_787_816_752_166 },
+          { usage: 140_000, currentValue: 14_000, nextResetTime: 1_787_927_612_998 },
+        ],
+      },
+    })
+
+    expect(capacity).toEqual({
+      _tag: 'Available',
+      usedPercent: (27_000 / 28_000) * 100,
+      resetsAt: new Date(1_787_816_752_166).toISOString(),
+    })
+  })
+
+  it('reports unavailable when the plan answers no windows', () => {
+    expect(zaiPlanCapacity({ data: { limits: [] } })).toEqual({
+      _tag: 'Unavailable',
+      reason: 'The GLM Coding Plan answered no quota windows.',
+    })
+  })
+
+  it('reports unavailable when a window carries no readable numbers', () => {
+    expect(zaiPlanCapacity({ data: { limits: [{ usage: 'lots', currentValue: 1 }] } })).toEqual({
+      _tag: 'Unavailable',
+      reason: 'The GLM Coding Plan answered no readable quota window.',
+    })
+  })
+
+  it('ignores a window whose allowance is zero, so it never divides by it', () => {
+    expect(zaiPlanCapacity({ data: { limits: [{ usage: 0, currentValue: 0 }] } })).toMatchObject({ _tag: 'Unavailable' })
+  })
+
+  it('answers no key when opencode declares no plan, which is not a fault', () => {
+    expect(readZaiApiKey('/nonexistent/opencode.json')).toBeNull()
   })
 })
