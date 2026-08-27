@@ -36,7 +36,7 @@ describe('queuePositionComment', () => {
   it('states the exact position and how many Tasks come first', () => {
     const body = queuePositionComment(queuedRepair())
 
-    expect(body).toContain('### 🤖 QUEUED · 3rd of 7')
+    expect(body).toContain('### 🤖 QUEUED · 3rd')
     expect(body).toContain('Next: Repair starts after the 2 Tasks ahead of it finish.')
     expect(body).toContain('░░░░░ 0%')
   })
@@ -55,6 +55,13 @@ describe('queuePositionComment', () => {
     expect(queuePositionComment(queuedRepair())).toBe(queuePositionComment(queuedRepair()))
   })
 
+  it('ignores the Queue length, so a Task joining behind rewrites nothing', () => {
+    const before = queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 3, total: 7 } }))
+    const after = queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 3, total: 40 } }))
+
+    expect(after).toBe(before)
+  })
+
   it('names the pause, because a position on a paused repository never moves', () => {
     const body = queuePositionComment(queuedRepair({ queue: { _tag: 'Paused' } }))
 
@@ -63,8 +70,8 @@ describe('queuePositionComment', () => {
   })
 
   it('writes an ordinal a person reads, not a number with a wrong suffix', () => {
-    expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 11, total: 20 } }))).toContain('11th of 20')
-    expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 22, total: 30 } }))).toContain('22nd of 30')
+    expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 11, total: 20 } }))).toContain('QUEUED · 11th')
+    expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 22, total: 30 } }))).toContain('QUEUED · 22nd')
   })
 })
 
@@ -94,7 +101,7 @@ describe('publishQueuePositions', () => {
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24, queue: { _tag: 'Waiting', position: 3, total: 7 } })])
     expect(edited?.commentId).toBe(42)
-    expect(edited?.body).toContain('### 🤖 QUEUED · 3rd of 7')
+    expect(edited?.body).toContain('### 🤖 QUEUED · 3rd')
     expect(recorded?.taskId).toBe('repair-task')
     expect(recorded?.body).toBe(edited?.body)
   })

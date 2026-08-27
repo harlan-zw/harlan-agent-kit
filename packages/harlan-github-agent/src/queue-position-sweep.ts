@@ -22,15 +22,20 @@ function ordinal(position: number): string {
 /**
  * The canonical comment while its Task waits in the Queue.
  *
- * No timestamp and no estimate. The comment carries one changing fact, the
- * Queue position, so an unchanged position renders an identical body and the
- * sweep writes nothing. A timestamp here would edit every comment every pass.
+ * No timestamp, no estimate, and no Queue length. The comment carries one
+ * changing fact, this Task's own position, so a Task nobody overtook renders
+ * an identical body and the sweep writes nothing.
+ *
+ * The length used to appear as "3rd of 7". Every Task joining the Queue moved
+ * that number, so one new pull request rewrote the comment on every other
+ * waiting pull request, once per poll. A position moves only when the Task
+ * ahead leaves, which is the fact worth an edit.
  */
 export function queuePositionComment(status: QueuedReviewStatus): string {
   const work = workLabel[status.taskKind]
   const heading = status.queue._tag === 'Paused'
     ? 'PAUSED'
-    : `QUEUED · ${ordinal(status.queue.position)} of ${status.queue.total}`
+    : `QUEUED · ${ordinal(status.queue.position)}`
   const ahead = status.queue._tag === 'Paused' ? 0 : status.queue.position - 1
   const next = status.queue._tag === 'Paused'
     ? `${work} starts when this repository resumes.`
