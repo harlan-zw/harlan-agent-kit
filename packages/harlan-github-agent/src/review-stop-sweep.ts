@@ -87,7 +87,7 @@ export async function publishStoppedReviews(
 ): Promise<Array<Result<StoppedReviewOutcome, string>>> {
   const mappings = new Map(options.repositories.map(mapping => [mapping.github.toLowerCase(), mapping]))
   const reviews = options.store.listStoppedReviews()
-  return Promise.all(reviews.map(async (review): Promise<Result<StoppedReviewOutcome, string>> => {
+  const publish = async (review: StoppedReview): Promise<Result<StoppedReviewOutcome, string>> => {
     const mapping = mappings.get(review.repository.toLowerCase())
     if (mapping === undefined)
       return err(`${review.repository}: the repository is no longer configured.`)
@@ -132,5 +132,10 @@ export async function publishStoppedReviews(
     return recorded
       ? ok({ _tag: 'Published', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
       : err(`${review.repository}#${review.pullRequestNumber}: the final review comment could not be saved.`)
-  }))
+  }
+
+  const results: Array<Result<StoppedReviewOutcome, string>> = []
+  for (const review of reviews)
+    results.push(await publish(review))
+  return results
 }

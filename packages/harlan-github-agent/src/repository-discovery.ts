@@ -108,6 +108,7 @@ function defaultMapping(repository: InstalledRepository, checkout: string): Repo
     writablePullRequestAuthors: ['harlan-zw', AGENT_ACTOR_LOGIN],
     writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/'],
     issueWork: ownership === 'owned',
+    maxOpenPullRequests: null,
     pullRequestReview: true,
     pullRequestConformance: true,
     conflictResolution: ownership === 'owned',

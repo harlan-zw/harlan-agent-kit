@@ -76,6 +76,37 @@ describe('queuePositionComment', () => {
 })
 
 describe('publishQueuePositions', () => {
+  it('reads Queue positions one at a time to protect the GitHub request quota', async () => {
+    let active = 0
+    let maximumActive = 0
+    const statuses = Array.from({ length: 8 }, (_, index) => queuedRepair({
+      taskId: `repair-task-${index}`,
+      pullRequestNumber: 24 + index,
+    }))
+
+    await publishQueuePositions({
+      github: {
+        getPullRequestReviewSnapshot: async () => {
+          active += 1
+          maximumActive = Math.max(maximumActive, active)
+          await new Promise(resolve => setTimeout(resolve, 5))
+          active -= 1
+          return snapshot()
+        },
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listQueuedReviewStatuses: () => statuses,
+        isQueuedReviewStatus: () => true,
+        recordQueuedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(maximumActive).toBe(1)
+  })
+
   it('rewrites the canonical comment and records the position it published', async () => {
     let edited: { commentId: number, body: string } | undefined
     let recorded: { taskId: string, body: string } | undefined

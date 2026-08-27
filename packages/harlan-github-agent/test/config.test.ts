@@ -70,6 +70,25 @@ describe('configuration boundary', () => {
     const parsed = parseConfigText(configText)
     expect(parsed._tag === 'Ok' && parsed.value.autoMerge).toEqual({ _tag: 'Disabled' })
     expect(parsed._tag === 'Ok' && parsed.value.maxOpenPullRequests).toBe(8)
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.maxOpenPullRequests).toBeNull()
+  })
+
+  it('parses a repository pull request limit', () => {
+    const parsed = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true\n    max_open_pull_requests: 4',
+    ))
+
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.maxOpenPullRequests).toBe(4)
+
+    const invalid = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true\n    max_open_pull_requests: 0',
+    ))
+    expect(invalid._tag === 'Err' && invalid.error).toContainEqual({
+      path: '$.repositories[0].max_open_pull_requests',
+      message: 'Expected an integer from 1 to 100.',
+    })
   })
 
   it('parses an enabled auto merge policy with its defaults', () => {

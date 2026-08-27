@@ -96,7 +96,7 @@ export async function publishQueuePositions(
   const mappings = new Map(options.repositories.map(mapping => [mapping.github.toLowerCase(), mapping]))
   const changed = options.store.listQueuedReviewStatuses()
     .filter(status => queuePositionComment(status) !== status.publishedBody)
-  return Promise.all(changed.map(async (status): Promise<Result<QueuePositionOutcome, string>> => {
+  const publish = async (status: QueuedReviewStatus): Promise<Result<QueuePositionOutcome, string>> => {
     const mapping = mappings.get(status.repository.toLowerCase())
     if (mapping === undefined)
       return err(`${status.repository}: the repository is no longer configured.`)
@@ -137,5 +137,10 @@ export async function publishQueuePositions(
       // The claim was lost while the edit was in flight, so the claimed agent
       // now owns the comment. Nothing was saved and nothing needs to be.
       : ok({ _tag: 'Superseded', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
-  }))
+  }
+
+  const results: Array<Result<QueuePositionOutcome, string>> = []
+  for (const status of changed)
+    results.push(await publish(status))
+  return results
 }

@@ -2379,6 +2379,8 @@ function dashboardQueue(
   reviewAgents: Array<Extract<DashboardAgent, { _tag: 'ReviewAgent' }>>,
   mappings: Map<string, RepositoryMapping>,
   rejectedIssueWorkResults: Map<string, number>,
+  openPullRequestsByRepository: Map<string, number>,
+  currentSelectionMode: SelectionMode,
 ): QueueEntry[] {
   const currentTasks = new Map<string, AgentTask>()
   tasks.forEach((task) => {
@@ -2415,7 +2417,22 @@ function dashboardQueue(
         switch (work.state._tag) {
           case 'Running':
           case 'Publishing': return [{ ...base, kind: 'issue', state: { _tag: 'Active', work: 'issue_work' } }]
-          case 'Queued': return [{ ...base, kind: 'issue', state: { _tag: 'Queued', work: 'issue_work' } }]
+          case 'Queued': {
+            const limit = mapping.maxOpenPullRequests
+            const openPullRequests = openPullRequestsByRepository.get(subject.repository) ?? 0
+            if (currentSelectionMode === 'auto' && limit !== null && openPullRequests >= limit) {
+              const pullRequest = limit === 1 ? 'pull request' : 'pull requests'
+              return [{
+                ...base,
+                kind: 'issue',
+                state: {
+                  _tag: 'Pending',
+                  reason: `${subject.repository} reached its limit of ${limit} open ${pullRequest}. Merge or close one to start Issue work.`,
+                },
+              }]
+            }
+            return [{ ...base, kind: 'issue', state: { _tag: 'Queued', work: 'issue_work' } }]
+          }
           case 'ActionRequired': {
             const rejectedResults = rejectedIssueWorkResults.get(work.id)
             const reason = rejectedResults === undefined
@@ -3875,7 +3892,7 @@ export function openJournalStore(
   path: string,
   mutationsEnabled = false,
   profile: AgentProfile = CODEX_AGENT_PROFILE,
-  /** Issue work stops above this many open pull requests. Matches the configuration default. */
+  /** Issue work stops when open pull requests reach this limit. Matches the configuration default. */
   maxOpenPullRequests = 8,
 ): JournalStore {
   const database = openDatabase(path)
@@ -4985,9 +5002,35 @@ export function openJournalStore(
                 AND pull_request_approvals.kind = 'fixes'
             )
           )
+          AND (
+            tasks.kind != 'issue_work'
+            OR (SELECT selection_mode FROM agent_control WHERE singleton = 1) = 'manual'
+            OR (
+              (
+                SELECT COUNT(*)
+                FROM subjects AS open_subjects
+                JOIN repositories AS open_repositories ON open_repositories.id = open_subjects.repository_id
+                JOIN revisions AS open_revisions ON open_revisions.id = open_subjects.current_revision_id
+                WHERE open_subjects.kind = 'pull_request'
+                  AND open_repositories.enabled = 1
+                  AND json_extract(open_revisions.payload, '$.state') = 'open'
+              ) < ?
+              AND (
+                json_extract(repositories.policy_json, '$.maxOpenPullRequests') IS NULL
+                OR (
+                  SELECT COUNT(*)
+                  FROM subjects AS repository_subjects
+                  JOIN revisions AS repository_revisions ON repository_revisions.id = repository_subjects.current_revision_id
+                  WHERE repository_subjects.repository_id = subjects.repository_id
+                    AND repository_subjects.kind = 'pull_request'
+                    AND json_extract(repository_revisions.payload, '$.state') = 'open'
+                ) < json_extract(repositories.policy_json, '$.maxOpenPullRequests')
+              )
+            )
+          )
         ORDER BY tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, exactTaskId ?? null, exactTaskId ?? null) as ClaimRow | undefined
+      `).get(kind, exactTaskId ?? null, exactTaskId ?? null, maxOpenPullRequests) as ClaimRow | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -6977,6 +7020,12 @@ export function openJournalStore(
       ...reviewAgents,
     ]
     const mappings = new Map(subjectRows.map(row => [row.repository, JSON.parse(row.policy_json) as RepositoryMapping]))
+    const openPullRequestsByRepository = new Map<string, number>()
+    items.forEach((item) => {
+      if (item.kind === 'pull_request' && item.state === 'open')
+        openPullRequestsByRepository.set(item.repository, (openPullRequestsByRepository.get(item.repository) ?? 0) + 1)
+    })
+    const currentSelectionMode = selectionMode(database)
 
     const storedAgentControl = getAgentControl()
     const agentControl = storedAgentControl._tag === 'Running'
@@ -6988,14 +7037,22 @@ export function openJournalStore(
       status,
       mutationsEnabled,
       agentControl,
-      selectionMode: selectionMode(database),
+      selectionMode: currentSelectionMode,
       openPullRequests: countOpenPullRequests(),
       maxOpenPullRequests,
       agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents),
       agentSelection: getAgentSelection(),
       agents,
       incidents: listIncidents(),
-      queue: dashboardQueue(items.filter(item => !item.dismissed), tasks, reviewAgents, mappings, rejectedIssueWorkResults),
+      queue: dashboardQueue(
+        items.filter(item => !item.dismissed),
+        tasks,
+        reviewAgents,
+        mappings,
+        rejectedIssueWorkResults,
+        openPullRequestsByRepository,
+        currentSelectionMode,
+      ),
       repositories,
       items,
       tasks,

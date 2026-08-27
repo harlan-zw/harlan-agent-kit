@@ -987,6 +987,54 @@ describe('journal store', () => {
     })).toEqual({ _tag: 'Rejected', reason: { _tag: 'ApprovalNotRequired' } })
   })
 
+  it('holds issue work when its repository reaches the pull request limit', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ maxOpenPullRequests: 1 })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'limited-issue',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem({ author: 'harlan-zw' }),
+    })
+    const triage = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
+    if (triage === null)
+      throw new Error('Expected issue triage.')
+    store.completeWorkerTask({
+      taskId: triage.id,
+      workerId: triage.state.workerId,
+      fence: triage.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      evidence: JSON.stringify({ validity: 'valid' }),
+    })
+
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.recordObservation({
+      externalId: 'open-pull-request',
+      observedAt: '2026-08-13T01:02:01.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+
+    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:02.000Z', 600_000)).toBeNull()
+    expect(store.getDashboardSnapshot('2026-08-13T01:02:03.000Z').queue).toContainEqual(expect.objectContaining({
+      number: 12,
+      state: {
+        _tag: 'Pending',
+        reason: 'harlan-zw/example reached its limit of 1 open pull request. Merge or close one to start Issue work.',
+      },
+    }))
+
+    store.recordObservation({
+      externalId: 'closed-pull-request',
+      observedAt: '2026-08-13T01:02:04.000Z',
+      source: 'poll',
+      subject: { ...pullRequest, state: 'closed', updatedAt: '2026-08-13T01:02:04.000Z' },
+    })
+    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:05.000Z', 600_000)).toEqual(
+      expect.objectContaining({ kind: 'issue_work', issueNumber: 12 }),
+    )
+  })
+
   it('allows approved issue work in an explicitly configured maintained repository', () => {
     const store = createStore()
     const mapping = repositoryMapping({
