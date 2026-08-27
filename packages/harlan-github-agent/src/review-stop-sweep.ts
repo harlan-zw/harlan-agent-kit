@@ -144,7 +144,11 @@ export async function publishStoppedReviews(
   }
 
   const results: Array<Result<StoppedReviewOutcome, string>> = []
-  for (const review of reviews)
-    results.push(await publish(review))
+  for (const review of reviews) {
+    // One row must not take the rest of the sweep with it. A throw here used
+    // to abandon every row behind it, and the pass reported nothing at all.
+    results.push(await publish(review).catch((error: unknown) =>
+      err(`${review.repository}#${review.pullRequestNumber}: ${error instanceof Error ? error.message : 'The stopped review comment failed unexpectedly.'}`)))
+  }
   return results
 }

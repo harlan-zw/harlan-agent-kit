@@ -669,6 +669,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           repositories: config.repositories,
           store,
         }, signal)
+        // The list size, every pass. A sweep that reports three outcomes while
+        // its list holds a hundred rows is invisible without this line.
+        if (stopped.length > 0)
+          options.logger.info(`Stopped review comments: ${stopped.length} to close.`)
         stopped.forEach((result) => {
           if (result._tag === 'Ok') {
             options.logger.info(result.value._tag === 'CommentGone'
