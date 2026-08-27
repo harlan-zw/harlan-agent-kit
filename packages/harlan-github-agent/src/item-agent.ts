@@ -15,6 +15,7 @@ import type {
   ReviewFinding,
   ReviewGates,
   ReviewGateState,
+  ReviewOutcomeName,
 } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -603,7 +604,7 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
  * a pull request the agent had answered it did not review, which reads to
  * everyone as "the agent found defects here".
  */
-export function reviewOutcome(gates: ReviewGates): 'READY' | 'PENDING' | 'BLOCKED' {
+export function reviewOutcome(gates: ReviewGates): ReviewOutcomeName {
   const states = Object.values(gates).map(gate => gate._tag)
   if (gates.review._tag === 'Pending')
     return 'PENDING'
@@ -790,6 +791,25 @@ function recordRunnerLostIncident(options: ReviewWorkerOptions, repository: stri
   })
 }
 
+/**
+ * Puts the Review verdict on the pull request itself.
+ *
+ * A person choosing what to review next reads the pull request list, where
+ * only labels show. The canonical comment already carries the verdict, so a
+ * failed stamp costs nothing the reader cannot recover and never fails the
+ * Review. It is reported the way every other cosmetic status write is.
+ */
+async function stampReviewOutcome(
+  options: ReviewWorkerOptions,
+  task: ClaimedAdversarialReviewTask,
+  outcome: ReviewOutcomeName,
+  signal: AbortSignal,
+): Promise<void> {
+  const stamped = await options.github.stampReviewOutcome(task.repositoryMapping, task.pullRequestNumber, outcome, signal)
+  if (stamped._tag === 'Err' && !signal.aborted)
+    options.onProgressPublishFailure?.(task, stamped.error)
+}
+
 export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
   return {
     async run(task, signal) {
@@ -832,6 +852,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           )
           if (waiting._tag === 'Err')
             return waiting
+          await stampReviewOutcome(options, task, 'PENDING', signal)
           return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
         }
       }
@@ -960,7 +981,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         })
         if (queued._tag === 'Queued') {
           const reported = await reportReviewProgress(options, task, 'review', { percent: 95, label: 'Repair queued' }, signal)
-          return reported._tag === 'Err' ? reported : ok({ evidence: reviewRunId })
+          if (reported._tag === 'Err')
+            return reported
+          // Repair owns the canonical comment from here, so this is the last
+          // point the Review can state its verdict on the pull request.
+          await stampReviewOutcome(options, task, outcome, signal)
+          return ok({ evidence: reviewRunId })
         }
         findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
           ? { ...finding, nextAction: queued.reason }
@@ -987,6 +1013,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         return err('The automated review comment could not be saved.')
       if (published._tag === 'Err')
         return published
+      await stampReviewOutcome(options, task, reviewOutcome(gates), signal)
       return ok({ evidence: reviewRunId })
     },
   }

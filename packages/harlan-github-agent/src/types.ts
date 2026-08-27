@@ -234,6 +234,9 @@ export type ReviewOutcome
     | { _tag: 'Pending' }
     | { _tag: 'Blocked' }
 
+/** How a Review outcome is spelled where a person reads it, in the canonical comment heading and on the pull request label. */
+export type ReviewOutcomeName = Uppercase<ReviewOutcome['_tag']>
+
 export type ReviewPublicationResult
   = | { _tag: 'Published', githubCommentId: number, url: string }
     | { _tag: 'Failed', reason: string }

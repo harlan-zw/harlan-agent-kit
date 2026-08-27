@@ -92,6 +92,7 @@ function harness(input: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+      stampReviewOutcome: () => Promise.resolve(ok(undefined)),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
       listPullRequestFiles: () => Promise.resolve(ok([])),
