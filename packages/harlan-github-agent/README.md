@@ -16,6 +16,7 @@ Current:
 - separate Baseline repair pull requests when default branch CI fails
 - fixed cutoff date for old issues
 - bounded GitHub polling with retry backoff
+- optional GitHub webhooks on their own port, which hint a reconciliation instead of carrying state
 - authenticated [H3](https://h3.dev) and [srvx](https://srvx.h3.dev) dashboard
 - safe merge conflict commits and pushes
 - two agent providers: [Codex](https://developers.openai.com/codex/sdk/) and [opencode](https://opencode.ai). Set `agent.provider` to `codex` or `opencode`
@@ -30,7 +31,7 @@ Current:
 - conflict fixes push only when the pull request head commit still matches
 - repair commits push only when the approved head commit still matches
 
-Still to build: Claude reviews, PR conformance, deployment ownership, and webhooks.
+Still to build: Claude reviews, PR conformance, and deployment ownership.
 
 ## Run
 
@@ -88,6 +89,18 @@ Switching the Agent provider starts new sessions. A saved session belongs to the
 Grant read access to metadata, contents, issues, checks, commit statuses, and administration. Grant write access to Actions, contents, deployments, issues, and pull requests. The service mints and reuses short-lived, repository-scoped tokens.
 
 A conflict fix also requires an owned repository, an allowed pull request author, an allowed branch prefix, and an unprotected head branch. The service pushes the checked commit from a clean bare Git repository.
+
+## Webhooks
+
+Set `webhook.enabled` to start a second listener on its own port. It carries one route, `POST /webhook`, and nothing else. Keep the dashboard port on loopback: it can pause agents, approve pull requests, cancel tasks, and eject sessions, so it must never be exposed.
+
+Point a tunnel at the webhook port alone, then set that URL and a shared secret on the GitHub App. Write the same secret to `webhook.secret_path` with mode `0600` and at least 32 characters.
+
+A delivery is a hint, never a payload. It says "read this repository again", and the service answers by running the reconciliation pass it already runs on a timer. The delivery body is never stored and never trusted beyond the repository name, so a missed, duplicated, or forged delivery cannot move the journal anywhere a poll would not.
+
+Deliveries within three seconds of each other cost one pass, so a busy repository cannot spend the rate limit this feature exists to save.
+
+Keep polling on. It is the safety net for a delivery GitHub never sent.
 
 Open `http://harlan-github-agent.local/`. Use `agent` as the dashboard username.
 

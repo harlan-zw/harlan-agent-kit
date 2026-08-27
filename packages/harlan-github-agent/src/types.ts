@@ -43,6 +43,10 @@ export interface ExternalRepositoryWatch {
   issues: 'all' | number[]
 }
 
+export type WebhookConfig
+  = | { _tag: 'Disabled' }
+    | { _tag: 'Enabled', host: string, port: number, secretPath: string }
+
 export interface AgentConfig {
   agent: {
     provider: AgentProviderName
@@ -68,6 +72,13 @@ export interface AgentConfig {
     port: number
     allowedHost: string
   }
+  /**
+   * The GitHub webhook listener.
+   *
+   * It runs on its own port carrying one route, so exposing it through a tunnel
+   * cannot reach the control API on the dashboard port.
+   */
+  webhook: WebhookConfig
   storage: {
     path: string
   }
