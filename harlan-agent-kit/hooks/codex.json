@@ -1,0 +1,18 @@
+{
+  "description": "Require the PR skill for pull request creation and description changes.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pr-skill-only.sh",
+            "timeout": 10,
+            "statusMessage": "Checking pull request command"
+          }
+        ]
+      }
+    ]
+  }
+}
