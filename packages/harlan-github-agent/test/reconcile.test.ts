@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { reconcileRepository } from '../src/reconcile.ts'
 import { err, ok } from '../src/result.ts'
+import { AGENT_ACTOR_LOGIN } from '../src/review-comment.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -22,6 +23,26 @@ describe('gitHub reconciliation', () => {
       value: { repository: repository.github, subjects: 0, inserted: 0, duplicates: 0, stale: 0, closed: 0 },
     })
     expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').items).toEqual([])
+    store.close()
+  })
+
+  it('records our own Routine issue even when the allowlist lists only humans', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+
+    const result = await reconcileRepository(repository, {
+      github: { listOpenItems: () => Promise.resolve(ok([
+        issueItem({ number: 41, author: AGENT_ACTOR_LOGIN, routineFiled: true, url: 'https://github.com/harlan-zw/example/issues/41' }),
+      ])) },
+      store,
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+    })
+
+    expect(result).toEqual({
+      _tag: 'Ok',
+      value: { repository: repository.github, subjects: 1, inserted: 1, duplicates: 0, stale: 0, closed: 0 },
+    })
     store.close()
   })
 

@@ -7,6 +7,7 @@ import { Buffer } from 'node:buffer'
 import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { pullRequestPurpose } from './baseline-repair-state.ts'
+import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { err, ok } from './result.ts'
@@ -340,23 +341,33 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
         }
         const issues: GitHubItem[] = issueRows
           .filter(issue => issue.pull_request === undefined)
-          .filter(issue => !isAutomatedGitHubActor({
-            login: issue.user?.login ?? 'ghost',
-            type: issue.user?.type,
-          }))
-          .filter(issue => isIssueAtOrAfterCutoff(issue.created_at, options.issueCutoff))
-          .map(issue => ({
-            kind: 'issue',
-            approvalLabels: approvalLabels(labelNames(issue.labels)),
-            repository: repository.github,
-            number: issue.number,
-            state: issue.state === 'closed' ? 'closed' : 'open',
-            title: issue.title,
-            author: issue.user?.login ?? 'ghost',
-            url: issue.html_url,
-            createdAt: issue.created_at,
-            updatedAt: issue.updated_at,
-          }))
+          .flatMap((issue) => {
+            // An issue a Routine filed carries the routine label, so the
+            // author allowlist never hides it from triage again.
+            const labels = labelNames(issue.labels)
+            const routineFiled = hasRoutineIssueLabel(labels)
+            if (!routineFiled && isAutomatedGitHubActor({
+              login: issue.user?.login ?? 'ghost',
+              type: issue.user?.type,
+            }, repository.writablePullRequestAuthors)) {
+              return []
+            }
+            if (!isIssueAtOrAfterCutoff(issue.created_at, options.issueCutoff))
+              return []
+            return [{
+              kind: 'issue',
+              approvalLabels: approvalLabels(labels),
+              repository: repository.github,
+              number: issue.number,
+              state: issue.state === 'closed' ? 'closed' : 'open',
+              title: issue.title,
+              author: issue.user?.login ?? 'ghost',
+              url: issue.html_url,
+              createdAt: issue.created_at,
+              updatedAt: issue.updated_at,
+              routineFiled,
+            }]
+          })
 
         const eligiblePullRows = pullRows.filter(pull => !isAutomatedGitHubActor({
           login: pull.user?.login ?? 'ghost',
@@ -391,6 +402,99 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           const status = errorStatus(error)
           return err({
             repository: repository.github,
+            message: error instanceof Error ? error.message : 'GitHub request failed.',
+            ...(status === undefined ? {} : { status }),
+          })
+        })
+    },
+  }
+}
+
+/** Files the issue one Candidate proposes, so the Item pipeline can act on it. */
+export interface GitHubIssuePublisher {
+  createIssue: (input: {
+    repository: RepositoryMapping
+    title: string
+    body: string
+    labels?: readonly string[]
+  }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string }, GitHubReadError>>
+  /**
+   * Finds the open issue whose body carries a Candidate's fingerprint marker.
+   *
+   * A create whose reply was lost still files its issue, so every pass checks
+   * before writing again.
+   */
+  findOpenIssueByFingerprint: (input: {
+    repository: RepositoryMapping
+    fingerprint: string
+  }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string } | null, GitHubReadError>>
+}
+
+export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOptions): GitHubIssuePublisher {
+  const itemWriteClient = async (repository: string, signal?: AbortSignal) => {
+    const credential = await options.tokens.getToken(repository, 'item_write', signal)
+    if (credential._tag === 'Err')
+      return credential
+    const client = options.createClient?.(credential.value.token)
+      ?? createAuthenticatedClient({
+        access: 'item_write',
+        repository,
+        signal,
+        token: credential.value.token,
+        tokens: options.tokens,
+        userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+      })
+    return ok(client)
+  }
+
+  return {
+    async createIssue(input, signal) {
+      const { owner, repo } = repositoryParts(input.repository.github)
+      const octokit = await itemWriteClient(input.repository.github, signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const request = signal === undefined ? {} : { request: { signal } }
+      return octokit.value.rest.issues.create({
+        owner,
+        repo,
+        title: input.title,
+        body: input.body,
+        ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
+        ...request,
+      })
+        .then(response => ok({ number: response.data.number, url: response.data.html_url }))
+        .catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({
+            repository: input.repository.github,
+            message: error instanceof Error ? error.message : 'GitHub refused the issue.',
+            ...(status === undefined ? {} : { status }),
+          })
+        })
+    },
+    async findOpenIssueByFingerprint(input, signal) {
+      const { owner, repo } = repositoryParts(input.repository.github)
+      const octokit = await itemWriteClient(input.repository.github, signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const requestOptions = signal === undefined ? {} : { request: { signal } }
+      return octokit.value.paginate(octokit.value.rest.issues.listForRepo, {
+        owner,
+        repo,
+        state: 'open',
+        per_page: 100,
+        ...requestOptions,
+      })
+        .then((rows): Result<{ number: number, url: string } | null, GitHubReadError> => {
+          const marker = candidateFingerprintMarker(input.fingerprint)
+          const row = rows.find(row =>
+            row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(marker))
+          return ok(row === undefined ? null : { number: row.number, url: row.html_url })
+        })
+        .catch((error: unknown): Result<{ number: number, url: string } | null, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({
+            repository: input.repository.github,
             message: error instanceof Error ? error.message : 'GitHub request failed.',
             ...(status === undefined ? {} : { status }),
           })
