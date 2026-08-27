@@ -57,3 +57,14 @@ export function planReviewOutcomeLabels(outcome: ReviewOutcomeName, current: str
       ownedLabels.has(label.toLowerCase()) && label.toLowerCase() !== wanted.name.toLowerCase()),
   }
 }
+
+/**
+ * The verdict labels to strip from a pull request with no verdict.
+ *
+ * A label names the head its Review answered for, and GitHub cannot show that
+ * head. Once a newer head arrives with no Review behind it, the label reads as
+ * a verdict on work nobody reviewed, so it goes until the next Review stamps.
+ */
+export function staleReviewOutcomeLabels(current: string[]): string[] {
+  return current.filter(label => ownedLabels.has(label.toLowerCase()))
+}

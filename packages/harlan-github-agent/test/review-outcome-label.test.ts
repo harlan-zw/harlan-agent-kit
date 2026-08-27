@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planReviewOutcomeLabels, REVIEW_OUTCOME_LABELS } from '../src/review-outcome-label.ts'
+import { planReviewOutcomeLabels, REVIEW_OUTCOME_LABELS, staleReviewOutcomeLabels } from '../src/review-outcome-label.ts'
 
 describe('planReviewOutcomeLabels', () => {
   it('adds the label for the verdict the Review reached', () => {
@@ -36,5 +36,22 @@ describe('planReviewOutcomeLabels', () => {
     const names = Object.values(REVIEW_OUTCOME_LABELS).map(label => label.name)
 
     expect(new Set(names).size).toBe(names.length)
+  })
+})
+
+describe('staleReviewOutcomeLabels', () => {
+  it('names every verdict on a pull request no Review has answered for', () => {
+    expect(staleReviewOutcomeLabels(['harlan-agent-ready', 'harlan-agent-blocked'])).toEqual([
+      'harlan-agent-ready',
+      'harlan-agent-blocked',
+    ])
+  })
+
+  it('leaves every label the service does not own', () => {
+    expect(staleReviewOutcomeLabels(['bug', 'harlan-agent-auto-merge', 'harlan-agent-review'])).toEqual([])
+  })
+
+  it('names nothing when the pull request carries no verdict, so nothing is written', () => {
+    expect(staleReviewOutcomeLabels([])).toEqual([])
   })
 })

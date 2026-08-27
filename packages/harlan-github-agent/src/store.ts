@@ -413,6 +413,7 @@ interface QueuedReviewStatusRow {
   revision_id: string
   head_sha: string
   paused: number
+  answered: number
   position: number | null
   total: number | null
   github_comment_id: number
@@ -436,6 +437,17 @@ export type ReviewQueueState
   }
   | { _tag: 'Paused' }
 
+/**
+ * Whether a Review has answered for the Revision this Task waits on.
+ *
+ * The verdict label on the pull request names the head its Review answered
+ * for. A Task queued against a head no Review has reached yet means the label
+ * still describes an older head, so it says nothing true about this one.
+ */
+export type ReviewVerdictState
+  = | { _tag: 'Answered' }
+    | { _tag: 'Unanswered' }
+
 export interface QueuedReviewStatus {
   taskId: string
   taskKind: 'adversarial_review' | 'review_fix'
@@ -444,6 +456,7 @@ export interface QueuedReviewStatus {
   revisionId: string
   headSha: string
   queue: ReviewQueueState
+  verdict: ReviewVerdictState
   commentId: number
   /** What the canonical comment holds now, so an unchanged position writes nothing. */
   publishedBody: string
@@ -7284,6 +7297,13 @@ export function openJournalStore(
       candidates.revision_id,
       json_extract(revisions.payload, '$.headSha') AS head_sha,
       candidates.paused,
+      -- A Repair queues behind the Review that found its work, on the same
+      -- Revision, so that Review's verdict still describes this head.
+      EXISTS (
+        SELECT 1 FROM review_runs
+        WHERE review_runs.subject_id = candidates.subject_id
+          AND review_runs.revision_id = candidates.revision_id
+      ) AS answered,
       (
         SELECT COUNT(*) + 1 FROM claimable AS ahead
         WHERE candidates.paused = 0
@@ -7353,6 +7373,7 @@ export function openJournalStore(
     queue: row.paused === 1 || row.position === null || row.total === null
       ? { _tag: 'Paused' as const }
       : { _tag: 'Waiting' as const, position: row.position, total: row.total },
+    verdict: row.answered === 1 ? { _tag: 'Answered' as const } : { _tag: 'Unanswered' as const },
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
   }))

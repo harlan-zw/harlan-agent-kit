@@ -56,7 +56,7 @@ Next: ${next}`
 }
 
 export interface QueuePositionSweepOptions {
-  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
+  github: Pick<GitHubAgentSource, 'clearReviewOutcome' | 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
   store: Pick<JournalStore, 'isQueuedReviewStatus' | 'listQueuedReviewStatuses' | 'recordQueuedReviewStatus'>
@@ -107,6 +107,17 @@ export async function publishQueuePositions(
       return err(`${status.repository}#${status.pullRequestNumber}: ${current.error}`)
     if (current.value.pullRequest.state !== 'open' || current.value.pullRequest.headSha !== status.headSha)
       return err(`${status.repository}#${status.pullRequestNumber}: the pull request changed before the Queue position comment.`)
+
+    // The verdict label names the head its Review answered for. A Task queued
+    // against a head no Review has reached leaves that label describing an
+    // older one, and a stale READY is the reading that costs a person a trip.
+    // This runs only on a pass that rewrites the comment, so a new head clears
+    // the label once rather than every pass.
+    if (status.verdict._tag === 'Unanswered') {
+      const cleared = await options.github.clearReviewOutcome(mapping, status.pullRequestNumber, signal)
+      if (cleared._tag === 'Err')
+        return err(`${status.repository}#${status.pullRequestNumber}: ${cleared.error}`)
+    }
 
     const at = options.now().toISOString()
     const body = queuePositionComment(status)
