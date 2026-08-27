@@ -18,7 +18,7 @@ export interface ReviewStopSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listStoppedReviews' | 'recordStoppedReviewStatus'>
+  store: Pick<JournalStore, 'listStoppedReviews' | 'recordDeletedReviewComment' | 'recordStoppedReviewStatus'>
 }
 
 export function stoppedReviewComment(
@@ -115,8 +115,17 @@ export async function publishStoppedReviews(
     const edited = await options.github.editReviewStatus(mapping, review.pullRequestNumber, review.commentId, review.publishedBody, body, signal)
     if (edited._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${edited.error}`)
-    if (edited.value._tag === 'Missing')
+    if (edited.value._tag === 'Missing') {
+      // Deleting the comment is how a person answers it. Retiring the
+      // publication is what stops this sweep asking again on every pass.
+      options.store.recordDeletedReviewComment({
+        taskKind: review.taskKind,
+        taskId: review.taskId,
+        commentId: review.commentId,
+        at,
+      })
       return ok({ _tag: 'CommentGone', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
+    }
     if (edited.value._tag === 'Changed')
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
     const recorded = options.store.recordStoppedReviewStatus({
@@ -135,7 +144,11 @@ export async function publishStoppedReviews(
   }
 
   const results: Array<Result<StoppedReviewOutcome, string>> = []
-  for (const review of reviews)
-    results.push(await publish(review))
+  for (const review of reviews) {
+    // One row must not take the rest of the sweep with it. A throw here used
+    // to abandon every row behind it, and the pass reported nothing at all.
+    results.push(await publish(review).catch((error: unknown) =>
+      err(`${review.repository}#${review.pullRequestNumber}: ${error instanceof Error ? error.message : 'The stopped review comment failed unexpectedly.'}`)))
+  }
   return results
 }

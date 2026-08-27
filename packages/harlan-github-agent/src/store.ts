@@ -9,9 +9,11 @@ import type {
   AgentTask,
   BaselineRepairTask,
   Candidate,
+  CandidateIssueCommand,
   CandidateResult,
   ClaimedAdversarialReviewTask,
   ClaimedBaselineRepairTask,
+  ClaimedCandidateIssueCommand,
   ClaimedConflictResolutionTask,
   ClaimedIssueTriageCommentCommand,
   ClaimedIssueTriageTask,
@@ -611,6 +613,11 @@ export interface JournalStore {
   listRoutineRuns: (routineId: string, limit?: number) => RoutineRun[]
   recordCandidates: (input: { routineId: string, runId: string, candidates: ReadonlyArray<Omit<Candidate, 'id' | 'routineId' | 'runId' | 'result' | 'createdAt' | 'updatedAt'>>, at: string }) => Candidate[]
   listCandidates: (routineId: string) => Candidate[]
+  /** Requests one issue per Candidate. Answers how many are new. */
+  stageCandidateIssues: (input: { commands: readonly CandidateIssueCommand[], at: string }) => number
+  claimNextCandidateIssue: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedCandidateIssueCommand | null
+  completeCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, issueNumber: number, url: string }) => boolean
+  failCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -702,6 +709,20 @@ export interface JournalStore {
    * sweep that sees false here has lost the comment to the claimed agent.
    */
   isQueuedReviewStatus: (input: { taskId: string, taskKind: 'adversarial_review' | 'review_fix' }) => boolean
+  /**
+   * Retires the canonical comment a person deleted.
+   *
+   * A sweep refuses to open a deleted comment again, which is right: deleting
+   * it is how a person answers it. Refusing was the whole response though, so
+   * the row stayed in the sweep's list and asked GitHub again every pass,
+   * forever. Retiring the publication takes the row out of every sweep.
+   */
+  recordDeletedReviewComment: (input: {
+    taskKind: 'adversarial_review' | 'review_fix'
+    taskId: string
+    commentId: number
+    at: string
+  }) => boolean
   recordStoppedReviewStatus: (input: {
     taskId: string
     taskKind: 'adversarial_review' | 'review_fix'
@@ -2317,7 +2338,7 @@ function githubSubjectFromRow(row: SubjectRow): GitHubItem {
   }
 
   if (row.kind === 'issue')
-    return { ...base, kind: 'issue', approvalLabels: [] }
+    return { ...base, kind: 'issue', approvalLabels: [], routineFiled: false }
 
   if (row.draft === null || row.base_sha === null || row.head_sha === null || row.head_repository === null || row.head_ref === null || row.merge_state === null)
     throw new Error(`Pull request ${row.repository}#${row.github_number} has incomplete state.`)
@@ -3778,6 +3799,49 @@ const polymorphicPublicationMigration = `
 `
 
 /**
+ * Adds the command that files one issue for one Candidate.
+ *
+ * A Routine proposes work by opening an issue, so the pipeline that already
+ * turns an issue into a reviewed pull request does the rest. That is why this
+ * is a small command table and not a second publication stack.
+ *
+ * One command per Candidate, enforced by the unique key. A Candidate is already
+ * unique per Routine, so a retry can never file the same proposal twice.
+ */
+const candidateIssueMigration = `
+  CREATE TABLE candidate_issue_commands (
+    id TEXT PRIMARY KEY,
+    candidate_id TEXT NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    repository TEXT NOT NULL,
+    routine_name TEXT NOT NULL,
+    title TEXT NOT NULL CHECK (title != ''),
+    body TEXT NOT NULL CHECK (body != ''),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Failed')),
+    reason TEXT,
+    github_issue_number INTEGER,
+    github_url TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (candidate_id),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (state_tag != 'Failed' OR reason IS NOT NULL),
+    CHECK (state_tag != 'Published' OR (github_issue_number IS NOT NULL AND github_url IS NOT NULL))
+  );
+
+  CREATE INDEX candidate_issue_commands_state ON candidate_issue_commands(state_tag, updated_at);
+
+  PRAGMA user_version = 40;
+`
+
+/**
  * Lets a Review run keep the agent's confidence score whatever the gates say.
  *
  * The score answers how sure the agent was about the change it read. The
@@ -3788,7 +3852,7 @@ const polymorphicPublicationMigration = `
 const reviewConfidenceMigration = `
   DROP INDEX IF EXISTS review_runs_subject_completed;
 
-  CREATE TABLE review_runs_v40 (
+  CREATE TABLE review_runs_v41 (
     id TEXT PRIMARY KEY,
     subject_id INTEGER NOT NULL REFERENCES subjects(id),
     revision_id TEXT NOT NULL,
@@ -3813,8 +3877,8 @@ const reviewConfidenceMigration = `
   );
 
   -- Named columns only: a later rewind replays this migration against a
-  -- journal that already carries columns version 40 never saw.
-  INSERT INTO review_runs_v40 (
+  -- journal that already carries columns version 41 never saw.
+  INSERT INTO review_runs_v41 (
     id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
     skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
     confidence, findings, content_digest, usage
@@ -3824,10 +3888,10 @@ const reviewConfidenceMigration = `
     confidence, findings, content_digest, usage
   FROM review_runs;
   DROP TABLE review_runs;
-  ALTER TABLE review_runs_v40 RENAME TO review_runs;
+  ALTER TABLE review_runs_v41 RENAME TO review_runs;
   CREATE INDEX review_runs_subject_completed ON review_runs(subject_id, completed_at DESC);
 
-  PRAGMA user_version = 40;
+  PRAGMA user_version = 41;
 `
 
 /**
@@ -3840,7 +3904,7 @@ const reviewConfidenceMigration = `
 const reviewSettlementMigration = `
   ALTER TABLE review_runs ADD COLUMN supersedes_review_run_id TEXT NULL REFERENCES review_runs(id);
 
-  PRAGMA user_version = 41;
+  PRAGMA user_version = 42;
 `
 
 function applyMigration(database: DatabaseSync, migration: string): void {
@@ -3868,7 +3932,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 41)
+  if (version === 42)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4028,10 +4092,14 @@ function installSchema(database: DatabaseSync): void {
     version = 39
   }
   if (version === 39) {
-    applyForeignKeyMigration(database, reviewConfidenceMigration)
+    applyMigration(database, candidateIssueMigration)
     version = 40
   }
   if (version === 40) {
+    applyForeignKeyMigration(database, reviewConfidenceMigration)
+    version = 41
+  }
+  if (version === 41) {
     applyMigration(database, reviewSettlementMigration)
     return
   }
@@ -4874,6 +4942,7 @@ export function openJournalStore(
         ? {
             kind: 'issue',
             approvalLabels: [],
+            routineFiled: false,
             repository: current.repository,
             number: current.number,
             state: 'closed',
@@ -8016,6 +8085,12 @@ export function openJournalStore(
     `).get(input.taskId, input.taskKind) !== undefined
   }
 
+  const recordDeletedReviewComment: JournalStore['recordDeletedReviewComment'] = input => database.prepare(`
+    UPDATE review_status_commands
+    SET state_tag = 'Superseded', reason = 'A person deleted the comment.', updated_at = ?
+    WHERE task_kind = ? AND task_id = ? AND state_tag = 'Published' AND github_comment_id = ?
+  `).run(input.at, input.taskKind, input.taskId, input.commentId).changes > 0
+
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
     const commandId = digest(`${input.taskKind}:${input.taskId}:stopped:${bodySha256}`)
@@ -8618,6 +8693,151 @@ export function openJournalStore(
     return retrying ? 'Retrying' : 'Failed'
   }
 
+  const stageCandidateIssues: JournalStore['stageCandidateIssues'] = (input) => {
+    const statement = database.prepare(`
+      INSERT INTO candidate_issue_commands (
+        id, candidate_id, repository, routine_name, title, body, state_tag, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+      ON CONFLICT (candidate_id) DO NOTHING
+    `)
+    let staged = 0
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      input.commands.forEach((command) => {
+        staged += Number(statement.run(
+          command.id,
+          command.candidateId,
+          command.repository,
+          command.routineName,
+          command.title,
+          command.body,
+          input.at,
+          input.at,
+        ).changes)
+      })
+      database.exec('COMMIT')
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    return staged
+  }
+
+  const claimNextCandidateIssue: JournalStore['claimNextCandidateIssue'] = (workerId, now, leaseMilliseconds) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      database.prepare(`
+        UPDATE candidate_issue_commands
+        SET state_tag = 'Pending', worker_id = NULL, lease_expires_at = NULL,
+          fence = fence + 1, updated_at = ?
+        WHERE state_tag = 'Running' AND lease_expires_at <= ?
+      `).run(now, now)
+
+      const row = database.prepare(`
+        SELECT
+          candidate_issue_commands.id,
+          candidate_issue_commands.candidate_id,
+          candidate_issue_commands.repository,
+          candidate_issue_commands.routine_name,
+          candidate_issue_commands.title,
+          candidate_issue_commands.body,
+          candidate_issue_commands.reason,
+          candidates.fingerprint,
+          candidate_issue_commands.fence,
+          repositories.policy_json
+        FROM candidate_issue_commands
+        JOIN candidates ON candidates.id = candidate_issue_commands.candidate_id
+        JOIN repositories ON repositories.github = candidate_issue_commands.repository
+        WHERE candidate_issue_commands.state_tag = 'Pending'
+          AND repositories.enabled = 1
+          AND repositories.writes_enabled = 1
+        ORDER BY candidate_issue_commands.updated_at, candidate_issue_commands.id
+        LIMIT 1
+      `).get() as unknown as {
+        id: string
+        candidate_id: string
+        repository: string
+        routine_name: string
+        title: string
+        body: string
+        reason: string | null
+        fingerprint: string
+        fence: number
+        policy_json: string
+      } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return null
+      }
+
+      const fence = row.fence + 1
+      const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()
+      const claimed = database.prepare(`
+        UPDATE candidate_issue_commands
+        SET state_tag = 'Running', worker_id = ?, lease_expires_at = ?, fence = ?,
+          attempts = attempts + 1, updated_at = ?
+        WHERE id = ? AND state_tag = 'Pending' AND fence = ?
+      `).run(workerId, leaseExpiresAt, fence, now, row.id, row.fence).changes === 1
+      database.exec('COMMIT')
+      if (!claimed)
+        return null
+      return {
+        id: row.id,
+        candidateId: row.candidate_id,
+        repository: row.repository,
+        routineName: row.routine_name as ClaimedCandidateIssueCommand['routineName'],
+        repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
+        title: row.title,
+        body: row.body,
+        fingerprint: row.fingerprint,
+        reason: row.reason,
+        fence,
+        workerId,
+      }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** Records the filed issue, and points the Candidate at it. */
+  const completeCandidateIssue: JournalStore['completeCandidateIssue'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE candidate_issue_commands
+        SET state_tag = 'Published', github_issue_number = ?, github_url = ?, reason = NULL,
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(input.issueNumber, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * Records one refused filing, and leaves the command recoverable.
+   *
+   * A refusal is GitHub answering, not the proposal dying. Every attempt is
+   * one create whose answer may change, so the command returns to Pending
+   * with its reason kept, and the next pass tries again. Failed stays
+   * reserved for dead letters a person has to act on.
+   */
+  const failCandidateIssue: JournalStore['failCandidateIssue'] = (input) => {
+    return database.prepare(`
+      UPDATE candidate_issue_commands
+      SET state_tag = 'Pending', reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+    `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+  }
+
   return {
     approveIssueWork,
     syncRoutines,
@@ -8627,6 +8847,10 @@ export function openJournalStore(
     listRoutineRuns,
     recordCandidates,
     listCandidates,
+    stageCandidateIssues,
+    claimNextCandidateIssue,
+    completeCandidateIssue,
+    failCandidateIssue,
     claimNextRoutineRun,
     heartbeatRoutineRun,
     completeRoutineRun,
@@ -8640,6 +8864,7 @@ export function openJournalStore(
     listStoppedReviews,
     recordQueuedReviewStatus,
     isQueuedReviewStatus,
+    recordDeletedReviewComment,
     recordStoppedReviewStatus,
     approvePullRequest,
     authorizePublication,

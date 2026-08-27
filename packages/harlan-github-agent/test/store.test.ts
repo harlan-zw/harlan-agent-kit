@@ -1410,6 +1410,63 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
+  it('drops a stopped Review for good once its comment is gone', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.recordObservation({
+      externalId: 'deleted-comment-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'review',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 REVIEWING · Git worktree ready',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: 'Waiting for Baseline repair baseline-task.',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toHaveLength(1)
+
+    // The sweep cannot close a comment GitHub no longer has, and refusing was
+    // its whole answer, so the row came back on every pass.
+    expect(store.recordDeletedReviewComment({
+      taskKind: 'adversarial_review',
+      taskId: review.id,
+      commentId: 42,
+      at: '2026-08-13T01:03:00.000Z',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([])
+  })
+
   it('keeps a stopped Review eligible after GitHub closes its pull request Revision', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

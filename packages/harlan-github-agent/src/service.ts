@@ -16,6 +16,7 @@ import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
 import { createBaselineRepairWorker } from './baseline-repair-worker.ts'
+import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { resolveAgentStartState } from './capacity.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { validateRepositoryMappings } from './config.ts'
@@ -26,7 +27,7 @@ import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createGitHubWriteGate, preflightGitHubWriteAccess, repositoryQuarantineReason, withGitHubWritePreflight } from './github-write-gate.ts'
-import { createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
+import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
@@ -583,6 +584,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.close()
     throw error
   })
+  const candidateIssues = createCandidateIssueController({
+    github: createGitHubIssuePublisher({ tokens: routedTokens }),
+    now,
+    store,
+    workerId: randomUUID(),
+  })
   const poller = createPoller({
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
@@ -636,6 +643,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })
       recordPassIncidents('routine_spec', routineFailures)
 
+      // Candidate issues are filed on the same pass, a few at a time. A scan
+      // that found twenty proposals must not open twenty issues at once.
+      if (config.mutationsEnabled) {
+        const filed = await candidateIssues.publishPending(signal)
+        filed.forEach((result) => {
+          if (result._tag === 'Ok')
+            options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a routine proposal.`)
+        })
+        recordPassIncidents('candidate_issue', filed.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+      }
+
       if (config.mutationsEnabled) {
         const planned = planRoutineRuns({ now, store })
         planned.opened.forEach(run => options.logger.info(`${run.repository}: queued the ${run.name} routine for ${run.scheduledFor}.`))
@@ -670,6 +688,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           repositories: config.repositories,
           store,
         }, signal)
+        // The list size, every pass. A sweep that reports three outcomes while
+        // its list holds a hundred rows is invisible without this line.
+        if (stopped.length > 0)
+          options.logger.info(`Stopped review comments: ${stopped.length} to close.`)
         stopped.forEach((result) => {
           if (result._tag === 'Ok') {
             options.logger.info(result.value._tag === 'CommentGone'

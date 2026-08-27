@@ -160,6 +160,7 @@ describe('dashboard HTTP app', () => {
       items: [{
         kind: 'issue',
         approvalLabels: [],
+        routineFiled: false,
         dismissed: false,
         repository: 'harlan-zw/example',
         number: 12,

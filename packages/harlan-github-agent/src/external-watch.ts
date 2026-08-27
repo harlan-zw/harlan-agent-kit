@@ -87,6 +87,7 @@ function issueItem(repository: string, issue: PublicIssueSnapshot): GitHubIssueI
   return {
     kind: 'issue',
     approvalLabels: [],
+    routineFiled: false,
     repository,
     number: issue.number,
     state: issue.state,

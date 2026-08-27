@@ -118,6 +118,13 @@ interface GitHubItemBase {
 export interface GitHubIssueItem extends GitHubItemBase {
   kind: 'issue'
   approvalLabels: PullRequestApprovalKind[]
+  /**
+   * True when a Routine filed this issue as one Candidate's proposal.
+   *
+   * An allowlist that lists only human authors would otherwise drop the issue
+   * again before triage ever read it, because the agent filed it.
+   */
+  routineFiled: boolean
 }
 
 export interface GitHubPullRequestItem extends GitHubItemBase {
@@ -519,6 +526,27 @@ export interface RoutineSpec {
  * A Routine is not an Item. It answers a clock, so it has no issue, no pull
  * request, and no Revision to hang from.
  */
+/** One request for the controller to file the issue a Candidate proposes. */
+export interface CandidateIssueCommand {
+  id: string
+  candidateId: string
+  repository: string
+  routineName: RoutineName
+  title: string
+  body: string
+}
+
+/** One leased Candidate issue command, ready for the controller to file. */
+export interface ClaimedCandidateIssueCommand extends CandidateIssueCommand {
+  repositoryMapping: RepositoryMapping
+  /** The Candidate's identity, used to find an issue a lost write already filed. */
+  fingerprint: string
+  /** Why the last attempt to file this command failed, or null when it never has. */
+  reason: string | null
+  fence: number
+  workerId: string
+}
+
 export interface Routine {
   id: string
   repository: string

@@ -59,7 +59,7 @@ export interface QueuePositionSweepOptions {
   github: Pick<GitHubAgentSource, 'clearReviewOutcome' | 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'isQueuedReviewStatus' | 'listQueuedReviewStatuses' | 'recordQueuedReviewStatus'>
+  store: Pick<JournalStore, 'isQueuedReviewStatus' | 'listQueuedReviewStatuses' | 'recordDeletedReviewComment' | 'recordQueuedReviewStatus'>
 }
 
 export type QueuePositionOutcome
@@ -124,8 +124,17 @@ export async function publishQueuePositions(
     const edited = await options.github.editReviewStatus(mapping, status.pullRequestNumber, status.commentId, status.publishedBody, body, signal)
     if (edited._tag === 'Err')
       return err(`${status.repository}#${status.pullRequestNumber}: ${edited.error}`)
-    if (edited.value._tag === 'Missing')
+    if (edited.value._tag === 'Missing') {
+      // Same as the stopped-review sweep: a deleted comment is answered, and
+      // the publication has to retire or every later pass asks again.
+      options.store.recordDeletedReviewComment({
+        taskKind: status.taskKind,
+        taskId: status.taskId,
+        commentId: status.commentId,
+        at,
+      })
       return ok({ _tag: 'CommentGone', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
+    }
     if (edited.value._tag === 'Changed')
       return ok({ _tag: 'Superseded', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
     const recorded = options.store.recordQueuedReviewStatus({
