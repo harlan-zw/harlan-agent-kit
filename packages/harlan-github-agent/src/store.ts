@@ -3436,6 +3436,35 @@ const pullRequestPurposeMigration = `
   PRAGMA user_version = 36;
 `
 
+/**
+ * Adds automatic Agent selection and the provider preference order it walks.
+ *
+ * Version 27 stored a pinned provider or nothing. Automatic selection stores
+ * neither: it stores the order to walk, and reads capacity at every turn. The
+ * two CHECKs keep a tag and its own column from disagreeing, so no row can say
+ * automatic while naming a single pinned provider.
+ */
+const automaticAgentSelectionMigration = `
+  CREATE TABLE agent_selection_v37 (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    tag TEXT NOT NULL CHECK (tag IN ('FollowsConfiguration', 'Pinned', 'Automatic')),
+    provider TEXT CHECK (provider IN ('codex', 'opencode')),
+    model TEXT,
+    reasoning_effort TEXT,
+    provider_order TEXT CHECK (provider_order IS NULL OR json_valid(provider_order)),
+    updated_at TEXT NOT NULL,
+    CHECK ((tag = 'Pinned') = (provider IS NOT NULL)),
+    CHECK ((tag = 'Automatic') = (provider_order IS NOT NULL))
+  );
+
+  INSERT INTO agent_selection_v37 (singleton, tag, provider, model, reasoning_effort, provider_order, updated_at)
+  SELECT singleton, tag, provider, model, reasoning_effort, NULL, updated_at FROM agent_selection;
+
+  DROP TABLE agent_selection;
+  ALTER TABLE agent_selection_v37 RENAME TO agent_selection;
+  PRAGMA user_version = 37;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3461,7 +3490,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 36)
+  if (version === 37)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3606,6 +3635,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 35) {
     applyMigration(database, pullRequestPurposeMigration)
+    version = 36
+  }
+  if (version === 36) {
+    applyMigration(database, automaticAgentSelectionMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -3844,14 +3877,22 @@ export function openJournalStore(
   const configuredSelection = providerAgentSelection(profile.provider)
 
   const getAgentSelection = (): AgentSelection => {
-    const row = database.prepare('SELECT tag, provider, model, reasoning_effort FROM agent_selection WHERE singleton = 1').get() as {
+    const row = database.prepare('SELECT tag, provider, model, reasoning_effort, provider_order FROM agent_selection WHERE singleton = 1').get() as {
       tag: string
       provider: string | null
       model: string | null
       reasoning_effort: string | null
+      provider_order: string | null
     } | undefined
-    if (row === undefined || row.tag !== 'Pinned')
+    if (row === undefined || row.tag === 'FollowsConfiguration')
       return { _tag: 'FollowsConfiguration' }
+    if (row.tag === 'Automatic') {
+      const parsedOrder = parseAgentSelection({
+        _tag: 'Automatic',
+        order: row.provider_order === null ? undefined : JSON.parse(row.provider_order),
+      })
+      return parsedOrder._tag === 'Ok' ? parsedOrder.value : { _tag: 'FollowsConfiguration' }
+    }
     const parsed = parseAgentSelection({ _tag: 'Pinned', provider: row.provider, model: row.model, reasoningEffort: row.reasoning_effort })
     // A build that drops a model leaves a stored selection nothing can answer.
     // The configuration is the safe answer, and the dashboard shows what it names.
@@ -3863,16 +3904,18 @@ export function openJournalStore(
 
   const selectAgent = (selection: AgentSelection, at: string): AgentSelection => {
     const pinned = selection._tag === 'Pinned' ? selection : null
+    const order = selection._tag === 'Automatic' ? JSON.stringify(selection.order) : null
     database.prepare(`
-      INSERT INTO agent_selection (singleton, tag, provider, model, reasoning_effort, updated_at)
-      VALUES (1, ?, ?, ?, ?, ?)
+      INSERT INTO agent_selection (singleton, tag, provider, model, reasoning_effort, provider_order, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (singleton) DO UPDATE SET
         tag = excluded.tag,
         provider = excluded.provider,
         model = excluded.model,
         reasoning_effort = excluded.reasoning_effort,
+        provider_order = excluded.provider_order,
         updated_at = excluded.updated_at
-    `).run(selection._tag, pinned?.provider ?? null, pinned?.model ?? null, pinned?.reasoningEffort ?? null, at)
+    `).run(selection._tag, pinned?.provider ?? null, pinned?.model ?? null, pinned?.reasoningEffort ?? null, order, at)
     return getAgentSelection()
   }
 

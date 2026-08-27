@@ -1,5 +1,6 @@
 import type { ConsolaInstance } from 'consola'
 import type { Server } from 'srvx'
+import type { AgentProviderName } from './agent-provider.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { Result } from './result.ts'
@@ -30,6 +31,7 @@ import { createIssueWorkWorker } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 import { createPoller } from './poller.ts'
+import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
 import { createPullRequestStatusController } from './pull-request-status-controller.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
@@ -174,9 +176,21 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
 
   const configuredProfile = agentProfile(config.agent.provider)
   const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests)
+  // A weekly window moves over hours, so a reading minutes old still decides
+  // correctly. Refreshing on its own interval keeps a subprocess out of the
+  // path of every agent turn.
+  const capacity = createProviderCapacitySource({
+    onError: error => options.logger.error(error),
+  })
+  const chooseProvider = (order: readonly AgentProviderName[]): AgentProviderName | null => chooseAgentProvider({
+    capacity: capacity.read,
+    order,
+    reservePercent: config.agent.reservePercent,
+  })
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
   const runtime = createAgentRuntimeSource({
+    chooseProvider,
     configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
     providers: { codex: createCodexProvider(), opencode: createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET }) },
@@ -259,7 +273,29 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const baselineWorktrees = createBaselineRepairWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const issueWorktrees = createIssueWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const permits = createAgentPermitPool(profile.maximumActiveAgents)
-    const canClaim = () => store.getAgentControl()._tag === 'Running'
+    /**
+     * Whether a scheduler may start another agent Task right now.
+     *
+     * Pause is a person's decision. Capacity is the account's. Automatic
+     * selection stops here when no Agent provider may spend its window, so the
+     * service waits for the reset instead of starting work it cannot pay for.
+     * Active agents and controller Publications finish either way.
+     */
+    const canClaim = (): boolean => {
+      if (store.getAgentControl()._tag !== 'Running')
+        return false
+      const selection = store.getAgentSelection()
+      if (selection._tag !== 'Automatic')
+        return true
+      const exhausted = chooseProvider(selection.order) === null
+      replaceServiceIncidents(
+        store,
+        now().toISOString(),
+        'agent_capacity',
+        exhausted ? ['No Agent provider has capacity above the reserve. New agent tasks wait for the window to reset.'] : [],
+      )
+      return !exhausted
+    }
     const validateMapping = async (mapping: RepositoryMapping) => {
       const validated = await validateRepositoryMappings({ ...config, repositories: [mapping] })
       if (validated._tag === 'Err')
@@ -679,6 +715,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.close()
     throw error
   })
+  capacity.start()
   poller.start()
   externalPoller.start()
   worktreeSweeper.start()
@@ -694,6 +731,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     server,
     stop: async () => {
       await Promise.all([
+        capacity.stop(),
         poller.stop(),
         externalPoller.stop(),
         worktreeSweeper.stop(),

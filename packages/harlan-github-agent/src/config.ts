@@ -146,22 +146,56 @@ function takeOwnership(source: UnknownRecord, path: string, repositoryOwnership:
   }
 }
 
+/**
+ * The share of a published weekly window unattended work never spends.
+ *
+ * Twenty percent of a seven-day Codex window is over a day of interactive
+ * work. That is enough to keep Harlan working on the day the fleet has spent
+ * the rest, which is the whole point of the reserve.
+ */
+const DEFAULT_RESERVE_PERCENT = 20
+
+function providerName(value: unknown): AgentProviderName | undefined {
+  return value === 'codex' || value === 'opencode' ? value : undefined
+}
+
 /** Defaults to Codex, so an existing configuration keeps its current agent. */
-function agentProvider(source: UnknownRecord, issues: ConfigIssue[]): AgentProviderName | undefined {
+function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfig['agent'] | undefined {
   const agent = source.agent
   if (agent === undefined)
-    return 'codex'
+    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: ['codex', 'opencode'] }
   if (!isRecord(agent)) {
     issues.push({ path: '$.agent', message: 'Expected an object.' })
     return undefined
   }
-  const provider = agent.provider
-  if (provider === undefined)
-    return 'codex'
-  if (provider === 'codex' || provider === 'opencode')
-    return provider
 
-  issues.push({ path: '$.agent.provider', message: 'Expected codex or opencode.' })
+  const provider = agent.provider === undefined ? 'codex' : providerName(agent.provider)
+  if (provider === undefined)
+    issues.push({ path: '$.agent.provider', message: 'Expected codex or opencode.' })
+
+  const reserveValue = agent.reserve_percent
+  const reservePercent = reserveValue === undefined
+    ? DEFAULT_RESERVE_PERCENT
+    : typeof reserveValue === 'number' && Number.isInteger(reserveValue) && reserveValue >= 0 && reserveValue < 100
+      ? reserveValue
+      : undefined
+  if (reservePercent === undefined)
+    issues.push({ path: '$.agent.reserve_percent', message: 'Expected a whole percent from 0 to 99.' })
+
+  const orderValue = agent.order
+  const order = orderValue === undefined
+    ? (['codex', 'opencode'] as const)
+    : Array.isArray(orderValue) && orderValue.length > 0
+      && orderValue.every(entry => providerName(entry) !== undefined)
+      && new Set(orderValue).size === orderValue.length
+      ? orderValue as AgentProviderName[]
+      : undefined
+  if (order === undefined)
+    issues.push({ path: '$.agent.order', message: 'Expected each Agent provider once, in preference order.' })
+
+  if (provider === undefined || reservePercent === undefined || order === undefined)
+    return undefined
+  return { provider, reservePercent, order }
 }
 
 function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[]): RepositoryMapping | undefined {
@@ -270,7 +304,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     return err([{ path: '$', message: 'Expected an object.' }])
 
   const issues: ConfigIssue[] = []
-  const provider = agentProvider(document.value, issues)
+  const agent = agentSettings(document.value, issues)
   const github = requiredRecord(document.value, 'github', '$', issues)
   const server = requiredRecord(document.value, 'server', '$', issues)
   const storage = requiredRecord(document.value, 'storage', '$', issues)
@@ -368,7 +402,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   if (
     issues.length > 0
-    || provider === undefined
+    || agent === undefined
     || host === undefined
     || appId === undefined
     || privateKeyPath === undefined
@@ -388,7 +422,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   }
 
   return ok({
-    agent: { provider },
+    agent,
     github: { appId, privateKeyPath, allowedOwners },
     server: { host, port, allowedHost },
     storage: { path: storagePath },

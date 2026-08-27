@@ -41,6 +41,7 @@ AGENT_MODELS = {
 REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
 PROVIDER_DEFAULT_LABEL = 'Provider default'
 FOLLOW_CONFIGURATION_LABEL = 'Follow configuration'
+AUTOMATIC_LABEL = 'Automatic'
 AGENT_ROLE_LABELS = {
     'adversarial_review': 'Adversarial review',
     'baseline_repair': 'Baseline repair',
@@ -160,6 +161,9 @@ def agent_selection(dashboard):
         return None
     if selection.get('_tag') == 'FollowsConfiguration':
         return {'_tag': 'FollowsConfiguration'}
+    if selection.get('_tag') == 'Automatic':
+        order = selection.get('order')
+        return {'_tag': 'Automatic', 'order': order if isinstance(order, list) else []}
     if selection.get('_tag') != 'Pinned' or not isinstance(selection.get('provider'), str):
         return None
     return {
@@ -198,7 +202,16 @@ def agent_selection_choices(selection, provider):
     effort = pinned['reasoningEffort'] if pinned else None
 
     choices = [{'_tag': 'Heading', 'label': 'Agent provider'}]
-    choices.append(choice(FOLLOW_CONFIGURATION_LABEL, pinned is None, {'_tag': 'FollowsConfiguration'}))
+    choices.append(choice(
+        FOLLOW_CONFIGURATION_LABEL,
+        selection.get('_tag') == 'FollowsConfiguration',
+        {'_tag': 'FollowsConfiguration'},
+    ))
+    choices.append(choice(
+        AUTOMATIC_LABEL,
+        selection.get('_tag') == 'Automatic',
+        {'_tag': 'Automatic', 'order': list(AGENT_MODELS)},
+    ))
     choices.extend(
         choice(
             PROVIDER_LABELS.get(candidate, candidate),

@@ -44,6 +44,16 @@ export interface ExternalRepositoryWatch {
 export interface AgentConfig {
   agent: {
     provider: AgentProviderName
+    /**
+     * The share of a published weekly window unattended work never spends.
+     *
+     * Overnight Routines and unattended reviews can drain a week of Codex
+     * before the workday starts. This keeps the last share for Harlan's own
+     * terminal, which the service cannot see and must not compete with.
+     */
+    reservePercent: number
+    /** Agent providers automatic selection walks, in preference order. */
+    order: readonly AgentProviderName[]
   }
   github: {
     appId: number
@@ -702,6 +712,29 @@ export interface PinnedAgentSelection {
 }
 
 /**
+ * What one Agent provider's weekly subscription window has left.
+ *
+ * `Unpublished` and `Unavailable` are different answers. opencode publishes no
+ * quota at all, so it is always `Unpublished` and never reads as a fault. Codex
+ * publishes one, so a failed read is `Unavailable` and worth an Incident.
+ */
+export type ProviderCapacity
+  = | { _tag: 'Unpublished' }
+    | { _tag: 'Unavailable', reason: string }
+    | { _tag: 'Available', usedPercent: number, resetsAt: string }
+
+/**
+ * The Agent providers automatic selection walks, in preference order.
+ *
+ * The first provider with capacity above the reserve answers the next turn.
+ * When none has capacity the service stops claiming new agent Tasks, rather
+ * than starting work it cannot pay for.
+ */
+export interface AutomaticAgentSelection {
+  order: readonly AgentProviderName[]
+}
+
+/**
  * One durable Agent selection.
  *
  * `FollowsConfiguration` is a value, so returning to the configuration file is
@@ -710,6 +743,7 @@ export interface PinnedAgentSelection {
 export type AgentSelection
   = | { _tag: 'FollowsConfiguration' }
     | ({ _tag: 'Pinned' } & PinnedAgentSelection)
+    | ({ _tag: 'Automatic' } & AutomaticAgentSelection)
 
 export type QueueState
   = | { _tag: 'Active', work: AgentRole }

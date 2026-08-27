@@ -13,6 +13,8 @@ did not cover it.
 | Agent provider | `agent.provider` | Configuration | 1 to N Agents | agent provider |
 | Agent selection | `agent_selection` | Controller | One per service | Agent selection |
 | Follow configuration | `agent_selection.tag` | Configuration | One Agent selection state | Follow configuration |
+| Automatic selection | `agent_selection.provider_order` | Controller | One Agent selection state | Automatic |
+| Reserve | `agent.reservePercent` | Configuration | One per service | Reserve |
 | Reasoning effort | `agent_selection.reasoning_effort` | Controller | One per Agent selection | Reasoning effort |
 | Repository mapping | `repositories` | Configuration | 1 to N Items | repository |
 | Item | `subjects` | Journal | 1 to N Revisions, Tasks, Agents | issue or pull request |
@@ -91,6 +93,7 @@ Collisions
 - "issue" means a GitHub Item alone. "Review issue" means a Review finding in review copy.
 - "queue" unqualified means this service's dashboard Queue. GitHub's feature is always "merge queue".
 - "Auto" names a Selection mode. GitHub's merge feature is always written "auto-merge", hyphenated.
+- "Automatic" names an Agent selection state and is always written in full. "Auto" alone always means the Selection mode. The two decide different things: `Auto` decides which pull requests to act on, `Automatic` decides which Agent provider answers.
 - "Dismiss" is this service's Dismissal. GitHub's own Dismiss applies to alerts, which this service does not touch, so the two never appear together.
 - "approval" means this service's local Approval. A GitHub pull request review is always "review" or "approving review".
 - "check" means a GitHub check run. This service's own conditions are always "Review gate", never bare "check".
@@ -126,6 +129,37 @@ A model belongs to one Agent provider. Switching the provider therefore returns 
 A switch starts the next agent turn. An agent already running keeps the model it started with.
 
 Use Agent selection for the control and for the stored choice. Do not use agent config, model config, or model override.
+
+### Automatic selection
+
+The Agent selection state that picks the Agent provider by remaining capacity.
+
+Automatic selection walks the configured preference order and takes the first
+Agent provider whose weekly window still has more than the Reserve left. A
+provider that publishes no quota always passes, because unknown is not empty.
+
+When no Agent provider may spend, the service stops claiming new agent Tasks and
+records one Incident. Active agents and controller Publications finish. This is
+the same stop Pause uses, decided by the account instead of by Harlan.
+
+Automatic selection is durable. It survives a restart.
+
+Use Automatic selection for the state and `Automatic` for the control. Do not
+use auto provider, failover, load balancing, or fallback mode.
+
+### Reserve
+
+The share of a published weekly window that unattended work never spends.
+
+The Reserve exists so overnight Routines and unattended reviews cannot drain a
+week of Codex before the workday starts. The service cannot see Harlan's own
+terminal, so it leaves that share alone rather than competing for it.
+
+Only a provider that publishes a quota has a Reserve. Codex publishes one.
+opencode publishes none, so its capacity reads as unpublished and the Reserve
+never applies to it.
+
+Use Reserve. Do not use quota, headroom, budget, or safety margin.
 
 ### Reasoning effort
 
@@ -440,6 +474,8 @@ Evidence that a skill, policy, or workflow should change.
 | opt-in, allowlist, gating, triage mode | Selection mode | One concept |
 | skip, ignore, mute, snooze, delete | Dismissal | GitHub's own word for the same decision |
 | config default, unset, no override, clear | Follow configuration | One Agent selection state, and one label |
+| auto provider, failover, load balancing, fallback mode | Automatic selection | One Agent selection state |
+| quota, headroom, budget, safety margin | Reserve | One concept |
 | reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |
 | risk level, skip review, review waiver, review exemption | Auto merge | Auto merge never affects whether review runs |

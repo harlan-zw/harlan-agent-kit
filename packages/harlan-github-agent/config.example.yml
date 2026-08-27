@@ -4,6 +4,12 @@
 # A switch overrides this value and survives a restart.
 agent:
   provider: codex
+  # Automatic Agent selection walks these in order and takes the first with
+  # capacity above the reserve. Switch it on from the dashboard or the tray.
+  order: [codex, opencode]
+  # The share of a published weekly window unattended work never spends.
+  # It keeps the last of the Codex week for your own terminal.
+  reserve_percent: 20
 github:
   app_id: 12345
   private_key_path: /home/harlan/.config/harlan-github-agent/app.pem

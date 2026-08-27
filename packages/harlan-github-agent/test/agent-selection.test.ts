@@ -66,7 +66,7 @@ describe('agent selection parsing', () => {
   it('rejects a body that names no selection state', () => {
     const parsed = parseAgentSelection({ provider: 'codex', model: null })
 
-    expect(parsed).toEqual({ _tag: 'Err', error: 'Pin an Agent provider, or follow the configuration.' })
+    expect(parsed).toEqual({ _tag: 'Err', error: 'Pin an Agent provider, select automatic, or follow the configuration.' })
   })
 
   it('rejects a body that is not an object', () => {
