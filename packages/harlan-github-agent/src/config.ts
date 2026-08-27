@@ -439,7 +439,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     : undefined
   if (port === undefined)
     issues.push({ path: '$.server.port', message: 'Expected an integer from 1 to 65535.' })
-  const allowedHost = server === undefined ? undefined : requiredString(server, 'allowed_host', '$.server', issues)
+  const allowedOrigin = server === undefined ? undefined : requiredString(server, 'allowed_origin', '$.server', issues)
   const storagePath = storage === undefined ? undefined : requiredString(storage, 'path', '$.storage', issues)
 
   const pollValue = document.value.poll_interval_seconds
@@ -489,8 +489,8 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   if (host !== '127.0.0.1' && host !== '::1')
     issues.push({ path: '$.server.host', message: 'Expected a loopback address.' })
-  if (allowedHost !== undefined && allowedHost !== 'harlan-github-agent.local')
-    issues.push({ path: '$.server.allowed_host', message: 'Expected harlan-github-agent.local.' })
+  if (allowedOrigin !== undefined && allowedOrigin !== 'https://harlan-github-agent.localhost')
+    issues.push({ path: '$.server.allowed_origin', message: 'Expected https://harlan-github-agent.localhost.' })
   if (storagePath !== undefined && storagePath !== ':memory:' && !isAbsolute(storagePath))
     issues.push({ path: '$.storage.path', message: 'Expected an absolute path or :memory:.' })
   if (mutationsEnabled === true && storagePath === ':memory:')
@@ -508,7 +508,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || privateKeyPath === undefined
     || allowedOwners === undefined
     || port === undefined
-    || allowedHost === undefined
+    || allowedOrigin === undefined
     || storagePath === undefined
     || pollIntervalSeconds === undefined
     || mutationsEnabled === undefined
@@ -524,7 +524,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   return ok({
     agent,
     github: { appId, privateKeyPath, allowedOwners },
-    server: { host, port, allowedHost },
+    server: { host, port, allowedOrigin },
     webhook,
     storage: { path: storagePath },
     trustedCheckoutRoots,

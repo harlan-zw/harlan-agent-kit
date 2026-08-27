@@ -74,7 +74,7 @@ Do not use an LLM as the scheduler.
 
 OpenAI recommends the SDK for automated jobs. App Server targets rich client integrations.
 
-Use `harlan-github-agent.localhost` for the dashboard. The `.localhost` suffix needs no DNS setup.
+Use `https://harlan-github-agent.localhost` for the dashboard. Portless provides local HTTPS without DNS setup.
 
 Keep any public webhook address separate from the loopback dashboard address.
 
@@ -626,7 +626,7 @@ Existing work keeps its pinned skill version. New work uses the approved version
 
 ## 16. Dashboard
 
-Serve the dashboard from `http://harlan-github-agent.localhost` on a loopback-only listener.
+Serve the dashboard from `https://harlan-github-agent.localhost` through Portless. Keep the service listener on loopback.
 
 Use a random session credential, strict Host and Origin checks, CSRF tokens, a restrictive CSP, and escaped rendering.
 

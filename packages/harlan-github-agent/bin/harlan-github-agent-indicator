@@ -20,7 +20,7 @@ gi.require_version('AyatanaAppIndicator3', '0.1')
 gi.require_version('Gtk', '3.0')
 from gi.repository import AyatanaAppIndicator3, GLib, Gtk
 
-DASHBOARD_URL = 'http://harlan-github-agent.local/'
+DASHBOARD_URL = 'https://harlan-github-agent.localhost/'
 DASHBOARD_API = f'{DASHBOARD_URL}api/state'
 DASHBOARD_ORIGIN = DASHBOARD_URL.rstrip('/')
 PASSWORD_FILE = Path.home() / '.config/harlan-github-agent/dashboard-password'

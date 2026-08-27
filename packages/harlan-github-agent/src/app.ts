@@ -15,7 +15,7 @@ import { parseAgentSelection } from './agent-profile.ts'
 
 export interface AgentAppOptions {
   store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
-  allowedHost: string
+  allowedOrigin: string
   dashboardPassword: string
   dashboardRoot?: string
   now: () => Date
@@ -244,9 +244,10 @@ async function changeDismissal(options: AgentAppOptions, event: { req: Request }
 
 export function createAgentApp(options: AgentAppOptions): H3 {
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot()
+  const allowedHost = new URL(options.allowedOrigin).host
   const app = new H3({
     onRequest(event) {
-      if (event.req.headers.get('host') !== options.allowedHost)
+      if (event.req.headers.get('host') !== allowedHost)
         throw createError({ status: 421, statusText: 'Misdirected Request', message: 'Host is not allowed.' })
       if (!hasDashboardAccess(event.req, options.dashboardPassword)) {
         throw createError({
@@ -256,7 +257,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
           headers: { 'www-authenticate': 'Basic realm="harlan-github-agent", charset="UTF-8"' },
         })
       }
-      if (event.req.method !== 'GET' && event.req.method !== 'HEAD' && event.req.headers.get('origin') !== `http://${options.allowedHost}`)
+      if (event.req.method !== 'GET' && event.req.method !== 'HEAD' && event.req.headers.get('origin') !== options.allowedOrigin)
         throw createError({ status: 403, statusText: 'Forbidden', message: 'Request origin is not allowed.' })
       event.context.dashboardNonce = randomBytes(18).toString('base64')
     },

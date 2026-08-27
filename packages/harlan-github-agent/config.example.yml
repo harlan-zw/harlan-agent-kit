@@ -21,7 +21,7 @@ github:
 server:
   host: 127.0.0.1
   port: 3210
-  allowed_host: harlan-github-agent.local
+  allowed_origin: https://harlan-github-agent.localhost
 # GitHub webhooks remove most polling latency. The listener runs on its own
 # port carrying one route, so a tunnel in front of it cannot reach the
 # dashboard or the control API. Point the GitHub App webhook URL at it and set

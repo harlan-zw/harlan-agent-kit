@@ -90,6 +90,10 @@ Grant read access to metadata, contents, issues, checks, commit statuses, and ad
 
 A conflict fix also requires an owned repository, an allowed pull request author, an allowed branch prefix, and an unprotected head branch. The service pushes the checked commit from a clean bare Git repository.
 
+Register the dashboard with `./bin/install-portless-alias`.
+
+Open `https://harlan-github-agent.localhost/`. Use `agent` as the dashboard username.
+
 ## Webhooks
 
 Set `webhook.enabled` to start a second listener on its own port. It carries one route, `POST /webhook`, and nothing else. Keep the dashboard port on loopback: it can pause agents, approve pull requests, cancel tasks, and eject sessions, so it must never be exposed.
@@ -101,8 +105,6 @@ A delivery is a hint, never a payload. It says "read this repository again", and
 Deliveries within three seconds of each other cost one pass, so a busy repository cannot spend the rate limit this feature exists to save.
 
 Keep polling on. It is the safety net for a delivery GitHub never sent.
-
-Open `http://harlan-github-agent.local/`. Use `agent` as the dashboard username.
 
 Select `Automatic` in the Agent provider control to pick the provider by remaining capacity. It walks `agent.order` and takes the first provider whose window has more than its `agent.reserve_percent` left.
 

@@ -70,7 +70,7 @@ export interface AgentConfig {
   server: {
     host: string
     port: number
-    allowedHost: string
+    allowedOrigin: string
   }
   /**
    * The GitHub webhook listener.

@@ -705,7 +705,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       dismissItem: store.dismissItem,
       restoreItem: store.restoreItem,
     },
-    allowedHost: config.server.allowedHost,
+    allowedOrigin: config.server.allowedOrigin,
     dashboardPassword: options.dashboardPassword,
     now,
     shutdownSignal: dashboardShutdown.signal,

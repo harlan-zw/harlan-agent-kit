@@ -136,7 +136,7 @@ const command = defineCommand({
       ...(webhookSecret === null ? {} : { webhookSecret: webhookSecret.value }),
       logger: consola,
     })
-    consola.success(`Dashboard: http://${validated.value.server.allowedHost}`)
+    consola.success(`Dashboard: ${validated.value.server.allowedOrigin}`)
     if (webhook._tag === 'Enabled')
       consola.success(`Webhooks: http://${webhook.host}:${webhook.port}/webhook`)
     await waitForShutdown()

@@ -13,7 +13,7 @@ set -euo pipefail
 SERVICE_CHECKOUT="${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}"
 SERVICE_UNIT=harlan-github-agent
 HEALTH_URL=http://127.0.0.1:3210/health
-HEALTH_HOST=harlan-github-agent.local
+HEALTH_HOST=harlan-github-agent.localhost
 PASSWORD_FILE="$HOME/.config/harlan-github-agent/dashboard-password"
 
 deployed() {

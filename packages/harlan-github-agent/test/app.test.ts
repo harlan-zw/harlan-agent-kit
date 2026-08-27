@@ -7,7 +7,8 @@ import { createAgentApp } from '../src/app.ts'
 import { ok } from '../src/result.ts'
 import { dashboardSnapshot } from './fixtures.ts'
 
-const allowedHost = 'harlan-github-agent.local'
+const allowedOrigin = 'https://harlan-github-agent.localhost'
+const allowedHost = new URL(allowedOrigin).host
 const dashboardPassword = 'test-password-with-at-least-32-bytes'
 const authorization = `Basic ${Buffer.from(`agent:${dashboardPassword}`).toString('base64')}`
 const now = () => new Date('2026-08-13T01:00:00.000Z')
@@ -27,7 +28,7 @@ afterEach(() => vi.useRealTimers())
 
 function createApp(snapshot = dashboardSnapshot()) {
   return createAgentApp({
-    allowedHost,
+    allowedOrigin,
     dashboardPassword,
     dashboardRoot,
     now,
@@ -39,7 +40,7 @@ describe('dashboard HTTP app', () => {
   it('switches the Agent provider, model, and reasoning effort', async () => {
     const switches: unknown[] = []
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -57,7 +58,7 @@ describe('dashboard HTTP app', () => {
         },
       },
     })
-    const headers = { authorization, host: allowedHost, origin: `http://${allowedHost}` }
+    const headers = { authorization, host: allowedHost, origin: allowedOrigin }
 
     const switched = await app.request(`http://${allowedHost}/api/agents/select`, {
       method: 'POST',
@@ -95,7 +96,7 @@ describe('dashboard HTTP app', () => {
   it('pauses and resumes new agent work', async () => {
     const controls: unknown[] = []
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -117,7 +118,7 @@ describe('dashboard HTTP app', () => {
         },
       },
     })
-    const headers = { authorization, host: allowedHost, origin: `http://${allowedHost}` }
+    const headers = { authorization, host: allowedHost, origin: allowedOrigin }
 
     const paused = await app.request(`http://${allowedHost}/api/agents/pause`, { method: 'POST', headers })
     const resumed = await app.request(`http://${allowedHost}/api/agents/resume`, { method: 'POST', headers })
@@ -192,7 +193,7 @@ describe('dashboard HTTP app', () => {
   it('returns local review history for one pull request', async () => {
     const requests: Array<{ repository: string, pullRequestNumber: number }> = []
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -233,7 +234,7 @@ describe('dashboard HTTP app', () => {
     const approvals: unknown[] = []
     const revisionId = 'a'.repeat(64)
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -252,7 +253,7 @@ describe('dashboard HTTP app', () => {
     })
     const response = await app.request(`http://${allowedHost}/api/approvals`, {
       method: 'POST',
-      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': `http://${allowedHost}` },
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
       body: JSON.stringify({ repository: 'harlan-zw/example', pullRequestNumber: 24, revisionId, kind: 'review' }),
     })
 
@@ -271,7 +272,7 @@ describe('dashboard HTTP app', () => {
     const approvals: unknown[] = []
     const revisionId = 'a'.repeat(64)
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -290,7 +291,7 @@ describe('dashboard HTTP app', () => {
     })
     const response = await app.request(`http://${allowedHost}/api/issues/approve`, {
       method: 'POST',
-      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': `http://${allowedHost}` },
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
       body: JSON.stringify({ repository: 'harlan-zw/example', issueNumber: 12, revisionId }),
     })
 
@@ -313,7 +314,7 @@ describe('dashboard HTTP app', () => {
     const cancellations: unknown[] = []
     const taskId = 'a'.repeat(64)
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -333,7 +334,7 @@ describe('dashboard HTTP app', () => {
 
     const response = await app.request(`http://${allowedHost}/api/tasks/cancel`, {
       method: 'POST',
-      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': `http://${allowedHost}` },
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
       body: JSON.stringify({ taskId }),
     })
 
@@ -371,7 +372,7 @@ describe('dashboard HTTP app', () => {
       }],
     })
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -395,7 +396,7 @@ describe('dashboard HTTP app', () => {
 
     const response = await app.request(`http://${allowedHost}/api/agents/eject`, {
       method: 'POST',
-      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': `http://${allowedHost}` },
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
       body: JSON.stringify({ taskId }),
     })
 
@@ -409,7 +410,7 @@ describe('dashboard HTTP app', () => {
     const requests: unknown[] = []
     const revisionId = 'a'.repeat(64)
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       now,
@@ -429,7 +430,7 @@ describe('dashboard HTTP app', () => {
 
     const response = await app.request(`http://${allowedHost}/api/reviews/rerun`, {
       method: 'POST',
-      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': `http://${allowedHost}` },
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
       body: JSON.stringify({ repository: 'harlan-zw/example', pullRequestNumber: 24, revisionId }),
     })
 
@@ -449,7 +450,7 @@ describe('dashboard HTTP app', () => {
     const shutdown = new AbortController()
     let reads = 0
     const app = createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot,
       eventIntervalMilliseconds: 1_000,
