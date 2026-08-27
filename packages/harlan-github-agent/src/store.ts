@@ -7064,28 +7064,27 @@ export function openJournalStore(
         ORDER BY candidate.updated_at DESC, candidate.id DESC
         LIMIT 1
       ),
-      -- A Repair queued straight after a Review has published nothing of its
-      -- own. It inherits the canonical comment of the Review for the same
-      -- revision, which is the comment left reading "Repair queued".
+      -- A Task that has published nothing of its own inherits the canonical
+      -- comment the pull request already carries. One comment serves the whole
+      -- pull request and outlives every Revision, so this finds both the
+      -- Review comment a Repair queues behind and the Repair comment a Review
+      -- queues behind once the Repair push becomes the next head.
       (
         SELECT candidate.id FROM review_status_commands AS candidate
-        JOIN worker_tasks AS sibling ON sibling.id = candidate.task_id
-        WHERE candidate.task_kind = 'adversarial_review' AND candidate.state_tag = 'Published'
-          AND sibling.subject_id = claimable.subject_id
-          AND candidate.revision_id = claimable.revision_id
+        JOIN revisions AS candidate_revision ON candidate_revision.id = candidate.revision_id
+        WHERE candidate.state_tag = 'Published'
+          AND candidate_revision.subject_id = claimable.subject_id
         ORDER BY candidate.updated_at DESC, candidate.id DESC
         LIMIT 1
       )
     )
     WHERE json_extract(revisions.payload, '$.state') = 'open'
       AND COALESCE(published.github_comment_id, prompt.github_comment_id) IS NOT NULL
-      AND (
-        published.id IS NULL
-        OR (
-          published.phase != 'terminal'
-          AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
-        )
-      )
+      -- A terminal comment is a complete statement, so the Queue leaves it for
+      -- the Review that replaces it. A nonterminal comment claims work is
+      -- under way, which is false the moment its Task ends, whichever head it
+      -- named. That comment is the one the Queue position corrects.
+      AND (published.id IS NULL OR published.phase != 'terminal')
       -- A final status for this exact head is a complete statement. Writing a
       -- Queue position over it would delete the review a person still needs.
       AND NOT EXISTS (
