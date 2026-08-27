@@ -22,6 +22,8 @@ did not cover it.
 | Revision | `revisions` | Journal | N to 1 Item, 1 to N Review runs | none |
 | Agent | `worker_sessions` | Runner | N to 1 Item, 1 to N Review runs | agent |
 | Task | `tasks`, `worker_tasks` | Scheduler | N to 1 Item and Revision | task |
+| Routine | `routines` | Scheduler | N to 1 Repository mapping, 1 to N Routine runs | Routine |
+| Routine run | `routine_runs` | Scheduler | N to 1 Routine | run |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
@@ -225,6 +227,18 @@ errors.
 One independently scheduled unit of work for an Item.
 
 GitHub Actions calls its unit a `job`. This service is not Actions, and a Task outlives a single run and carries its own lease, so Task stays. Never call a Task a job.
+
+### Routine
+
+One named recurring repository check declared in `.github/routines.yml`.
+
+A Routine answers a clock. It has no Item or Revision. Each due instant creates one Routine run.
+
+### Routine run
+
+One durable answer to one exact cron instant for a Routine.
+
+A skipped instant remains a Routine run. This keeps missed work visible.
 
 ### Queue
 
@@ -494,6 +508,7 @@ Evidence that a skill, policy, or workflow should change.
 | waiting, in progress | PENDING | GitHub's own check status and review state |
 | failed, as a Review outcome | BLOCKED | GitHub's own mergeable state |
 | job | Task | `job` is a GitHub Actions unit and must keep that meaning |
+| scheduled task, cron task | Routine | A Task belongs to an Item. A Routine answers a clock. |
 | bot | Agent | Reads as a GitHub App, which the agent is not |
 | ticket, card | issue | GitHub's word |
 | PR in prose | pull request | GitHub's word |

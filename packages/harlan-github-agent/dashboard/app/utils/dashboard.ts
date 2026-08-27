@@ -5,6 +5,7 @@ import type {
   AgentStartState,
   AgentTask,
   DashboardSnapshot,
+  DashboardTask,
   Incident,
   IncidentKind,
   ProviderCapacityStatus,
@@ -12,6 +13,8 @@ import type {
   RepositoryStatus,
   ReviewAgent,
   ReviewGateState,
+  Routine,
+  RoutineRun,
   SelectionMode,
 } from '../../../src/types.ts'
 import { hasSpendableCapacity } from '../../../src/capacity.ts'
@@ -45,6 +48,49 @@ export interface ProviderCapacityPresentation {
   value: string
   detail: string
   tone: StatusTone | 'neutral'
+}
+
+export interface ScheduledRoutineRecord {
+  routine: Routine
+  latestRun: RoutineRun | undefined
+}
+
+export interface RoutineRunPresentation {
+  label: string
+  tone: StatusTone | 'neutral'
+  detail?: string
+}
+
+/** Pairs each declared Routine with the newest run the snapshot retained. */
+export function scheduledRoutineRecords(routines: readonly Routine[], runs: readonly RoutineRun[]): ScheduledRoutineRecord[] {
+  const newest = new Map<string, RoutineRun>()
+  runs.forEach((run) => {
+    const current = newest.get(run.routineId)
+    if (current === undefined || run.scheduledFor > current.scheduledFor)
+      newest.set(run.routineId, run)
+  })
+  return routines.map(routine => ({ routine, latestRun: newest.get(routine.id) }))
+}
+
+/** Gives one Routine run a label, semantic tone, and durable outcome detail. */
+export function routineRunPresentation(run: RoutineRun | undefined): RoutineRunPresentation {
+  if (run === undefined)
+    return { label: 'Never run', tone: 'neutral' }
+  switch (run.state._tag) {
+    case 'Queued': return { label: 'Queued', tone: 'neutral' }
+    case 'Running': return { label: 'Running', tone: 'primary' }
+    case 'Completed': return { label: 'Completed', tone: 'success', detail: run.state.evidence }
+    case 'Failed': return { label: 'Failed', tone: 'error', detail: run.state.reason }
+    case 'Skipped': return { label: 'Skipped', tone: 'neutral', detail: run.state.reason }
+    case 'ActionRequired': return { label: 'Action required', tone: 'warning', detail: run.state.reason }
+    case 'Superseded': return { label: 'Superseded', tone: 'neutral', detail: run.state.reason }
+  }
+}
+
+export function routineTrackingUrl(routine: Routine): string | undefined {
+  return routine.trackingIssueNumber === null
+    ? undefined
+    : `https://github.com/${routine.repository}/issues/${routine.trackingIssueNumber}`
 }
 
 /** Human-readable live limit state for the System pane. */
@@ -255,6 +301,40 @@ export function reviewOutcomeLabel(agent: ReviewAgent): string {
   return agent.outcome.confidence === undefined ? 'READY' : `READY · ${agent.outcome.confidence}/100`
 }
 
+const reviewGateNames = ['head', 'merge', 'metadata', 'review', 'verification', 'ci'] as const
+
+function reviewGateLabel(gate: typeof reviewGateNames[number]): string {
+  return gate === 'ci' ? 'CI' : `${gate.charAt(0).toUpperCase()}${gate.slice(1)}`
+}
+
+function sentence(value: string): string {
+  return /[.!?]$/.test(value) ? value : `${value}.`
+}
+
+/** Explains a Review outcome without making Review findings read as agent failure. */
+export function reviewOutcomeDetail(agent: ReviewAgent): string {
+  if (agent.outcome._tag === 'Ready')
+    return 'No issues found.'
+
+  const openFindings = agent.findings.filter(finding => finding._tag === 'Open')
+  if (openFindings.length > 0) {
+    const count = `${openFindings.length} issue${openFindings.length === 1 ? '' : 's'} found.`
+    if (openFindings.every(finding => finding.resolution === 'Repair'))
+      return `${count} Repair follows automatically.`
+    if (openFindings.some(finding => finding.resolution === 'Dismissal'))
+      return `${count} Dismissal recommended.`
+    return count
+  }
+
+  const unsettledName = reviewGateNames.find(name => agent.gates[name]._tag !== 'Passed')
+  if (unsettledName === undefined)
+    return 'The Review outcome has no recorded explanation.'
+  const gate = agent.gates[unsettledName]
+  if (gate._tag === 'Passed')
+    return 'The Review outcome has no recorded explanation.'
+  return `${reviewGateLabel(unsettledName)} Review gate ${gate._tag.toLowerCase()}. ${sentence(gate.reason)}`
+}
+
 const incidentKindLabels: Record<IncidentKind, string> = {
   agent_provider: 'Agent provider',
   agent_result: 'Agent result',
@@ -361,21 +441,58 @@ export function taskStateTone(task: AgentTask): 'success' | 'error' | 'neutral' 
 }
 
 export function taskStateDetail(task: AgentTask): string | undefined {
+  if (task.state._tag === 'Completed')
+    return task.state.evidence
   if (task.state._tag === 'Failed' || task.state._tag === 'Superseded')
     return task.state.reason
   return undefined
 }
 
+export type HistoryCategory = 'ready' | 'issues' | 'pending' | 'failed' | 'superseded'
+
+export function taskHistoryCategory(task: AgentTask): HistoryCategory {
+  if (task.state._tag === 'Completed')
+    return 'ready'
+  if (task.state._tag === 'Failed')
+    return 'failed'
+  if (task.state._tag === 'Superseded')
+    return 'superseded'
+  return 'pending'
+}
+
+/** The last durable phase helps explain where a terminal Task stopped. */
+export function taskProgressDetail(task: DashboardTask): string | undefined {
+  if (task.progress.percent === 0 || task.progress.label === 'Starting')
+    return undefined
+  return `Last phase: ${task.progress.label}`
+}
+
 export type HistoryRecord
   = | { _tag: 'Review', key: string, at: string, agent: ReviewAgent }
-    | { _tag: 'Task', key: string, at: string, task: AgentTask }
+    | { _tag: 'Task', key: string, at: string, task: DashboardTask }
+
+export function historyCategory(record: HistoryRecord): HistoryCategory {
+  if (record._tag === 'Task')
+    return taskHistoryCategory(record.task)
+  if (record.agent.outcome._tag === 'Ready')
+    return 'ready'
+  return record.agent.outcome._tag === 'Blocked' ? 'issues' : 'pending'
+}
+
+export function historyOutcomeDetail(record: HistoryRecord): string | undefined {
+  if (record._tag === 'Review')
+    return reviewOutcomeDetail(record.agent)
+  if (record.task.state._tag === 'Completed')
+    return 'Completed successfully.'
+  return taskStateDetail(record.task)
+}
 
 /**
  * Everything that already finished, newest first. Reviews carry their own evidence.
  * Terminal tasks cover the work that produces no review, which would otherwise
  * finish and vanish without ever being recorded on screen.
  */
-export function buildHistory(reviewAgents: ReviewAgent[], tasks: AgentTask[]): HistoryRecord[] {
+export function buildHistory(reviewAgents: ReviewAgent[], tasks: DashboardTask[]): HistoryRecord[] {
   const reviewed = new Set(reviewAgents.map(agent => `${agent.repository}#${agent.pullRequestNumber}@${agent.revisionId}`))
   const reviews = reviewAgents.map((agent): HistoryRecord => ({ _tag: 'Review', key: agent.id, at: agent.completedAt, agent }))
   const settled = tasks
@@ -386,8 +503,10 @@ export function buildHistory(reviewAgents: ReviewAgent[], tasks: AgentTask[]): H
 }
 
 /** The System pane keeps only enough finished work to confirm recent movement. */
-export function recentlyFinished(reviewAgents: ReviewAgent[], tasks: AgentTask[]): HistoryRecord[] {
-  return buildHistory(reviewAgents, tasks).slice(0, 3)
+export function recentlyFinished(reviewAgents: ReviewAgent[], tasks: DashboardTask[]): HistoryRecord[] {
+  return buildHistory(reviewAgents, tasks)
+    .filter(record => historyCategory(record) !== 'superseded')
+    .slice(0, 3)
 }
 
 /**

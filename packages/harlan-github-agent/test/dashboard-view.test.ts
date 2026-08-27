@@ -1,4 +1,4 @@
-import type { ActiveAgent, AgentTask, Incident, QueueEntry, ReviewAgent } from '../src/types.ts'
+import type { ActiveAgent, DashboardTask, Incident, QueueEntry, ReviewAgent, Routine, RoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import {
   activeEntries,
@@ -21,10 +21,16 @@ import {
   queueWork,
   recentlyFinished,
   repositoryState,
+  reviewOutcomeDetail,
   reviewOutcomeLabel,
   reviewUsageLabel,
+  routineRunPresentation,
+  routineTrackingUrl,
+  scheduledRoutineRecords,
   systemState,
+  taskHistoryCategory,
   taskKindLabel,
+  taskProgressDetail,
   taskStateTone,
   taskSubjectUrl,
   waitingEntries,
@@ -53,6 +59,40 @@ function activeAgent(overrides: Partial<ActiveAgent> = {}): ActiveAgent {
     progress: { percent: 50, label: 'Working' },
     activity: [],
     state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-14T12:30:00.000Z' },
+    ...overrides,
+  }
+}
+
+function routine(overrides: Partial<Routine> = {}): Routine {
+  return {
+    id: 'harlan-zw/example:sentry-checkin',
+    repository: 'harlan-zw/example',
+    name: 'sentry-checkin',
+    crons: ['0 7 * * *'],
+    timeZone: 'Australia/Melbourne',
+    mode: 'report',
+    enabled: true,
+    specSha: 'abc123',
+    lastRunAt: '2026-08-27T21:00:00.000Z',
+    trackingIssueNumber: 42,
+    updatedAt: '2026-08-27T21:00:01.000Z',
+    ...overrides,
+  }
+}
+
+function routineRun(overrides: Partial<RoutineRun> = {}): RoutineRun {
+  return {
+    id: 'routine-run-1',
+    routineId: 'harlan-zw/example:sentry-checkin',
+    repository: 'harlan-zw/example',
+    name: 'sentry-checkin',
+    scheduledFor: '2026-08-27T21:00:00.000Z',
+    specSha: 'abc123',
+    state: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
+    fence: 1,
+    attempts: 1,
+    createdAt: '2026-08-27T21:00:00.000Z',
+    updatedAt: '2026-08-27T21:01:00.000Z',
     ...overrides,
   }
 }
@@ -115,7 +155,7 @@ function reviewAgent(overrides: Partial<ReviewAgent> = {}): ReviewAgent {
   } as ReviewAgent
 }
 
-const reviewTask: AgentTask = {
+const reviewTask: DashboardTask = {
   id: 'task-review',
   kind: 'adversarial_review',
   repository: 'harlan-zw/nuxt-seo',
@@ -123,9 +163,10 @@ const reviewTask: AgentTask = {
   revisionId: 'rev-a',
   state: { _tag: 'Completed', evidence: 'done' },
   updatedAt: '2026-08-14T11:31:00.000Z',
+  progress: { percent: 95, label: 'Review complete' },
 }
 
-const triageTask: AgentTask = {
+const triageTask: DashboardTask = {
   id: 'task-triage',
   kind: 'issue_triage',
   repository: 'harlan-zw/unlighthouse',
@@ -133,6 +174,7 @@ const triageTask: AgentTask = {
   revisionId: 'rev-i',
   state: { _tag: 'Failed', reason: 'The focused test suite did not pass.' },
   updatedAt: '2026-08-14T11:45:00.000Z',
+  progress: { percent: 70, label: 'Running tests and checks' },
 }
 
 describe('buildHistory', () => {
@@ -148,7 +190,7 @@ describe('buildHistory', () => {
   })
 
   it('ignores work that has not finished', () => {
-    const running: AgentTask = { ...triageTask, state: { _tag: 'Queued' } }
+    const running: DashboardTask = { ...triageTask, state: { _tag: 'Queued' } }
     expect(buildHistory([], [running])).toEqual([])
   })
 
@@ -177,6 +219,60 @@ describe('recentlyFinished', () => {
       'task-3',
       'task-2',
     ])
+  })
+
+  it('keeps superseded work in History without letting it crowd out System outcomes', () => {
+    const superseded: DashboardTask = {
+      ...triageTask,
+      id: 'superseded',
+      updatedAt: '2026-08-14T11:59:00.000Z',
+      state: { _tag: 'Superseded', reason: 'A newer issue state replaced this Task.' },
+    }
+
+    expect(recentlyFinished([], [triageTask, superseded]).map(record => record.key)).toEqual(['task-triage'])
+  })
+})
+
+describe('history outcome visibility', () => {
+  it('states how many issues a blocked review found', () => {
+    const blocked = reviewAgent({
+      outcome: { _tag: 'Blocked' },
+      findings: [{
+        _tag: 'Open',
+        summary: 'The parser accepts an invalid state.',
+        nextAction: 'Reject the invalid state at the boundary.',
+        resolution: 'Repair',
+      }],
+    })
+
+    expect(reviewOutcomeDetail(blocked)).toBe('1 issue found. Repair follows automatically.')
+  })
+
+  it('names the unsettled gate and reason for a pending review', () => {
+    const pending = reviewAgent({
+      outcome: { _tag: 'Pending' },
+      gates: {
+        ...reviewAgent().gates,
+        ci: { _tag: 'Pending', reason: 'Required checks are still running.', evidence: [] },
+      },
+    })
+
+    expect(reviewOutcomeDetail(pending)).toBe('CI Review gate pending. Required checks are still running.')
+  })
+
+  it('keeps superseded work out of failure filters', () => {
+    const superseded = { ...reviewTask, state: { _tag: 'Superseded' as const, reason: 'A newer head commit replaced this review.' } }
+
+    expect(taskHistoryCategory(superseded)).toBe('superseded')
+  })
+
+  it('shows the last phase without presenting it as completion progress', () => {
+    const failed = {
+      ...triageTask,
+      progress: { percent: 70, label: 'Running tests and checks' },
+    }
+
+    expect(taskProgressDetail(failed)).toBe('Last phase: Running tests and checks')
   })
 })
 
@@ -517,5 +613,34 @@ describe('system pane', () => {
     })
 
     expect(systemState(snapshot)).toEqual({ label: 'Action required', tone: 'error' })
+  })
+
+  it('pairs each Routine with its newest run', () => {
+    const older = routineRun()
+    const newest = routineRun({
+      id: 'routine-run-2',
+      scheduledFor: '2026-08-28T21:00:00.000Z',
+      state: { _tag: 'Failed', reason: 'Sentry timed out.' },
+      updatedAt: '2026-08-28T21:01:00.000Z',
+    })
+
+    expect(scheduledRoutineRecords([routine()], [older, newest])).toEqual([{
+      routine: routine(),
+      latestRun: newest,
+    }])
+  })
+
+  it('presents Routine state and its durable detail', () => {
+    expect(routineRunPresentation(routineRun({ state: { _tag: 'Failed', reason: 'Sentry timed out.' } }))).toEqual({
+      label: 'Failed',
+      tone: 'error',
+      detail: 'Sentry timed out.',
+    })
+    expect(routineRunPresentation(undefined)).toEqual({ label: 'Never run', tone: 'neutral' })
+  })
+
+  it('links a Routine to its tracking issue', () => {
+    expect(routineTrackingUrl(routine())).toBe('https://github.com/harlan-zw/example/issues/42')
+    expect(routineTrackingUrl(routine({ trackingIssueNumber: null }))).toBeUndefined()
   })
 })

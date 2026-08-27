@@ -57,6 +57,38 @@ function passedReviewGates(): ReviewGates {
 }
 
 describe('journal store', () => {
+  it('includes Routines and their recent runs in the dashboard snapshot', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-28T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{
+        name: 'sentry-checkin',
+        crons: ['0 7 * * *'],
+        timeZone: 'Australia/Melbourne',
+        mode: 'report',
+        enabled: true,
+      }],
+      at: '2026-08-28T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    const run = store.openRoutineRun({
+      routineId: routine.id,
+      scheduledFor: '2026-08-28T21:00:00.000Z',
+      specSha: routine.specSha,
+      at: '2026-08-28T21:00:00.000Z',
+    })
+    if (run === null)
+      throw new Error('Expected a Routine run.')
+
+    const snapshot = store.getDashboardSnapshot('2026-08-28T21:00:01.000Z')
+
+    expect(snapshot.routines).toEqual([expect.objectContaining({ id: routine.id, name: 'sentry-checkin' })])
+    expect(snapshot.routineRuns).toEqual([expect.objectContaining({ id: run.id, state: { _tag: 'Queued' } })])
+  })
+
   it('persists Pause and reports when restart is safe', () => {
     const directory = mkdtempSync(join(tmpdir(), 'harlan-github-agent-'))
     temporaryDirectories.push(directory)
@@ -639,6 +671,11 @@ describe('journal store', () => {
         state: expect.objectContaining({ _tag: 'Working', workerId: 'worker-1' }),
       }),
     ])
+    expect(store.getDashboardSnapshot('2026-08-13T01:02:00.000Z').tasks)
+      .toContainEqual(expect.objectContaining({
+        id: task.id,
+        progress: { percent: 70, label: 'Running tests and checks' },
+      }))
   })
 
   it('keeps active agents in stable positions when progress changes', () => {

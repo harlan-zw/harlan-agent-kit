@@ -188,6 +188,19 @@ function providerName(value: unknown): AgentProviderName | undefined {
   return value === 'codex' || value === 'opencode' ? value : undefined
 }
 
+/** Keeps the control UI on the local proxy or one private Tailscale HTTPS name. */
+function isDashboardOrigin(value: string): boolean {
+  if (!URL.canParse(value))
+    return false
+  const origin = new URL(value)
+  const allowedHost = origin.hostname === 'harlan-github-agent.localhost'
+    || (origin.hostname.endsWith('.ts.net') && origin.hostname.length > '.ts.net'.length)
+  return origin.protocol === 'https:'
+    && origin.port === ''
+    && origin.origin === value
+    && allowedHost
+}
+
 /** Defaults to Codex, so an existing configuration keeps its current agent. */
 function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfig['agent'] | undefined {
   const agent = source.agent
@@ -522,8 +535,8 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   if (host !== '127.0.0.1' && host !== '::1')
     issues.push({ path: '$.server.host', message: 'Expected a loopback address.' })
-  if (allowedOrigin !== undefined && allowedOrigin !== 'https://harlan-github-agent.localhost')
-    issues.push({ path: '$.server.allowed_origin', message: 'Expected https://harlan-github-agent.localhost.' })
+  if (allowedOrigin !== undefined && !isDashboardOrigin(allowedOrigin))
+    issues.push({ path: '$.server.allowed_origin', message: 'Expected the local dashboard or an HTTPS Tailscale origin.' })
   if (storagePath !== undefined && storagePath !== ':memory:' && !isAbsolute(storagePath))
     issues.push({ path: '$.storage.path', message: 'Expected an absolute path or :memory:.' })
   if (mutationsEnabled === true && storagePath === ':memory:')

@@ -50,6 +50,35 @@ describe('configuration boundary', () => {
     expect(parsed._tag === 'Ok' && parsed.value.server.allowedOrigin).toBe('https://harlan-github-agent.localhost')
   })
 
+  it('accepts an HTTPS Tailscale dashboard origin', () => {
+    const parsed = parseConfigText(configText.replace(
+      'https://harlan-github-agent.localhost',
+      'https://hogwild.tailcad325.ts.net',
+    ))
+
+    expect(parsed._tag === 'Ok' && parsed.value.server.allowedOrigin).toBe('https://hogwild.tailcad325.ts.net')
+  })
+
+  it('rejects a public or unencrypted dashboard origin', () => {
+    const publicOrigin = parseConfigText(configText.replace(
+      'https://harlan-github-agent.localhost',
+      'https://example.com',
+    ))
+    const unencrypted = parseConfigText(configText.replace(
+      'https://harlan-github-agent.localhost',
+      'http://hogwild.tailcad325.ts.net',
+    ))
+
+    expect(publicOrigin._tag === 'Err' && publicOrigin.error).toContainEqual({
+      path: '$.server.allowed_origin',
+      message: 'Expected the local dashboard or an HTTPS Tailscale origin.',
+    })
+    expect(unencrypted._tag === 'Err' && unencrypted.error).toContainEqual({
+      path: '$.server.allowed_origin',
+      message: 'Expected the local dashboard or an HTTPS Tailscale origin.',
+    })
+  })
+
   it('parses a precise repository policy', () => {
     const result = parseConfigText(configText)
 

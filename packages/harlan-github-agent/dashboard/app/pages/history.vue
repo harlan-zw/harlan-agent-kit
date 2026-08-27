@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import type { ReviewAgent } from '../../../src/types.ts'
+import type { HistoryCategory } from '../utils/dashboard.ts'
 import { useClipboard } from '@vueuse/core'
 import {
   buildHistory,
   gateTone,
+  historyCategory,
+  reviewOutcomeDetail,
   reviewOutcomeLabel,
   reviewOutcomeTone,
   reviewUsageLabel,
@@ -11,6 +14,7 @@ import {
   taskIsIssue,
   taskKindLabel,
   taskNumber,
+  taskProgressDetail,
   taskStateDetail,
   taskStateTone,
   taskSubjectUrl,
@@ -34,17 +38,23 @@ const reviewGateNames = ['head', 'merge', 'metadata', 'review', 'verification', 
 const { copy, isSupported: clipboardSupported } = useClipboard()
 const copiedSession = ref<string>()
 const expanded = ref<Record<string, boolean>>({})
-const outcomeFilter = ref<'all' | 'ready' | 'attention'>('all')
+const outcomeFilter = ref<'all' | HistoryCategory>('all')
+
+const outcomeFilters: Array<{ label: string, value: 'all' | HistoryCategory }> = [
+  { label: 'All', value: 'all' },
+  { label: 'Ready', value: 'ready' },
+  { label: 'Issues found', value: 'issues' },
+  { label: 'Pending', value: 'pending' },
+  { label: 'Failed', value: 'failed' },
+  { label: 'Superseded', value: 'superseded' },
+]
 
 const records = computed(() => buildHistory(reviewAgents.value, snapshot.value.tasks))
 
 const filtered = computed(() => records.value.filter((record) => {
   if (outcomeFilter.value === 'all')
     return true
-  const good = record._tag === 'Review'
-    ? record.agent.outcome._tag === 'Ready'
-    : record.task.state._tag === 'Completed'
-  return outcomeFilter.value === 'ready' ? good : !good
+  return historyCategory(record) === outcomeFilter.value
 }))
 
 function isExpanded(id: string): boolean {
@@ -83,11 +93,7 @@ useHead({
       </div>
       <div class="flex items-center gap-1" aria-label="Filter by outcome">
         <UButton
-          v-for="filter in [
-            { label: 'All', value: 'all' as const },
-            { label: 'Succeeded', value: 'ready' as const },
-            { label: 'Needs a look', value: 'attention' as const },
-          ]"
+          v-for="filter in outcomeFilters"
           :key="filter.value"
           size="xs"
           :color="outcomeFilter === filter.value ? 'primary' : 'neutral'"
@@ -122,9 +128,17 @@ useHead({
           <p class="font-mono text-xs text-dimmed md:text-right">
             {{ relativeTime(record.at) }}
           </p>
-          <p v-if="taskStateDetail(record.task)" class="text-sm text-muted md:col-span-2">
-            {{ taskStateDetail(record.task) }}
-          </p>
+          <div v-if="taskProgressDetail(record.task) || taskStateDetail(record.task)" class="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-sm md:col-span-2">
+            <p v-if="taskProgressDetail(record.task)" class="text-muted">
+              {{ taskProgressDetail(record.task) }}
+            </p>
+            <p
+              v-if="taskStateDetail(record.task)"
+              :class="record.task.state._tag === 'Failed' ? 'status-error' : 'text-muted'"
+            >
+              {{ taskStateDetail(record.task) }}
+            </p>
+          </div>
         </div>
 
         <article v-else>
@@ -181,6 +195,10 @@ useHead({
 
           <p v-if="rerunErrors[itemKey(record.agent.repository, record.agent.pullRequestNumber, record.agent.revisionId)]" role="alert" class="status-error pb-3 text-sm">
             {{ rerunErrors[itemKey(record.agent.repository, record.agent.pullRequestNumber, record.agent.revisionId)] }}
+          </p>
+
+          <p class="pb-3 text-sm text-muted">
+            {{ reviewOutcomeDetail(record.agent) }}
           </p>
 
           <div
