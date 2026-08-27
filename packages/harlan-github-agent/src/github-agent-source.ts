@@ -1,8 +1,10 @@
 import type { Octokit } from 'octokit'
+import type { AgentLabelState } from './agent-label.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
-import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping, ReviewOutcomeName } from './types.ts'
+import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
+import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
@@ -10,7 +12,6 @@ import { currentBaseSha } from './github-base.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
-import { planReviewOutcomeLabels, REVIEW_OUTCOME_LABELS, staleReviewOutcomeLabels } from './review-outcome-label.ts'
 
 /**
  * What the job steps say about a check run GitHub reports as failed.
@@ -181,14 +182,16 @@ export interface GitHubAgentSource {
    * The write is skipped when the pull request already carries the label, so a
    * rerun that reaches the same verdict costs one read.
    */
-  stampReviewOutcome: (repository: RepositoryMapping, pullRequestNumber: number, outcome: ReviewOutcomeName, signal: AbortSignal) => Promise<Result<void, string>>
+  stampAgentLabel: (repository: RepositoryMapping, itemNumber: number, state: AgentLabelState, signal: AbortSignal) => Promise<Result<void, string>>
   /**
    * Takes the verdict off a pull request no Review has answered for.
    *
    * Costs one read on a pull request carrying no verdict label, which is the
    * common case, and writes nothing there.
    */
-  clearReviewOutcome: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<void, string>>
+  clearAgentLabels: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<void, string>>
+  clearRunningLabel: (repository: RepositoryMapping, itemNumber: number, signal: AbortSignal) => Promise<Result<void, string>>
+  listRunningLabelledItems: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<number[], string>>
   getIssueTriageSnapshot: (repository: RepositoryMapping, issueNumber: number, signal: AbortSignal) => Promise<Result<IssueTriageSnapshot, string>>
   getPullRequestTemplate: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<PullRequestTemplate, string>>
   getPullRequestReviewSnapshot: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<PullRequestReviewSnapshot, string>>
@@ -375,7 +378,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return ok(undefined)
     },
 
-    async clearReviewOutcome(repository, pullRequestNumber, signal) {
+    async clearAgentLabels(repository, pullRequestNumber, signal) {
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -386,7 +389,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown): Result<string[], string> => err(message(error)))
       if (current._tag === 'Err')
         return current
-      const stale = staleReviewOutcomeLabels(current.value)
+      const stale = staleAgentLabels(current.value)
       if (stale.length === 0)
         return ok(undefined)
       // A label another writer already removed answers this call.
@@ -398,18 +401,54 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return failed ?? ok(undefined)
     },
 
-    async stampReviewOutcome(repository, pullRequestNumber, outcome, signal) {
+    /** Every open Item GitHub still shows the Running label on. */
+    async listRunningLabelledItems(repository, signal) {
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, issue_number: pullRequestNumber, request: { signal } }
+      return octokit.value.paginate(octokit.value.rest.issues.listForRepo, {
+        owner,
+        repo,
+        state: 'open',
+        labels: AGENT_LABELS.RUNNING.name,
+        per_page: 100,
+        request: { signal },
+      })
+        .then((items): Result<number[], string> => ok(items.map(item => item.number)))
+        .catch((error: unknown): Result<number[], string> => err(message(error)))
+    },
+
+    /**
+     * Takes the Running label off, and leaves every other label alone.
+     *
+     * A settled Review stamps its verdict just before the Task settles, so a
+     * blanket clear here would wipe the verdict it had just written.
+     */
+    async clearRunningLabel(repository, itemNumber, signal) {
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      const request = { owner, repo, issue_number: itemNumber, request: { signal } }
+      // A label another writer already removed answers this call.
+      return octokit.value.rest.issues.removeLabel({ ...request, name: AGENT_LABELS.RUNNING.name })
+        .then((): Result<void, string> => ok(undefined))
+        .catch((error: unknown): Result<void, string> => errorStatus(error) === 404 ? ok(undefined) : err(message(error)))
+    },
+
+    async stampAgentLabel(repository, itemNumber, state, signal) {
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      const request = { owner, repo, issue_number: itemNumber, request: { signal } }
       const current = await octokit.value.rest.issues.get(request)
         .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
         .catch((error: unknown): Result<string[], string> => err(message(error)))
       if (current._tag === 'Err')
         return current
-      const plan = planReviewOutcomeLabels(outcome, current.value)
+      const plan = planAgentLabels(state, current.value)
       if (plan.add === null && plan.remove.length === 0)
         return ok(undefined)
       if (plan.add !== null) {
@@ -445,10 +484,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown): Result<string[], string> => err(message(error)))
       if (confirmed._tag === 'Err')
         return confirmed
-      const settled = planReviewOutcomeLabels(outcome, confirmed.value)
+      const settled = planAgentLabels(state, confirmed.value)
       return settled.add === null && settled.remove.length === 0
         ? ok(undefined)
-        : err(`GitHub did not stamp the ${REVIEW_OUTCOME_LABELS[outcome].name} label.`)
+        : err(`GitHub did not stamp the ${AGENT_LABELS[state].name} label.`)
     },
 
     async ensureApprovalLabel(repository, label, signal) {

@@ -13,7 +13,7 @@ export type CiRegateOutcome
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
 
 export interface ReviewCiSweepOptions {
-  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampReviewOutcome'>
+  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampAgentLabel'>
   now: () => Date
   repositories: RepositoryMapping[]
   store: Pick<JournalStore, 'listCiPendingReviews' | 'recordReviewPublication' | 'supersedeReviewRun'>
@@ -112,7 +112,7 @@ export async function publishResolvedCiReviews(
     })
     if (publication._tag === 'Rejected' || publication._tag === 'Conflict')
       return err(`${review.repository}#${review.pullRequestNumber}: the settled review comment could not be saved.`)
-    const stamped = await options.github.stampReviewOutcome(mapping, review.pullRequestNumber, outcome, signal)
+    const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal)
     if (stamped._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${stamped.error}`)
     return ok({ _tag: 'Republished', repository: review.repository, pullRequestNumber: review.pullRequestNumber, outcome })

@@ -666,6 +666,8 @@ export interface JournalStore {
    * worktree still in use from one nothing will touch again.
    */
   listActiveTaskLeases: () => AgentWorktreeLease[]
+  /** Every Item an Agent holds a Running Task on, so the Running label can answer for it. */
+  listRunningTaskItems: () => Array<{ repository: string, itemNumber: number }>
   /**
    * Queued Tasks whose pull request already carries a canonical comment.
    *
@@ -7669,6 +7671,20 @@ export function openJournalStore(
     SELECT id AS taskId, fence FROM worker_tasks WHERE state_tag NOT IN ('Completed', 'Failed', 'Superseded')
   `).all() as unknown as AgentWorktreeLease[]
 
+  const listRunningTaskItems: JournalStore['listRunningTaskItems'] = () => database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number AS itemNumber
+    FROM tasks
+    JOIN subjects ON subjects.id = tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE tasks.state_tag IN ('Running', 'Publishing')
+    UNION
+    SELECT repositories.github AS repository, subjects.github_number AS itemNumber
+    FROM worker_tasks
+    JOIN subjects ON subjects.id = worker_tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE worker_tasks.state_tag = 'Running'
+  `).all() as unknown as Array<{ repository: string, itemNumber: number }>
+
   const recordApprovalPromptComment: JournalStore['recordApprovalPromptComment'] = (input) => {
     const subject = database.prepare(`
       SELECT subjects.id
@@ -8858,6 +8874,7 @@ export function openJournalStore(
     isIssueWorkApprovalReady,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
+    listRunningTaskItems,
     listQueuedReviewStatuses,
     recordApprovalPromptComment,
     listCiPendingReviews,

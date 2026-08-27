@@ -23,8 +23,15 @@ export interface TaskSchedulerOptions<Task extends PublicationTask = ClaimedConf
   leaseMilliseconds: number
   now: () => Date
   onError: (error: unknown) => void
+  /**
+   * Called once the scheduler owns the lease, before the agent runs.
+   *
+   * The Running label is written from here, so every Task kind gets it from one
+   * place instead of six workers each remembering to.
+   */
+  onTaskStarted?: (task: Task) => void
   /** Called once the worker stops running a task, whatever the outcome. */
-  onTaskSettled?: (taskId: string) => void
+  onTaskSettled?: (taskId: string, task: Task) => void
   permits: AgentPermitPool
   store: Pick<JournalStore, 'claimNextConflictTask' | 'failTask' | 'heartbeatTask' | 'needsAttentionTask' | 'stagePublication' | 'supersedeTask'>
   worker: PublicationWorker<Task>
@@ -38,7 +45,7 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
   let active: Promise<void> = Promise.resolve()
 
   async function execute(): Promise<void> {
-    let settledTaskId: string | undefined
+    let settled: Task | undefined
     if (options.canClaim?.() === false)
       return
     const permit = options.permits.tryAcquire()
@@ -49,7 +56,8 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
       const task = claim(options.workerId, options.now().toISOString(), options.leaseMilliseconds) as Task | null
       if (task === null)
         return
-      settledTaskId = task.id
+      settled = task
+      options.onTaskStarted?.(task)
 
       controller = new AbortController()
       const executionController = controller
@@ -125,8 +133,8 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
     }
     finally {
       permit.release()
-      if (settledTaskId !== undefined)
-        options.onTaskSettled?.(settledTaskId)
+      if (settled !== undefined)
+        options.onTaskSettled?.(settled.id, settled)
     }
   }
 

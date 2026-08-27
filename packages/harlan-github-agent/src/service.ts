@@ -9,6 +9,7 @@ import type { ClaimedAgentTask, RepositoryMapping, ValidatedAgentConfig } from '
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createAgentActivityLog } from './agent-activity.ts'
+import { agentLabelItem } from './agent-label.ts'
 import { createAgentPermitPool } from './agent-permit-pool.ts'
 import { AGENT_PROVIDER_NAMES, agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
 import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
@@ -48,6 +49,7 @@ import { createReviewStatusController } from './review-status-controller.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
 import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
 import { createRoutineScanWorker } from './routine-worker.ts'
+import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
@@ -321,6 +323,42 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         return true
       return chooseProvider(selection.order) !== null
     }
+    /**
+     * Writes the Running label as the scheduler takes and gives up a lease.
+     *
+     * A person deciding what to open next reads a list of issues and pull
+     * requests, not a list of comments, and an issue carries no progress
+     * comment at all while triage or issue work runs. The write never blocks
+     * the agent: a label that failed to land is worth an Incident, not a Task.
+     *
+     * The clear takes off the Running label alone. A settled Review stamps its
+     * verdict just before its Task settles, and a blanket clear would wipe it.
+     *
+     * Each write carries its own deadline, so a slow GitHub cannot hold the
+     * shutdown open on a label nobody is waiting for.
+     */
+    const labelDeadline = (): AbortSignal => AbortSignal.timeout(30_000)
+    const labelWrite = (label: string, write: Promise<Result<void, string>>): void => {
+      void write
+        .then((result) => {
+          if (result._tag === 'Err')
+            options.logger.error(`${label}: ${result.error}`)
+        })
+        .catch((error: unknown) => options.logger.error(error))
+    }
+    const stampRunningLabel = (task: object): void => {
+      const item = agentLabelItem(task)
+      if (item === undefined)
+        return
+      labelWrite('Running label', workerGithub.stampAgentLabel(item.repositoryMapping, item.itemNumber, 'RUNNING', labelDeadline()))
+    }
+    const settleTask = (taskId: string, task: object): void => {
+      activityLog.clear(taskId)
+      const item = agentLabelItem(task)
+      if (item === undefined)
+        return
+      labelWrite('Running label', workerGithub.clearRunningLabel(item.repositoryMapping, item.itemNumber, labelDeadline()))
+    }
     const validateMapping = async (mapping: RepositoryMapping) => {
       const validated = await validateRepositoryMappings({ ...config, repositories: [mapping] })
       if (validated._tag === 'Err')
@@ -415,7 +453,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         leaseMilliseconds: 45 * 60_000,
         now,
         onError: error => options.logger.error(error),
-        onTaskSettled: activityLog.clear,
+        onTaskStarted: stampRunningLabel,
+        onTaskSettled: settleTask,
         permits,
         store,
         worker: withGitHubWritePreflight({
@@ -444,7 +483,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         leaseMilliseconds: 45 * 60_000,
         now,
         onError: error => options.logger.error(error),
-        onTaskSettled: activityLog.clear,
+        onTaskStarted: stampRunningLabel,
+        onTaskSettled: settleTask,
         permits,
         // A scan is read only, so it needs no write access to start.
         worker: createRoutineScanWorker({
@@ -469,7 +509,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         leaseMilliseconds: 20 * 60_000,
         now,
         onError: error => options.logger.error(error),
-        onTaskSettled: activityLog.clear,
+        onTaskStarted: stampRunningLabel,
+        onTaskSettled: settleTask,
         permits,
         worker: withGitHubWritePreflight({
           accesses: ['item_write'],
@@ -499,7 +540,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         leaseMilliseconds: 45 * 60_000,
         now,
         onError: error => options.logger.error(error),
-        onTaskSettled: activityLog.clear,
+        onTaskStarted: stampRunningLabel,
+        onTaskSettled: settleTask,
         permits,
         store,
         worker: withGitHubWritePreflight({
@@ -529,7 +571,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         leaseMilliseconds: 45 * 60_000,
         now,
         onError: error => options.logger.error(error),
-        onTaskSettled: activityLog.clear,
+        onTaskStarted: stampRunningLabel,
+        onTaskSettled: settleTask,
         permits,
         worker: withGitHubWritePreflight({
           accesses: ['item_write'],
@@ -549,7 +592,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         leaseMilliseconds: 45 * 60_000,
         now,
         onError: error => options.logger.error(error),
-        onTaskSettled: activityLog.clear,
+        onTaskStarted: stampRunningLabel,
+        onTaskSettled: settleTask,
         permits,
         store,
         worker: withGitHubWritePreflight({
@@ -573,7 +617,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         leaseMilliseconds: 10 * 60_000,
         now,
         onError: error => options.logger.error(error),
-        onTaskSettled: activityLog.clear,
+        onTaskStarted: stampRunningLabel,
+        onTaskSettled: settleTask,
         permits,
         store,
         worker: conflictWorker,
@@ -885,6 +930,27 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         options.logger.error(`The webhook listener did not start: ${error instanceof Error ? error.message : 'unknown error'}`)
         return null
       })
+
+  // A process that died mid-Task left the Running label saying an Agent is on
+  // an Item nothing is on. The journal answers that, so it is settled once here
+  // before any scheduler can claim work and write the label again.
+  if (config.mutationsEnabled && config.triggers.includes('github')) {
+    void clearAbandonedRunningLabels({
+      github: workerGithub,
+      repositories: config.repositories,
+      store,
+    }, AbortSignal.timeout(5 * 60_000))
+      .then((results) => {
+        results.forEach((result) => {
+          if (result._tag === 'Err')
+            options.logger.error(`Running label: ${result.error}`)
+          else if (result.value.cleared.length > 0)
+            options.logger.info(`${result.value.repository}: took the Running label off ${result.value.cleared.length} items no agent is working on.`)
+        })
+        replaceServiceIncidents(store, now().toISOString(), 'running_label', results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+      })
+      .catch((error: unknown) => options.logger.error(error))
+  }
 
   // A machine answers only the triggers its configuration names. Starting a
   // scheduler it does not own is what would let two machines claim one Task.

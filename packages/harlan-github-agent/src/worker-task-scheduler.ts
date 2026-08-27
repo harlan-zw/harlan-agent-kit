@@ -33,8 +33,15 @@ export interface WorkerTaskSchedulerOptions<Task extends LeasedWork> {
   leaseMilliseconds: number
   now: () => Date
   onError: (error: unknown) => void
+  /**
+   * Called once the scheduler owns the lease, before the agent runs.
+   *
+   * The Running label is written from here, so every Task kind gets it from one
+   * place instead of six workers each remembering to.
+   */
+  onTaskStarted?: (task: Task) => void
   /** Called once the worker stops running a task, whatever the outcome. */
-  onTaskSettled?: (taskId: string) => void
+  onTaskSettled?: (taskId: string, task: Task) => void
   permits: AgentPermitPool
   worker: ItemAgent<Task>
   workerId: string
@@ -47,7 +54,7 @@ export function createWorkerTaskScheduler<Task extends LeasedWork>(options: Work
   let active: Promise<void> = Promise.resolve()
 
   async function execute(): Promise<void> {
-    let settledTaskId: string | undefined
+    let settled: Task | undefined
     if (options.canClaim?.() === false)
       return
     const permit = options.permits.tryAcquire()
@@ -57,7 +64,8 @@ export function createWorkerTaskScheduler<Task extends LeasedWork>(options: Work
       const task = options.claim(options.workerId, options.now().toISOString(), options.leaseMilliseconds)
       if (task === null)
         return
-      settledTaskId = task.id
+      settled = task
+      options.onTaskStarted?.(task)
 
       controller = new AbortController()
       const executionController = controller
@@ -112,8 +120,8 @@ export function createWorkerTaskScheduler<Task extends LeasedWork>(options: Work
     }
     finally {
       permit.release()
-      if (settledTaskId !== undefined)
-        options.onTaskSettled?.(settledTaskId)
+      if (settled !== undefined)
+        options.onTaskSettled?.(settled.id, settled)
     }
   }
 

@@ -869,13 +869,13 @@ function recordRunnerLostIncident(options: ReviewWorkerOptions, repository: stri
  * failed stamp costs nothing the reader cannot recover and never fails the
  * Review. It is reported the way every other cosmetic status write is.
  */
-async function stampReviewOutcome(
+async function stampAgentLabel(
   options: ReviewWorkerOptions,
   task: ClaimedAdversarialReviewTask,
   outcome: ReviewOutcomeName,
   signal: AbortSignal,
 ): Promise<void> {
-  const stamped = await options.github.stampReviewOutcome(task.repositoryMapping, task.pullRequestNumber, outcome, signal)
+  const stamped = await options.github.stampAgentLabel(task.repositoryMapping, task.pullRequestNumber, outcome, signal)
   if (stamped._tag === 'Err' && !signal.aborted)
     options.onProgressPublishFailure?.(task, stamped.error)
 }
@@ -922,7 +922,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           )
           if (waiting._tag === 'Err')
             return waiting
-          await stampReviewOutcome(options, task, 'PENDING', signal)
+          await stampAgentLabel(options, task, 'PENDING', signal)
           return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
         }
       }
@@ -1060,7 +1060,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
             return reported
           // Repair owns the canonical comment from here, so this is the last
           // point the Review can state its verdict on the pull request.
-          await stampReviewOutcome(options, task, outcome, signal)
+          await stampAgentLabel(options, task, outcome, signal)
           return ok({ evidence: reviewRunId })
         }
         findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
@@ -1088,7 +1088,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         return err('The automated review comment could not be saved.')
       if (published._tag === 'Err')
         return published
-      await stampReviewOutcome(options, task, reviewOutcome(gates), signal)
+      await stampAgentLabel(options, task, reviewOutcome(gates), signal)
       return ok({ evidence: reviewRunId })
     },
   }

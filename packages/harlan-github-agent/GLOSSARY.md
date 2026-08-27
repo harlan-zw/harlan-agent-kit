@@ -45,6 +45,7 @@ did not cover it.
 | Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
 | Review gate | `review_runs.gates` | Adversarial review | Six per Review run | gate |
 | Review outcome | `review_runs.outcome_tag` | Adversarial review | One per Review run | READY, PENDING, or BLOCKED |
+| Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task | none |
 | Review finding | `review_runs.findings` | Adversarial review | N per Review run | issue |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
 | Publication | `review_publications` | Journal | N to 1 Review run | automated review |
@@ -377,6 +378,16 @@ One deterministic result derived from all Review gates.
 Use `READY`, `PENDING`, or `BLOCKED`. Only `READY` carries confidence, and confidence is optional.
 
 `PENDING` and `BLOCKED` are GitHub's own words: `PENDING` is a check status and a review state, `blocked` is a mergeable state. Do not use waiting, in progress, or failed.
+
+### Running label
+
+One GitHub label, `harlan-agent-running`, that says an Agent holds a Running Task on this issue or pull request now.
+
+A scheduler adds it when it takes the lease and removes it when it gives the lease up. It shares one mutually exclusive set with the Review outcome labels, so a settled verdict removes it and a new Agent removes a stale verdict.
+
+An Item with no Running Task carries no Running label, whatever GitHub still shows. A process that died mid-Task leaves the label behind, and a startup sweep answers that from the Journal.
+
+Do not use active, in progress, working, or busy.
 
 ### Review finding
 
