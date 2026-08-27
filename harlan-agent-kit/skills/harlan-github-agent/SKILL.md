@@ -46,6 +46,7 @@ Require every enabled discovered repository mapping to pass these checks:
 7. Require explicit pull request authors and branch prefixes for conflict publication.
 8. Require one fixed `issue_cutoff` date. Never calculate a rolling cutoff.
 9. If mutation Workers are enabled, require `gh auth status` and `wt --version` to pass. For the `codex` Agent provider also require `codex login status`. For the `opencode` Agent provider require `opencode auth list` to list a credential. Never require `CODEX_API_KEY`.
+10. Keep each mapped primary checkout clean on `main`, with `HEAD` equal to `origin/main`. The global Worktrunk `pre-switch` hook enforces this before agent worktree creation.
 
 Run package tests, typecheck, and build after changing service code.
 
@@ -86,9 +87,14 @@ curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://har
 
 The controller creates every agent worktree from its mapped repository checkout with `wt`. The global Worktrunk configuration places it beside the checkout as `<repo>.<branch-slug>`. Workers must not create, enter, or remove worktrees themselves.
 
+The mapped checkout is a read-only control checkout. Never run an Agent there. Worktrunk fetches and fast-forwards it to `origin/main` before it prepares the task worktree. Treat a blocked primary check as a repository incident. Preserve its local changes for human recovery.
+
 Worktrunk completes its blocking `pre-start` hook before the controller starts an Agent.
 For pnpm repositories, this prepares an isolated `node_modules` from the new worktree's lockfile.
 The hook reuses pnpm's shared store and disables lifecycle scripts.
+It also seeds ignored `.data` and `.wrangler/state` from the Repository mapping.
+Each worktree receives a private writable copy.
+If the Repository mapping has an open state file, setup fails before the Agent starts.
 
 If setup fails, start no Agent.
 Keep the Task failure and its Incident visible with the exact Worktrunk error.

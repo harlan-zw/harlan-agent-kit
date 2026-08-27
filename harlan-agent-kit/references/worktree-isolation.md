@@ -2,6 +2,8 @@
 
 Use a live task claim to detect concurrent repository mutation. A worktree's existence does not prove an agent is active.
 
+The primary checkout is a control checkout. Keep it clean on `main`, with `HEAD` equal to `origin/main`. Never edit it. Read-only work may use it. Every mutation uses a task-owned worktree.
+
 ## Worktree ownership
 
 `wt` is the only tool that may create, enter, or remove a worktree.
@@ -18,6 +20,8 @@ Example: branch `fix/auth` in `~/pkg/app` resolves to `~/pkg/app.fix-auth`. Neve
 
 `harlan-github-agent` follows the same contract. It creates each agent worktree from the configured repository checkout with `wt`.
 
+The global `pre-switch` hook protects the primary checkout before every Worktrunk switch. It requires `main`, a clean worktree, and an `origin` remote. It fetches `origin/main`, then fast-forwards local `main`. A fetch failure, local commit, divergent branch, or dirty file stops the switch.
+
 ## Prepared worktrees
 
 The global `pre-start` hook runs once when `wt` creates a worktree.
@@ -30,6 +34,13 @@ It prefers the shared pnpm store and disables lifecycle scripts.
 A successful creation means that `node_modules` is ready for repository checks.
 Do not repeat the install only to initialise that worktree.
 Run another install when the task changes the dependency graph.
+
+The global hook also seeds ignored `.data` and `.wrangler/state` directories.
+It copies only from the primary worktree when the destination has no state.
+Each worktree receives a private writable copy.
+Worktrunk stops setup when the primary state has an open file.
+This prevents a torn copy of SQLite or WAL state.
+The copy uses filesystem reflinks when available and a normal copy otherwise.
 
 A failed hook stops the worktree handoff.
 Do not start an Agent in a partly prepared worktree.
@@ -51,7 +62,7 @@ Do not share its cache directory across different worktree paths.
 | Action | Command |
 | --- | --- |
 | List worktrees and absolute paths | `wt list --format=json` |
-| Create from a base | `wt switch --create <branch> --base <base>` |
+| Create from the current default branch | `wt switch --create <branch> --base origin/main` |
 | Enter an existing worktree | `wt switch <branch>` |
 | Remove after merge | `wt remove <branch>` |
 
@@ -77,14 +88,12 @@ Run `acquire` again before each mutation phase and at least every five minutes t
 
 ## Isolation decision
 
-If the selected checkout already belongs to this task, reuse it.
+Use the primary checkout only for read-only work and Worktrunk commands. Do not acquire it for mutation.
 
-If the shared checkout claim succeeds with `other_active: false`, work there. Do not create a worktree.
-
-If another session owns the shared checkout, or a successful shared claim reports `other_active: true`, do not edit there. Release any claim owned by this session. Run `wt list --format=json`. Reuse this task's worktree or create one with `wt switch --create <branch> --base <base>`. Acquire the new checkout before editing it.
+Before mutation, run `wt list --format=json`. If one worktree already belongs to this task, acquire and reuse it. Otherwise create one with `wt switch --create <branch> --base origin/main`, then acquire it. A pull request or recovery task may use its exact frozen base instead of `origin/main`.
 
 A live claim in another worktree still proves concurrent repository work. A stale claim or an unclaimed worktree does not.
 
-Never share a mutation worktree between tasks. If claim ownership is missing or ambiguous, stop before editing the shared checkout.
+Never share a mutation worktree between tasks. If claim ownership is missing or ambiguous, stop before editing the selected worktree.
 
 When the task reaches its cleanup point, release its claim. If the task created a worktree, use `wt remove <branch>`. Never force removal.

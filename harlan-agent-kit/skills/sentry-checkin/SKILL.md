@@ -15,7 +15,7 @@ An existing worktree alone does not prove another agent is active.
 
 `wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
 
-Use `wt` for a site only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse a worktree only when it belongs to the same frozen site task. Otherwise create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+Keep each primary site checkout read only. Run `wt list --format=json`. Reuse a worktree only when it belongs to the same frozen site task. Otherwise create one with `wt switch --create <branch> --base origin/main`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
 
 ## Load the contracts
 
@@ -53,7 +53,7 @@ SENTRY_CHECKIN_RUN_DIR=$(mktemp -d "${XDG_STATE_HOME:-$HOME/.local/state}/sentry
 
 ## Build the site map
 
-1. Parse every site and main checkout from the inventory's Projects table.
+1. Parse every site and primary checkout from the inventory's Projects table.
 2. List current Sentry projects with the CLI:
 
    ```bash
@@ -106,7 +106,7 @@ Spawn exactly one agent for every mapped inventory site, including sites with ze
 
 Pass each agent:
 
-- The site name and absolute main checkout path.
+- The site name and absolute primary checkout path.
 - The organization and all project slugs for that site.
 - The snapshot paths and frozen numeric and short IDs.
 - The history report path for its projects.

@@ -15,7 +15,7 @@ An existing worktree alone does not prove another agent is active.
 
 `wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
 
-Triage stays read only. Use `wt` for follow-on implementation only when another agent is actively modifying the same repository. Otherwise keep the current checkout. Before concurrent edits, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+Triage stays read only and may use the primary checkout. Every follow-on implementation uses a task-owned worktree. Run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base origin/main`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
 
 ## Gotchas
 
@@ -58,9 +58,9 @@ On subsequent runs, read the log and highlight what changed since last triage.
 
    See [references/heuristics.md](references/heuristics.md) for the full difficulty/impact scales and signal weighting.
 
-   Each agent returns a JSON array conforming exactly to this schema (reject and re-run any batch that returns malformed entries):
+   Each agent returns a JSON array. Every entry has this shape. Reject and rerun malformed batches.
    ```json
-   { "number": int, "difficulty": 1-5, "impact": 1-5, "hasRepro": bool, "needsCodebaseReview": bool, "notes": string }
+   { "number": 123, "difficulty": 2, "impact": 4, "hasRepro": true, "needsCodebaseReview": false, "notes": "Short reason." }
    ```
 
 4. **Merge results** from all agents into unified list.
@@ -78,14 +78,14 @@ On subsequent runs, read the log and highlight what changed since last triage.
 
 8. **Highlight high priorities** -- impact 4-5 regardless of difficulty
 
-9. **Offer worktree setup only for concurrent implementation** -- use `wt` when another agent is already active in this repository, or when two selected issues will run concurrently. Otherwise do not create a worktree. Prompt user with options:
+9. **Offer task setup for implementation** -- every selected issue uses a task-owned `wt` worktree. Prompt user with options:
    - "Create worktrees for quick wins (difficulty 1-2, impact 2+)?"
    - "Create worktrees for high priorities (impact 4-5)?"
    - "Pick specific issues by number?"
 
    For each selected issue, create an isolated worktree using `wt`:
    ```bash
-   wt switch --create fix/<number>-<slug> --base <base>
+   wt switch --create fix/<number>-<slug> --base origin/main
    ```
    Where `<slug>` is a kebab-case short title (first 4-5 words).
 
