@@ -121,6 +121,49 @@ class RunnerActivityTest(unittest.TestCase):
             },
         ])
 
+    def test_ignores_a_runner_that_disappears_between_list_and_logs(self):
+        def run(command, **_options):
+            if 'ps' in command:
+                return subprocess.CompletedProcess(command, 0, stdout=(
+                    '{"ID":"gone","State":"running","Status":"Up 2 seconds",'
+                    '"Labels":"com.harlanzw.desktop-runner.repository=harlan-zw/example"}\n'
+                ), stderr='')
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout='',
+                stderr='Error response from daemon: No such container: gone',
+            )
+
+        host = runner_indicator.parse_runner_hosts('Hogwild=ssh://hogwild')[0]
+
+        self.assertEqual(runner_indicator.request_runners(host, run), [])
+
+    def test_keeps_last_known_runner_state_during_a_short_host_failure(self):
+        previous = {'_tag': 'Available', 'hosts': [{
+            '_tag': 'Available',
+            'name': 'Hogwild',
+            'observedAt': 100.0,
+            'runners': [{'Activity': {'_tag': 'Idle'}}],
+        }]}
+        current = {'_tag': 'Available', 'hosts': [{
+            '_tag': 'Unavailable',
+            'name': 'Hogwild',
+            'message': 'SSH connection reset',
+        }]}
+
+        merged = runner_indicator.merge_runner_source(previous, current, 118.9)
+
+        self.assertEqual(merged['hosts'][0]['runners'], [{'Activity': {'_tag': 'Idle'}}])
+        self.assertEqual(merged['hosts'][0]['stale'], {
+            'message': 'SSH connection reset',
+            'observedAt': 100.0,
+        })
+        self.assertEqual(
+            runner_indicator.runner_host_status_label(merged['hosts'][0], 118.9),
+            '🟠 Hogwild · last known status 18s old · 1 self-hosted runner · 1 idle',
+        )
+
     def test_reports_idle_runner(self):
         self.assertEqual(runner_indicator.runner_activity(
             {'State': 'running', 'Status': 'Up 10 minutes'},

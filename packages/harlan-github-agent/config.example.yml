@@ -21,7 +21,7 @@ auto_merge:
   enabled: false
   minimum_confidence: 100
   method: squash
-# No new issue work starts above this many open pull requests.
+# No new issue work starts when open pull requests reach this limit.
 max_open_pull_requests: 8
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14
@@ -34,3 +34,4 @@ external_repositories: []
 repositories: []
 # Owned repositories enable issue work and conflict resolution by default.
 # Maintained repositories need an explicit policy and GitHub App installation.
+# Set repositories[].max_open_pull_requests to hold new Issue work for one busy repository.

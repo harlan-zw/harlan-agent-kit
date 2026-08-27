@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -118,43 +119,53 @@ def runner_activity(runner, logs):
     return {'_tag': 'Starting'}
 
 
-def request_runners(host):
+def request_runners(host, run=None):
+    run = run or subprocess.run
     docker = ['docker', '--host', host['dockerHost']]
-    completed = subprocess.run(
+    completed = run(
         [*docker, 'ps', '--all', '--filter', f'label={RUNNER_LABEL}', '--format', '{{json .}}'],
         check=True,
         capture_output=True,
         text=True,
         timeout=4,
     )
-    runners = []
+    listed_runners = []
     for line in completed.stdout.splitlines():
         if not line:
             continue
-        runner = json.loads(line)
-        logs = subprocess.run(
+        listed_runners.append(json.loads(line))
+
+    def read_runner(runner):
+        if runner.get('State', '').lower() != 'running':
+            activity = runner_activity(runner, '')
+        else:
+            logs = run(
             [*docker, 'logs', '--tail', '80', runner['ID']],
             check=False,
             capture_output=True,
             text=True,
             timeout=3,
         )
-        activity = runner_activity(runner, logs.stdout + logs.stderr) if logs.returncode == 0 else {
-            '_tag': 'Unknown',
-            'detail': logs.stderr.strip() or 'Runner logs unavailable',
-        }
-        runners.append({
+            if logs.returncode != 0 and 'no such container' in logs.stderr.lower():
+                return None
+            activity = runner_activity(runner, logs.stdout + logs.stderr) if logs.returncode == 0 else {
+                '_tag': 'Unknown',
+                'detail': logs.stderr.strip() or 'Runner logs unavailable',
+            }
+        return {
             **runner,
             'Activity': activity,
             'RunnerLabels': parse_labels(runner.get('Labels', '')),
             'Host': host['name'],
-        })
-    return runners
+        }
+
+    if not listed_runners:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(listed_runners))) as executor:
+        return [runner for runner in executor.map(read_runner, listed_runners) if runner is not None]
 
 
-def request_runner_hosts(hosts):
-    results = []
-    for host in hosts:
+def request_runner_host(host):
         control = None
         if host.get('control') is not None:
             try:
@@ -181,8 +192,14 @@ def request_runner_hosts(hosts):
             result['dockerHost'] = host['dockerHost']
             result['service'] = host['control']
             result['control'] = control
-        results.append(result)
-    return results
+        return result
+
+
+def request_runner_hosts(hosts):
+    if not hosts:
+        return []
+    with ThreadPoolExecutor(max_workers=len(hosts)) as executor:
+        return list(executor.map(request_runner_host, hosts))
 
 
 def read_runner_source(fetch_runner_hosts):
@@ -190,6 +207,46 @@ def read_runner_source(fetch_runner_hosts):
         return {'_tag': 'Available', 'hosts': fetch_runner_hosts()}
     except Exception as caught:
         return {'_tag': 'Unavailable', 'message': str(caught)}
+
+
+def merge_runner_source(previous, current, now=None):
+    now = time.monotonic() if now is None else now
+    if current['_tag'] == 'Unavailable':
+        if previous is None or previous['_tag'] != 'Available':
+            return current
+        return {
+            '_tag': 'Available',
+            'hosts': [{
+                **host,
+                'stale': {
+                    'message': current['message'],
+                    'observedAt': host.get('observedAt', now),
+                },
+            } for host in previous['hosts']],
+        }
+
+    previous_hosts = {
+        host['name']: host
+        for host in previous.get('hosts', [])
+    } if previous is not None and previous['_tag'] == 'Available' else {}
+    hosts = []
+    for host in current['hosts']:
+        if host['_tag'] == 'Available':
+            hosts.append({**host, 'observedAt': now})
+            continue
+        last_known = previous_hosts.get(host['name'])
+        if last_known is None or last_known['_tag'] != 'Available':
+            hosts.append(host)
+            continue
+        hosts.append({
+            **last_known,
+            **{key: value for key, value in host.items() if key in ('dockerHost', 'service', 'control')},
+            'stale': {
+                'message': host['message'],
+                'observedAt': last_known.get('observedAt', now),
+            },
+        })
+    return {'_tag': 'Available', 'hosts': hosts}
 
 
 WORKFLOW_RUNS_PAGE_SIZE = 50
@@ -239,9 +296,9 @@ def request_run_jobs(repository, run_id):
 
 
 def request_workflow_jobs(repositories, on_error=None):
-    jobs = []
-    for repository in repositories:
+    def request_repository(repository):
         try:
+            jobs = []
             for status in ('queued', 'in_progress'):
                 page = 1
                 while True:
@@ -256,9 +313,19 @@ def request_workflow_jobs(repositories, on_error=None):
                     if len(runs) < WORKFLOW_RUNS_PAGE_SIZE:
                         break
                     page += 1
+            return jobs, None
         except Exception as caught:
-            if on_error is not None:
-                on_error(f'{repository} · Jobs unavailable · {caught}')
+            return [], f'{repository} · Jobs unavailable · {caught}'
+
+    if not repositories:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(repositories))) as executor:
+        results = list(executor.map(request_repository, repositories))
+    jobs = []
+    for repository_jobs, error in results:
+        jobs.extend(repository_jobs)
+        if error is not None and on_error is not None:
+            on_error(error)
     return jobs
 
 
@@ -333,11 +400,15 @@ def github_actions_status_label(runners, error):
     return ' · '.join((f'{marker} {counted(len(runners), "self-hosted runner")}', *states))
 
 
-def runner_host_status_label(host):
+def runner_host_status_label(host, now=None):
     if host['_tag'] == 'Unavailable':
         return f"🔴 {host['name']} · unavailable · {host['message'][:100]}"
     status = github_actions_status_label(host['runners'], None)
     marker, detail = status.split(' ', 1)
+    if host.get('stale') is not None:
+        now = time.monotonic() if now is None else now
+        age = max(0, int(now - host['stale']['observedAt']))
+        return f"🟠 {host['name']} · last known status {age}s old · {detail}"
     return f"{marker} {host['name']} · {detail}"
 
 
@@ -526,15 +597,17 @@ def main():
     refreshing = {'active': False}
     pending_action = {'value': None}
     jobs_cache = {'source': {'_tag': 'Loading'}, 'updatedAt': 0.0}
+    runner_cache = {'source': None}
 
-    def apply_state(source, jobs_source, action_error):
-        refreshing['active'] = False
+    def apply_state(source, jobs_source, action_error, complete=True):
+        if complete:
+            refreshing['active'] = False
         label, title = indicator_summary(source)
         indicator.set_label(label, '🟢 99')
         indicator.set_icon_full(str(RUNNER_ICON), 'GitHub Actions')
         indicator.set_title(title)
         build_menu(indicator, source, jobs_source, action_error, manual_refresh, change_host_capacity)
-        if pending_action['value'] is not None:
+        if complete and pending_action['value'] is not None:
             refresh()
         return False
 
@@ -548,7 +621,9 @@ def main():
             except Exception as caught:
                 action_error = f"{action['host']['name']} · Action required · {caught}"
 
-        source = read_runner_source(lambda: request_runner_hosts(runner_hosts))
+        current_source = read_runner_source(lambda: request_runner_hosts(runner_hosts))
+        source = merge_runner_source(runner_cache['source'], current_source)
+        runner_cache['source'] = source
         repositories = list(configured_repositories)
         for runner in source_runners(source):
             repository = runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository')
@@ -556,6 +631,7 @@ def main():
                 repositories.append(repository)
         stale = time.monotonic() - jobs_cache['updatedAt'] >= JOBS_REFRESH_SECONDS
         if stale:
+            GLib.idle_add(apply_state, source, jobs_cache['source'], action_error, False)
             errors = []
             jobs = request_workflow_jobs(repositories, errors.append)
             jobs_cache['source'] = (
@@ -564,7 +640,7 @@ def main():
                 else {'_tag': 'Available', 'jobs': jobs, 'errors': errors}
             )
             jobs_cache['updatedAt'] = time.monotonic()
-        GLib.idle_add(apply_state, source, jobs_cache['source'], action_error)
+        GLib.idle_add(apply_state, source, jobs_cache['source'], action_error, True)
 
     def refresh(*_args):
         if refreshing['active']:

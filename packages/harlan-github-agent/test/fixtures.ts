@@ -19,6 +19,7 @@ export function repositoryMapping(overrides: Partial<RepositoryMapping> = {}): R
     writablePullRequestAuthors: ['harlan-zw'],
     writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/'],
     issueWork: true,
+    maxOpenPullRequests: null,
     pullRequestReview: true,
     pullRequestConformance: true,
     conflictResolution: true,

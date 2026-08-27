@@ -30,6 +30,8 @@ export interface RepositoryMapping {
   writablePullRequestAuthors: string[]
   writablePullRequestHeadPrefixes: string[]
   issueWork: boolean
+  /** New issue work stops when this repository reaches the limit. */
+  maxOpenPullRequests: number | null
   pullRequestReview: boolean
   pullRequestConformance: boolean
   conflictResolution: boolean
@@ -61,7 +63,7 @@ export interface AgentConfig {
   trustedCheckoutRoots: string[]
   mutationsEnabled: boolean
   autoMerge: AutoMergePolicy
-  /** New issue work stops above this many open pull requests waiting on Harlan. */
+  /** New issue work stops when open pull requests reach this limit. */
   maxOpenPullRequests: number
   pollIntervalSeconds: number
   issueCutoff: string
@@ -812,7 +814,7 @@ export interface DashboardSnapshot {
   selectionMode: SelectionMode
   /** Open pull requests across every enabled repository. */
   openPullRequests: number
-  /** Issue work stops above this many open pull requests. */
+  /** Issue work stops when open pull requests reach this limit. */
   maxOpenPullRequests: number
   agentProfile: AgentProfile
   agentSelection: AgentSelection

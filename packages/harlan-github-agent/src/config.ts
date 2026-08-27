@@ -179,6 +179,15 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
   const writablePullRequestAuthors = stringArray(value, 'writable_pr_authors', path, issues)
   const writablePullRequestHeadPrefixes = stringArray(value, 'writable_pr_head_prefixes', path, issues)
   const issueWork = requiredBoolean(value, 'issue_work', path, issues)
+  const openPullRequestsValue = value.max_open_pull_requests
+  const maxOpenPullRequests = openPullRequestsValue === undefined
+    ? null
+    : typeof openPullRequestsValue === 'number'
+      && Number.isInteger(openPullRequestsValue)
+      && openPullRequestsValue >= 1
+      && openPullRequestsValue <= 100
+      ? openPullRequestsValue
+      : undefined
   const pullRequestReview = requiredBoolean(value, 'pr_review', path, issues)
   const pullRequestConformance = requiredBoolean(value, 'pr_conformance', path, issues)
   const conflictResolution = requiredBoolean(value, 'conflict_resolution', path, issues)
@@ -202,6 +211,8 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     issues.push({ path: `${path}.conflict_resolution`, message: 'Conflict resolution requires an owned repository.' })
   if (conflictResolution === true && pullRequestReview !== true)
     issues.push({ path: `${path}.conflict_resolution`, message: 'Conflict resolution requires pull request review.' })
+  if (maxOpenPullRequests === undefined)
+    issues.push({ path: `${path}.max_open_pull_requests`, message: 'Expected an integer from 1 to 100.' })
 
   if (
     github === undefined
@@ -212,6 +223,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     || writablePullRequestAuthors === undefined
     || writablePullRequestHeadPrefixes === undefined
     || issueWork === undefined
+    || maxOpenPullRequests === undefined
     || pullRequestReview === undefined
     || pullRequestConformance === undefined
     || conflictResolution === undefined
@@ -230,6 +242,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     writablePullRequestAuthors,
     writablePullRequestHeadPrefixes,
     issueWork,
+    maxOpenPullRequests,
     pullRequestReview,
     pullRequestConformance,
     conflictResolution,
