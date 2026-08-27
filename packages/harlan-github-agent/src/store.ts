@@ -19,6 +19,7 @@ import type {
   ClaimedPublicationCommand,
   ClaimedReviewFixTask,
   ClaimedReviewStatusCommand,
+  ClaimedRoutineRun,
   ConflictResolutionTask,
   DashboardAgent,
   DashboardSnapshot,
@@ -557,6 +558,10 @@ export interface JournalStore {
   listRoutineRuns: (routineId: string, limit?: number) => RoutineRun[]
   recordCandidates: (input: { routineId: string, runId: string, candidates: ReadonlyArray<Omit<Candidate, 'id' | 'routineId' | 'runId' | 'result' | 'createdAt' | 'updatedAt'>>, at: string }) => Candidate[]
   listCandidates: (routineId: string) => Candidate[]
+  claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
+  heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
+  completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
+  failRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   closeMissingItems: (github: string, seen: Array<{ kind: GitHubItem['kind'], number: number }>, observedAt: string) => number
   completeTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -8002,6 +8007,136 @@ export function openJournalStore(
     (database.prepare('SELECT * FROM candidates WHERE routine_id = ? ORDER BY created_at').all(routineId) as unknown as CandidateRow[])
       .map(readCandidate)
 
+  /**
+   * Returns a Running Routine run whose lease expired to the queue.
+   *
+   * A crash leaves a run Running with nobody holding it. Without this the run
+   * would sit leased to a dead process until its instant passed for good, and
+   * the unique constraint on the instant means no replacement could open.
+   */
+  const recoverExpiredRoutineRuns = (now: string): void => {
+    database.prepare(`
+      UPDATE routine_runs
+      SET state_tag = 'Queued', worker_id = NULL, lease_expires_at = NULL,
+        fence = fence + 1, updated_at = ?
+      WHERE state_tag = 'Running' AND lease_expires_at <= ?
+    `).run(now, now)
+  }
+
+  const claimNextRoutineRun: JournalStore['claimNextRoutineRun'] = (workerId, now, leaseMilliseconds) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      recoverExpiredRoutineRuns(now)
+      const row = database.prepare(`
+        SELECT
+          routine_runs.id,
+          routine_runs.routine_id,
+          routine_runs.scheduled_for,
+          routine_runs.spec_sha,
+          routine_runs.fence,
+          routine_runs.attempts,
+          routines.repository,
+          routines.name,
+          routines.mode,
+          repositories.policy_json
+        FROM routine_runs
+        JOIN routines ON routines.id = routine_runs.routine_id
+        JOIN repositories ON repositories.github = routines.repository
+        WHERE routine_runs.state_tag = 'Queued'
+          AND routines.enabled = 1
+          AND repositories.enabled = 1
+        ORDER BY routine_runs.scheduled_for
+        LIMIT 1
+      `).get() as unknown as {
+        id: string
+        routine_id: string
+        scheduled_for: string
+        spec_sha: string
+        fence: number
+        attempts: number
+        repository: string
+        name: string
+        mode: string
+        policy_json: string
+      } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return null
+      }
+
+      const fence = row.fence + 1
+      const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()
+      const claimed = database.prepare(`
+        UPDATE routine_runs
+        SET state_tag = 'Running', worker_id = ?, lease_expires_at = ?, fence = ?,
+          attempts = attempts + 1, updated_at = ?
+        WHERE id = ? AND state_tag = 'Queued' AND fence = ?
+      `).run(workerId, leaseExpiresAt, fence, now, row.id, row.fence).changes === 1
+      if (!claimed) {
+        database.exec('COMMIT')
+        return null
+      }
+      database.exec('COMMIT')
+      return {
+        id: row.id,
+        routineId: row.routine_id,
+        repository: row.repository,
+        repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
+        name: row.name as ClaimedRoutineRun['name'],
+        mode: row.mode as ClaimedRoutineRun['mode'],
+        scheduledFor: row.scheduled_for,
+        specSha: row.spec_sha,
+        attempts: row.attempts + 1,
+        state: { _tag: 'Running', fence, workerId, leaseExpiresAt },
+      }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const heartbeatRoutineRun: JournalStore['heartbeatRoutineRun'] = (input) => {
+    const leaseExpiresAt = new Date(new Date(input.at).getTime() + input.leaseMilliseconds).toISOString()
+    return database.prepare(`
+      UPDATE routine_runs SET lease_expires_at = ?
+      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+        AND lease_expires_at > ?
+    `).run(leaseExpiresAt, input.taskId, input.workerId, input.fence, input.at).changes === 1
+  }
+
+  const completeRoutineRun: JournalStore['completeRoutineRun'] = input =>
+    database.prepare(`
+      UPDATE routine_runs
+      SET state_tag = 'Completed', evidence = ?, reason = NULL, worker_id = NULL,
+        lease_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+        AND lease_expires_at > ?
+    `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at).changes === 1
+
+  /**
+   * Records one failed Routine run, retrying it until its attempts run out.
+   *
+   * A retry returns the run to the queue at the same instant. The unique
+   * constraint on that instant still holds, so retrying can never fan one
+   * missed morning out into several runs.
+   */
+  const failRoutineRun: JournalStore['failRoutineRun'] = (input) => {
+    const row = database.prepare('SELECT attempts, max_attempts FROM routine_runs WHERE id = ?')
+      .get(input.taskId) as unknown as { attempts: number, max_attempts: number } | undefined
+    if (row === undefined)
+      return 'Rejected'
+    const retrying = row.attempts < row.max_attempts
+    const changed = database.prepare(`
+      UPDATE routine_runs
+      SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+    `).run(retrying ? 'Queued' : 'Failed', input.reason, input.at, input.taskId, input.workerId, input.fence).changes === 1
+    if (!changed)
+      return 'Rejected'
+    return retrying ? 'Retrying' : 'Failed'
+  }
+
   return {
     approveIssueWork,
     syncRoutines,
@@ -8011,6 +8146,10 @@ export function openJournalStore(
     listRoutineRuns,
     recordCandidates,
     listCandidates,
+    claimNextRoutineRun,
+    heartbeatRoutineRun,
+    completeRoutineRun,
+    failRoutineRun,
     isIssueWorkApprovalReady,
     listOpenAgentPullRequests,
     listActiveTaskLeases,

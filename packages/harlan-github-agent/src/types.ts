@@ -552,6 +552,30 @@ export type CandidateResult
     | { _tag: 'Rejected', reason: string }
     | { _tag: 'Superseded', reason: string }
 
+/**
+ * One Routine run a worker has leased.
+ *
+ * The shape matches every other claimed task, so one worktree helper and one
+ * scheduler answer Routines without a second code path.
+ */
+export interface ClaimedRoutineRun {
+  id: string
+  routineId: string
+  repository: string
+  repositoryMapping: RepositoryMapping
+  name: RoutineName
+  mode: RoutineMode
+  scheduledFor: string
+  specSha: string
+  attempts: number
+  state: {
+    _tag: 'Running'
+    fence: number
+    workerId: string
+    leaseExpiresAt: string
+  }
+}
+
 /** One proposed change a Routine run found, before any edit. */
 export interface Candidate {
   id: string

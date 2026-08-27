@@ -1,9 +1,19 @@
 import type { AgentPermitPool } from './agent-permit-pool.ts'
 import type { Result } from './result.ts'
-import type { ClaimedAgentTask } from './types.ts'
 import { err } from './result.ts'
+/**
+ * The least a scheduler needs to lease one unit of work.
+ *
+ * Routines are not Items, so they have no subject and no revision. Naming the
+ * lease alone lets Routine runs and Item Tasks share one scheduler instead of
+ * growing a second copy of the lease, heartbeat, and settle logic.
+ */
+export interface LeasedWork {
+  id: string
+  state: { fence: number }
+}
 
-export interface ItemAgent<Task extends ClaimedAgentTask> {
+export interface ItemAgent<Task extends LeasedWork> {
   run: (task: Task, signal: AbortSignal) => Promise<Result<{ evidence: string }, string>>
 }
 
@@ -13,7 +23,7 @@ export interface WorkerTaskScheduler {
   stop: () => Promise<void>
 }
 
-export interface WorkerTaskSchedulerOptions<Task extends ClaimedAgentTask> {
+export interface WorkerTaskSchedulerOptions<Task extends LeasedWork> {
   canClaim?: () => boolean
   claim: (workerId: string, now: string, leaseMilliseconds: number) => Task | null
   complete: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -30,7 +40,7 @@ export interface WorkerTaskSchedulerOptions<Task extends ClaimedAgentTask> {
   workerId: string
 }
 
-export function createWorkerTaskScheduler<Task extends ClaimedAgentTask>(options: WorkerTaskSchedulerOptions<Task>): WorkerTaskScheduler {
+export function createWorkerTaskScheduler<Task extends LeasedWork>(options: WorkerTaskSchedulerOptions<Task>): WorkerTaskScheduler {
   let stopped = true
   let timer: NodeJS.Timeout | undefined
   let controller: AbortController | undefined
