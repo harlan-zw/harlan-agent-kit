@@ -123,6 +123,50 @@ describe('who owns one Publication command', () => {
     }
   })
 
+  it('removes a Routine whose run owns a Publication command', () => {
+    const path = join(directory, 'state.sqlite')
+    const store = openJournalStore(path)
+    store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'pr-triage', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+      at: '2026-08-27T00:00:00.000Z',
+    })
+    const run = store.openRoutineRun({
+      routineId: 'harlan-zw/example:pr-triage',
+      scheduledFor: '2026-08-27T07:00:00.000Z',
+      specSha: 'abc123',
+      at: '2026-08-27T07:00:05.000Z',
+    })
+    store.close()
+
+    const database = new DatabaseSync(path)
+    database.exec('PRAGMA foreign_keys = ON')
+    try {
+      database
+        .prepare(`INSERT INTO publication_commands (${columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(...values(null, run?.id ?? '') as never[])
+    }
+    finally {
+      database.close()
+    }
+
+    const reopened = openJournalStore(path)
+    try {
+      const routines = reopened.syncRoutines({
+        repository: 'harlan-zw/example',
+        specSha: 'def456',
+        entries: [],
+        at: '2026-08-27T08:00:00.000Z',
+      })
+
+      expect(routines).toEqual([])
+    }
+    finally {
+      reopened.close()
+    }
+  })
+
   it('keeps one live command per Routine run', () => {
     const path = join(directory, 'state.sqlite')
     const store = openJournalStore(path)

@@ -7829,7 +7829,10 @@ export function openJournalStore(
    *
    * A Routine the spec dropped is deleted, and its runs and Candidates go with
    * it through the cascade. Leaving them would let a Routine nobody declares
-   * keep answering a clock.
+   * keep answering a clock. Its Publications go too: the routine_runs foreign
+   * key on publication_commands has no cascade of its own, so a command left
+   * behind would wedge this delete forever, on every tick after a normal
+   * spec-file removal.
    *
    * `last_run_at` survives a rewrite. A schedule edit must not make every past
    * instant look unrun, which would fire a catch-up run on the next tick.
@@ -7850,6 +7853,21 @@ export function openJournalStore(
     try {
       const declared = input.entries.map(entry => `${input.repository}:${entry.name}`)
       const placeholders = declared.map(() => '?').join(', ')
+      const dropping = declared.length === 0
+        ? 'SELECT id FROM routines WHERE repository = ?'
+        : `SELECT id FROM routines WHERE repository = ? AND id NOT IN (${placeholders})`
+      database.prepare(`
+        DELETE FROM publication_events WHERE command_id IN (
+          SELECT publication_commands.id FROM publication_commands
+          JOIN routine_runs ON routine_runs.id = publication_commands.routine_run_id
+          WHERE routine_runs.routine_id IN (${dropping})
+        )
+      `).run(input.repository, ...declared)
+      database.prepare(`
+        DELETE FROM publication_commands WHERE routine_run_id IN (
+          SELECT id FROM routine_runs WHERE routine_id IN (${dropping})
+        )
+      `).run(input.repository, ...declared)
       database.prepare(
         `DELETE FROM routines WHERE repository = ?${declared.length === 0 ? '' : ` AND id NOT IN (${placeholders})`}`,
       ).run(input.repository, ...declared)
