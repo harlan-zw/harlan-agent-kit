@@ -209,7 +209,7 @@ git push -u origin HEAD
 
 **If PR exists** -> update it:
 ```bash
-gh pr edit NUMBER --title "TITLE" --body "$(cat <<'EOF'
+HARLAN_AGENT_PR_SKILL=1 gh pr edit NUMBER --title "TITLE" --body "$(cat <<'EOF'
 BODY
 EOF
 )"
@@ -217,7 +217,7 @@ EOF
 
 **If no PR** -> create it:
 ```bash
-gh pr create --title "TITLE" --body "$(cat <<'EOF'
+HARLAN_AGENT_PR_SKILL=1 gh pr create --title "TITLE" --body "$(cat <<'EOF'
 BODY
 EOF
 )"

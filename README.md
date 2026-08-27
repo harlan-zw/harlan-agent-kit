@@ -77,7 +77,8 @@ codex plugin add harlan-agent-kit@personal
 Validate before reinstalling:
 
 ```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ~/plugins/harlan-agent-kit
+claude plugin validate ~/plugins/harlan-agent-kit
+jq empty ~/plugins/harlan-agent-kit/hooks/codex.json
 codex plugin add harlan-agent-kit@personal
 ```
 
@@ -85,14 +86,15 @@ Start a new Codex thread after reinstalling so newly installed skills are loaded
 
 ## Hooks
 
-Claude Code loads hooks from `.claude-plugin/plugin.json`. Codex currently uses
-the skills only; the Claude hook config is not portable to Codex as-is.
+Claude Code loads hooks from `.claude-plugin/plugin.json`. Codex loads its hook
+config from `hooks/codex.json` through `.codex-plugin/plugin.json`.
 
 | Event | Hook | Description |
 |-------|------|-------------|
 | SessionStart | `session-start.sh` | Detect project type, show git status |
 | PreToolUse | `merged-branch-guard.sh` | Block commits on merged branches |
 | PreToolUse | `pnpm-only.sh` | Block npm/yarn commands |
+| PreToolUse | `pr-skill-only.sh` | Require the PR skill for creation and description changes |
 | PreToolUse | `wt-only.sh` | Keep worktrees under `wt` and off `.claude/worktrees` |
 | PreToolUse | `pre-commit-push.sh` | Run lint/typecheck/test before commit/push |
 | PostToolUse | `eslint.sh` | Auto-lint + fix after file changes |

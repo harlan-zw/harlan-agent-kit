@@ -13,6 +13,7 @@
     "workflow"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks/codex.json",
   "interface": {
     "displayName": "Harlan Agent Kit",
     "shortDescription": "Nuxt, Vue, TypeScript, release, PR, and writing workflow skills.",
