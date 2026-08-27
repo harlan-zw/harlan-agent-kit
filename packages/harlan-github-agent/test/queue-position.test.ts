@@ -130,7 +130,7 @@ describe('listQueuedReviewStatuses', () => {
     const second = queuedRepair(store, 25, '2026-08-13T02:00:00.000Z')
 
     expect(store.listQueuedReviewStatuses()).toEqual([
-      expect.objectContaining({ pullRequestNumber: 24, queue: { _tag: 'Waiting', position: 1, total: 2 }, commentId: first.commentId, publishedBody: first.body }),
+      expect.objectContaining({ pullRequestNumber: 24, queue: { _tag: 'Waiting', position: 1, total: 2 }, verdict: { _tag: 'Answered' }, commentId: first.commentId, publishedBody: first.body }),
       expect.objectContaining({ pullRequestNumber: 25, queue: { _tag: 'Waiting', position: 2, total: 2 }, commentId: second.commentId, publishedBody: second.body }),
     ])
   })
@@ -342,6 +342,9 @@ describe('listQueuedReviewStatuses across revisions', () => {
         pullRequestNumber: 24,
         headSha: 'repaired24',
         queue: { _tag: 'Waiting', position: 1, total: 1 },
+        // No Review has read this head, so the verdict on the pull request is
+        // still the one its previous head earned.
+        verdict: { _tag: 'Unanswered' },
         commentId: review.commentId,
         publishedBody: progress,
       }),

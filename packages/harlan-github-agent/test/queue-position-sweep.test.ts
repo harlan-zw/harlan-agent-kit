@@ -13,6 +13,7 @@ function queuedRepair(overrides: Partial<QueuedReviewStatus> = {}): QueuedReview
     revisionId: 'revision-1',
     headSha: 'abc123',
     queue: { _tag: 'Waiting', position: 3, total: 7 },
+    verdict: { _tag: 'Answered' },
     commentId: 42,
     publishedBody: '### 🤖 REVIEWING · Repair queued',
     ...overrides,
@@ -86,6 +87,7 @@ describe('publishQueuePositions', () => {
 
     await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: async () => {
           active += 1
           maximumActive = Math.max(maximumActive, active)
@@ -112,6 +114,7 @@ describe('publishQueuePositions', () => {
     let recorded: { taskId: string, body: string } | undefined
     const results = await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
           edited = { commentId, body }
@@ -142,6 +145,7 @@ describe('publishQueuePositions', () => {
     const unchanged = queuedRepair()
     const results = await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(err('Unexpected snapshot read.')),
         editReviewStatus: () => {
           writes += 1
@@ -161,10 +165,57 @@ describe('publishQueuePositions', () => {
     expect(writes).toBe(0)
   })
 
+  it('takes the verdict off a head no Review has answered for', async () => {
+    const cleared: number[] = []
+    await publishQueuePositions({
+      github: {
+        clearReviewOutcome: (_repository, pullRequestNumber) => {
+          cleared.push(pullRequestNumber)
+          return Promise.resolve(ok(undefined))
+        },
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        isQueuedReviewStatus: () => true,
+        listQueuedReviewStatuses: () => [queuedRepair({ verdict: { _tag: 'Unanswered' } })],
+        recordQueuedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(cleared).toEqual([24])
+  })
+
+  it('keeps the verdict a Review reached for this head, which the queued Repair is fixing', async () => {
+    let cleared = 0
+    await publishQueuePositions({
+      github: {
+        clearReviewOutcome: () => {
+          cleared += 1
+          return Promise.resolve(ok(undefined))
+        },
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        isQueuedReviewStatus: () => true,
+        listQueuedReviewStatuses: () => [queuedRepair({ verdict: { _tag: 'Answered' } })],
+        recordQueuedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(cleared).toBe(0)
+  })
+
   it('writes nothing when a person deleted the comment, rather than posting it again', async () => {
     let recorded = 0
     const results = await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
       },
@@ -188,6 +239,7 @@ describe('publishQueuePositions', () => {
     let writes = 0
     const results = await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({ headSha: 'def456' })),
         editReviewStatus: () => {
           writes += 1
@@ -214,6 +266,7 @@ describe('publishQueuePositions', () => {
     let writes = 0
     const results = await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: () => {
           writes += 1
@@ -238,6 +291,7 @@ describe('publishQueuePositions', () => {
     let expected: string | undefined
     await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: (_repository, _number, _commentId, expectedBody) => {
           expected = expectedBody
@@ -260,6 +314,7 @@ describe('publishQueuePositions', () => {
     let recorded = 0
     const results = await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         // The claimed agent published its own progress, so GitHub no longer
         // holds the body the Queue read saw and the swap declines.
@@ -286,6 +341,7 @@ describe('publishQueuePositions', () => {
     let recorded = 0
     const results = await publishQueuePositions({
       github: {
+        clearReviewOutcome: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: () => new Promise((resolve) => {
           // The claim lands while the comment edit is in flight.
