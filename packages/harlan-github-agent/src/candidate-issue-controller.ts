@@ -9,6 +9,30 @@ export function routineIssueLabel(name: ClaimedRoutineRun['name']): string {
   return `routine:${name}`
 }
 
+const routineLabelPrefix = 'routine:'
+
+/** Whether one label names an issue a Routine filed, whatever the Routine is. */
+export function hasRoutineIssueLabel(labels: readonly string[]): boolean {
+  return labels.some(label => label.toLowerCase().startsWith(routineLabelPrefix))
+}
+
+/**
+ * The hidden marker that matches one Candidate's issue, before and after
+ * GitHub holds it. A controller that loses the reply to its own write finds
+ * the issue again by this marker instead of filing the proposal twice.
+ */
+export function candidateFingerprintMarker(fingerprint: string): string {
+  return `<!-- candidate-fingerprint: ${fingerprint} -->`
+}
+
+// GitHub refuses a title longer than 256 characters and a body longer than
+// 65536. The claim repeats inside both, so it is capped once, at staging.
+const maximumClaimLength = 20_000
+
+function displayableClaim(claim: string): string {
+  return claim.length <= maximumClaimLength ? claim : `${claim.slice(0, maximumClaimLength)}…`
+}
+
 /**
  * Writes the issue one Candidate proposes.
  *
@@ -27,7 +51,7 @@ export function candidateIssueBody(candidate: Candidate, routine: ClaimedRoutine
 Estimated to change ${candidate.estimatedChangedFiles} ${candidate.estimatedChangedFiles === 1 ? 'file' : 'files'}.
 
 <!-- harlan-agent-kit:routine ${routine.name} -->
-<!-- candidate-fingerprint: ${candidate.fingerprint} -->
+${candidateFingerprintMarker(candidate.fingerprint)}
 
 > The ${routine.name} routine opened this issue automatically on its ${routine.scheduledFor} run. It is not Harlan's own report. Close it to reject the proposal, and the reason you give stops it being offered again.`
 }
@@ -37,14 +61,17 @@ export function candidateIssueCommands(
   candidates: readonly Candidate[],
   routine: ClaimedRoutineRun,
 ): CandidateIssueCommand[] {
-  return candidates.map(candidate => ({
-    id: `${candidate.id}:issue`,
-    candidateId: candidate.id,
-    repository: routine.repository,
-    routineName: routine.name,
-    title: `${routine.name}: ${candidate.claim}`,
-    body: candidateIssueBody(candidate, routine),
-  }))
+  return candidates.map((candidate) => {
+    const claim = displayableClaim(candidate.claim)
+    return {
+      id: `${candidate.id}:issue`,
+      candidateId: candidate.id,
+      repository: routine.repository,
+      routineName: routine.name,
+      title: `${routine.name}: ${claim}`.slice(0, 256),
+      body: candidateIssueBody({ ...candidate, claim }, routine),
+    }
+  })
 }
 
 export interface CandidateIssueControllerOptions {
@@ -85,6 +112,26 @@ export function createCandidateIssueController(options: CandidateIssueController
         if (command === null)
           return results
 
+        // GitHub may have accepted a write whose reply was lost. Finding the
+        // issue by its fingerprint marker first keeps one proposal at one
+        // issue, however often the pass before this one crashed mid flight.
+        const existing = await options.github.findOpenIssueByFingerprint({
+          repository: command.repositoryMapping,
+          fingerprint: command.fingerprint,
+        }, signal)
+        if (existing._tag === 'Ok' && existing.value !== null) {
+          options.store.completeCandidateIssue({
+            commandId: command.id,
+            workerId: command.workerId,
+            fence: command.fence,
+            at: options.now().toISOString(),
+            issueNumber: existing.value.number,
+            url: existing.value.url,
+          })
+          results.push(ok({ repository: command.repository, issueNumber: existing.value.number }))
+          continue
+        }
+
         const created = await options.github.createIssue({
           repository: command.repositoryMapping,
           title: command.title,
@@ -104,7 +151,10 @@ export function createCandidateIssueController(options: CandidateIssueController
             })
             results.push(err(`${command.repository}: ${created.error.message}`))
           }
-          continue
+          // A refusal usually comes from GitHub itself, so the rest of the
+          // pass would only spend the attempt budget on the same answer. One
+          // try per command per pass backs the next one off naturally.
+          return results
         }
 
         options.store.completeCandidateIssue({

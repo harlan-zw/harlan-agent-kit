@@ -2263,7 +2263,7 @@ function githubSubjectFromRow(row: SubjectRow): GitHubItem {
   }
 
   if (row.kind === 'issue')
-    return { ...base, kind: 'issue', approvalLabels: [] }
+    return { ...base, kind: 'issue', approvalLabels: [], routineFiled: false }
 
   if (row.draft === null || row.base_sha === null || row.head_sha === null || row.head_repository === null || row.head_ref === null || row.merge_state === null)
     throw new Error(`Pull request ${row.repository}#${row.github_number} has incomplete state.`)
@@ -4785,6 +4785,7 @@ export function openJournalStore(
         ? {
             kind: 'issue',
             approvalLabels: [],
+            routineFiled: false,
             repository: current.repository,
             number: current.number,
             state: 'closed',
@@ -8352,9 +8353,12 @@ export function openJournalStore(
           candidate_issue_commands.routine_name,
           candidate_issue_commands.title,
           candidate_issue_commands.body,
+          candidate_issue_commands.reason,
+          candidates.fingerprint,
           candidate_issue_commands.fence,
           repositories.policy_json
         FROM candidate_issue_commands
+        JOIN candidates ON candidates.id = candidate_issue_commands.candidate_id
         JOIN repositories ON repositories.github = candidate_issue_commands.repository
         WHERE candidate_issue_commands.state_tag = 'Pending'
           AND repositories.enabled = 1
@@ -8368,6 +8372,8 @@ export function openJournalStore(
         routine_name: string
         title: string
         body: string
+        reason: string | null
+        fingerprint: string
         fence: number
         policy_json: string
       } | undefined
@@ -8395,6 +8401,8 @@ export function openJournalStore(
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
         title: row.title,
         body: row.body,
+        fingerprint: row.fingerprint,
+        reason: row.reason,
         fence,
         workerId,
       }
@@ -8424,17 +8432,20 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * Records one refused filing, and leaves the command recoverable.
+   *
+   * A refusal is GitHub answering, not the proposal dying. Every attempt is
+   * one create whose answer may change, so the command returns to Pending
+   * with its reason kept, and the next pass tries again. Failed stays
+   * reserved for dead letters a person has to act on.
+   */
   const failCandidateIssue: JournalStore['failCandidateIssue'] = (input) => {
-    const row = database.prepare('SELECT attempts, max_attempts FROM candidate_issue_commands WHERE id = ?')
-      .get(input.commandId) as unknown as { attempts: number, max_attempts: number } | undefined
-    if (row === undefined)
-      return false
-    const retrying = row.attempts < row.max_attempts
     return database.prepare(`
       UPDATE candidate_issue_commands
-      SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+      SET state_tag = 'Pending', reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
       WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-    `).run(retrying ? 'Pending' : 'Failed', input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+    `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
   }
 
   return {

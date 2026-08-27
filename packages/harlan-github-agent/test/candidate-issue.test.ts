@@ -66,6 +66,7 @@ function seed(store: ReturnType<typeof openJournalStore>): void {
 
 function publisher(calls: Array<{ title: string, labels?: readonly string[] }>): GitHubIssuePublisher {
   return {
+    findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
     createIssue: async (input) => {
       calls.push({ title: input.title, ...(input.labels === undefined ? {} : { labels: input.labels }) })
       return ok({ number: 100 + calls.length, url: `https://github.com/harlan-zw/example/issues/${100 + calls.length}` })
@@ -95,6 +96,16 @@ describe('writing the issue a Candidate proposes', () => {
 
   it('labels every routine issue by its routine', () => {
     expect(routineIssueLabel('sentry-checkin')).toBe('routine:sentry-checkin')
+  })
+
+  it('caps the title and body so GitHub accepts them', () => {
+    const wordy: Candidate = { ...candidate, claim: `never called. ${'word '.repeat(20_000)}` }
+    const [command] = candidateIssueCommands([wordy], routine)
+    if (command === undefined)
+      throw new Error('one command per Candidate')
+
+    expect(command.title.length).toBeLessThanOrEqual(256)
+    expect(command.body.length).toBeLessThanOrEqual(65_536)
   })
 
   it('names one command per Candidate', () => {
@@ -193,6 +204,7 @@ describe('filing the issues Candidates propose', () => {
         at: now().toISOString(),
       })
       const refusing = {
+        findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
         createIssue: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
       }
       const controller = createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })
@@ -208,6 +220,63 @@ describe('filing the issues Candidates propose', () => {
 
       expect(failed[0]?._tag).toBe('Err')
       expect(retried[0]).toMatchObject({ _tag: 'Ok' })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('adopts the issue an ambiguous create already filed', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      let ghost: { number: number, url: string } | null = null
+      let created = 0
+      const ambiguous = {
+        findOpenIssueByFingerprint: () => Promise.resolve(ok(ghost)),
+        createIssue: async () => {
+          created += 1
+          ghost = { number: 7, url: 'https://github.com/harlan-zw/example/issues/7' }
+          return { _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'The request timed out.' } }
+        },
+      }
+      const controller = createCandidateIssueController({ github: ambiguous, now, store, workerId: 'controller-1' })
+
+      await controller.publishPending(new AbortController().signal)
+      const results = await controller.publishPending(new AbortController().signal)
+
+      expect(created).toBe(1)
+      expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 7 } }])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps a refused proposal claimable however many passes refuse it', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      const refusing = {
+        findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+        createIssue: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
+      }
+      const controller = createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })
+      await controller.publishPending(new AbortController().signal)
+      await controller.publishPending(new AbortController().signal)
+
+      const claimed = store.claimNextCandidateIssue('controller-2', now().toISOString(), 60_000)
+
+      expect(claimed?.title).toBe('pr-triage: This helper is never called.')
+      expect(claimed?.reason).toBe('GitHub returned 502.')
     }
     finally {
       store.close()

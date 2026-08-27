@@ -32,6 +32,7 @@ export function issueItem(overrides: Partial<GitHubIssueItem> = {}): GitHubIssue
   return {
     kind: 'issue',
     approvalLabels: [],
+    routineFiled: false,
     repository: 'harlan-zw/example',
     number: 12,
     state: 'open',

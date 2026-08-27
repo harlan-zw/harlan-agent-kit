@@ -118,6 +118,13 @@ interface GitHubItemBase {
 export interface GitHubIssueItem extends GitHubItemBase {
   kind: 'issue'
   approvalLabels: PullRequestApprovalKind[]
+  /**
+   * True when a Routine filed this issue as one Candidate's proposal.
+   *
+   * An allowlist that lists only human authors would otherwise drop the issue
+   * again before triage ever read it, because the agent filed it.
+   */
+  routineFiled: boolean
 }
 
 export interface GitHubPullRequestItem extends GitHubItemBase {
@@ -507,6 +514,10 @@ export interface CandidateIssueCommand {
 /** One leased Candidate issue command, ready for the controller to file. */
 export interface ClaimedCandidateIssueCommand extends CandidateIssueCommand {
   repositoryMapping: RepositoryMapping
+  /** The Candidate's identity, used to find an issue a lost write already filed. */
+  fingerprint: string
+  /** Why the last attempt to file this command failed, or null when it never has. */
+  reason: string | null
   fence: number
   workerId: string
 }
