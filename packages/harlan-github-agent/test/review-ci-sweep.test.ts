@@ -100,7 +100,7 @@ function harness(options: {
           url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
         }))
       },
-      stampReviewOutcome: (_repository, _number, outcome) => {
+      stampAgentLabel: (_repository, _number, outcome) => {
         recorded.stamped.push(outcome)
         return Promise.resolve(ok(undefined))
       },
@@ -300,7 +300,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
-        stampReviewOutcome: (_repository, _number, outcome) => {
+        stampAgentLabel: (_repository, _number, outcome) => {
           stamped.push(outcome)
           return Promise.resolve(ok(undefined))
         },
@@ -374,7 +374,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
-        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
       },
       now: () => new Date('2026-08-27T11:15:00.000Z'),
       repositories: [repositoryMapping()],

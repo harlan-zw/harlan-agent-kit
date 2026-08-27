@@ -3869,6 +3869,35 @@ describe('journal store', () => {
       .toEqual(['attempt-current-head-pending'])
   })
 
+  it('names the item an agent is running on, and drops it once the task settles', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'running-label-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+
+    expect(store.listRunningTaskItems()).toEqual([])
+
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected the queued Review Task.')
+
+    expect(store.listRunningTaskItems()).toEqual([{ repository: 'harlan-zw/example', itemNumber: 24 }])
+
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:30.000Z',
+      evidence: 'review-run',
+    })
+
+    expect(store.listRunningTaskItems()).toEqual([])
+  })
+
   it('never overwrites an immutable review attempt', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

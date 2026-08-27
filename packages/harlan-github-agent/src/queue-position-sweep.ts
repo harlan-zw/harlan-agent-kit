@@ -56,7 +56,7 @@ Next: ${next}`
 }
 
 export interface QueuePositionSweepOptions {
-  github: Pick<GitHubAgentSource, 'clearReviewOutcome' | 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
+  github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
   store: Pick<JournalStore, 'isQueuedReviewStatus' | 'listQueuedReviewStatuses' | 'recordDeletedReviewComment' | 'recordQueuedReviewStatus'>
@@ -114,7 +114,7 @@ export async function publishQueuePositions(
     // This runs only on a pass that rewrites the comment, so a new head clears
     // the label once rather than every pass.
     if (status.verdict._tag === 'Unanswered') {
-      const cleared = await options.github.clearReviewOutcome(mapping, status.pullRequestNumber, signal)
+      const cleared = await options.github.clearAgentLabels(mapping, status.pullRequestNumber, signal)
       if (cleared._tag === 'Err')
         return err(`${status.repository}#${status.pullRequestNumber}: ${cleared.error}`)
     }
