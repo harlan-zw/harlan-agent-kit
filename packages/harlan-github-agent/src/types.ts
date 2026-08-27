@@ -309,8 +309,7 @@ export interface RecordReviewPublicationInput {
 }
 
 export type RecordReviewRunRejection
-  = | { _tag: 'ConfidenceRequiresReady' }
-    | { _tag: 'InvalidConfidence' }
+  = | { _tag: 'InvalidConfidence' }
     | { _tag: 'InvalidEvidenceDigest', label: string }
     | { _tag: 'OpenFindingRequiresBlocked' }
     | { _tag: 'ReviewApprovalRequired' }

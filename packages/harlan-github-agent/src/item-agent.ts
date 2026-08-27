@@ -622,6 +622,29 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
 }
 
 /**
+ * The gates a fresh CI read produces for a verdict the agent already reached.
+ *
+ * Every gate but `ci` answers for one head commit, so a finished Review keeps
+ * its own answer. The CI gate answers for a moment instead: a base branch whose
+ * deploy was still running when the Review ran turns green minutes later, and
+ * nothing in the pull request payload moves when it does. That left one healthy
+ * pull request reading PENDING for three hours on 2026-08-27, until an
+ * unrelated push to the default branch happened to start a second review.
+ *
+ * Recomputing this one gate settles the verdict with no second agent turn.
+ */
+export function regateReviewCi(
+  gates: ReviewGates,
+  snapshot: PullRequestReviewSnapshot,
+  mapping: RepositoryMapping,
+): { gates: ReviewGates, reportedChecks: string[] } {
+  const repairsBaseline = snapshot.pullRequest.purpose._tag === 'BaselineRepair'
+    || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
+  const ci = ciGate(snapshot, repairsBaseline)
+  return { gates: { ...gates, ci: ci.state }, reportedChecks: ci.reported }
+}
+
+/**
  * The Review outcome the gates justify.
  *
  * BLOCKED claims the review found something. So a review that never ran can
@@ -664,7 +687,7 @@ Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
 Next: merge or repair the marked Baseline repair pull request.`
 }
 
-function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
+export function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const reason = result === 'PENDING'
@@ -964,7 +987,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // A READY review whose every gate passed is a complete result. A missing
       // confidence number is a gap in the report, not a reason to discard the
       // review, so the comment omits the score instead.
-      const confidence = outcome === 'READY' && response.confidence !== null ? response.confidence : undefined
+      //
+      // The score is stored whatever the outcome, because it answers how sure
+      // the agent was, not whether the gates passed. A review that waits on CI
+      // keeps it, so the CI re-gate can publish it once the gate settles.
+      const reportedConfidence = response.confidence ?? undefined
+      const confidence = outcome === 'READY' ? reportedConfidence : undefined
       let findings: ReviewFinding[] = response.findings.map(finding => ({
         _tag: 'Open',
         summary: finding.summary,
@@ -995,7 +1023,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         completedAt,
         usage: turn.value.usage,
         gates,
-        ...(confidence === undefined ? {} : { confidence }),
+        ...(reportedConfidence === undefined ? {} : { confidence: reportedConfidence }),
         findings,
       })
       if (recorded._tag === 'Rejected')

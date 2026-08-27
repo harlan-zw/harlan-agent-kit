@@ -406,6 +406,57 @@ export interface StoppedReview {
   findings: ReviewFinding[]
 }
 
+/**
+ * A finished Review whose only unsettled gate is CI.
+ *
+ * The agent already answered for this head commit. Only the CI read can still
+ * change, so the sweep carries everything needed to restate the same verdict
+ * against a fresh one, without starting a second agent turn.
+ */
+export interface CiPendingReview {
+  reviewRunId: string
+  repository: string
+  pullRequestNumber: number
+  revisionId: string
+  headSha: string
+  provider: AgentProviderName | 'claude'
+  sessionId: string
+  model: string
+  agentVersion: string
+  skillDigest: string
+  startedAt: string
+  completedAt: string
+  usage: AgentTokenUsage
+  gates: ReviewGates
+  findings: ReviewFinding[]
+  /** The agent's own score, kept whatever the gates said. */
+  confidence: number | undefined
+  commentId: number
+  /** What the canonical comment holds now, so the edit can compare and swap. */
+  publishedBody: string
+}
+
+interface CiPendingReviewRow {
+  review_run_id: string
+  repository: string
+  github_number: number
+  revision_id: string
+  head_sha: string
+  provider: AgentProviderName | 'claude'
+  session_id: string
+  model: string
+  agent_version: string
+  skill_digest: string
+  started_at: string
+  completed_at: string
+  usage: string
+  gates: string
+  findings: string
+  confidence: number | null
+  github_comment_id: number
+  published_body: string
+}
+
 interface QueuedReviewStatusRow {
   task_id: string
   task_kind: 'adversarial_review' | 'review_fix'
@@ -614,6 +665,7 @@ export interface JournalStore {
    */
   listQueuedReviewStatuses: () => QueuedReviewStatus[]
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
+  listCiPendingReviews: () => CiPendingReview[]
   listStoppedReviews: () => StoppedReview[]
   /**
    * Records the Approval prompt comment, so a sweep can correct it later.
@@ -2122,8 +2174,6 @@ function reviewOutcome(input: RecordReviewRunInput): ReviewOutcome | { _tag: 'Re
     return { _tag: 'Rejected', reason: { _tag: 'InvalidEvidenceDigest', label: invalidEvidence.label } }
   if (input.findings.some(finding => finding._tag === 'Open') && tag !== 'Blocked')
     return { _tag: 'Rejected', reason: { _tag: 'OpenFindingRequiresBlocked' } }
-  if (tag !== 'Ready' && input.confidence !== undefined)
-    return { _tag: 'Rejected', reason: { _tag: 'ConfidenceRequiresReady' } }
   if (input.confidence !== undefined && (!Number.isInteger(input.confidence) || input.confidence < 0 || input.confidence > 100))
     return { _tag: 'Rejected', reason: { _tag: 'InvalidConfidence' } }
   // A Ready review without a confidence number is still a complete review. The
@@ -2171,11 +2221,12 @@ function agentTokenUsageFromJson(value: string): AgentTokenUsage {
 }
 
 function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]): ReviewRun {
+  // A waiting or blocked Review keeps its stored score, because the score
+  // describes the agent's reading and the outcome describes the gates. It is
+  // not published under those outcomes, so the domain outcome omits it.
   const outcome: ReviewOutcome = row.outcome_tag === 'Ready'
     ? row.confidence === null ? { _tag: 'Ready' } : { _tag: 'Ready', confidence: row.confidence }
     : { _tag: row.outcome_tag }
-  if (outcome._tag !== 'Ready' && row.confidence !== null)
-    throw new Error(`Review run ${row.id} has invalid confidence state.`)
   return {
     id: row.id,
     repository: row.repository,
@@ -3716,6 +3767,49 @@ const polymorphicPublicationMigration = `
   PRAGMA user_version = 39;
 `
 
+/**
+ * Lets a Review run keep the agent's confidence score whatever the gates say.
+ *
+ * The score answers how sure the agent was about the change it read. The
+ * outcome answers whether every gate passed. Storing one only when the other
+ * said Ready threw the score away for a Review that waited on CI, and the CI
+ * re-gate then had nothing to publish once the base branch turned green.
+ */
+const reviewConfidenceMigration = `
+  DROP INDEX IF EXISTS review_runs_subject_completed;
+
+  CREATE TABLE review_runs_v40 (
+    id TEXT PRIMARY KEY,
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind = 'adversarial_review'),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'opencode', 'claude')),
+    session_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    skill_digest TEXT NOT NULL CHECK (length(skill_digest) = 64),
+    head_sha TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    gates TEXT NOT NULL CHECK (json_valid(gates)),
+    outcome_tag TEXT NOT NULL CHECK (outcome_tag IN ('Ready', 'Pending', 'Blocked')),
+    confidence INTEGER,
+    findings TEXT NOT NULL CHECK (json_valid(findings)),
+    content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+    usage TEXT NOT NULL DEFAULT '{"_tag":"Unavailable"}' CHECK (json_valid(usage)),
+    FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id),
+    CHECK (completed_at >= started_at),
+    CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 100)
+  );
+
+  INSERT INTO review_runs_v40 SELECT * FROM review_runs;
+  DROP TABLE review_runs;
+  ALTER TABLE review_runs_v40 RENAME TO review_runs;
+  CREATE INDEX review_runs_subject_completed ON review_runs(subject_id, completed_at DESC);
+
+  PRAGMA user_version = 40;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3741,7 +3835,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 39)
+  if (version === 40)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3898,6 +3992,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 38) {
     applyForeignKeyMigration(database, polymorphicPublicationMigration)
+    version = 39
+  }
+  if (version === 39) {
+    applyForeignKeyMigration(database, reviewConfidenceMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -4996,7 +5094,7 @@ export function openJournalStore(
         input.completedAt,
         gates,
         outcome._tag,
-        outcome._tag === 'Ready' ? outcome.confidence ?? null : null,
+        input.confidence ?? null,
         findings,
         contentDigest,
         usage,
@@ -7530,6 +7628,90 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * Every finished Review that only CI still holds back.
+   *
+   * The row is limited to the latest Review for the pull request's current
+   * head, so a superseded verdict never gets restated. A live Review or Repair
+   * owns the canonical comment while it runs, so anything queued or running
+   * excludes the pull request here.
+   */
+  const listCiPendingReviews: JournalStore['listCiPendingReviews'] = () => (database.prepare(`
+    WITH ranked AS (
+      SELECT review_runs.*,
+        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY completed_at DESC, id DESC) AS run_rank
+      FROM review_runs
+    )
+    SELECT
+      ranked.id AS review_run_id,
+      repositories.github AS repository,
+      subjects.github_number,
+      ranked.revision_id,
+      ranked.head_sha,
+      ranked.provider,
+      ranked.session_id,
+      ranked.model,
+      ranked.agent_version,
+      ranked.skill_digest,
+      ranked.started_at,
+      ranked.completed_at,
+      ranked.usage,
+      ranked.gates,
+      ranked.findings,
+      ranked.confidence,
+      published.github_comment_id,
+      published.body AS published_body
+    FROM ranked
+    JOIN subjects ON subjects.id = ranked.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions AS current_revisions ON current_revisions.id = subjects.current_revision_id
+    JOIN review_publications AS published ON published.id = (
+      SELECT candidate.id FROM review_publications AS candidate
+      WHERE candidate.review_run_id = ranked.id AND candidate.result_tag = 'Published'
+      ORDER BY candidate.created_at DESC, candidate.id DESC
+      LIMIT 1
+    )
+    WHERE ranked.run_rank = 1
+      AND ranked.outcome_tag = 'Pending'
+      AND json_extract(ranked.gates, '$.ci._tag') = 'Pending'
+      AND repositories.enabled = 1
+      AND repositories.paused = 0
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      AND ranked.revision_id = subjects.current_revision_id
+      AND json_extract(current_revisions.payload, '$.state') = 'open'
+      AND json_extract(current_revisions.payload, '$.headSha') = ranked.head_sha
+      AND NOT EXISTS (
+        SELECT 1 FROM worker_tasks AS live
+        WHERE live.subject_id = ranked.subject_id AND live.kind = 'adversarial_review'
+          AND live.state_tag IN ('Queued', 'ActionRequired', 'Running')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM tasks AS repair
+        WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
+          AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+      )
+    ORDER BY repositories.github, subjects.github_number
+  `).all() as unknown as CiPendingReviewRow[]).map(row => ({
+    reviewRunId: row.review_run_id,
+    repository: row.repository,
+    pullRequestNumber: row.github_number,
+    revisionId: row.revision_id,
+    headSha: row.head_sha,
+    provider: row.provider,
+    sessionId: row.session_id,
+    model: row.model,
+    agentVersion: row.agent_version,
+    skillDigest: row.skill_digest,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    usage: agentTokenUsageFromJson(row.usage),
+    gates: JSON.parse(row.gates) as ReviewGates,
+    findings: JSON.parse(row.findings) as ReviewFinding[],
+    confidence: row.confidence ?? undefined,
+    commentId: row.github_comment_id,
+    publishedBody: row.published_body,
+  }))
+
   const listStoppedReviews: JournalStore['listStoppedReviews'] = () => (database.prepare(`
     WITH stopped AS (
       SELECT id, subject_id, revision_id, kind AS task_kind, state_tag, reason
@@ -8266,6 +8448,7 @@ export function openJournalStore(
     listActiveTaskLeases,
     listQueuedReviewStatuses,
     recordApprovalPromptComment,
+    listCiPendingReviews,
     listStoppedReviews,
     recordQueuedReviewStatus,
     isQueuedReviewStatus,
