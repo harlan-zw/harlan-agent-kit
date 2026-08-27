@@ -1,0 +1,28 @@
+{
+  "schema_version": 4,
+  "job_id": "routine-trigger-ui-0828-0203",
+  "created": "2026-08-27T16:19:58Z",
+  "git_hash": "ac88bda00d1c321b648d9422bd44987af21b237f",
+  "dev_port": 43127,
+  "pages_changed": [],
+  "components_created": [],
+  "routes_to_test": ["/"],
+  "design_system_changes": false,
+  "theme_name": "neutral-control-room",
+  "contract_path": ".claude/context/jobs/routine-trigger-ui-0828-0203/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met"
+  },
+  "self_assessment": {
+    "confidence": "high",
+    "weakest_area": "Live hosts need the merged revision before their dashboards diverge.",
+    "hardest_decision": "Filtering at the service boundary preserves Journal history while preventing disabled features from leaking into the UI."
+  },
+  "has_client_animations": false,
+  "known_limitations": [],
+  "next_steps": ["Merge and deploy the same revision to desktop and Hogwild."],
+  "dark_mode_relevant": false
+}

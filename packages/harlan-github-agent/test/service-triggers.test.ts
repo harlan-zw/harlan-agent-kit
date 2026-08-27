@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseConfigText } from '../src/config.ts'
-import { recordRoutineOnlyRepositoryHealth } from '../src/service.ts'
+import { dashboardSnapshotForTriggers, recordRoutineOnlyRepositoryHealth } from '../src/service.ts'
+import { dashboardSnapshot } from './fixtures.ts'
 
 const base = `
 github:
@@ -26,6 +27,35 @@ function parse(extra = ''): ReturnType<typeof parseConfigText> {
 }
 
 describe('which triggers one machine answers', () => {
+  const routineSnapshot = dashboardSnapshot({
+    routines: [{
+      id: 'harlan-zw/example:sentry-checkin',
+      repository: 'harlan-zw/example',
+      name: 'sentry-checkin',
+      crons: ['0 7 * * *'],
+      timeZone: 'Australia/Melbourne',
+      mode: 'report',
+      enabled: true,
+      specSha: 'abc123',
+      lastRunAt: '2026-08-28T21:00:00.000Z',
+      trackingIssueNumber: 42,
+      updatedAt: '2026-08-28T21:01:00.000Z',
+    }],
+    routineRuns: [{
+      id: 'routine-run-1',
+      routineId: 'harlan-zw/example:sentry-checkin',
+      repository: 'harlan-zw/example',
+      name: 'sentry-checkin',
+      scheduledFor: '2026-08-28T21:00:00.000Z',
+      specSha: 'abc123',
+      state: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
+      fence: 1,
+      attempts: 1,
+      createdAt: '2026-08-28T21:00:00.000Z',
+      updatedAt: '2026-08-28T21:01:00.000Z',
+    }],
+  })
+
   it('answers every trigger when the file says nothing', () => {
     const parsed = parse()
 
@@ -43,6 +73,20 @@ describe('which triggers one machine answers', () => {
     const parsed = parse('triggers: [github]\n')
 
     expect(parsed._tag === 'Ok' ? parsed.value.triggers : []).toEqual(['github'])
+  })
+
+  it('hides stale Routine history from a GitHub-only dashboard', () => {
+    const visible = dashboardSnapshotForTriggers(routineSnapshot, ['github'])
+
+    expect(visible.routines).toEqual([])
+    expect(visible.routineRuns).toEqual([])
+  })
+
+  it('keeps Routine history on a Routine dashboard', () => {
+    const visible = dashboardSnapshotForTriggers(routineSnapshot, ['routine'])
+
+    expect(visible.routines.map(routine => routine.id)).toEqual(['harlan-zw/example:sentry-checkin'])
+    expect(visible.routineRuns.map(run => run.id)).toEqual(['routine-run-1'])
   })
 
   it('refuses an empty list, because a machine that answers nothing is a mistake', () => {
