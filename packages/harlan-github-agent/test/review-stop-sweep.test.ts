@@ -86,6 +86,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listStoppedReviews: () => reviews,
         recordStoppedReviewStatus: () => true,
       },
@@ -108,6 +109,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => {
           recorded += 1
@@ -139,6 +141,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => true,
       },
@@ -162,6 +165,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [{ ...stopped, disposition: { _tag: 'Merged' } }],
         recordStoppedReviewStatus: () => true,
       },
@@ -171,7 +175,8 @@ describe('publishStoppedReviews', () => {
     expect(body).toContain('### 🤖 MERGED')
   })
 
-  it('writes nothing when a person deleted the comment, rather than posting it again', async () => {
+  it('retires the publication a person deleted, so no later pass asks again', async () => {
+    const retired: number[] = []
     let recorded = 0
     const results = await publishStoppedReviews({
       github: {
@@ -181,6 +186,10 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: (input) => {
+          retired.push(input.commentId)
+          return true
+        },
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => {
           recorded += 1
@@ -191,8 +200,8 @@ describe('publishStoppedReviews', () => {
 
     expect(results).toEqual([ok({ _tag: 'CommentGone', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
     expect(recorded).toBe(0)
+    expect(retired).toEqual([42])
   })
-
   it('leaves the comment alone once the pull request moves on', async () => {
     let writes = 0
     const results = await publishStoppedReviews({
@@ -206,6 +215,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => true,
       },

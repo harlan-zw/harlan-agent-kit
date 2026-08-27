@@ -648,6 +648,20 @@ export interface JournalStore {
    * sweep that sees false here has lost the comment to the claimed agent.
    */
   isQueuedReviewStatus: (input: { taskId: string, taskKind: 'adversarial_review' | 'review_fix' }) => boolean
+  /**
+   * Retires the canonical comment a person deleted.
+   *
+   * A sweep refuses to open a deleted comment again, which is right: deleting
+   * it is how a person answers it. Refusing was the whole response though, so
+   * the row stayed in the sweep's list and asked GitHub again every pass,
+   * forever. Retiring the publication takes the row out of every sweep.
+   */
+  recordDeletedReviewComment: (input: {
+    taskKind: 'adversarial_review' | 'review_fix'
+    taskId: string
+    commentId: number
+    at: string
+  }) => boolean
   recordStoppedReviewStatus: (input: {
     taskId: string
     taskKind: 'adversarial_review' | 'review_fix'
@@ -7646,6 +7660,12 @@ export function openJournalStore(
     `).get(input.taskId, input.taskKind) !== undefined
   }
 
+  const recordDeletedReviewComment: JournalStore['recordDeletedReviewComment'] = input => database.prepare(`
+    UPDATE review_status_commands
+    SET state_tag = 'Superseded', reason = 'A person deleted the comment.', updated_at = ?
+    WHERE task_kind = ? AND task_id = ? AND state_tag = 'Published' AND github_comment_id = ?
+  `).run(input.at, input.taskKind, input.taskId, input.commentId).changes > 0
+
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
     const commandId = digest(`${input.taskKind}:${input.taskId}:stopped:${bodySha256}`)
@@ -8269,6 +8289,7 @@ export function openJournalStore(
     listStoppedReviews,
     recordQueuedReviewStatus,
     isQueuedReviewStatus,
+    recordDeletedReviewComment,
     recordStoppedReviewStatus,
     approvePullRequest,
     authorizePublication,

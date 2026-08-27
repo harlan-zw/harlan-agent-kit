@@ -100,6 +100,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => statuses,
         isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => true,
@@ -124,6 +125,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair()],
         isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: (input) => {
@@ -155,6 +157,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [{ ...unchanged, publishedBody: queuePositionComment(unchanged) }],
         isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => true,
@@ -180,6 +183,7 @@ describe('publishQueuePositions', () => {
       repositories: [repositoryMapping()],
       store: {
         isQueuedReviewStatus: () => true,
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair({ verdict: { _tag: 'Unanswered' } })],
         recordQueuedReviewStatus: () => true,
       },
@@ -203,6 +207,7 @@ describe('publishQueuePositions', () => {
       repositories: [repositoryMapping()],
       store: {
         isQueuedReviewStatus: () => true,
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair({ verdict: { _tag: 'Answered' } })],
         recordQueuedReviewStatus: () => true,
       },
@@ -211,7 +216,8 @@ describe('publishQueuePositions', () => {
     expect(cleared).toBe(0)
   })
 
-  it('writes nothing when a person deleted the comment, rather than posting it again', async () => {
+  it('retires the publication a person deleted, so no later pass asks again', async () => {
+    const retired: number[] = []
     let recorded = 0
     const results = await publishQueuePositions({
       github: {
@@ -222,6 +228,10 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: (input) => {
+          retired.push(input.commentId)
+          return true
+        },
         listQueuedReviewStatuses: () => [queuedRepair()],
         isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => {
@@ -233,8 +243,8 @@ describe('publishQueuePositions', () => {
 
     expect(results).toEqual([ok({ _tag: 'CommentGone', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
     expect(recorded).toBe(0)
+    expect(retired).toEqual([42])
   })
-
   it('leaves the comment alone once the head commit moves', async () => {
     let writes = 0
     const results = await publishQueuePositions({
@@ -249,6 +259,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair()],
         isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => true,
@@ -276,6 +287,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair()],
         // An agent claimed the Task between the Queue read and the write.
         isQueuedReviewStatus: () => false,
@@ -301,6 +313,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair()],
         isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => true,
@@ -323,6 +336,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair()],
         isQueuedReviewStatus: () => true,
         recordQueuedReviewStatus: () => {
@@ -352,6 +366,7 @@ describe('publishQueuePositions', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordDeletedReviewComment: () => true,
         listQueuedReviewStatuses: () => [queuedRepair()],
         isQueuedReviewStatus: () => !claimed,
         recordQueuedReviewStatus: () => {
