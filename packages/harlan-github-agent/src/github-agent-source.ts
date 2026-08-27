@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
-import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
+import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping, ReviewOutcomeName } from './types.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
@@ -10,6 +10,7 @@ import { currentBaseSha } from './github-base.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
+import { planReviewOutcomeLabels, REVIEW_OUTCOME_LABELS } from './review-outcome-label.ts'
 
 /**
  * What the job steps say about a check run GitHub reports as failed.
@@ -171,6 +172,16 @@ export type EditedReviewStatus
 export interface GitHubAgentSource {
   consumeApprovalLabel: (repository: RepositoryMapping, subjectKind: 'issue' | 'pull_request', itemNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   ensureApprovalLabel: (repository: RepositoryMapping, label: string, signal: AbortSignal) => Promise<Result<void, string>>
+  /**
+   * Stamps the pull request with the verdict its Review reached.
+   *
+   * The canonical comment states the verdict, but a person choosing what to
+   * review next reads the pull request list. Only labels show there.
+   *
+   * The write is skipped when the pull request already carries the label, so a
+   * rerun that reaches the same verdict costs one read.
+   */
+  stampReviewOutcome: (repository: RepositoryMapping, pullRequestNumber: number, outcome: ReviewOutcomeName, signal: AbortSignal) => Promise<Result<void, string>>
   getIssueTriageSnapshot: (repository: RepositoryMapping, issueNumber: number, signal: AbortSignal) => Promise<Result<IssueTriageSnapshot, string>>
   getPullRequestTemplate: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<PullRequestTemplate, string>>
   getPullRequestReviewSnapshot: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<PullRequestReviewSnapshot, string>>
@@ -355,6 +366,59 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       if (current.value.some(value => value.toLowerCase() === label.toLowerCase()))
         return removed._tag === 'Err' ? removed : err(`GitHub did not remove the ${label} label.`)
       return ok(undefined)
+    },
+
+    async stampReviewOutcome(repository, pullRequestNumber, outcome, signal) {
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      const request = { owner, repo, issue_number: pullRequestNumber, request: { signal } }
+      const current = await octokit.value.rest.issues.get(request)
+        .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
+        .catch((error: unknown): Result<string[], string> => err(message(error)))
+      if (current._tag === 'Err')
+        return current
+      const plan = planReviewOutcomeLabels(outcome, current.value)
+      if (plan.add === null && plan.remove.length === 0)
+        return ok(undefined)
+      if (plan.add !== null) {
+        const created = await octokit.value.rest.issues.createLabel({
+          owner,
+          repo,
+          name: plan.add.name,
+          color: plan.add.color,
+          description: plan.add.description,
+          request: { signal },
+        })
+          .then((): Result<void, string> => ok(undefined))
+          .catch((error: unknown): Result<void, string> => errorStatus(error) === 422 ? ok(undefined) : err(message(error)))
+        if (created._tag === 'Err')
+          return created
+        const added = await octokit.value.rest.issues.addLabels({ ...request, labels: [plan.add.name] })
+          .then((): Result<void, string> => ok(undefined))
+          .catch((error: unknown): Result<void, string> => err(message(error)))
+        if (added._tag === 'Err')
+          return added
+      }
+      // A label another writer already removed answers this call. Only a label
+      // GitHub still reports after the write is a failure.
+      const removals = await Promise.all(plan.remove.map(label =>
+        octokit.value.rest.issues.removeLabel({ ...request, name: label })
+          .then((): Result<void, string> => ok(undefined))
+          .catch((error: unknown): Result<void, string> => errorStatus(error) === 404 ? ok(undefined) : err(message(error)))))
+      const failed = removals.find(removal => removal._tag === 'Err')
+      if (failed !== undefined)
+        return failed
+      const confirmed = await octokit.value.rest.issues.get(request)
+        .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
+        .catch((error: unknown): Result<string[], string> => err(message(error)))
+      if (confirmed._tag === 'Err')
+        return confirmed
+      const settled = planReviewOutcomeLabels(outcome, confirmed.value)
+      return settled.add === null && settled.remove.length === 0
+        ? ok(undefined)
+        : err(`GitHub did not stamp the ${REVIEW_OUTCOME_LABELS[outcome].name} label.`)
     },
 
     async ensureApprovalLabel(repository, label, signal) {

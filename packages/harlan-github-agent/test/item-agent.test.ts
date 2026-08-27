@@ -39,6 +39,7 @@ describe('subject Workers', () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const capture: ProviderCapture = { requests: [] }
     const comments: string[] = []
+    const stamped: string[] = []
     let attempt: RecordReviewRunInput | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
@@ -53,6 +54,10 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: (_repository, _number, outcome) => {
+          stamped.push(outcome)
+          return Promise.resolve(ok(undefined))
+        },
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -126,6 +131,7 @@ describe('subject Workers', () => {
     expect(comments[3]).toContain('REVIEWING · Preparing the review comment')
     expect(comments[5]).toContain('READY · 96/100')
     expect(comments[5]).toContain('▓▓▓▓▓ 100%')
+    expect(stamped).toEqual(['READY'])
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
   })
@@ -140,6 +146,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -237,6 +244,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -343,6 +351,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -437,6 +446,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -529,6 +539,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -614,6 +625,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -698,6 +710,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -779,6 +792,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -861,6 +875,7 @@ describe('subject Workers', () => {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        stampReviewOutcome: () => Promise.resolve(ok(undefined)),
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: issue.updatedAt })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
