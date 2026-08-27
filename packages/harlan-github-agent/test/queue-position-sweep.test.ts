@@ -39,7 +39,7 @@ describe('queuePositionComment', () => {
 
     expect(body).toContain('### 🤖 QUEUED · 3rd')
     expect(body).toContain('Next: Repair starts after the 2 Tasks ahead of it finish.')
-    expect(body).toContain('░░░░░ 0%')
+    expect(body).not.toMatch(/[▓░]|\b\d+%/)
   })
 
   it('says an agent is the only thing left to wait for at the head of the Queue', () => {

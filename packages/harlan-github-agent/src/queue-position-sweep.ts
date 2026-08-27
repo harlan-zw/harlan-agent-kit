@@ -2,7 +2,6 @@ import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, QueuedReviewStatus, ReviewQueueState } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
-import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 
@@ -49,8 +48,6 @@ export function queuePositionComment(status: QueuedReviewStatus): string {
 ### 🤖 ${heading}
 
 ${automatedDisclosure({ kind: 'review', notes: ['This comment updates as the Queue moves.'] })}
-
-\`${formatProgressBar(0)}\`
 
 Next: ${next}`
 }

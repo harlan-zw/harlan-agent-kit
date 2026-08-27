@@ -2,7 +2,6 @@ import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, StoppedReview, StoppedReviewDisposition } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
-import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
@@ -60,8 +59,6 @@ export function stoppedReviewComment(
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, updatedAt: updatedAtLabel(at) })}
 
-\`${formatProgressBar(100)}\`
-
 GitHub ${action} this pull request. The unfinished automated review stopped.`
   }
   if (review.taskKind === 'review_fix') {
@@ -74,8 +71,6 @@ GitHub ${action} this pull request. The unfinished automated review stopped.`
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
 
-\`${formatProgressBar(100)}\`
-
 Repair stopped: ${cleanLine(review.reason)}
 
 ${findings.join('\n')}`
@@ -85,8 +80,6 @@ ${findings.join('\n')}`
 ### 🤖 STOPPED
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
-
-\`${formatProgressBar(100)}\`
 
 The automated review stopped. Reason: ${cleanLine(review.reason)}
 

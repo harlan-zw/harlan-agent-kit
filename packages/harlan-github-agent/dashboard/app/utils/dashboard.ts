@@ -201,6 +201,45 @@ export function activeAgentProgress(agent: ActiveAgent): string {
   return agent.progress.label
 }
 
+export interface AgentActivityPresentation {
+  at: string
+  text: string
+  tone: 'muted' | 'error'
+}
+
+function conciseActivityText(value: string): string {
+  const text = value.replace(/\s+/g, ' ').trim()
+  return text.length <= 72 ? text : `${text.slice(0, 71).trimEnd()}…`
+}
+
+/** Describes the newest structured event without pretending to know completion. */
+export function activeAgentActivity(agent: ActiveAgent): AgentActivityPresentation | undefined {
+  const activity = agent.activity[agent.activity.length - 1]
+  if (activity === undefined)
+    return undefined
+
+  if (activity._tag === 'Command') {
+    const command = conciseActivityText(activity.command) || 'command'
+    if (activity.exitCode === null)
+      return { at: activity.at, text: `Running ${command}`, tone: 'muted' }
+    if (activity.exitCode === 0)
+      return { at: activity.at, text: `Ran ${command}`, tone: 'muted' }
+    return { at: activity.at, text: `Command failed: ${command}`, tone: 'error' }
+  }
+
+  if (activity._tag === 'FileChange') {
+    const paths = activity.changes.map(change => change.path)
+    const text = paths.length === 1 ? `Edited ${paths[0]}` : `Edited ${paths.length} files`
+    return { at: activity.at, text: conciseActivityText(text), tone: 'muted' }
+  }
+
+  return {
+    at: activity.at,
+    text: conciseActivityText(activity.text) || 'Planning the next step',
+    tone: 'muted',
+  }
+}
+
 export function workLabel(work: AgentRole): string {
   if (work === 'adversarial_review')
     return 'Adversarial review'

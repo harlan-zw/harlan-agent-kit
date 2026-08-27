@@ -37,11 +37,6 @@ export function formatPhaseDuration(since: string | undefined, at: string): stri
   return ` for ${hours} h ${minutes - hours * 60} min`
 }
 
-export function formatProgressBar(percent: number): string {
-  const complete = Math.round(percent / 20)
-  return `${'▓'.repeat(complete)}${'░'.repeat(5 - complete)} ${percent}%`
-}
-
 export function agentEventProgress(event: AgentEvent, work: AgentProgressWork): AgentProgress | undefined {
   if (event._tag === 'WebSearch')
     return { percent: 55, label: 'Checking docs' }

@@ -439,9 +439,6 @@ class IndicatorDisplayTest(unittest.TestCase):
             '🟢 Running · deploy production · harlan-zw/example · runner-1',
         )
 
-    def test_keeps_progress_bar_for_active_agents(self):
-        self.assertEqual(indicator.progress_bar(57), '▓▓▓░░')
-
     def test_reads_the_agent_profile_the_dashboard_sends(self):
         dashboard = {
             'agentProfile': {
@@ -466,8 +463,67 @@ class IndicatorDisplayTest(unittest.TestCase):
 
         self.assertEqual(
             indicator.active_agent_label(agent),
-            '▓▓▓░░  57% · Issue triage · harlan-zw/example #12',
+            '🟢 Issue triage · harlan-zw/example #12',
         )
+
+    def test_reads_live_activity_without_inventing_completion(self):
+        agent = {
+            'activity': [{
+                '_tag': 'Command',
+                'at': '2026-08-14T00:00:00.000Z',
+                'command': 'pnpm test',
+                'output': '',
+                'exitCode': None,
+            }],
+            'progress': {'percent': 70, 'label': 'Running tests and checks'},
+        }
+
+        self.assertEqual(indicator.active_agent_activity_label(agent), 'Running pnpm test')
+
+    def test_agent_submenu_shows_phase_and_live_activity(self):
+        agent = {
+            '_tag': 'ActiveAgent',
+            'role': 'issue_triage',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 12,
+            'subjectKind': 'issue',
+            'subjectUrl': 'https://github.com/harlan-zw/example/issues/12',
+            'session': {'_tag': 'Connected', 'id': 'session-1'},
+            'progress': {'percent': 70, 'label': 'Running tests and checks'},
+            'activity': [{
+                '_tag': 'Command',
+                'at': '2026-08-14T00:00:00.000Z',
+                'command': 'pnpm test',
+                'output': '',
+                'exitCode': None,
+            }],
+        }
+        sources = {'harlanGithubAgent': {'_tag': 'Available', 'dashboard': {
+            'status': 'ready',
+            'agentControl': {'_tag': 'Running'},
+            'agents': [agent],
+            'queue': [],
+            'incidents': [],
+        }}}
+        stub = StubIndicator()
+
+        indicator.build_menu(
+            stub,
+            sources,
+            None,
+            lambda: None,
+            lambda *_args: None,
+            lambda *_args: None,
+            lambda *_args: None,
+        )
+
+        active = next(
+            item for item in stub.menus[0].get_children()
+            if item.get_label().startswith('🟢 Issue triage') and item.get_submenu() is not None
+        )
+        labels = menu_labels(active.get_submenu())
+        self.assertEqual(labels[:2], ['Running tests and checks', 'Running pnpm test'])
+        self.assertFalse(any('%' in label or '▓' in label or '░' in label for label in labels))
 
     def test_uses_canonical_labels_for_every_agent_role(self):
         labels = {

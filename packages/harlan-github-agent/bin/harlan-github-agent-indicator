@@ -344,21 +344,39 @@ def separator():
     return item
 
 
-def progress_bar(percent):
-    complete = min(5, max(0, int(percent / 20 + 0.5)))
-    return f"{'▓' * complete}{'░' * (5 - complete)}"
-
-
 def agent_role_label(agent):
     return AGENT_ROLE_LABELS[agent['role']]
 
 
 def active_agent_label(agent):
-    progress = agent.get('progress', {'percent': 0, 'label': 'Starting'})
-    return (
-        f"{progress_bar(progress['percent'])}  {progress['percent']}% · "
-        f"{agent_role_label(agent)} · {agent['repository']} #{agent['itemNumber']}"
-    )
+    return f"🟢 {agent_role_label(agent)} · {agent['repository']} #{agent['itemNumber']}"
+
+
+def concise_activity_text(value):
+    text = ' '.join(str(value).split())
+    return text if len(text) <= 72 else f'{text[:71].rstrip()}…'
+
+
+def active_agent_activity_label(agent):
+    activity = agent.get('activity') or []
+    if not activity:
+        return None
+    latest = activity[-1]
+    kind = latest.get('_tag')
+    if kind == 'Command':
+        command = concise_activity_text(latest.get('command') or 'command')
+        exit_code = latest.get('exitCode')
+        if exit_code is None:
+            return f'Running {command}'
+        if exit_code == 0:
+            return f'Ran {command}'
+        return f'Command failed: {command}'
+    if kind == 'FileChange':
+        paths = [change.get('path') for change in latest.get('changes', []) if change.get('path')]
+        return concise_activity_text(f'Edited {paths[0]}' if len(paths) == 1 else f'Edited {len(paths)} files')
+    if kind == 'Reasoning':
+        return concise_activity_text(latest.get('text') or 'Planning the next step')
+    return None
 
 
 def confirm_agent_eject(agent, eject_agent):
@@ -546,8 +564,11 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
             kind = 'issue' if agent.get('subjectKind') == 'issue' else 'pull request'
             links = [
                 menu_item(progress['label'], enabled=False),
-                menu_item(f'Open {kind}', agent['subjectUrl']),
             ]
+            activity_label = active_agent_activity_label(agent)
+            if activity_label is not None:
+                links.append(menu_item(activity_label, enabled=False))
+            links.append(menu_item(f'Open {kind}', agent['subjectUrl']))
             if agent.get('commitUrl'):
                 links.append(menu_item('Open head commit', agent['commitUrl']))
             watch_item = menu_item('Watch logs', enabled=agent.get('session', {}).get('_tag') == 'Connected')

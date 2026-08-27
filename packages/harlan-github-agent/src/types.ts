@@ -841,6 +841,7 @@ export type ActiveAgentState
     | { _tag: 'Publishing', commandId: string }
 
 export interface AgentProgress {
+  /** Internal phase rank for monotonic updates and next-step selection. Never show it as completion. */
   percent: number
   label: string
   /**
