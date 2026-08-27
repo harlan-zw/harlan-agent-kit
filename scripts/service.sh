@@ -13,8 +13,19 @@ set -euo pipefail
 SERVICE_CHECKOUT="${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}"
 SERVICE_UNIT=harlan-github-agent
 HEALTH_URL=http://127.0.0.1:3210/health
-HEALTH_HOST=harlan-github-agent.localhost
+CONFIG_FILE="$HOME/.config/harlan-github-agent/config.yml"
 PASSWORD_FILE="$HOME/.config/harlan-github-agent/dashboard-password"
+
+HEALTH_HOST=$(node --input-type=commonjs - "$CONFIG_FILE" <<'NODE'
+const { readFileSync } = require('node:fs')
+
+const text = readFileSync(process.argv[2], 'utf8')
+const match = text.match(/^\s*allowed_origin:\s*["']?([^\s#"']+)["']?\s*(?:#.*)?$/m)
+if (match === null)
+  throw new Error('The service configuration needs server.allowed_origin.')
+process.stdout.write(new URL(match[1]).host)
+NODE
+)
 
 deployed() {
   git -C "$SERVICE_CHECKOUT" log --oneline -1

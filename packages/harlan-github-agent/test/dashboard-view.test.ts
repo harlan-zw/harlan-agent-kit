@@ -27,6 +27,7 @@ import {
   routineRunPresentation,
   routineTrackingUrl,
   scheduledRoutineRecords,
+  stalledLabel,
   systemState,
   taskHistoryCategory,
   taskKindLabel,
@@ -450,6 +451,22 @@ describe('stalled progress', () => {
 
   it('reports a stall once the agent has been silent past the threshold', () => {
     expect(isProgressStalled(activeAgent({ updatedAt: '2026-08-14T11:50:00.000Z' }), now)).toBe(true)
+  })
+
+  it('stays quiet while terminal activity continues', () => {
+    const agent = activeAgent({
+      updatedAt: '2026-08-14T11:50:00.000Z',
+      activity: [{
+        _tag: 'Command',
+        at: '2026-08-14T11:59:00.000Z',
+        command: 'pnpm test',
+        output: 'passed',
+        exitCode: 0,
+      }],
+    })
+
+    expect(isProgressStalled(agent, now)).toBe(false)
+    expect(stalledLabel(agent, now)).toBe('No progress for 1m')
   })
 })
 

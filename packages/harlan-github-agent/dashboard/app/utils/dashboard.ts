@@ -151,12 +151,22 @@ export function secondsSince(at: string, now: Date): number {
   return Math.max(0, (now.getTime() - new Date(at).getTime()) / 1_000)
 }
 
+function latestAgentReportAt(agent: ActiveAgent): string {
+  const latestActivity = agent.activity[agent.activity.length - 1]
+  if (latestActivity === undefined)
+    return agent.updatedAt
+
+  return new Date(latestActivity.at).getTime() > new Date(agent.updatedAt).getTime()
+    ? latestActivity.at
+    : agent.updatedAt
+}
+
 export function isProgressStalled(agent: ActiveAgent, now: Date): boolean {
-  return secondsSince(agent.updatedAt, now) > stalledProgressSeconds
+  return secondsSince(latestAgentReportAt(agent), now) > stalledProgressSeconds
 }
 
 export function stalledLabel(agent: ActiveAgent, now: Date): string {
-  return `No progress for ${Math.floor(secondsSince(agent.updatedAt, now) / 60)}m`
+  return `No progress for ${Math.floor(secondsSince(latestAgentReportAt(agent), now) / 60)}m`
 }
 
 export function isSnapshotStale(generatedAt: string, now: Date): boolean {
