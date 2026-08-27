@@ -43,7 +43,7 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 - **Never amend published commits** -- CI and reviewers lose context. Always fix-forward with new commits.
 - **Never `--force` push** during a PR -- rewrites shared history. Use `git push` (regular) after new commits.
 - **Never `--no-verify`** -- if hooks fail, fix the underlying issue.
-- **Never move unknown changes** -- shared checkout changes may belong to another task. Copy only changes this task owns.
+- **Never move unknown changes** -- primary checkout changes may belong to another task. Copy only changes this task owns.
 - **`gh pr create` fails silently with bad body** -- always use HEREDOC for the body, never inline quotes.
 - **CI flakes vs real failures** -- if the same check fails twice with different errors, it's flaky. If same error, it's real. Don't retry flakes more than once.
 - **CodeRabbit reviews can be noisy** -- address security/correctness findings, but style suggestions are optional. Don't block the loop on nitpicks.
@@ -73,18 +73,16 @@ An existing worktree alone does not prove another agent is active.
 
 `wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
 
-Use `wt` only when another agent is actively modifying the same repository. If no other agent is active there, keep the current checkout. If it is on the default branch, create a normal task branch with `git switch -c BRANCH`, then continue to Step 1.
-
-If another agent is active in the repository:
+Keep the primary checkout read only. Every mutation uses a task-owned `wt` worktree:
 
 1. Run `wt list --format=json`.
 2. Reuse this task's existing worktree with `wt switch BRANCH` when one exists.
 3. Otherwise derive a branch name such as `feat/add-widget` or `fix/login-bug`.
-4. Create it from the intended base with `wt switch --create BRANCH --base BASE`.
+4. Create it with `wt switch --create BRANCH --base origin/main`. Use an exact frozen base only when the task requires one.
 5. Run `wt list --format=json` again. Read the branch's absolute `path`.
 6. Pass that path as `workdir` to every later command, including CI repairs.
 
-If this task's changes already exist in a shared checkout, leave that checkout untouched. List every verified task-owned path. Export `git diff --cached --binary -- PATHS` and `git diff --binary -- PATHS` separately. Apply the cached patch with `git apply --index`, then apply the unstaged patch. Copy owned untracked files individually. Compare every owned source path with its destination before continuing. Never reset, clean, stash, or overwrite the source checkout.
+If this task's changes already exist in the primary checkout, leave that checkout untouched. List every verified task-owned path. Export `git diff --cached --binary -- PATHS` and `git diff --binary -- PATHS` separately. Apply the cached patch with `git apply --index`, then apply the unstaged patch. Copy owned untracked files individually. Compare every owned source path with its destination before continuing. Never reset, clean, stash, or overwrite the source checkout.
 
 Never share a mutation worktree between tasks. Never use `wt switch --clobber` to resolve a path collision.
 

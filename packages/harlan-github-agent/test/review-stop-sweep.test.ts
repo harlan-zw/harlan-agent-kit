@@ -12,6 +12,7 @@ const stopped: StoppedReview = {
   revisionId: 'revision-1',
   headSha: 'abc123',
   reason: 'The pull request is not ready for review.',
+  disposition: { _tag: 'Stopped' },
   commentId: 42,
   publishedBody: '### 🤖 REVIEWING · Reviewing changed files',
   findings: [],
@@ -115,6 +116,28 @@ describe('publishStoppedReviews', () => {
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
     expect(body).toContain('### 🤖 MERGED')
     expect(body).not.toContain('REVIEWING')
+  })
+
+  it('closes the comment on a merged pull request whose head branch GitHub deleted', async () => {
+    let body = ''
+    const results = await publishStoppedReviews({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(err('Branch not found - https://docs.github.com/rest/branches/branches#get-a-branch')),
+        editReviewStatus: (_repository, _number, _commentId, _expectedBody, value) => {
+          body = value
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        listStoppedReviews: () => [{ ...stopped, disposition: { _tag: 'Merged' } }],
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+    expect(body).toContain('### 🤖 MERGED')
   })
 
   it('writes nothing when a person deleted the comment, rather than posting it again', async () => {

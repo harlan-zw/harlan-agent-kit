@@ -357,10 +357,24 @@ interface StoppedReviewRow {
   revision_id: string
   head_sha: string
   reason: string
+  current_state: string
+  current_merged_at: string | null
   github_comment_id: number
   published_body: string
   findings: string
 }
+
+/**
+ * How the pull request ended, as the last poll saw it.
+ *
+ * `Stopped` means the pull request is still open, so only the Task behind the
+ * comment ended. The other two are final, and GitHub cannot take them back
+ * without creating a Revision of its own.
+ */
+export type StoppedReviewDisposition
+  = | { _tag: 'Stopped' }
+    | { _tag: 'Merged' }
+    | { _tag: 'Closed' }
 
 export interface StoppedReview {
   taskId: string
@@ -370,6 +384,15 @@ export interface StoppedReview {
   revisionId: string
   headSha: string
   reason: string
+  /**
+   * Lets the sweep skip its GitHub read on a closed pull request.
+   *
+   * A closed pull request whose head branch is deleted answers no snapshot
+   * request at all, and its stale comment used to fail every pass with
+   * "Branch not found". Nothing about a closed pull request can change without
+   * a new Revision, so the stored answer is the current one.
+   */
+  disposition: StoppedReviewDisposition
   commentId: number
   /** What the canonical comment holds now, so the edit can compare and swap. */
   publishedBody: string
@@ -7258,6 +7281,8 @@ export function openJournalStore(
       stopped.revision_id,
       json_extract(revisions.payload, '$.headSha') AS head_sha,
       COALESCE(stopped.reason, 'The automated review stopped.') AS reason,
+      json_extract(current_revisions.payload, '$.state') AS current_state,
+      json_extract(current_revisions.payload, '$.mergedAt') AS current_merged_at,
       published.github_comment_id,
       published.body AS published_body,
       COALESCE((
@@ -7338,6 +7363,11 @@ export function openJournalStore(
     revisionId: row.revision_id,
     headSha: row.head_sha,
     reason: row.reason,
+    disposition: row.current_state !== 'closed'
+      ? { _tag: 'Stopped' as const }
+      : row.current_merged_at === null
+        ? { _tag: 'Closed' as const }
+        : { _tag: 'Merged' as const },
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
     findings: JSON.parse(row.findings) as ReviewFinding[],
