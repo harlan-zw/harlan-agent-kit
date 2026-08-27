@@ -20,7 +20,7 @@ if [[ "$command" =~ $skill_create ]] || [[ "$command" =~ $skill_body_edit ]]; th
 fi
 
 if [[ "$command" =~ $pr_create ]] || [[ "$command" =~ $pr_body_edit ]]; then
-  reason="Use the pr skill to create pull requests or change descriptions. It loads the repository template and required disclosure."
+  reason='Use the Harlan Agent Kit PR skill: `harlan-agent-kit:pr`. Claude Code invokes it as `/harlan-agent-kit:pr`. Codex invokes it as `$harlan-agent-kit:pr`. It loads the repository template and required disclosure.'
   jq -nc --arg reason "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
 fi
 

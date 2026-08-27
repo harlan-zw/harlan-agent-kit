@@ -12,6 +12,12 @@ decision() {
   printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision'
 }
 
+block_reason() {
+  jq -nc --arg command "$1" '{tool_input:{command:$command}}' \
+    | bash "$hook" \
+    | jq -r '.hookSpecificOutput.permissionDecisionReason // empty'
+}
+
 expect() {
   local want="$1" command="$2" got
   got="$(decision "$command")"
@@ -25,6 +31,13 @@ expect deny 'gh pr create --title "fix: example" --body "wrong"'
 expect deny 'cd /repo && gh pr create --fill'
 expect deny 'gh pr edit 42 --body "wrong"'
 expect deny 'gh pr edit 42 --body-file /tmp/pr.md'
+
+expected_reason='Use the Harlan Agent Kit PR skill: `harlan-agent-kit:pr`. Claude Code invokes it as `/harlan-agent-kit:pr`. Codex invokes it as `$harlan-agent-kit:pr`. It loads the repository template and required disclosure.'
+actual_reason="$(block_reason 'gh pr create --fill')"
+if [ "$actual_reason" != "$expected_reason" ]; then
+  printf 'FAIL  unexpected block reason: %s\n' "$actual_reason"
+  fail=1
+fi
 
 expect allow 'HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: example" --body "right"'
 expect allow 'HARLAN_AGENT_PR_SKILL=1 gh pr edit 42 --body "right"'
