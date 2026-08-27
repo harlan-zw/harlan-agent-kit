@@ -343,7 +343,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           .filter(issue => !isAutomatedGitHubActor({
             login: issue.user?.login ?? 'ghost',
             type: issue.user?.type,
-          }))
+          }, repository.writablePullRequestAuthors))
           .filter(issue => isIssueAtOrAfterCutoff(issue.created_at, options.issueCutoff))
           .map(issue => ({
             kind: 'issue',
@@ -392,6 +392,54 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           return err({
             repository: repository.github,
             message: error instanceof Error ? error.message : 'GitHub request failed.',
+            ...(status === undefined ? {} : { status }),
+          })
+        })
+    },
+  }
+}
+
+/** Files the issue one Candidate proposes, so the Item pipeline can act on it. */
+export interface GitHubIssuePublisher {
+  createIssue: (input: {
+    repository: RepositoryMapping
+    title: string
+    body: string
+    labels?: readonly string[]
+  }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string }, GitHubReadError>>
+}
+
+export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOptions): GitHubIssuePublisher {
+  return {
+    async createIssue(input, signal) {
+      const { owner, repo } = repositoryParts(input.repository.github)
+      const credential = await options.tokens.getToken(input.repository.github, 'item_write', signal)
+      if (credential._tag === 'Err')
+        return credential
+      const octokit = options.createClient?.(credential.value.token)
+        ?? createAuthenticatedClient({
+          access: 'item_write',
+          repository: input.repository.github,
+          signal,
+          token: credential.value.token,
+          tokens: options.tokens,
+          userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+        })
+      const request = signal === undefined ? {} : { request: { signal } }
+      return octokit.rest.issues.create({
+        owner,
+        repo,
+        title: input.title,
+        body: input.body,
+        ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
+        ...request,
+      })
+        .then(response => ok({ number: response.data.number, url: response.data.html_url }))
+        .catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({
+            repository: input.repository.github,
+            message: error instanceof Error ? error.message : 'GitHub refused the issue.',
             ...(status === undefined ? {} : { status }),
           })
         })

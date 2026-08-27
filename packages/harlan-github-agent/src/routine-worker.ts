@@ -4,6 +4,7 @@ import type { JournalStore } from './store.ts'
 import type { Candidate, ClaimedRoutineRun } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
+import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
 
 /**
@@ -117,7 +118,7 @@ export interface RoutineScanWorkerOptions {
   maximumChangedFiles?: number
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'listCandidates' | 'recordCandidates'>
+  store: Pick<JournalStore, 'listCandidates' | 'recordCandidates' | 'stageCandidateIssues'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareRoutine'>
 }
 
@@ -202,12 +203,23 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         at: options.now().toISOString(),
       })
 
+      // A proposing Routine asks for one issue per new Candidate. The pipeline
+      // that already turns an issue into a reviewed pull request does the rest,
+      // so a Routine needs no publication path of its own.
+      const requested = task.mode === 'propose' && fresh.length > 0
+        ? options.store.stageCandidateIssues({
+            commands: candidateIssueCommands(fresh, task),
+            at: options.now().toISOString(),
+          })
+        : 0
+
       const evidence = [
         `${task.name} on ${task.repository}`,
         `${response.candidates.length} found`,
         `${fresh.length} new`,
         `${withinSize.length - fresh.length} already known`,
         `${dropped} over ${maximumChangedFiles} files`,
+        `${requested} issues requested`,
       ].join(' | ')
       options.logger.info(evidence)
       return ok({ evidence })

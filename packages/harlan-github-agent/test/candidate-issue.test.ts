@@ -1,0 +1,242 @@
+import type { GitHubIssuePublisher } from '../src/github.ts'
+import type { Candidate, ClaimedRoutineRun } from '../src/types.ts'
+import { describe, expect, it } from 'vitest'
+import { candidateIssueBody, candidateIssueCommands, createCandidateIssueController, routineIssueLabel } from '../src/candidate-issue-controller.ts'
+import { ok } from '../src/result.ts'
+import { openJournalStore } from '../src/store.ts'
+import { repositoryMapping } from './fixtures.ts'
+
+const now = () => new Date('2026-08-27T07:10:00.000Z')
+
+const routine: ClaimedRoutineRun = {
+  id: 'harlan-zw/example:pr-triage:2026-08-27T07:00:00.000Z',
+  routineId: 'harlan-zw/example:pr-triage',
+  repository: 'harlan-zw/example',
+  repositoryMapping: repositoryMapping(),
+  name: 'pr-triage',
+  mode: 'propose',
+  scheduledFor: '2026-08-27T07:00:00.000Z',
+  specSha: 'abc123',
+  attempts: 1,
+  state: { _tag: 'Running', fence: 1, workerId: 'worker-1', leaseExpiresAt: '2026-08-27T08:00:00.000Z' },
+}
+
+const candidate: Candidate = {
+  id: 'candidate-1',
+  routineId: routine.routineId,
+  runId: routine.id,
+  fingerprint: 'src/store.ts#openRoutineRun',
+  target: 'src/store.ts',
+  claim: 'This helper is never called.',
+  verification: 'pnpm test',
+  estimatedChangedFiles: 1,
+  result: { _tag: 'Proposed', pullRequest: null },
+  createdAt: '2026-08-27T07:05:00.000Z',
+  updatedAt: '2026-08-27T07:05:00.000Z',
+}
+
+function seed(store: ReturnType<typeof openJournalStore>): void {
+  store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
+  store.setRepositoryWritesEnabled('harlan-zw/example', true)
+  store.syncRoutines({
+    repository: 'harlan-zw/example',
+    specSha: 'abc123',
+    entries: [{ name: 'pr-triage', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+    at: '2026-08-27T00:00:00.000Z',
+  })
+  store.openRoutineRun({
+    routineId: routine.routineId,
+    scheduledFor: routine.scheduledFor,
+    specSha: 'abc123',
+    at: '2026-08-27T07:00:05.000Z',
+  })
+  store.recordCandidates({
+    routineId: routine.routineId,
+    runId: routine.id,
+    candidates: [{
+      fingerprint: candidate.fingerprint,
+      target: candidate.target,
+      claim: candidate.claim,
+      verification: candidate.verification,
+      estimatedChangedFiles: candidate.estimatedChangedFiles,
+    }],
+    at: '2026-08-27T07:05:00.000Z',
+  })
+}
+
+function publisher(calls: Array<{ title: string, labels?: readonly string[] }>): GitHubIssuePublisher {
+  return {
+    createIssue: async (input) => {
+      calls.push({ title: input.title, ...(input.labels === undefined ? {} : { labels: input.labels }) })
+      return ok({ number: 100 + calls.length, url: `https://github.com/harlan-zw/example/issues/${100 + calls.length}` })
+    },
+  }
+}
+
+describe('writing the issue a Candidate proposes', () => {
+  it('carries the claim, the target, and the command that proves it', () => {
+    const body = candidateIssueBody(candidate, routine)
+
+    expect(body).toContain('This helper is never called.')
+    expect(body).toContain('src/store.ts')
+    expect(body).toContain('pnpm test')
+  })
+
+  it('identifies itself as automated and says how to reject it', () => {
+    const body = candidateIssueBody(candidate, routine)
+
+    expect(body).toContain('opened this issue automatically')
+    expect(body).toContain('Close it to reject')
+  })
+
+  it('hides the fingerprint in a comment, because nobody reads one', () => {
+    expect(candidateIssueBody(candidate, routine)).toContain('<!-- candidate-fingerprint: src/store.ts#openRoutineRun -->')
+  })
+
+  it('labels every routine issue by its routine', () => {
+    expect(routineIssueLabel('sentry-checkin')).toBe('routine:sentry-checkin')
+  })
+
+  it('names one command per Candidate', () => {
+    expect(candidateIssueCommands([candidate], routine)).toEqual([expect.objectContaining({
+      candidateId: 'candidate-1',
+      repository: 'harlan-zw/example',
+      routineName: 'pr-triage',
+    })])
+  })
+})
+
+describe('filing the issues Candidates propose', () => {
+  it('files a pending request and records the issue it opened', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const stored = store.listCandidates(routine.routineId)
+      store.stageCandidateIssues({ commands: candidateIssueCommands(stored, routine), at: now().toISOString() })
+      const calls: Array<{ title: string, labels?: readonly string[] }> = []
+
+      const results = await createCandidateIssueController({
+        github: publisher(calls),
+        now,
+        store,
+        workerId: 'controller-1',
+      }).publishPending(new AbortController().signal)
+
+      expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 101 } }])
+      expect(calls[0]?.labels).toEqual(['routine:pr-triage'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('files one issue per Candidate however often it is asked', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const stored = store.listCandidates(routine.routineId)
+      const commands = candidateIssueCommands(stored, routine)
+
+      const first = store.stageCandidateIssues({ commands, at: now().toISOString() })
+      const second = store.stageCandidateIssues({ commands, at: now().toISOString() })
+
+      expect(first).toBe(1)
+      expect(second).toBe(0)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('stops at the limit, so one scan cannot flood a repository', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.recordCandidates({
+        routineId: routine.routineId,
+        runId: routine.id,
+        candidates: Array.from({ length: 8 }, (_unused, index) => ({
+          fingerprint: `src/file-${index}.ts`,
+          target: `src/file-${index}.ts`,
+          claim: 'unused',
+          verification: 'pnpm test',
+          estimatedChangedFiles: 1,
+        })),
+        at: '2026-08-27T07:05:00.000Z',
+      })
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      const calls: Array<{ title: string }> = []
+
+      const results = await createCandidateIssueController({
+        github: publisher(calls),
+        now,
+        store,
+        workerId: 'controller-1',
+      }).publishPending(new AbortController().signal, 3)
+
+      expect(results).toHaveLength(3)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('retries a refused request on the next pass', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      const refusing = {
+        createIssue: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
+      }
+      const controller = createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })
+
+      const failed = await controller.publishPending(new AbortController().signal, 1)
+      const calls: Array<{ title: string }> = []
+      const retried = await createCandidateIssueController({
+        github: publisher(calls),
+        now,
+        store,
+        workerId: 'controller-1',
+      }).publishPending(new AbortController().signal, 1)
+
+      expect(failed[0]?._tag).toBe('Err')
+      expect(retried[0]).toMatchObject({ _tag: 'Ok' })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('files nothing when the repository has writes turned off', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      store.setRepositoryWritesEnabled('harlan-zw/example', false)
+      const calls: Array<{ title: string }> = []
+
+      const results = await createCandidateIssueController({
+        github: publisher(calls),
+        now,
+        store,
+        workerId: 'controller-1',
+      }).publishPending(new AbortController().signal)
+
+      expect(results).toEqual([])
+      expect(calls).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+})

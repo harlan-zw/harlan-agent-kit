@@ -494,6 +494,23 @@ export interface RoutineSpec {
  * A Routine is not an Item. It answers a clock, so it has no issue, no pull
  * request, and no Revision to hang from.
  */
+/** One request for the controller to file the issue a Candidate proposes. */
+export interface CandidateIssueCommand {
+  id: string
+  candidateId: string
+  repository: string
+  routineName: RoutineName
+  title: string
+  body: string
+}
+
+/** One leased Candidate issue command, ready for the controller to file. */
+export interface ClaimedCandidateIssueCommand extends CandidateIssueCommand {
+  repositoryMapping: RepositoryMapping
+  fence: number
+  workerId: string
+}
+
 export interface Routine {
   id: string
   repository: string

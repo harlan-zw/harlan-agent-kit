@@ -57,9 +57,12 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     return err({ repository: repository.github, message: result.error.message })
   }
 
+  // The allowlist reaches issues as well as pull requests. Routines file their
+  // own issues, and an allowlist that stopped at pull requests dropped them
+  // before triage ever saw one.
   const eligibleItems = result.value.filter(subject => !isAutomatedGitHubActor(
     { login: subject.author },
-    subject.kind === 'pull_request' ? repository.writablePullRequestAuthors : [],
+    repository.writablePullRequestAuthors,
   ))
   const writes = eligibleItems.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
