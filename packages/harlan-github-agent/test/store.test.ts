@@ -3773,6 +3773,80 @@ describe('journal store', () => {
     expect(store.listReviewRuns(input.repository, input.pullRequestNumber)[0]?.usage).toEqual(input.usage)
   })
 
+  it('settles a CI-pending run once, and only while nothing else has settled it', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'ci-settle-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    finishReviewTask(store, '2026-08-13T01:00:30.000Z')
+    const waiting = passedReviewGates()
+    waiting.ci = { _tag: 'Pending', reason: 'Base branch CI is still running.', evidence: [{ label: 'base-ci', sha256: 'e'.repeat(64) }] }
+    const seed = {
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex' as const,
+      sessionId: 'session-1',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+    }
+    store.recordReviewRun({ ...seed, id: 'attempt-waiting', completedAt: '2026-08-13T01:02:00.000Z', gates: waiting, confidence: 79, findings: [] })
+
+    expect(store.supersedeReviewRun({
+      ...seed,
+      id: 'settlement-lost',
+      supersedesReviewRunId: 'missing-run',
+      completedAt: '2026-08-13T03:00:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 79,
+      findings: [],
+    })).toEqual({ _tag: 'Rejected', reason: { _tag: 'RunNotFound' } })
+
+    expect(store.supersedeReviewRun({
+      ...seed,
+      id: 'settlement-1',
+      supersedesReviewRunId: 'attempt-waiting',
+      completedAt: '2026-08-13T03:00:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 79,
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'settlement-1' })
+
+    // A replayed sweep that coins a fresh id finds the run already settled.
+    expect(store.supersedeReviewRun({
+      ...seed,
+      id: 'settlement-2',
+      supersedesReviewRunId: 'attempt-waiting',
+      completedAt: '2026-08-13T04:00:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 79,
+      findings: [],
+    })).toEqual({ _tag: 'Rejected', reason: { _tag: 'AlreadySuperseded' } })
+    // The identical settlement answers as a duplicate instead of failing.
+    expect(store.supersedeReviewRun({
+      ...seed,
+      id: 'settlement-1',
+      supersedesReviewRunId: 'attempt-waiting',
+      completedAt: '2026-08-13T03:00:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 79,
+      findings: [],
+    })).toEqual({ _tag: 'Duplicate', reviewRunId: 'settlement-1' })
+
+    const runs = store.listReviewRuns('harlan-zw/example', 24)
+    expect(runs.map(run => run.id)).toEqual(['settlement-1'])
+    expect(store.listCiPendingReviews()).toEqual([])
+  })
+
   it('records comment publication failures for later analysis', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

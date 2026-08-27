@@ -16,7 +16,7 @@ export interface ReviewCiSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampReviewOutcome'>
   now: () => Date
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listCiPendingReviews' | 'recordReviewPublication' | 'recordReviewRun'>
+  store: Pick<JournalStore, 'listCiPendingReviews' | 'recordReviewPublication' | 'supersedeReviewRun'>
 }
 
 /**
@@ -51,6 +51,12 @@ export async function publishResolvedCiReviews(
     if (live.value.pullRequest.state !== 'open' || live.value.pullRequest.headSha !== review.headSha)
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
+    // Mergeability answers for the live pull request, not for the head commit.
+    // The stored merge gate froze hours ago, so a conflict that arrived while CI
+    // ran would be restated as READY. GitHub has to report clean again first.
+    if (live.value.pullRequest.mergeState !== 'clean')
+      return ok({ _tag: 'StillWaiting', repository: review.repository, pullRequestNumber: review.pullRequestNumber, reason: 'GitHub does not report the pull request as mergeable.' })
+
     const { gates, reportedChecks } = regateReviewCi(review.gates, live.value, mapping)
     if (gates.ci._tag === 'Pending')
       return ok({ _tag: 'StillWaiting', repository: review.repository, pullRequestNumber: review.pullRequestNumber, reason: gates.ci.reason })
@@ -60,9 +66,10 @@ export async function publishResolvedCiReviews(
     const body = terminalComment(review.headSha, gates, review.findings, confidence, reportedChecks)
     const at = options.now().toISOString()
     const reviewRunId = randomUUID()
-    // The run is recorded before the comment is written, so a failed edit still
-    // leaves auto merge and the dashboard reading the settled verdict.
-    const recorded = options.store.recordReviewRun({
+    // The settlement supersedes the stored run before the comment is written,
+    // so a failed edit still leaves auto merge and the dashboard reading the
+    // settled verdict, and one agent turn keeps exactly one journal entry.
+    const recorded = options.store.supersedeReviewRun({
       id: reviewRunId,
       repository: review.repository,
       pullRequestNumber: review.pullRequestNumber,
@@ -79,6 +86,7 @@ export async function publishResolvedCiReviews(
       gates,
       ...(review.confidence === undefined ? {} : { confidence: review.confidence }),
       findings: review.findings,
+      supersedesReviewRunId: review.reviewRunId,
     })
     if (recorded._tag === 'Rejected')
       return err(`${review.repository}#${review.pullRequestNumber}: the settled review could not be saved: ${recorded.reason._tag}.`)
