@@ -98,7 +98,7 @@ describe('publishStoppedReviews', () => {
   it('rewrites the canonical comment and records it once', async () => {
     let edited: { commentId: number, body: string } | undefined
     let recorded = 0
-    const results = await publishStoppedReviews({
+    const { results } = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
@@ -126,7 +126,7 @@ describe('publishStoppedReviews', () => {
 
   it('closes a stale progress comment after GitHub merges the pull request', async () => {
     let body = ''
-    const results = await publishStoppedReviews({
+    const { results } = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({
           state: 'closed',
@@ -154,7 +154,7 @@ describe('publishStoppedReviews', () => {
 
   it('closes the comment on a merged pull request whose head branch GitHub deleted', async () => {
     let body = ''
-    const results = await publishStoppedReviews({
+    const { results } = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(err('Branch not found - https://docs.github.com/rest/branches/branches#get-a-branch')),
         editReviewStatus: (_repository, _number, _commentId, _expectedBody, value) => {
@@ -175,10 +175,65 @@ describe('publishStoppedReviews', () => {
     expect(body).toContain('### 🤖 MERGED')
   })
 
+  it('stops on its own budget and leaves the rest for the next pass', async () => {
+    const backlog = Array.from({ length: 5 }, (_, index) => ({
+      ...stopped,
+      taskId: `review-task-${index}`,
+      pullRequestNumber: 24 + index,
+      disposition: { _tag: 'Merged' as const },
+    }))
+    let edits = 0
+    // Every closed comment costs a GitHub round trip. This clock spends one
+    // second on each, so the budget runs out partway through the backlog.
+    let clock = Date.parse('2026-08-15T04:00:00.000Z')
+    const { results, remaining } = await publishStoppedReviews({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.reject(new Error('A merged pull request needs no snapshot.')),
+        editReviewStatus: () => {
+          edits += 1
+          clock += 1_000
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      now: () => new Date(clock),
+      repositories: [repositoryMapping()],
+      store: {
+        recordDeletedReviewComment: () => true,
+        listStoppedReviews: () => backlog,
+        recordStoppedReviewStatus: () => true,
+      },
+      budgetMilliseconds: 3_000,
+    }, new AbortController().signal)
+
+    expect(results).toHaveLength(3)
+    expect(remaining).toBe(2)
+    expect(edits).toBe(3)
+  })
+
+  it('reports a backlog it never started, so a spent pass is never silent', async () => {
+    const { results, remaining } = await publishStoppedReviews({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.reject(new Error('The budget was spent before any row ran.')),
+        editReviewStatus: () => Promise.reject(new Error('The budget was spent before any row ran.')),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        recordDeletedReviewComment: () => true,
+        listStoppedReviews: () => [stopped, stopped],
+        recordStoppedReviewStatus: () => true,
+      },
+      budgetMilliseconds: 0,
+    }, new AbortController().signal)
+
+    expect(results).toEqual([])
+    expect(remaining).toBe(2)
+  })
+
   it('retires the publication a person deleted, so no later pass asks again', async () => {
     const retired: number[] = []
     let recorded = 0
-    const results = await publishStoppedReviews({
+    const { results } = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
@@ -204,7 +259,7 @@ describe('publishStoppedReviews', () => {
   })
   it('leaves the comment alone once the pull request moves on', async () => {
     let writes = 0
-    const results = await publishStoppedReviews({
+    const { results } = await publishStoppedReviews({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({ headSha: 'def456' })),
         editReviewStatus: () => {

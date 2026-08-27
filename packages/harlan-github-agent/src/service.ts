@@ -690,9 +690,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }, signal)
         // The list size, every pass. A sweep that reports three outcomes while
         // its list holds a hundred rows is invisible without this line.
-        if (stopped.length > 0)
-          options.logger.info(`Stopped review comments: ${stopped.length} to close.`)
-        stopped.forEach((result) => {
+        if (stopped.results.length > 0 || stopped.remaining > 0) {
+          options.logger.info(stopped.remaining > 0
+            ? `Stopped review comments: closed ${stopped.results.length} this pass, ${stopped.remaining} left for the next.`
+            : `Stopped review comments: closed ${stopped.results.length}.`)
+        }
+        stopped.results.forEach((result) => {
           if (result._tag === 'Ok') {
             options.logger.info(result.value._tag === 'CommentGone'
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the stopped review comment was deleted, so nothing was written.`
@@ -704,7 +707,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             options.logger.error(`Stopped review comment: ${result.error}`)
           }
         })
-        recordPassIncidents('stopped_review_comment', stopped.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const settled = await publishResolvedCiReviews({
           github: workerGithub,
           now,
