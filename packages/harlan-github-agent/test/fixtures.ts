@@ -98,6 +98,8 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     repositories: [],
     items: [],
     tasks: [],
+    routines: [],
+    routineRuns: [],
     ...overrides,
   }
 }

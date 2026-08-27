@@ -234,7 +234,8 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 - The status bar states only what is not the default. It said "agents running" beside "0/4 agents", which reads as a contradiction. Pause and manual selection speak; running and auto stay quiet.
 - A dismissed item leaves the board entirely and reappears only under `Dismissed` on Watching. A greyed row on the board would keep costing the attention the Dismissal was meant to reclaim, and `Restore` is rare enough to live one page away.
 - The content security policy allows `github.com` and `avatars.githubusercontent.com` under `img-src`. Without it every avatar falls back to a monogram, which is the one thing the cards are built around.
-- A running card shows work, elapsed time, author, subject, progress sentence, and progress bar. The terminal and the session identifier stay behind a disclosure.
+- A running card shows work, elapsed time, author, subject, and current phase. The terminal and session identifier stay behind a disclosure.
+- Agent percentages are milestones, not completion estimates. Never show them as progress bars or completion percentages.
 - Work the Queue calls Active with no agent session yet still lands in Running, so a task cannot vanish between starting and reporting.
 - The status bar carries only live state: connection, agent capacity, whether GitHub writes are enabled, and repository failures. Fixed configuration sits in the footer.
 - Queue order reflects engine priority. Position is always visible.
@@ -246,6 +247,7 @@ Panels use plain utilities (`border border-default rounded-md bg-elevated`) rath
 - The tab title carries the decision count and the favicon carries its colour, because this page is meant to be watched from another window. Notifications are opt in behind the bell, and the first snapshot after load only seeds the baseline so opening the page never fires one.
 - Agent activity is ephemeral and in process. It answers what an agent is doing now, not what it did. Keeping it out of the journal means no schema, no retention policy, and nothing to leak after a restart.
 - Recently finished repeats the three newest History records in the System pane. It confirms recent movement without exposing evidence or replacing History.
+- The System pane lists each Routine schedule with its latest durable run. Each host shows only the Routines in its own Journal.
 - Command output is redacted in the service before it reaches the dashboard. Loopback binding and a dashboard password are not a reason to ship raw stdout that can contain installation tokens.
 - Keyboard: `j` and `k` move through the Needs you column and `a` approves the focused card, listed under the board. `/` focuses the repository filter on Watching, where that filter lives.
 - Notifications fire on a new decision. Failures are visible in Done and on History, so they raise a badge rather than a notification.

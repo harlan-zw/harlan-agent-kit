@@ -7,6 +7,8 @@ import {
   activeEntries,
   approvalConsequence,
   buildHistory,
+  historyCategory,
+  historyOutcomeDetail,
   incidentEntries,
   incidentKindLabel,
   incidentRecoveryLabel,
@@ -22,6 +24,9 @@ import {
   recentlyFinished,
   reviewOutcomeLabel,
   reviewOutcomeTone,
+  routineRunPresentation,
+  routineTrackingUrl,
+  scheduledRoutineRecords,
   stalledLabel,
   statusClass,
   systemState,
@@ -81,6 +86,11 @@ const providerCapacities = computed(() => snapshot.value.providerCapacities.map(
   presentation: providerCapacityPresentation(entry),
 })))
 const recentlyFinishedRecords = computed(() => recentlyFinished(reviewAgents.value, snapshot.value.tasks))
+const routineRecords = computed(() => scheduledRoutineRecords(snapshot.value.routines, snapshot.value.routineRuns).map(record => ({
+  ...record,
+  presentation: routineRunPresentation(record.latestRun),
+  trackingUrl: routineTrackingUrl(record.routine),
+})))
 
 /** Only offer a filter for work the board actually holds right now. */
 const availableWork = computed(() => {
@@ -132,11 +142,14 @@ const nothingQueuedReason = computed(() => {
     return { text: 'Manual selection. Approve a pull request on the left to queue it.', resume: false }
   return { text: 'Nothing queued.', resume: false }
 })
-const done = computed(() => buildHistory(reviewAgents.value, snapshot.value.tasks)
+const finished = computed(() => buildHistory(reviewAgents.value, snapshot.value.tasks)
+  .filter(record => historyCategory(record) !== 'superseded'))
+
+const done = computed(() => finished.value
   .filter(record => matchesFilter(record._tag === 'Review' ? 'adversarial_review' : taskWork(record.task)))
   .slice(0, doneOnBoard))
 
-const doneTotal = computed(() => buildHistory(reviewAgents.value, snapshot.value.tasks).length)
+const doneTotal = computed(() => finished.value.length)
 
 function entryKey(entry: QueueEntry): string {
   return `${entry.repository}:${entry.kind}:${entry.number}`
@@ -267,6 +280,64 @@ useHead({
         </li>
       </ul>
 
+      <section v-if="routineRecords.length > 0" class="mt-3" aria-labelledby="routines-heading">
+        <div class="zone-header">
+          <h3 id="routines-heading" class="field-label">
+            Routines
+          </h3>
+          <span class="font-mono text-xs text-dimmed">{{ routineRecords.length }}</span>
+          <hr class="zone-rule">
+        </div>
+
+        <ol class="divide-y divide-default border-y border-default">
+          <li
+            v-for="record in routineRecords"
+            :key="record.routine.id"
+            class="grid gap-x-4 gap-y-1 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          >
+            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <UBadge
+                size="sm"
+                :color="record.presentation.tone"
+                :class="record.presentation.tone === 'neutral' ? undefined : statusClass(record.presentation.tone)"
+                variant="subtle"
+              >
+                {{ record.presentation.label }}
+              </UBadge>
+              <span class="font-mono text-xs text-default">{{ record.routine.name }}</span>
+              <a
+                v-if="record.trackingUrl"
+                :href="record.trackingUrl"
+                target="_blank"
+                rel="noreferrer"
+                class="entity-link min-w-0 truncate font-mono text-xs text-muted"
+              >
+                {{ record.routine.repository }} #{{ record.routine.trackingIssueNumber }}
+              </a>
+              <span v-else class="min-w-0 truncate font-mono text-xs text-muted">
+                {{ record.routine.repository }}
+              </span>
+            </div>
+            <time
+              v-if="record.latestRun"
+              :datetime="record.latestRun.scheduledFor"
+              class="font-mono text-xs text-dimmed sm:text-right"
+            >
+              {{ relativeTime(record.latestRun.scheduledFor) }}
+            </time>
+            <span v-else class="font-mono text-xs text-dimmed sm:text-right">No runs</span>
+            <p class="font-mono text-xs text-muted sm:col-span-2">
+              {{ record.routine.crons.join(' · ') }} · {{ record.routine.timeZone }}<template v-if="!record.routine.enabled">
+                · disabled
+              </template>
+            </p>
+            <p v-if="record.presentation.detail" class="text-xs text-muted sm:col-span-2">
+              {{ record.presentation.detail }}
+            </p>
+          </li>
+        </ol>
+      </section>
+
       <section class="mt-3" aria-labelledby="recently-finished-heading">
         <div class="zone-header">
           <h3 id="recently-finished-heading" class="field-label">
@@ -326,6 +397,9 @@ useHead({
             <time :datetime="record.at" class="font-mono text-xs text-dimmed sm:text-right">
               {{ relativeTime(record.at) }}
             </time>
+            <p v-if="historyOutcomeDetail(record)" class="text-xs text-muted sm:col-span-2">
+              {{ historyOutcomeDetail(record) }}
+            </p>
           </li>
         </ol>
         <p v-else class="font-mono text-sm text-dimmed">
@@ -624,18 +698,9 @@ useHead({
               :number="agent.itemNumber"
             />
 
-            <p class="mt-2.5 line-clamp-2 text-xs text-muted">
+            <p class="mt-2.5 line-clamp-2 text-sm text-muted" :aria-label="`${activeAgentRole(agent)} current phase`">
               {{ activeAgentProgress(agent) }}
             </p>
-            <div class="mt-1.5 flex items-center gap-2">
-              <progress
-                class="min-w-0 flex-1"
-                :value="agent.progress.percent"
-                max="100"
-                :aria-label="`${activeAgentRole(agent)} progress`"
-              />
-              <span class="font-mono text-xs tabular-nums text-dimmed">{{ agent.progress.percent }}%</span>
-            </div>
             <!-- Only appears once silence is long enough to mean something. -->
             <p v-if="isProgressStalled(agent, now)" class="status-warning mt-1.5 font-mono text-xs">
               {{ stalledLabel(agent, now) }}

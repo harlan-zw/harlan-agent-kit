@@ -27,6 +27,7 @@ import type {
   ConflictResolutionTask,
   DashboardAgent,
   DashboardSnapshot,
+  DashboardTask,
   GitHubItem,
   GitHubPullRequestItem,
   Incident,
@@ -885,6 +886,8 @@ interface TaskRow {
   lease_expires_at: string | null
   updated_at: string
   recovery_attempts: number
+  progress_percent: number
+  progress_label: string
 }
 
 interface PublicationRow {
@@ -953,8 +956,6 @@ interface ActiveAgentRow extends TaskRow {
   head_repository: string | null
   session_id: string | null
   started_at: string
-  progress_percent: number
-  progress_label: string
 }
 
 interface ReviewPublicationRow {
@@ -2437,7 +2438,7 @@ function subjectFromRow(database: DatabaseSync, row: DashboardSubjectRow): ItemS
   }
 }
 
-function taskFromRow(row: TaskRow): AgentTask {
+function taskFromRow(row: TaskRow): DashboardTask {
   const base = {
     id: row.id,
     repository: row.repository,
@@ -2445,6 +2446,7 @@ function taskFromRow(row: TaskRow): AgentTask {
     state: taskStateFromRow(row),
     updatedAt: row.updated_at,
     recoveryAttempts: row.recovery_attempts,
+    progress: { percent: row.progress_percent, label: row.progress_label },
   }
   if (row.kind === 'issue_triage' || row.kind === 'issue_work')
     return { ...base, kind: row.kind, issueNumber: row.github_number } satisfies IssueTriageTask | IssueWorkTask
@@ -4233,7 +4235,9 @@ function taskRows(database: DatabaseSync): TaskRow[] {
       ${table}.fence,
       ${table}.lease_expires_at,
       ${table}.updated_at,
-      ${table}.recovery_attempts
+      ${table}.recovery_attempts,
+      ${table}.progress_percent,
+      ${table}.progress_label
     FROM ${table}
     JOIN subjects ON subjects.id = ${table}.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
@@ -7691,6 +7695,11 @@ export function openJournalStore(
       : repositories.some(repository => repository.lastSuccessAt === null) ? 'starting' : 'ready'
     const items = subjectRows.map(row => subjectFromRow(database, row))
     const tasks = taskRows(database).map(taskFromRow)
+    const routines = listRoutines()
+    const routineRuns = routines
+      .flatMap(routine => listRoutineRuns(routine.id, 5))
+      .sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor))
+      .slice(0, 50)
     const rejectedIssueWorkResults = new Map((database.prepare(`
       SELECT task_transitions.task_id, COUNT(*) AS occurrences
       FROM task_transitions
@@ -7756,6 +7765,8 @@ export function openJournalStore(
       repositories,
       items,
       tasks,
+      routines,
+      routineRuns,
     }
   }
 

@@ -501,6 +501,8 @@ export interface ClaimedIssueWorkTask extends IssueWorkTask {
 
 export type AgentTask = ConflictResolutionTask | ReviewFixTask | BaselineRepairTask | AdversarialReviewTask | IssueTriageTask | IssueWorkTask
 export type ClaimedAgentTask = ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask
+/** A Task as shown by the dashboard, including its last durable phase. */
+export type DashboardTask = AgentTask & { progress: AgentProgress }
 export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'pull_request_triage' | 'issue_triage' | 'issue_work' | 'routine_scan' | 'routine_fix'
 
 /**
@@ -1133,7 +1135,9 @@ export interface DashboardSnapshot {
   queue: QueueEntry[]
   repositories: RepositoryStatus[]
   items: ItemSummary[]
-  tasks: AgentTask[]
+  tasks: DashboardTask[]
+  routines: Routine[]
+  routineRuns: RoutineRun[]
 }
 
 export type StoredAgentControl

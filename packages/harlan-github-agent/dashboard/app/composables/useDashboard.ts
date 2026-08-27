@@ -39,6 +39,8 @@ function emptySnapshot(): DashboardSnapshot {
     repositories: [],
     items: [],
     tasks: [],
+    routines: [],
+    routineRuns: [],
   }
 }
 

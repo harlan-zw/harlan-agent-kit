@@ -1,0 +1,48 @@
+{
+  "schema_version": 4,
+  "job_id": "agent-history-visibility-0828-0104",
+  "created": "2026-08-27T15:33:40Z",
+  "git_hash": "63e0b98d42d610511a5c03cf7fbbeb753fa9021d",
+  "dev_port": 43829,
+  "pages_changed": [
+    "packages/harlan-github-agent/dashboard/app/pages/index.vue",
+    "packages/harlan-github-agent/dashboard/app/pages/history.vue"
+  ],
+  "components_created": [],
+  "routes_to_test": [
+    "/",
+    "/history"
+  ],
+  "design_system_changes": false,
+  "theme_name": "minimal-control-room",
+  "contract_path": ".claude/context/jobs/agent-history-visibility-0828-0104/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met",
+    "C10": "met",
+    "C11": "met",
+    "C12": "met",
+    "C13": "met",
+    "C14": "met",
+    "C15": "met",
+    "C16": "met",
+    "C17": "met",
+    "C18": "met"
+  },
+  "self_assessment": {
+    "confidence": "medium",
+    "weakest_area": "The Tailscale URL needs the merged service on Hogwild before its final browser check.",
+    "hardest_decision": "Kept each Routine to one compact row with its newest durable run."
+  },
+  "has_client_animations": false,
+  "known_limitations": ["Tailscale access is configured after this change reaches Hogwild."],
+  "next_steps": ["Deploy to Hogwild and enable Tailscale Serve."],
+  "dark_mode_relevant": true
+}
