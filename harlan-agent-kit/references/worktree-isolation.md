@@ -18,6 +18,34 @@ Example: branch `fix/auth` in `~/pkg/app` resolves to `~/pkg/app.fix-auth`. Neve
 
 `harlan-github-agent` follows the same contract. It creates each agent worktree from the configured repository checkout with `wt`.
 
+## Prepared worktrees
+
+The global `pre-start` hook runs once when `wt` creates a worktree.
+It blocks the caller until setup finishes.
+
+For a pnpm repository, the hook runs when both worktrees contain `pnpm-lock.yaml`.
+It installs the new worktree's exact dependency graph.
+It prefers the shared pnpm store and disables lifecycle scripts.
+
+A successful creation means that `node_modules` is ready for repository checks.
+Do not repeat the install only to initialise that worktree.
+Run another install when the task changes the dependency graph.
+
+A failed hook stops the worktree handoff.
+Do not start an Agent in a partly prepared worktree.
+
+pnpm shares immutable package data through its content-addressable store.
+Each worktree keeps its own `node_modules` topology.
+Never copy, hard-link, or symlink `node_modules` from another worktree.
+
+Nuxt recreates `.nuxt` from the current worktree.
+Generated files can contain absolute worktree paths.
+Never copy, hard-link, or symlink `.nuxt` between worktrees.
+
+Nuxt's experimental build cache is also path-specific today.
+A project may enable it after a repeated-build smoke test.
+Do not share its cache directory across different worktree paths.
+
 ## Commands
 
 | Action | Command |

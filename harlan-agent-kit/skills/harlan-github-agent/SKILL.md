@@ -86,6 +86,17 @@ curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://har
 
 The controller creates every agent worktree from its mapped repository checkout with `wt`. The global Worktrunk configuration places it beside the checkout as `<repo>.<branch-slug>`. Workers must not create, enter, or remove worktrees themselves.
 
+Worktrunk completes its blocking `pre-start` hook before the controller starts an Agent.
+For pnpm repositories, this prepares an isolated `node_modules` from the new worktree's lockfile.
+The hook reuses pnpm's shared store and disables lifecycle scripts.
+
+If setup fails, start no Agent.
+Keep the Task failure and its Incident visible with the exact Worktrunk error.
+
+Never copy `node_modules` or `.nuxt` from the Repository mapping.
+Each Nuxt worktree generates its own `.nuxt` directory.
+Nuxt's current build cache remains local to one worktree path.
+
 Limit reviews, issue triage, and conflict fixes to three active agents in total. Show that limit in the dashboard profile.
 
 Inspect one pull request's review Attempts and Publications through
