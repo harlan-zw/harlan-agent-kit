@@ -136,6 +136,20 @@ For an open pull request or revision, resume `take-ownership`.
 
 For a merged pull request, verify its revision on the default branch.
 
+Then refresh the primary checkout before task cleanup:
+
+1. Resolve the primary checkout with `wt list --format=json`.
+2. Verify no live claim owns the primary checkout.
+3. Run `wt switch main` from the task worktree.
+4. Let the global Worktrunk guard fetch and prune `origin`.
+5. Let the guard fast-forward clean local `main` to `origin/main`.
+6. Verify the primary checkout is clean on `main` and `HEAD` equals `origin/main`.
+
+This refresh is required after a merged pull request.
+
+If the primary checkout is dirty, claimed, off `main`, or divergent, preserve it.
+Report the exact state and do not switch, stash, reset, or rewrite it.
+
 Complete every applicable delivery stage already inside the intended result.
 
 Repair attributable failures through the loaded contracts.
@@ -192,7 +206,7 @@ Never delete a local ref without its expected old SHA, or when integration proof
 
 If safe deletion fails, preserve the state and report why.
 
-Fast-forward a canonical default checkout only when it is clean and unclaimed.
+The merged pull request refresh in step 5 must finish before cleanup.
 
 Never switch or rewrite a checkout during cleanup.
 
