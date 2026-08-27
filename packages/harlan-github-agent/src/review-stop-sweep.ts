@@ -1,6 +1,6 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
-import type { JournalStore, StoppedReview } from './store.ts'
+import type { JournalStore, StoppedReview, StoppedReviewDisposition } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
@@ -12,10 +12,7 @@ export type StoppedReviewOutcome
     | { _tag: 'CommentGone', repository: string, pullRequestNumber: number }
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
 
-export type StoppedReviewDisposition
-  = | { _tag: 'Stopped' }
-    | { _tag: 'Merged' }
-    | { _tag: 'Closed' }
+export type { StoppedReviewDisposition }
 
 export interface ReviewStopSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
@@ -94,18 +91,26 @@ export async function publishStoppedReviews(
     const mapping = mappings.get(review.repository.toLowerCase())
     if (mapping === undefined)
       return err(`${review.repository}: the repository is no longer configured.`)
-    const current = await options.github.getPullRequestReviewSnapshot(mapping, review.pullRequestNumber, signal)
-    if (current._tag === 'Err')
-      return err(`${review.repository}#${review.pullRequestNumber}: ${current.error}`)
-    if (current.value.pullRequest.state === 'open' && current.value.pullRequest.headSha !== review.headSha)
+    // A closed pull request takes no more commits, so the stored answer is the
+    // current one and the read is skipped. GitHub answers no snapshot request
+    // at all once the head branch is deleted, which is every merged pull
+    // request whose branch GitHub cleaned up.
+    const live = review.disposition._tag === 'Stopped'
+      ? await options.github.getPullRequestReviewSnapshot(mapping, review.pullRequestNumber, signal)
+      : null
+    if (live !== null && live._tag === 'Err')
+      return err(`${review.repository}#${review.pullRequestNumber}: ${live.error}`)
+    if (live !== null && live.value.pullRequest.state === 'open' && live.value.pullRequest.headSha !== review.headSha)
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
     const at = options.now().toISOString()
-    const disposition: StoppedReviewDisposition = current.value.pullRequest.state === 'open'
-      ? { _tag: 'Stopped' }
-      : current.value.pullRequest.mergedAt === null
-        ? { _tag: 'Closed' }
-        : { _tag: 'Merged' }
+    const disposition: StoppedReviewDisposition = live === null
+      ? review.disposition
+      : live.value.pullRequest.state === 'open'
+        ? { _tag: 'Stopped' }
+        : live.value.pullRequest.mergedAt === null
+          ? { _tag: 'Closed' }
+          : { _tag: 'Merged' }
     const body = stoppedReviewComment(review, at, disposition)
     const edited = await options.github.editReviewStatus(mapping, review.pullRequestNumber, review.commentId, review.publishedBody, body, signal)
     if (edited._tag === 'Err')
