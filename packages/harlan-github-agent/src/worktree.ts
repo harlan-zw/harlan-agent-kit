@@ -187,12 +187,26 @@ function runGit(checkout: string, args: string[], signal: AbortSignal, githubTok
   })
 }
 
+/**
+ * Names this service to the Worktrunk hooks that run around a switch.
+ *
+ * A hook cannot tell a person's shell from this service, and the two want
+ * opposite things. Harlan's control checkout policy refuses a switch while the
+ * primary checkout sits off main or carries local changes, which is every
+ * repository this service works in. It stopped every worktree, so every Review
+ * and every Repair stopped with it.
+ *
+ * `gitEnvironment` is an allowlist, so this variable reaches a hook only when
+ * this function sets it.
+ */
+const AGENT_IDENTITY = { HARLAN_GITHUB_AGENT: '1' } as const
+
 function runWt(checkout: string, args: string[], signal: AbortSignal): Promise<CommandResult> {
   return new Promise((resolve) => {
     execFile(
       'wt',
       ['-C', checkout, ...args],
-      { encoding: 'utf8', env: gitEnvironment(), signal },
+      { encoding: 'utf8', env: { ...gitEnvironment(), ...AGENT_IDENTITY }, signal },
       (error, stdout, stderr) => resolve({
         exitCode: error === null ? 0 : typeof error.code === 'number' ? error.code : 1,
         stdout: stdout.trim(),
