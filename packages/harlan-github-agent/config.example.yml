@@ -22,6 +22,14 @@ server:
   host: 127.0.0.1
   port: 3210
   allowed_origin: https://harlan-github-agent.localhost
+# GitHub webhooks remove most polling latency. The listener runs on its own
+# port carrying one route, so a tunnel in front of it cannot reach the
+# dashboard or the control API. Point the GitHub App webhook URL at it and set
+# the same secret in secret_path, mode 0600, at least 32 characters.
+webhook:
+  enabled: false
+  port: 3211
+  secret_path: /home/harlan/.config/harlan-github-agent/webhook-secret
 storage:
   path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
 mutations_enabled: false
@@ -33,6 +41,7 @@ auto_merge:
   method: squash
 # No new issue work starts when open pull requests reach this limit.
 max_open_pull_requests: 8
+# With webhooks on, polling only has to catch what a delivery missed.
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14
 # Public, read-only watches outside the GitHub App installation.

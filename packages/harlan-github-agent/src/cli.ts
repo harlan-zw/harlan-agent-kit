@@ -4,7 +4,7 @@ import process from 'node:process'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
 import { invokesSubCommand } from './cli-subcommand.ts'
-import { loadConfig, loadGitHubAppPrivateKey, validateRepositoryMappings } from './config.ts'
+import { loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateRepositoryMappings } from './config.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
@@ -119,6 +119,11 @@ const command = defineCommand({
     if (dashboardPassword._tag === 'Err')
       throw new Error(dashboardPassword.error)
 
+    const webhook = validated.value.webhook
+    const webhookSecret = webhook._tag === 'Enabled' ? await loadWebhookSecret(webhook.secretPath) : null
+    if (webhookSecret?._tag === 'Err')
+      throw new Error(webhookSecret.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+
     const gitIdentity = await loadGitIdentity()
     if (gitIdentity._tag === 'Err')
       throw new Error(gitIdentity.error)
@@ -128,9 +133,12 @@ const command = defineCommand({
       dashboardPassword: dashboardPassword.value,
       gitIdentity: gitIdentity.value,
       githubPrivateKey: privateKey.value,
+      ...(webhookSecret === null ? {} : { webhookSecret: webhookSecret.value }),
       logger: consola,
     })
     consola.success(`Dashboard: ${validated.value.server.allowedOrigin}`)
+    if (webhook._tag === 'Enabled')
+      consola.success(`Webhooks: http://${webhook.host}:${webhook.port}/webhook`)
     await waitForShutdown()
     const stopped = await stopWithin(service.stop, 10_000)
     if (!stopped) {

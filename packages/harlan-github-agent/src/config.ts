@@ -1,7 +1,7 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, TakeOwnershipConfig, ValidatedAgentConfig } from './types.ts'
+import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -220,6 +220,69 @@ function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfi
   return { provider, reservePercent: reserve, order }
 }
 
+/** The webhook listener is off unless the configuration turns it on. */
+function webhookConfig(source: UnknownRecord, issues: ConfigIssue[]): WebhookConfig | undefined {
+  const value = source.webhook
+  if (value === undefined)
+    return { _tag: 'Disabled' }
+  if (!isRecord(value)) {
+    issues.push({ path: '$.webhook', message: 'Expected an object.' })
+    return undefined
+  }
+  const enabled = requiredBoolean(value, 'enabled', '$.webhook', issues)
+  if (enabled === undefined)
+    return undefined
+  if (!enabled)
+    return { _tag: 'Disabled' }
+
+  // Always loopback. The tunnel connects locally, so binding wider would put
+  // the listener on the network with nothing in front of it.
+  const host = '127.0.0.1'
+  const portValue = value.port ?? 3211
+  const port = typeof portValue === 'number' && Number.isInteger(portValue) && portValue > 0 && portValue < 65_536
+    ? portValue
+    : undefined
+  if (port === undefined)
+    issues.push({ path: '$.webhook.port', message: 'Expected a port from 1 to 65535.' })
+  const secretPath = requiredString(value, 'secret_path', '$.webhook', issues)
+  if (secretPath !== undefined && !isAbsolute(secretPath))
+    issues.push({ path: '$.webhook.secret_path', message: 'Expected an absolute path.' })
+
+  if (port === undefined || secretPath === undefined)
+    return undefined
+  return { _tag: 'Enabled', host, port, secretPath }
+}
+
+/**
+ * Reads the GitHub webhook secret, with the same file checks as the App key.
+ *
+ * A secret with loose permissions is refused rather than used, because anything
+ * that can read it can forge a delivery.
+ */
+export async function loadWebhookSecret(path: string): Promise<Result<string, ConfigIssue[]>> {
+  const issuePath = '$.webhook.secret_path'
+  return lstat(path)
+    .then(async (linkMetadata) => {
+      if (linkMetadata.isSymbolicLink())
+        return err([{ path: issuePath, message: 'Webhook secret path must not be a symbolic link.' }])
+      const metadata = await stat(path)
+      if (!metadata.isFile())
+        return err([{ path: issuePath, message: 'Webhook secret path is not a file.' }])
+      if (process.getuid !== undefined && metadata.uid !== process.getuid())
+        return err([{ path: issuePath, message: 'Webhook secret has the wrong owner.' }])
+      if ((metadata.mode & 0o077) !== 0)
+        return err([{ path: issuePath, message: 'Webhook secret must use mode 0600.' }])
+      const secret = (await readFile(path, 'utf8')).trim()
+      if (secret.length < 32)
+        return err([{ path: issuePath, message: 'Webhook secret must be at least 32 characters.' }])
+      return ok(secret)
+    })
+    .catch((error: unknown) => err([{
+      path: issuePath,
+      message: error instanceof Error ? error.message : 'Webhook secret could not be read.',
+    }]))
+}
+
 function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[]): RepositoryMapping | undefined {
   const path = `$.repositories[${index}]`
   if (!isRecord(value)) {
@@ -340,6 +403,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   const issues: ConfigIssue[] = []
   const agent = agentSettings(document.value, issues)
+  const webhook = webhookConfig(document.value, issues)
   const github = requiredRecord(document.value, 'github', '$', issues)
   const server = requiredRecord(document.value, 'server', '$', issues)
   const storage = requiredRecord(document.value, 'storage', '$', issues)
@@ -438,6 +502,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   if (
     issues.length > 0
     || agent === undefined
+    || webhook === undefined
     || host === undefined
     || appId === undefined
     || privateKeyPath === undefined
@@ -460,6 +525,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     agent,
     github: { appId, privateKeyPath, allowedOwners },
     server: { host, port, allowedOrigin },
+    webhook,
     storage: { path: storagePath },
     trustedCheckoutRoots,
     mutationsEnabled,

@@ -47,6 +47,7 @@ import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
 import { createTerminalSessionLauncher } from './terminal-session.ts'
+import { createReconcileHint, createWebhookApp } from './webhook.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
 import { agentWorktreeLeaseKey, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createReviewFixWorktreeManager, sweepAgentWorktrees } from './worktree.ts'
 
@@ -57,6 +58,8 @@ export interface RunningAgentService {
 
 export interface StartAgentServiceOptions {
   config: ValidatedAgentConfig
+  /** Required when the configuration enables the webhook listener. */
+  webhookSecret?: string
   userAccess?: GitHubUserAccess
   dashboardPassword: string
   githubPrivateKey: string
@@ -716,6 +719,30 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     throw error
   })
   capacity.start()
+  // A delivery says "read GitHub again", never what changed. Reconciliation
+  // stays the only writer, so a missed, duplicated, or forged delivery can at
+  // worst ask for a pass the poller would have run anyway.
+  const reconcileHint = createReconcileHint({
+    onError: error => options.logger.error(error),
+    run: () => poller.runNow(),
+  })
+  const webhookServer = config.webhook._tag === 'Disabled' || options.webhookSecret === undefined
+    ? null
+    : await startAgentServer({
+        app: createWebhookApp({
+          allowedOwners: config.github.allowedOwners,
+          logger: { info: message => options.logger.info(message) },
+          onHint: () => reconcileHint.hint(),
+          secret: options.webhookSecret,
+        }),
+        hostname: config.webhook.host,
+        port: config.webhook.port,
+      }).catch((error: unknown) => {
+      // A busy port must not take the whole service down. Polling still works.
+        options.logger.error(`The webhook listener did not start: ${error instanceof Error ? error.message : 'unknown error'}`)
+        return null
+      })
+
   poller.start()
   externalPoller.start()
   worktreeSweeper.start()
@@ -732,6 +759,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     stop: async () => {
       await Promise.all([
         capacity.stop(),
+        reconcileHint.stop(),
         poller.stop(),
         externalPoller.stop(),
         worktreeSweeper.stop(),
@@ -744,7 +772,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         mutationSchedulers?.issues.stop() ?? Promise.resolve(),
       ])
       dashboardShutdown.abort()
-      await server.close()
+      await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
       store.close()
     },
   }
