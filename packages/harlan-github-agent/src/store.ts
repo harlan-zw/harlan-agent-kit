@@ -7241,9 +7241,13 @@ export function openJournalStore(
     WHERE stopped.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
       AND published.phase != 'terminal'
       AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
-      -- GitHub closure creates a new Revision. The stopped Review still owns
-      -- the canonical comment while GitHub reports the same exact head SHA.
-      AND json_extract(current_revisions.payload, '$.headSha') = json_extract(revisions.payload, '$.headSha')
+      -- A closed pull request takes no more work, so its last Task still owns
+      -- the canonical comment however far the head moved first. An open one
+      -- hands the comment to the Task queued for its current head instead.
+      AND (
+        json_extract(current_revisions.payload, '$.headSha') = json_extract(revisions.payload, '$.headSha')
+        OR json_extract(current_revisions.payload, '$.state') = 'closed'
+      )
       AND repositories.enabled = 1
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       -- Repair owns the canonical comment after Review hands work to it.
@@ -7306,7 +7310,10 @@ export function openJournalStore(
           AND ${taskTable}.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
           AND ${taskTable}.revision_id = ?
           AND json_extract(task_revision.payload, '$.headSha') = ?
-          AND json_extract(current_revision.payload, '$.headSha') = ?
+          AND (
+            json_extract(current_revision.payload, '$.headSha') = ?
+            OR json_extract(current_revision.payload, '$.state') = 'closed'
+          )
       `).get(
         input.taskId,
         input.taskKind,
