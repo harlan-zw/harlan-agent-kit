@@ -14,11 +14,32 @@ export type StoppedReviewOutcome
 
 export type { StoppedReviewDisposition }
 
+/**
+ * What one pass of the sweep did, and what it left behind.
+ *
+ * `remaining` is never silent. A sweep that closes three comments out of a
+ * hundred and says nothing reads exactly like a sweep with nothing to do.
+ */
+export interface StoppedReviewSweep {
+  results: Array<Result<StoppedReviewOutcome, string>>
+  remaining: number
+}
+
 export interface ReviewStopSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
   store: Pick<JournalStore, 'listStoppedReviews' | 'recordDeletedReviewComment' | 'recordStoppedReviewStatus'>
+  /**
+   * How long one pass may spend closing comments.
+   *
+   * Every row costs a GitHub round trip, and the whole list used to run inside
+   * a pass that has a fixed deadline. A backlog of 139 rows spent that deadline
+   * and the poller aborted the sweep at the same place every pass, so two
+   * comments closed and the rest never ran. The sweep stops on its own budget
+   * now and the next pass carries on.
+   */
+  budgetMilliseconds?: number
 }
 
 export function stoppedReviewComment(
@@ -84,7 +105,7 @@ Push a new commit to start a new review. To review this commit again, comment \`
 export async function publishStoppedReviews(
   options: ReviewStopSweepOptions,
   signal: AbortSignal,
-): Promise<Array<Result<StoppedReviewOutcome, string>>> {
+): Promise<StoppedReviewSweep> {
   const mappings = new Map(options.repositories.map(mapping => [mapping.github.toLowerCase(), mapping]))
   const reviews = options.store.listStoppedReviews()
   const publish = async (review: StoppedReview): Promise<Result<StoppedReviewOutcome, string>> => {
@@ -143,12 +164,18 @@ export async function publishStoppedReviews(
       : err(`${review.repository}#${review.pullRequestNumber}: the final review comment could not be saved.`)
   }
 
+  const budgetMilliseconds = options.budgetMilliseconds ?? 30_000
+  const startedAt = options.now().getTime()
   const results: Array<Result<StoppedReviewOutcome, string>> = []
+  let index = 0
   for (const review of reviews) {
+    if (signal.aborted || options.now().getTime() - startedAt >= budgetMilliseconds)
+      break
+    index += 1
     // One row must not take the rest of the sweep with it. A throw here used
     // to abandon every row behind it, and the pass reported nothing at all.
     results.push(await publish(review).catch((error: unknown) =>
       err(`${review.repository}#${review.pullRequestNumber}: ${error instanceof Error ? error.message : 'The stopped review comment failed unexpectedly.'}`)))
   }
-  return results
+  return { results, remaining: reviews.length - index }
 }
