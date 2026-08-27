@@ -443,7 +443,119 @@ export interface ClaimedIssueWorkTask extends IssueWorkTask {
 
 export type AgentTask = ConflictResolutionTask | ReviewFixTask | BaselineRepairTask | AdversarialReviewTask | IssueTriageTask | IssueWorkTask
 export type ClaimedAgentTask = ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask
-export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'issue_triage' | 'issue_work'
+export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'issue_triage' | 'issue_work' | 'routine_scan' | 'routine_fix'
+
+/**
+ * Every Routine the service knows how to run.
+ *
+ * A repository spec selects from this list and never extends it, so a pull
+ * request can change a schedule and can never name new work.
+ */
+export type RoutineName = 'sentry-checkin' | 'pr-triage'
+
+/**
+ * What a Routine run does with what it finds.
+ *
+ * `report` writes to the tracking issue and opens nothing. `propose` opens one
+ * pull request per Candidate. An unproven Routine earns `propose` by holding
+ * its Candidate precision in `report` first.
+ */
+export type RoutineMode = 'report' | 'propose'
+
+/** One Routine entry exactly as a repository spec declares it. */
+export interface RoutineSpecEntry {
+  name: RoutineName
+  /** Every cron expression this Routine answers, in its own time zone. */
+  crons: readonly string[]
+  timeZone: string
+  mode: RoutineMode
+  enabled: boolean
+}
+
+/** One repository's whole Routine spec, parsed at the boundary. */
+export interface RoutineSpec {
+  routines: readonly RoutineSpecEntry[]
+}
+
+/**
+ * One Routine bound to one Repository mapping.
+ *
+ * A Routine is not an Item. It answers a clock, so it has no issue, no pull
+ * request, and no Revision to hang from.
+ */
+export interface Routine {
+  id: string
+  repository: string
+  name: RoutineName
+  crons: readonly string[]
+  timeZone: string
+  mode: RoutineMode
+  enabled: boolean
+  /** The default branch commit the spec was read from. */
+  specSha: string
+  lastRunAt: string | null
+  updatedAt: string
+}
+
+/**
+ * What one Routine run is doing.
+ *
+ * `Skipped` is its own state. A run that fell outside the catch-up window is
+ * recorded rather than forgotten, so a check-in that did not happen reads
+ * differently from one that found nothing.
+ */
+export type RoutineRunState
+  = | { _tag: 'Queued' }
+    | { _tag: 'Running', workerId: string, leaseExpiresAt: string }
+    | { _tag: 'Completed', evidence: string }
+    | { _tag: 'Failed', reason: string }
+    | { _tag: 'Skipped', reason: string }
+    | { _tag: 'ActionRequired', reason: string }
+    | { _tag: 'Superseded', reason: string }
+
+export interface RoutineRun {
+  id: string
+  routineId: string
+  repository: string
+  name: RoutineName
+  /** The exact cron instant this run answers. One run per instant, ever. */
+  scheduledFor: string
+  specSha: string
+  state: RoutineRunState
+  fence: number
+  attempts: number
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * What happened to one Candidate.
+ *
+ * A `Rejected` Candidate keeps its reason so the next scan can be told not to
+ * propose it again. A Routine that repeats a rejected change every day costs
+ * more trust than a wrong fix.
+ */
+export type CandidateResult
+  = | { _tag: 'Proposed', pullRequest: number | null }
+    | { _tag: 'Merged', pullRequest: number }
+    | { _tag: 'Rejected', reason: string }
+    | { _tag: 'Superseded', reason: string }
+
+/** One proposed change a Routine run found, before any edit. */
+export interface Candidate {
+  id: string
+  routineId: string
+  runId: string
+  /** Stable across runs. Never derived from a line number. */
+  fingerprint: string
+  target: string
+  claim: string
+  verification: string
+  estimatedChangedFiles: number
+  result: CandidateResult
+  createdAt: string
+  updatedAt: string
+}
 
 interface ReviewStatusCommandBase {
   id: string

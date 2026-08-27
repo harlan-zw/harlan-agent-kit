@@ -8,6 +8,8 @@ import type {
   AgentSelection,
   AgentTask,
   BaselineRepairTask,
+  Candidate,
+  CandidateResult,
   ClaimedAdversarialReviewTask,
   ClaimedBaselineRepairTask,
   ClaimedConflictResolutionTask,
@@ -57,6 +59,10 @@ import type {
   ReviewRerunSource,
   ReviewRun,
   ReviewStatusTaskPhase,
+  Routine,
+  RoutineRun,
+  RoutineRunState,
+  RoutineSpecEntry,
   SelectionMode,
   StoredAgentControl,
   TaskState,
@@ -528,6 +534,16 @@ export interface JournalStore {
   claimIssueTriageComment: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueTriageCommentCommand | null
   claimReviewStatus: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
   close: () => void
+  /** Replaces one repository's Routines with the spec its default branch declares. */
+  syncRoutines: (input: { repository: string, specSha: string, entries: readonly RoutineSpecEntry[], at: string }) => Routine[]
+  listRoutines: (repository?: string) => Routine[]
+  /** Inserts one run for one exact cron instant. Answers null when it already exists. */
+  openRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, at: string }) => RoutineRun | null
+  /** Records an instant that fell outside the catch-up window, so a missed run stays visible. */
+  skipRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, reason: string, at: string }) => RoutineRun | null
+  listRoutineRuns: (routineId: string, limit?: number) => RoutineRun[]
+  recordCandidates: (input: { routineId: string, runId: string, candidates: ReadonlyArray<Omit<Candidate, 'id' | 'routineId' | 'runId' | 'result' | 'createdAt' | 'updatedAt'>>, at: string }) => Candidate[]
+  listCandidates: (routineId: string) => Candidate[]
   closeMissingItems: (github: string, seen: Array<{ kind: GitHubItem['kind'], number: number }>, observedAt: string) => number
   completeTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -3520,6 +3536,89 @@ const automaticAgentSelectionMigration = `
   PRAGMA user_version = 37;
 `
 
+/**
+ * Adds Routines, their runs, and the Candidate ledger.
+ *
+ * A Routine answers a clock, so it has no Item and no Revision. `worker_tasks`
+ * requires both, which is why these are their own tables rather than another
+ * Task kind hung off a synthetic Item.
+ *
+ * Two unique constraints carry the design:
+ *
+ * `routine_runs (routine_id, scheduled_for)` makes a backlog unrepresentable.
+ * A machine asleep for two days can only ever insert one run per cron instant,
+ * so waking up runs a Routine once instead of ninety-six times.
+ *
+ * `candidates (routine_id, fingerprint)` makes a repeated proposal
+ * unrepresentable. A Candidate Harlan rejected cannot be inserted a second
+ * time, so the rejection memory is a constraint and not a query someone has to
+ * remember to write.
+ */
+const routineMigration = `
+  CREATE TABLE routines (
+    id TEXT PRIMARY KEY,
+    repository TEXT NOT NULL,
+    name TEXT NOT NULL,
+    crons TEXT NOT NULL CHECK (json_valid(crons)),
+    time_zone TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('report', 'propose')),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    spec_sha TEXT NOT NULL,
+    last_run_at TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE (repository, name)
+  );
+
+  CREATE TABLE routine_runs (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    scheduled_for TEXT NOT NULL,
+    spec_sha TEXT NOT NULL,
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Queued', 'Running', 'Completed', 'Failed', 'Skipped', 'ActionRequired', 'Superseded')),
+    reason TEXT,
+    evidence TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (routine_id, scheduled_for),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (state_tag != 'Completed' OR evidence IS NOT NULL),
+    CHECK (state_tag NOT IN ('Failed', 'Skipped', 'ActionRequired', 'Superseded') OR reason IS NOT NULL)
+  );
+
+  CREATE INDEX routine_runs_state ON routine_runs(state_tag, updated_at);
+
+  CREATE TABLE candidates (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES routine_runs(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    target TEXT NOT NULL,
+    claim TEXT NOT NULL,
+    verification TEXT NOT NULL,
+    estimated_changed_files INTEGER NOT NULL,
+    result_tag TEXT NOT NULL CHECK (result_tag IN ('Proposed', 'Merged', 'Rejected', 'Superseded')),
+    reason TEXT,
+    pull_request INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (routine_id, fingerprint),
+    CHECK (result_tag NOT IN ('Rejected', 'Superseded') OR reason IS NOT NULL),
+    CHECK (result_tag != 'Merged' OR pull_request IS NOT NULL)
+  );
+
+  CREATE INDEX candidates_routine ON candidates(routine_id, result_tag);
+
+  PRAGMA user_version = 38;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3545,7 +3644,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 37)
+  if (version === 38)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3694,6 +3793,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 36) {
     applyMigration(database, automaticAgentSelectionMigration)
+    version = 37
+  }
+  if (version === 37) {
+    applyMigration(database, routineMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -7586,8 +7689,307 @@ export function openJournalStore(
     `).run(input.progress.percent, input.progress.label, input.at, input.taskId, input.workerId, input.fence).changes === 1
   }
 
+  interface RoutineRow {
+    id: string
+    repository: string
+    name: string
+    crons: string
+    time_zone: string
+    mode: string
+    enabled: number
+    spec_sha: string
+    last_run_at: string | null
+    updated_at: string
+  }
+
+  const readRoutine = (row: RoutineRow): Routine => ({
+    id: row.id,
+    repository: row.repository,
+    name: row.name as Routine['name'],
+    crons: JSON.parse(row.crons) as string[],
+    timeZone: row.time_zone,
+    mode: row.mode as Routine['mode'],
+    enabled: row.enabled === 1,
+    specSha: row.spec_sha,
+    lastRunAt: row.last_run_at,
+    updatedAt: row.updated_at,
+  })
+
+  /**
+   * Replaces one repository's Routines with what its spec declares.
+   *
+   * A Routine the spec dropped is deleted, and its runs and Candidates go with
+   * it through the cascade. Leaving them would let a Routine nobody declares
+   * keep answering a clock.
+   *
+   * `last_run_at` survives a rewrite. A schedule edit must not make every past
+   * instant look unrun, which would fire a catch-up run on the next tick.
+   */
+  const syncRoutines: JournalStore['syncRoutines'] = (input) => {
+    const upsert = database.prepare(`
+      INSERT INTO routines (id, repository, name, crons, time_zone, mode, enabled, spec_sha, last_run_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+      ON CONFLICT (repository, name) DO UPDATE SET
+        crons = excluded.crons,
+        time_zone = excluded.time_zone,
+        mode = excluded.mode,
+        enabled = excluded.enabled,
+        spec_sha = excluded.spec_sha,
+        updated_at = excluded.updated_at
+    `)
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const declared = input.entries.map(entry => `${input.repository}:${entry.name}`)
+      const placeholders = declared.map(() => '?').join(', ')
+      database.prepare(
+        `DELETE FROM routines WHERE repository = ?${declared.length === 0 ? '' : ` AND id NOT IN (${placeholders})`}`,
+      ).run(input.repository, ...declared)
+      input.entries.forEach((entry) => {
+        upsert.run(
+          `${input.repository}:${entry.name}`,
+          input.repository,
+          entry.name,
+          JSON.stringify(entry.crons),
+          entry.timeZone,
+          entry.mode,
+          entry.enabled ? 1 : 0,
+          input.specSha,
+          input.at,
+        )
+      })
+      database.exec('COMMIT')
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    return listRoutines(input.repository)
+  }
+
+  const listRoutines: JournalStore['listRoutines'] = (repository) => {
+    const rows = repository === undefined
+      ? database.prepare('SELECT * FROM routines ORDER BY repository, name').all() as unknown as RoutineRow[]
+      : database.prepare('SELECT * FROM routines WHERE repository = ? ORDER BY name').all(repository) as unknown as RoutineRow[]
+    return rows.map(readRoutine)
+  }
+
+  interface RoutineRunRow {
+    id: string
+    routine_id: string
+    repository: string
+    name: string
+    scheduled_for: string
+    spec_sha: string
+    state_tag: string
+    reason: string | null
+    evidence: string | null
+    worker_id: string | null
+    lease_expires_at: string | null
+    fence: number
+    attempts: number
+    created_at: string
+    updated_at: string
+  }
+
+  const readRoutineRunState = (row: RoutineRunRow): RoutineRunState => {
+    switch (row.state_tag) {
+      case 'Running':
+        return { _tag: 'Running', workerId: row.worker_id ?? '', leaseExpiresAt: row.lease_expires_at ?? '' }
+      case 'Completed':
+        return { _tag: 'Completed', evidence: row.evidence ?? '' }
+      case 'Failed':
+        return { _tag: 'Failed', reason: row.reason ?? '' }
+      case 'Skipped':
+        return { _tag: 'Skipped', reason: row.reason ?? '' }
+      case 'ActionRequired':
+        return { _tag: 'ActionRequired', reason: row.reason ?? '' }
+      case 'Superseded':
+        return { _tag: 'Superseded', reason: row.reason ?? '' }
+      default:
+        return { _tag: 'Queued' }
+    }
+  }
+
+  const readRoutineRun = (row: RoutineRunRow): RoutineRun => ({
+    id: row.id,
+    routineId: row.routine_id,
+    repository: row.repository,
+    name: row.name as Routine['name'],
+    scheduledFor: row.scheduled_for,
+    specSha: row.spec_sha,
+    state: readRoutineRunState(row),
+    fence: row.fence,
+    attempts: row.attempts,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+
+  const readRunById = (id: string): RoutineRun | null => {
+    const row = database.prepare(`
+      SELECT routine_runs.*, routines.repository AS repository, routines.name AS name
+      FROM routine_runs
+      JOIN routines ON routines.id = routine_runs.routine_id
+      WHERE routine_runs.id = ?
+    `).get(id) as unknown as RoutineRunRow | undefined
+    return row === undefined ? null : readRoutineRun(row)
+  }
+
+  /**
+   * Opens one run for one exact cron instant.
+   *
+   * The unique constraint on `(routine_id, scheduled_for)` decides this, not a
+   * read followed by a write. Two ticks racing the same instant produce one
+   * run, and a machine waking after two days asleep produces one run and never
+   * a backlog of them.
+   */
+  const insertRoutineRun = (input: {
+    routineId: string
+    scheduledFor: string
+    specSha: string
+    at: string
+    state: 'Queued' | 'Skipped'
+    reason: string | null
+  }): RoutineRun | null => {
+    const id = `${input.routineId}:${input.scheduledFor}`
+    const inserted = database.prepare(`
+      INSERT INTO routine_runs (id, routine_id, scheduled_for, spec_sha, state_tag, reason, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (routine_id, scheduled_for) DO NOTHING
+    `).run(id, input.routineId, input.scheduledFor, input.specSha, input.state, input.reason, input.at, input.at).changes === 1
+    if (!inserted)
+      return null
+    // The clock only moves forward, so the last run is the newest instant that
+    // produced one. A skipped instant counts, or the next tick tries it again.
+    database.prepare('UPDATE routines SET last_run_at = ?, updated_at = ? WHERE id = ?')
+      .run(input.scheduledFor, input.at, input.routineId)
+    return readRunById(id)
+  }
+
+  const openRoutineRun: JournalStore['openRoutineRun'] = input =>
+    insertRoutineRun({ ...input, state: 'Queued', reason: null })
+
+  const skipRoutineRun: JournalStore['skipRoutineRun'] = input =>
+    insertRoutineRun({ ...input, state: 'Skipped', reason: input.reason })
+
+  const listRoutineRuns: JournalStore['listRoutineRuns'] = (routineId, limit = 50) => {
+    const rows = database.prepare(`
+      SELECT routine_runs.*, routines.repository AS repository, routines.name AS name
+      FROM routine_runs
+      JOIN routines ON routines.id = routine_runs.routine_id
+      WHERE routine_runs.routine_id = ?
+      ORDER BY routine_runs.scheduled_for DESC
+      LIMIT ?
+    `).all(routineId, limit) as unknown as RoutineRunRow[]
+    return rows.map(readRoutineRun)
+  }
+
+  interface CandidateRow {
+    id: string
+    routine_id: string
+    run_id: string
+    fingerprint: string
+    target: string
+    claim: string
+    verification: string
+    estimated_changed_files: number
+    result_tag: string
+    reason: string | null
+    pull_request: number | null
+    created_at: string
+    updated_at: string
+  }
+
+  const readCandidateResult = (row: CandidateRow): CandidateResult => {
+    switch (row.result_tag) {
+      case 'Merged':
+        return { _tag: 'Merged', pullRequest: row.pull_request ?? 0 }
+      case 'Rejected':
+        return { _tag: 'Rejected', reason: row.reason ?? '' }
+      case 'Superseded':
+        return { _tag: 'Superseded', reason: row.reason ?? '' }
+      default:
+        return { _tag: 'Proposed', pullRequest: row.pull_request }
+    }
+  }
+
+  const readCandidate = (row: CandidateRow): Candidate => ({
+    id: row.id,
+    routineId: row.routine_id,
+    runId: row.run_id,
+    fingerprint: row.fingerprint,
+    target: row.target,
+    claim: row.claim,
+    verification: row.verification,
+    estimatedChangedFiles: row.estimated_changed_files,
+    result: readCandidateResult(row),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+
+  /**
+   * Records the Candidates one run found, keeping only the ones never seen.
+   *
+   * The unique constraint on `(routine_id, fingerprint)` carries the rejection
+   * memory. A Candidate Harlan rejected cannot be written again, so a Routine
+   * cannot propose the same change every morning. Answering with only the
+   * inserted rows tells the caller exactly what is new.
+   */
+  const recordCandidates: JournalStore['recordCandidates'] = (input) => {
+    const statement = database.prepare(`
+      INSERT INTO candidates (
+        id, routine_id, run_id, fingerprint, target, claim, verification,
+        estimated_changed_files, result_tag, pull_request, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Proposed', NULL, ?, ?)
+      ON CONFLICT (routine_id, fingerprint) DO NOTHING
+    `)
+    const fresh: string[] = []
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      input.candidates.forEach((candidate) => {
+        const id = `${input.runId}:${candidate.fingerprint}`
+        const inserted = statement.run(
+          id,
+          input.routineId,
+          input.runId,
+          candidate.fingerprint,
+          candidate.target,
+          candidate.claim,
+          candidate.verification,
+          candidate.estimatedChangedFiles,
+          input.at,
+          input.at,
+        ).changes === 1
+        if (inserted)
+          fresh.push(id)
+      })
+      database.exec('COMMIT')
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    if (fresh.length === 0)
+      return []
+    const rows = database.prepare(
+      `SELECT * FROM candidates WHERE id IN (${fresh.map(() => '?').join(', ')}) ORDER BY created_at`,
+    ).all(...fresh) as unknown as CandidateRow[]
+    return rows.map(readCandidate)
+  }
+
+  const listCandidates: JournalStore['listCandidates'] = routineId =>
+    (database.prepare('SELECT * FROM candidates WHERE routine_id = ? ORDER BY created_at').all(routineId) as unknown as CandidateRow[])
+      .map(readCandidate)
+
   return {
     approveIssueWork,
+    syncRoutines,
+    listRoutines,
+    openRoutineRun,
+    skipRoutineRun,
+    listRoutineRuns,
+    recordCandidates,
+    listCandidates,
     isIssueWorkApprovalReady,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
