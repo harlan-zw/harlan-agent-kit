@@ -300,7 +300,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const turn = await runAgentTurn(options, {
         freshSession: task.state.fence > 1,
         number: task.issueNumber,
-        progress: { currentPercent: 35, report: reportProgress, work: 'fix' },
+        progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'fix' },
         prompt: workerPrompt(task, snapshot.value.body, snapshot.value.comments, template.value),
         repository: task.repository,
         role: 'issue_work',

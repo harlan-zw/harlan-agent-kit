@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentProvider } from '../src/agent-provider.ts'
 import type { Result } from '../src/result.ts'
+import type { AgentProgress } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { runAgentTurn, runParsedAgentTurn } from '../src/agent-turn.ts'
@@ -143,5 +144,71 @@ describe('an exhausted Context budget', () => {
     await runParsedAgentTurn(options(exhausts(capture)), input, new AbortController().signal)
 
     expect(capture.prompts).toHaveLength(1)
+  })
+})
+
+describe('agent turn progress', () => {
+  /** Drives one clock the event stream advances, so each beat is exact. */
+  function scriptedTurn(steps: Array<{ afterMilliseconds: number, event: AgentEvent }>) {
+    let nowMilliseconds = new Date('2026-08-16T00:00:00.000Z').getTime()
+    const provider: AgentProvider = {
+      name: 'opencode',
+      runTurn: () => (async function* () {
+        for (const step of steps) {
+          nowMilliseconds += step.afterMilliseconds
+          yield step.event
+        }
+      })(),
+    }
+    return { provider, now: () => new Date(nowMilliseconds) }
+  }
+
+  function reportingInput(reported: AgentProgress[]) {
+    return {
+      ...input,
+      progress: {
+        current: { percent: 35, label: 'Git worktree ready' },
+        report: (progress: AgentProgress) => {
+          reported.push(progress)
+          return ok(undefined)
+        },
+        work: 'fix' as const,
+      },
+    }
+  }
+
+  it('restates one unchanged phase on a slow beat and keeps its start time', async () => {
+    const reported: AgentProgress[] = []
+    const { provider, now } = scriptedTurn([
+      { afterMilliseconds: 0, event: { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'FileChanged', changes: [{ path: 'a.ts', kind: 'update' }] } as AgentEvent },
+      { afterMilliseconds: 60_000, event: { _tag: 'FileChanged', changes: [{ path: 'b.ts', kind: 'update' }] } as AgentEvent },
+      { afterMilliseconds: 40 * 60_000, event: { _tag: 'FileChanged', changes: [{ path: 'c.ts', kind: 'update' }] } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'Message', text: '{"outcome":"resolved"}' } as AgentEvent },
+    ])
+
+    const result = await runAgentTurn({ ...options(provider), now }, reportingInput(reported), new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    // The first edit advances the phase. The second is inside the beat, so it
+    // stays quiet. The third restates the same phase, from the same start.
+    expect(reported).toEqual([
+      { percent: 70, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
+      { percent: 70, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
+    ])
+  })
+
+  it('says nothing extra while one phase stays inside the beat', async () => {
+    const reported: AgentProgress[] = []
+    const { provider, now } = scriptedTurn([
+      { afterMilliseconds: 0, event: { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'FileChanged', changes: [{ path: 'a.ts', kind: 'update' }] } as AgentEvent },
+      { afterMilliseconds: 60_000, event: { _tag: 'FileChanged', changes: [{ path: 'b.ts', kind: 'update' }] } as AgentEvent },
+      { afterMilliseconds: 60_000, event: { _tag: 'Message', text: '{"outcome":"resolved"}' } as AgentEvent },
+    ])
+
+    await runAgentTurn({ ...options(provider), now }, reportingInput(reported), new AbortController().signal)
+
+    expect(reported).toHaveLength(1)
   })
 })

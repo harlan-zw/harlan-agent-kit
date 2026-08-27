@@ -207,7 +207,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       const turn = await runAgentTurn(options, {
         freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
-        progress: { currentPercent: 35, report: progress, work: 'baseline' },
+        progress: { current: { percent: 35, label: 'Git worktree ready' }, report: progress, work: 'baseline' },
         prompt: prompt(task, checks, template.value),
         repository: task.repository,
         role: 'baseline_repair',

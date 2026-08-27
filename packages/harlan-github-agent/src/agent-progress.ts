@@ -19,6 +19,24 @@ const resultLabel: Record<AgentProgressWork, string> = {
   baseline: 'Checking the default branch repair',
 }
 
+/**
+ * How long the current phase has run, in the fewest words that answer it.
+ *
+ * Empty under a minute, because a phase that just started says nothing useful
+ * and every comment would carry noise.
+ */
+export function formatPhaseDuration(since: string | undefined, at: string): string {
+  if (since === undefined)
+    return ''
+  const minutes = Math.floor((new Date(at).getTime() - new Date(since).getTime()) / 60_000)
+  if (!Number.isFinite(minutes) || minutes < 1)
+    return ''
+  if (minutes < 60)
+    return ` for ${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  return ` for ${hours} h ${minutes - hours * 60} min`
+}
+
 export function formatProgressBar(percent: number): string {
   const complete = Math.round(percent / 20)
   return `${'▓'.repeat(complete)}${'░'.repeat(5 - complete)} ${percent}%`

@@ -12,6 +12,16 @@ import { addAgentTokenUsage } from './agent-provider.ts'
 import { contextBudgetExhaustedReason } from './failure.ts'
 import { err, ok } from './result.ts'
 
+/**
+ * How often one unchanged phase restates itself on the pull request.
+ *
+ * Progress only moves forward, so a Repair that edits files for forty minutes
+ * publishes one line and then goes quiet. A reader could not tell that from an
+ * agent that had died. A slow beat proves the agent is still producing events,
+ * and stays far below the noise of a comment per file.
+ */
+const PROGRESS_HEARTBEAT_MILLISECONDS = 15 * 60_000
+
 export interface AgentTurnOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
   now: () => Date
@@ -26,7 +36,8 @@ export interface AgentTurnInput {
   /** Issue or pull request number the session belongs to. */
   number: number
   progress?: {
-    currentPercent: number
+    /** The phase the caller already reported, which the turn continues from. */
+    current: AgentProgress
     report: (progress: AgentProgress) => Promise<Result<void, string>> | Result<void, string>
     work: AgentProgressWork
   }
@@ -98,7 +109,9 @@ export async function runAgentTurn(
   let currentSessionId = sessionId
   let failure: string | undefined
   let usage: AgentTokenUsage = { _tag: 'Unavailable' }
-  let currentPercent = input.progress?.currentPercent ?? 0
+  let current = input.progress?.current
+  let phaseSince = options.now().toISOString()
+  let reportedAt = phaseSince
   for await (const event of events) {
     if (event._tag === 'SessionStarted') {
       currentSessionId = event.sessionId
@@ -122,13 +135,27 @@ export async function runAgentTurn(
     const activity = agentActivityFromEvent(event, options.now().toISOString())
     if (activity !== undefined)
       options.activityLog?.record(input.taskId, activity)
-    const progress = input.progress === undefined ? undefined : agentEventProgress(event, input.progress.work)
-    if (progress !== undefined && progress.percent > currentPercent) {
-      const reported = await input.progress!.report(progress)
-      if (reported._tag === 'Err')
-        failure ??= reported.error
-      else
-        currentPercent = progress.percent
+    if (input.progress !== undefined) {
+      const at = options.now().toISOString()
+      const next = agentEventProgress(event, input.progress.work)
+      // A new phase restates the line. Otherwise the same phase restates it on
+      // a slow beat, so a reader can see the agent is alive without a comment
+      // for every file it touches.
+      const advanced = next !== undefined && current !== undefined && next.percent > current.percent
+      const stale = new Date(at).getTime() - new Date(reportedAt).getTime() >= PROGRESS_HEARTBEAT_MILLISECONDS
+      if (advanced || stale) {
+        const phase = advanced ? next as AgentProgress : current as AgentProgress
+        if (advanced)
+          phaseSince = at
+        const reported = await input.progress.report({ ...phase, since: phaseSince })
+        if (reported._tag === 'Err') {
+          failure ??= reported.error
+        }
+        else {
+          current = phase
+          reportedAt = at
+        }
+      }
     }
   }
 
@@ -169,7 +196,7 @@ export async function runParsedAgentTurn<Value>(
     ...input,
     prompt: repairPrompt(input.schema, turn.value.response, parsed.error),
     // The work is done, so this turn reports no progress of its own.
-    ...(input.progress === undefined ? {} : { progress: { ...input.progress, currentPercent: 100 } }),
+    ...(input.progress === undefined ? {} : { progress: { ...input.progress, current: { percent: 100, label: input.progress.current.label } } }),
   }, signal)
   if (repaired._tag === 'Err')
     return err(parsed.error)
