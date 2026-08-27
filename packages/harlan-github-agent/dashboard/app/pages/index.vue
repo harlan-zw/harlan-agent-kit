@@ -15,6 +15,7 @@ import {
   incidentUrl,
   isIssueWorkThrottled,
   isProgressStalled,
+  providerCapacityPresentation,
   queuedEntries,
   queueDetail,
   queueWork,
@@ -22,6 +23,7 @@ import {
   reviewOutcomeTone,
   stalledLabel,
   statusClass,
+  systemState,
   taskIsIssue,
   taskNumber,
   taskStateTone,
@@ -72,6 +74,11 @@ const focusedDecision = ref(-1)
 const decisionElements = ref<Array<HTMLElement | null>>([])
 
 const incidents = computed(() => incidentEntries(snapshot.value.incidents))
+const system = computed(() => systemState(snapshot.value))
+const providerCapacities = computed(() => snapshot.value.providerCapacities.map(entry => ({
+  ...entry,
+  presentation: providerCapacityPresentation(entry),
+})))
 
 /** Only offer a filter for work the board actually holds right now. */
 const availableWork = computed(() => {
@@ -111,10 +118,14 @@ const waiting = computed(() => [
 const nothingQueuedReason = computed(() => {
   if (queued.value.length > 0)
     return undefined
-  if (snapshot.value.agentControl._tag === 'Paused')
+  if (queueContext.value.agentStart._tag === 'Paused')
     return { text: 'Agents are paused, so nothing will start.', resume: true }
-  if (!snapshot.value.mutationsEnabled)
+  if (queueContext.value.agentStart._tag === 'WritesDisabled')
     return { text: 'GitHub writes are off, so no agent will start.', resume: false }
+  if (queueContext.value.agentStart._tag === 'ReserveReached')
+    return { text: 'Every automatic Agent provider reached its Reserve.', resume: false }
+  if (queueContext.value.agentStart._tag === 'CapacityUnavailable')
+    return { text: 'Agent provider limits could not load. The controller will retry.', resume: false }
   if (snapshot.value.selectionMode === 'manual' && needsYou.value.length > 0)
     return { text: 'Manual selection. Approve a pull request on the left to queue it.', resume: false }
   return { text: 'Nothing queued.', resume: false }
@@ -201,12 +212,36 @@ useHead({
 
 <template>
   <div>
-    <!-- What is currently wrong. Absent when nothing is. -->
-    <section v-if="incidents.length > 0" aria-labelledby="system-heading" class="mb-6">
-      <h2 id="system-heading" class="sr-only">
-        System incidents
-      </h2>
-      <ul class="grid gap-2" role="list">
+    <section id="system" aria-labelledby="system-heading" class="mb-6 scroll-mt-20">
+      <div class="zone-header">
+        <h2 id="system-heading" class="field-label" :class="statusClass(system.tone)">
+          System
+        </h2>
+        <span class="font-mono text-xs" :class="statusClass(system.tone)">{{ system.label }}</span>
+        <hr class="zone-rule">
+      </div>
+
+      <dl v-if="providerCapacities.length > 0" class="mb-2 grid gap-2 sm:grid-cols-2">
+        <div
+          v-for="entry in providerCapacities"
+          :key="entry.provider"
+          class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border border-default bg-elevated px-3 py-2 text-sm"
+        >
+          <dt class="field-label">
+            {{ entry.presentation.label }}
+          </dt>
+          <dd class="font-mono text-xs" :class="entry.presentation.tone === 'neutral' ? 'text-muted' : statusClass(entry.presentation.tone)">
+            {{ entry.presentation.value }}
+          </dd>
+          <dd class="min-w-0 flex-1 text-right text-xs text-muted">
+            {{ entry.presentation.detail }}<template v-if="entry.capacity._tag === 'Available'">
+              · resets {{ relativeTime(entry.capacity.resetsAt) }}
+            </template>
+          </dd>
+        </div>
+      </dl>
+
+      <ul v-if="incidents.length > 0" class="grid gap-2" role="list">
         <li
           v-for="incident in incidents"
           :key="incident.id"

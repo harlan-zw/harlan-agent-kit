@@ -268,7 +268,16 @@ describe('incident log', () => {
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
     store.recordPollFailure('harlan-zw/example', '2026-08-18T00:01:00.000Z', 'fetch failed')
 
-    expect(store.getDashboardSnapshot('2026-08-18T00:02:00.000Z').incidents).toHaveLength(1)
+    const snapshot = store.getDashboardSnapshot('2026-08-18T00:02:00.000Z')
+    expect(snapshot.incidents).toHaveLength(1)
+    expect(snapshot.status).toBe('degraded')
+  })
+
+  it('reports a controller Incident as degraded without a repository failure', () => {
+    const store = createStore()
+    replaceServiceIncidents(store, '2026-08-18T00:01:00.000Z', 'review_rerun', ['fetch failed'])
+
+    expect(store.getDashboardSnapshot('2026-08-18T00:02:00.000Z').status).toBe('degraded')
   })
 })
 

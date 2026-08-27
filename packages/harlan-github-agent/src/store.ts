@@ -73,7 +73,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
+import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { cleanLine } from './text.ts'
@@ -7159,7 +7159,8 @@ export function openJournalStore(
       paused: row.paused === 1,
       subjectCount: row.subject_count,
     }))
-    const status = repositories.some(repository => repository.lastError !== null)
+    const incidents = listIncidents()
+    const status = repositories.some(repository => repository.lastError !== null) || incidents.length > 0
       ? 'degraded'
       : repositories.some(repository => repository.lastSuccessAt === null) ? 'starting' : 'ready'
     const items = subjectRows.map(row => subjectFromRow(database, row))
@@ -7206,8 +7207,17 @@ export function openJournalStore(
       maxOpenPullRequests,
       agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents),
       agentSelection: getAgentSelection(),
+      agentStart: !mutationsEnabled
+        ? { _tag: 'WritesDisabled' }
+        : agentControl._tag === 'Paused'
+          ? { _tag: 'Paused' }
+          : { _tag: 'Available' },
+      agentProviderOrder: AGENT_PROVIDER_NAMES,
+      agentModels: AGENT_MODELS,
+      reasoningEfforts: REASONING_EFFORTS,
+      providerCapacities: [],
       agents,
-      incidents: listIncidents(),
+      incidents,
       queue: dashboardQueue(
         items.filter(item => !item.dismissed),
         tasks,

@@ -67,7 +67,7 @@ Workers run as normal local agent sessions inside disposable Git worktrees. They
 
 A pinned Agent selection overrides it. Harlan switches the Agent provider, model, and Reasoning effort from the dashboard header or the tray, and the switch survives a restart. Read it from `/api/state` as `agentSelection`, which is `{"_tag":"FollowsConfiguration"}`, `{"_tag":"Pinned", ...}`, or `{"_tag":"Automatic","order":[...]}`.
 
-Automatic selection picks the Agent provider by remaining capacity. It walks `order` and takes the first provider whose window has more than its own Reserve left. `order` defaults to opencode first, because opencode answers on the GLM Coding Plan. Codex publishes a seven-day window. opencode publishes the GLM Coding Plan five-hour and weekly windows, and the fuller window decides. When no provider may spend, the service stops claiming new agent Tasks and records one Incident. Active agents and Publications finish.
+Automatic selection picks the Agent provider by remaining capacity. It walks `order` and takes the first provider whose window has more than its own Reserve left. `order` defaults to opencode first, because opencode answers on the GLM Coding Plan. Codex publishes a seven-day window. opencode publishes the GLM Coding Plan five-hour and weekly windows, and the fuller window decides. When no provider may spend, the service stops claiming new agent Tasks and shows `Reserve reached` in the System pane. Active agents and Publications finish. Reaching a Reserve is normal state, not an Incident.
 
 For `codex`, use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair.
 

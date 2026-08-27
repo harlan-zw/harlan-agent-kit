@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   activeEntries,
   agentProfileState,
+  agentStartState,
   approvalConsequence,
   buildHistory,
   decisionEntries,
@@ -13,6 +14,7 @@ import {
   isIssueWorkThrottled,
   isProgressStalled,
   isSnapshotStale,
+  providerCapacityPresentation,
   queuedEntries,
   queueDetail,
   queueStateLabel,
@@ -20,6 +22,7 @@ import {
   repositoryState,
   reviewOutcomeLabel,
   reviewUsageLabel,
+  systemState,
   taskKindLabel,
   taskStateTone,
   taskSubjectUrl,
@@ -243,26 +246,42 @@ describe('decisionEntries', () => {
   })
 })
 
-const running = { agentsCanStart: true, agentsPaused: false, openPullRequests: 0, maxOpenPullRequests: 8, selectionMode: 'auto' as const }
+const running = { agentStart: { _tag: 'Available' as const }, openPullRequests: 0, maxOpenPullRequests: 8, selectionMode: 'auto' as const }
 
 describe('queue copy', () => {
   it('says agents are paused rather than queued when the engine is paused', () => {
     const entry = queueEntry()
-    expect(queueStateLabel(entry, { ...running, agentsCanStart: false, agentsPaused: true })).toBe('Agents paused')
-    expect(queueStateLabel(entry, { ...running, agentsCanStart: false, agentsPaused: false })).toBe('Agents disabled')
+    expect(queueStateLabel(entry, { ...running, agentStart: { _tag: 'Paused' } })).toBe('Agents paused')
+    expect(queueStateLabel(entry, { ...running, agentStart: { _tag: 'WritesDisabled' } })).toBe('Agents disabled')
     expect(queueStateLabel(entry, running)).toBe('Queued')
   })
 
   it('explains how to start work when Pause is on', () => {
     const entry = queueEntry()
-    expect(queueDetail(entry, { ...running, agentsCanStart: false, agentsPaused: true }))
+    expect(queueDetail(entry, { ...running, agentStart: { _tag: 'Paused' } }))
       .toBe('Pause is on. Select Resume to start this Task.')
   })
 
   it('explains how to enable work when GitHub writes are off', () => {
     const entry = queueEntry()
-    expect(queueDetail(entry, { ...running, agentsCanStart: false, agentsPaused: false }))
+    expect(queueDetail(entry, { ...running, agentStart: { _tag: 'WritesDisabled' } }))
       .toBe('GitHub writes are off. Enable them in the configuration, then restart the service.')
+  })
+
+  it('explains when every automatic provider has reached its Reserve', () => {
+    const entry = queueEntry()
+    const context = { ...running, agentStart: { _tag: 'ReserveReached' as const } }
+
+    expect(queueStateLabel(entry, context)).toBe('Reserve reached')
+    expect(queueDetail(entry, context)).toBe('Every automatic Agent provider reached its Reserve. Work starts after a limit resets.')
+  })
+
+  it('explains when provider limits could not load', () => {
+    const entry = queueEntry()
+    const context = { ...running, agentStart: { _tag: 'CapacityUnavailable' as const } }
+
+    expect(queueStateLabel(entry, context)).toBe('Agent provider unavailable')
+    expect(queueDetail(entry, context)).toBe('Agent provider limits could not load. The controller will retry.')
   })
 
   it('reports the reason a subject needs attention', () => {
@@ -426,5 +445,59 @@ describe('incident pane', () => {
   it('reads a passing review that named no confidence as READY', () => {
     expect(reviewOutcomeLabel({ ...reviewAgent(), outcome: { _tag: 'Ready' } })).toBe('READY')
     expect(reviewOutcomeLabel({ ...reviewAgent(), outcome: { _tag: 'Ready', confidence: 92 } })).toBe('READY · 92/100')
+  })
+})
+
+describe('system pane', () => {
+  const capacity = {
+    provider: 'codex' as const,
+    reservePercent: 20,
+    capacity: { _tag: 'Available' as const, usedPercent: 86, resetsAt: '2026-08-28T12:00:00.000Z' },
+  }
+
+  it('shows the published limit and whether its Reserve is reached', () => {
+    expect(providerCapacityPresentation(capacity)).toEqual({
+      label: 'Weekly Codex limit',
+      value: '14% left',
+      detail: '20% Reserve reached',
+      tone: 'warning',
+    })
+  })
+
+  it('keeps a missing reading distinct from an unpublished limit', () => {
+    expect(providerCapacityPresentation({ ...capacity, capacity: { _tag: 'Unavailable', reason: 'The request timed out.' } })).toMatchObject({
+      value: 'Unavailable',
+      detail: 'The request timed out.',
+      tone: 'warning',
+    })
+    expect(providerCapacityPresentation({ ...capacity, provider: 'opencode', capacity: { _tag: 'Unpublished' } })).toMatchObject({
+      label: 'opencode',
+      value: 'Limit not published',
+      tone: 'neutral',
+    })
+  })
+
+  it('stops automatic work at the Reserve without calling it Action required', () => {
+    const snapshot = dashboardSnapshot({
+      mutationsEnabled: true,
+      agentSelection: { _tag: 'Automatic', order: ['codex'] },
+      agentStart: { _tag: 'ReserveReached' },
+      providerCapacities: [capacity],
+    })
+
+    expect(agentStartState(snapshot)).toEqual({ _tag: 'ReserveReached' })
+    expect(systemState(snapshot)).toEqual({ label: 'Reserve reached', tone: 'warning' })
+  })
+
+  it('puts an Incident needing a person above capacity status', () => {
+    const snapshot = dashboardSnapshot({
+      mutationsEnabled: true,
+      incidents: [incident({ recovery: { _tag: 'ActionRequired' }, severity: 'error' })],
+      agentSelection: { _tag: 'Automatic', order: ['codex'] },
+      agentStart: { _tag: 'ReserveReached' },
+      providerCapacities: [capacity],
+    })
+
+    expect(systemState(snapshot)).toEqual({ label: 'Action required', tone: 'error' })
   })
 })

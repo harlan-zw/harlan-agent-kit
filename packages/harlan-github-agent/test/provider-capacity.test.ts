@@ -2,6 +2,7 @@ import type { AgentProviderName } from '../src/agent-provider.ts'
 import type { ProviderCapacity } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentRuntimeSource, parseAgentSelection, resolveAgentSelection } from '../src/agent-profile.ts'
+import { resolveAgentStartState } from '../src/capacity.ts'
 import {
   chooseAgentProvider,
   createProviderCapacitySource,
@@ -128,6 +129,36 @@ describe('choosing an Agent provider automatically', () => {
     })
 
     expect(chosen).toBe('opencode')
+  })
+})
+
+describe('resolving Agent start state', () => {
+  const input = {
+    mutationsEnabled: true,
+    agentControl: { _tag: 'Running' as const },
+    agentSelection: { _tag: 'Automatic' as const, order: ['codex'] as const },
+  }
+
+  it('names a reached Reserve without creating Action required', () => {
+    expect(resolveAgentStartState({
+      ...input,
+      providerCapacities: [{
+        provider: 'codex',
+        reservePercent: 20,
+        capacity: { _tag: 'Available', usedPercent: 86, resetsAt: '2026-08-28T00:00:00.000Z' },
+      }],
+    })).toEqual({ _tag: 'ReserveReached' })
+  })
+
+  it('keeps an unread limit distinct from a reached Reserve', () => {
+    expect(resolveAgentStartState({
+      ...input,
+      providerCapacities: [{
+        provider: 'codex',
+        reservePercent: 20,
+        capacity: { _tag: 'Unavailable', reason: 'timed out' },
+      }],
+    })).toEqual({ _tag: 'CapacityUnavailable' })
   })
 })
 

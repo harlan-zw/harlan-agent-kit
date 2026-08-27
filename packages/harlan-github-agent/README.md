@@ -110,7 +110,7 @@ Select `Automatic` in the Agent provider control to pick the provider by remaini
 
 Codex publishes a seven-day window, read from `codex app-server`. opencode publishes the GLM Coding Plan windows, read from `https://api.z.ai/api/monitor/usage/quota/limit` with the key in `~/.config/opencode/opencode.json`. The plan publishes a five-hour window and a weekly one, and the fuller of the two decides, because a spent five-hour window stalls the fleet for hours whatever the week has left.
 
-A provider that publishes no quota always passes, so it never blocks a turn on an unknown figure. When no provider may spend, the service stops claiming new agent tasks and records one incident. Active agents and publications finish.
+A provider that publishes no limit always passes. When no provider may spend, the service stops claiming new Agent Tasks. The System pane shows `Reserve reached`. Active agents and Publications finish.
 
 Use the Agent provider control in the header to switch the Agent provider, model, or reasoning effort. A switch starts the next agent turn. An agent already running keeps the model it started with. Switching the provider returns the model and the reasoning effort to that provider's defaults.
 
@@ -127,9 +127,9 @@ Use the `Auto` and `Manual` control in the header to set the Selection mode. `Au
 
 The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers read only Review and separate scoped Repair for that head commit.
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
-Use `Watch logs` from the system pane to open a read-only live event stream while automation continues.
-The system pane separates Harlan GitHub Agent from GitHub Actions. A runner failure never changes the Agent status.
-The Harlan GitHub Agent section shows the `Weekly Codex limit`, including its remaining percentage and reset countdown.
+Use `Watch logs` from the System pane to open a read-only live event stream while automation continues.
+The System pane stays visible. It shows Agent provider limits, Reserves, and unresolved Incidents.
+It separates Harlan GitHub Agent from GitHub Actions. A runner failure never changes the Agent status.
 `max_open_pull_requests` stops new issue work while that many pull requests are open. `Manual` Selection mode ignores the limit, because you already select every pull request.
 
 Use `Dismiss` on a board card to never act on that pull request or issue again. A new commit does not undo it. Dismissing cancels the item's running and queued tasks. Restore it from `Dismissed` on the Watching page.

@@ -258,36 +258,7 @@ export async function readZaiCapacity(options: ZaiCapacityOptions = {}): Promise
   }
 }
 
-/**
- * Whether unattended work may spend this provider's window right now.
- *
- * A provider that publishes no quota always passes. Refusing an unknown figure
- * would mean opencode could never answer a turn, which is the opposite of what
- * a fallback ladder is for.
- */
-export function hasSpendableCapacity(capacity: ProviderCapacity, reservePercent: number): boolean {
-  if (capacity._tag === 'Unpublished')
-    return true
-  if (capacity._tag === 'Unavailable')
-    return false
-  return 100 - capacity.usedPercent > reservePercent
-}
-
-/**
- * Picks the first Agent provider in preference order that may spend its window.
- *
- * Returns null when none may. The caller stops claiming new agent Tasks rather
- * than starting one it cannot pay for.
- */
-export function chooseAgentProvider(input: {
-  capacity: (provider: AgentProviderName) => ProviderCapacity
-  order: readonly AgentProviderName[]
-  reservePercent: Record<AgentProviderName, number>
-}): AgentProviderName | null {
-  return input.order.find(
-    provider => hasSpendableCapacity(input.capacity(provider), input.reservePercent[provider]),
-  ) ?? null
-}
+export { chooseAgentProvider, hasSpendableCapacity } from './capacity.ts'
 
 export interface ProviderCapacitySource {
   /** The last reading. Never blocks an agent turn on a subprocess. */

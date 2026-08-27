@@ -3,7 +3,7 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type { AgentModel, AgentSelection, CodexReasoningEffort, QueueEntry } from '../../../src/types.ts'
 import { useLocalStorage } from '@vueuse/core'
-import { AGENT_MODELS, AGENT_PROVIDER_NAMES, REASONING_EFFORTS } from '../../../src/agent-profile.ts'
+import { AGENT_PROVIDER_NAMES } from '../../../src/agent-profile.ts'
 import { agentProfileState, agentRoleLabels, decisionKey, incidentEntries, statusClass } from '../utils/dashboard.ts'
 
 const {
@@ -105,7 +105,7 @@ const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
         icon: 'i-lucide-gauge',
         type: 'checkbox',
         checked: selection._tag === 'Automatic',
-        onUpdateChecked: () => switchAgent({ _tag: 'Automatic', order: [...AGENT_PROVIDER_NAMES] }),
+        onUpdateChecked: () => switchAgent({ _tag: 'Automatic', order: [...snapshot.value.agentProviderOrder] }),
       },
       ...AGENT_PROVIDER_NAMES.map(candidate => ({
         label: providerLabels[candidate],
@@ -123,7 +123,7 @@ const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
         checked: (pinned?.model ?? null) === null,
         onUpdateChecked: () => switchAgent(pin(null, pinned?.reasoningEffort ?? null)),
       },
-      ...AGENT_MODELS[provider].map(model => ({
+      ...snapshot.value.agentModels[provider].map(model => ({
         label: model,
         type: 'checkbox' as const,
         checked: pinned?.model === model,
@@ -138,7 +138,7 @@ const agentSelectionItems = computed<DropdownMenuItem[][]>(() => {
         checked: (pinned?.reasoningEffort ?? null) === null,
         onUpdateChecked: () => switchAgent(pin(pinned?.model ?? null, null)),
       },
-      ...REASONING_EFFORTS.map(reasoningEffort => ({
+      ...snapshot.value.reasoningEfforts.map(reasoningEffort => ({
         label: reasoningEffort,
         type: 'checkbox' as const,
         checked: pinned?.reasoningEffort === reasoningEffort,
@@ -158,7 +158,9 @@ const documentTitle = computed(() => decisions.value.length > 0
  * Literal hex is unavoidable inside a data URI; these track the design tokens by hand.
  */
 const faviconHref = computed(() => {
-  const fill = decisions.value.length > 0 ? '#d97706' : unhealthyRepositories.value > 0 ? '#dc2626' : '#059669'
+  const fill = blockingIncidents.value > 0 || unhealthyRepositories.value > 0
+    ? '#dc2626'
+    : decisions.value.length > 0 || incidents.value.length > 0 ? '#d97706' : '#059669'
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#171717"/><circle cx="16" cy="16" r="7" fill="${fill}"/></svg>`
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
 })
@@ -362,7 +364,7 @@ useHead({
         <span v-if="incidents.length > 0" aria-hidden="true" class="text-dimmed">·</span>
         <NuxtLink
           v-if="incidents.length > 0"
-          to="/"
+          to="/#system"
           class="entity-link"
           :class="statusClass(blockingIncidents > 0 ? 'error' : 'warning')"
         >

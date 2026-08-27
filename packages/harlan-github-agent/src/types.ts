@@ -876,14 +876,28 @@ export interface PinnedAgentSelection {
 /**
  * What one Agent provider's weekly subscription window has left.
  *
- * `Unpublished` and `Unavailable` are different answers. opencode publishes no
- * quota at all, so it is always `Unpublished` and never reads as a fault. Codex
- * publishes one, so a failed read is `Unavailable` and worth an Incident.
+ * `Unpublished` and `Unavailable` are different answers. A provider may publish
+ * no limit. A provider that normally publishes one can fail to answer.
  */
 export type ProviderCapacity
   = | { _tag: 'Unpublished' }
     | { _tag: 'Unavailable', reason: string }
     | { _tag: 'Available', usedPercent: number, resetsAt: string }
+
+/** One Agent provider's live limit and configured Reserve for the dashboard. */
+export interface ProviderCapacityStatus {
+  provider: AgentProviderName
+  capacity: ProviderCapacity
+  reservePercent: number
+}
+
+/** The one reason the scheduler can or cannot start another Agent Task. */
+export type AgentStartState
+  = | { _tag: 'Available' }
+    | { _tag: 'Paused' }
+    | { _tag: 'WritesDisabled' }
+    | { _tag: 'ReserveReached' }
+    | { _tag: 'CapacityUnavailable' }
 
 /**
  * The Agent providers automatic selection walks, in preference order.
@@ -1012,6 +1026,12 @@ export interface DashboardSnapshot {
   maxOpenPullRequests: number
   agentProfile: AgentProfile
   agentSelection: AgentSelection
+  agentStart: AgentStartState
+  /** Provider preference from configuration, used when a person selects Automatic. */
+  agentProviderOrder: readonly AgentProviderName[]
+  agentModels: Record<AgentProviderName, readonly AgentModel[]>
+  reasoningEfforts: readonly CodexReasoningEffort[]
+  providerCapacities: ProviderCapacityStatus[]
   agents: DashboardAgent[]
   incidents: Incident[]
   queue: QueueEntry[]
