@@ -601,16 +601,26 @@ function headRepairsFailedBaseChecks(snapshot: PullRequestReviewSnapshot): boole
     && headCheck.conclusion === 'success'))
 }
 
+/**
+ * The merge gate one pull request read produces.
+ *
+ * GitHub computes mergeability whenever the branch graph moves, so the same
+ * answer belongs to whichever gate reads a snapshot and to no other gate.
+ */
+function mergeGate(pullRequest: GitHubPullRequestItem): ReviewGateState {
+  return pullRequest.mergeState === 'clean'
+    ? { _tag: 'Passed', evidence: [evidence('mergeability', 'clean')] }
+    : pullRequest.mergeState === 'unknown'
+      ? { _tag: 'Pending', reason: 'GitHub has not resolved mergeability.', evidence: [evidence('mergeability', 'unknown')] }
+      : { _tag: 'Failed', reason: 'The pull request has merge conflicts.', evidence: [evidence('mergeability', 'conflicting')] }
+}
+
 function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean): { gates: ReviewGates, reportedChecks: string[] } {
   const findings = response.findings
   const ci = ciGate(snapshot, repairsBaseline)
   const gates: ReviewGates = {
     head: { _tag: 'Passed', evidence: [evidence('head', snapshot.pullRequest.headSha)] },
-    merge: snapshot.pullRequest.mergeState === 'clean'
-      ? { _tag: 'Passed', evidence: [evidence('mergeability', 'clean')] }
-      : snapshot.pullRequest.mergeState === 'unknown'
-        ? { _tag: 'Pending', reason: 'GitHub has not resolved mergeability.', evidence: [evidence('mergeability', 'unknown')] }
-        : { _tag: 'Failed', reason: 'The pull request has merge conflicts.', evidence: [evidence('mergeability', 'conflicting')] },
+    merge: mergeGate(snapshot.pullRequest),
     metadata: gate(response.metadata, 'metadata'),
     review: findings.length > 0
       ? { _tag: 'Failed', reason: findings[0]?.summary ?? 'Material findings remain.', evidence: [evidence('review', response.review.evidence)] }
@@ -624,14 +634,18 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
 /**
  * The gates a fresh CI read produces for a verdict the agent already reached.
  *
- * Every gate but `ci` answers for one head commit, so a finished Review keeps
- * its own answer. The CI gate answers for a moment instead: a base branch whose
- * deploy was still running when the Review ran turns green minutes later, and
- * nothing in the pull request payload moves when it does. That left one healthy
- * pull request reading PENDING for three hours on 2026-08-27, until an
- * unrelated push to the default branch happened to start a second review.
+ * Every gate but `ci` and `merge` answers for one head commit, so a finished
+ * Review keeps its own answer. The CI gate answers for a moment instead: a base
+ * branch whose deploy was still running when the Review ran turns green minutes
+ * later, and nothing in the pull request payload moves when it does. That left
+ * one healthy pull request reading PENDING for three hours on 2026-08-27, until
+ * an unrelated push to the default branch happened to start a second review.
  *
- * Recomputing this one gate settles the verdict with no second agent turn.
+ * The merge gate answers for the live pull request too. A Review read
+ * mergeability while GitHub had not resolved it and froze Pending; once GitHub
+ * reported clean nothing recomputed that gate, so reviewOutcome kept returning
+ * PENDING and auto merge stalled forever. Recomputing both gates settles the
+ * verdict with no second agent turn.
  */
 export function regateReviewCi(
   gates: ReviewGates,
@@ -641,7 +655,8 @@ export function regateReviewCi(
   const repairsBaseline = snapshot.pullRequest.purpose._tag === 'BaselineRepair'
     || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
   const ci = ciGate(snapshot, repairsBaseline)
-  return { gates: { ...gates, ci: ci.state }, reportedChecks: ci.reported }
+  const merge = mergeGate(snapshot.pullRequest)
+  return { gates: { ...gates, ci: ci.state, merge }, reportedChecks: ci.reported }
 }
 
 /**

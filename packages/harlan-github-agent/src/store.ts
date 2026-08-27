@@ -7811,20 +7811,24 @@ export function openJournalStore(
   /**
    * Every finished Review that only CI still holds back.
    *
-   * The row is limited to the latest Review for the pull request's current
-   * head, so a superseded verdict never gets restated. A live Review or Repair
-   * owns the canonical comment while it runs, so anything queued or running
-   * excludes the pull request here.
+   * The row is limited to the latest Review of the pull request's current
+   * revision, so a superseded verdict never gets restated and a slow run for
+   * an old head cannot outrank the current-head review. A live Review or
+   * Repair owns the canonical comment while it runs, so anything queued or
+   * running excludes the pull request here.
    */
   const listCiPendingReviews: JournalStore['listCiPendingReviews'] = () => (database.prepare(`
     WITH ranked AS (
       SELECT review_runs.*,
-        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY completed_at DESC, id DESC) AS run_rank
+        ROW_NUMBER() OVER (PARTITION BY review_runs.subject_id ORDER BY review_runs.completed_at DESC, review_runs.id DESC) AS run_rank
       FROM review_runs
-      WHERE NOT EXISTS (
-        SELECT 1 FROM review_runs AS settled
-        WHERE settled.supersedes_review_run_id = review_runs.id
-      )
+      WHERE review_runs.revision_id = (
+          SELECT subjects.current_revision_id FROM subjects WHERE subjects.id = review_runs.subject_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS settled
+          WHERE settled.supersedes_review_run_id = review_runs.id
+        )
     )
     SELECT
       ranked.id AS review_run_id,

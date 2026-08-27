@@ -254,6 +254,79 @@ describe('publishResolvedCiReviews against the journal store', () => {
     stores.splice(0).forEach(store => store.close())
   })
 
+  it('settles a merge gate frozen as Pending once GitHub reports the pull request mergeable', async () => {
+    const store = openJournalStore(':memory:')
+    stores.push(store)
+    store.syncRepositories([repositoryMapping()], '2026-08-27T08:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'merge-pending-pr',
+      observedAt: '2026-08-27T08:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'unknown' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+
+    const gates = waitingOnBaseCi()
+    gates.merge = { _tag: 'Pending', reason: 'GitHub has not resolved mergeability.', evidence: [{ label: 'mergeability', sha256: 'd'.repeat(64) }] }
+    expect(store.recordReviewRun({
+      id: 'run-pending',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6-sol',
+      agentVersion: '0.0.0',
+      skillDigest: 'c'.repeat(64),
+      startedAt: '2026-08-27T08:11:00.000Z',
+      completedAt: '2026-08-27T08:20:00.000Z',
+      usage: { _tag: 'Available', input: 10, cachedInput: 0, cacheWrite: 0, output: 5, reasoning: 0 },
+      gates,
+      confidence: 88,
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'run-pending' })
+    expect(store.recordReviewPublication({
+      id: 'publication-pending',
+      reviewRunId: 'run-pending',
+      body: '### 🤖 PENDING',
+      at: '2026-08-27T08:21:00.000Z',
+      result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+    })).toEqual({ _tag: 'Inserted', publicationId: 'publication-pending' })
+
+    const stamped: string[] = []
+    const results = await publishResolvedCiReviews({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+        stampReviewOutcome: (_repository, _number, outcome) => {
+          stamped.push(outcome)
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      now: () => new Date('2026-08-27T11:15:00.000Z'),
+      repositories: [repositoryMapping()],
+      store,
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({
+      _tag: 'Republished',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      outcome: 'READY',
+    })])
+    expect(stamped).toEqual(['READY'])
+    expect(store.listCiPendingReviews()).toEqual([])
+    const settledRun = store.getDashboardSnapshot('2026-08-27T11:16:00.000Z')
+      .agents
+      .find(agent => agent._tag === 'ReviewAgent')
+    if (settledRun?._tag !== 'ReviewAgent')
+      throw new Error('Expected the settled Review run on the dashboard.')
+    expect(settledRun.outcome).toEqual({ _tag: 'Ready', confidence: 88 })
+    expect(settledRun.gates.merge._tag).toBe('Passed')
+  })
+
   it('keeps one journal entry for the agent turn the CI re-gate settles', async () => {
     const store = openJournalStore(':memory:')
     stores.push(store)

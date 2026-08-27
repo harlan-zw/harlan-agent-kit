@@ -3733,6 +3733,85 @@ describe('journal store', () => {
     expect(store.listCiPendingReviews()).toEqual([])
   })
 
+  it('lists the current-head review even when a superseded-revision run finished later', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const oldHead = store.recordObservation({
+      externalId: 'ranked-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ headSha: 'abc123', mergeState: 'clean' }),
+    })
+    if (oldHead._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    finishReviewTask(store, '2026-08-13T01:00:30.000Z')
+
+    const waiting = passedReviewGates()
+    waiting.ci = {
+      _tag: 'Pending',
+      reason: 'Base branch CI: deploy is still running.',
+      evidence: [{ label: 'base-ci', sha256: 'e'.repeat(64) }],
+    }
+    // The run for the old head was slow and only finished after the push below.
+    expect(store.recordReviewRun({
+      id: 'attempt-old-head-late',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: oldHead.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:30:00.000Z',
+      gates: waiting,
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-old-head-late' })
+
+    const newHead = store.recordObservation({
+      externalId: 'ranked-pr-push',
+      observedAt: '2026-08-13T01:10:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ headSha: 'def456', mergeState: 'clean' }),
+    })
+    if (newHead._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    finishReviewTask(store, '2026-08-13T01:10:30.000Z')
+
+    expect(store.recordReviewRun({
+      id: 'attempt-current-head-pending',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: newHead.revisionId,
+      headSha: 'def456',
+      provider: 'codex',
+      sessionId: 'session-2',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:11:00.000Z',
+      completedAt: '2026-08-13T01:12:00.000Z',
+      gates: waiting,
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-current-head-pending' })
+    expect(store.recordReviewPublication({
+      id: 'publication-current-head-pending',
+      reviewRunId: 'attempt-current-head-pending',
+      body: '### 🤖 PENDING',
+      at: '2026-08-13T01:12:30.000Z',
+      result: {
+        _tag: 'Published',
+        githubCommentId: 43,
+        url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-43',
+      },
+    })).toEqual({ _tag: 'Inserted', publicationId: 'publication-current-head-pending' })
+
+    expect(store.listCiPendingReviews().map(review => review.reviewRunId))
+      .toEqual(['attempt-current-head-pending'])
+  })
+
   it('never overwrites an immutable review attempt', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
