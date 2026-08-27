@@ -582,7 +582,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the automated comment was deleted, so nothing was written.`
               : result.value._tag === 'Superseded'
                 ? `${result.value.repository}#${result.value.pullRequestNumber}: an agent claimed the Task, so the Queue position comment was left to it.`
-                : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.position} of ${result.value.total}.`)
+                : result.value.queue._tag === 'Paused'
+                  ? `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads that the repository is paused.`
+                  : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.queue.position} of ${result.value.queue.total}.`)
           }
           else {
             options.logger.error(`Queue position comment: ${result.error}`)
