@@ -5,7 +5,7 @@ import { createReviewStatusController } from '../src/review-status-controller.ts
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('review status controller', () => {
-  it('replaces the blocked review comment with repair progress', async () => {
+  function harness() {
     const repository = repositoryMapping()
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const task: ClaimedReviewFixTask = {
@@ -70,8 +70,40 @@ describe('review status controller', () => {
       workerId: 'status-worker',
     })
 
+    return { controller, task, read: () => ({ body, replaced }) }
+  }
+
+  it('replaces the blocked review comment with repair progress', async () => {
+    const { controller, task, read } = harness()
+
     expect(await controller.publishRepair(task, { percent: 35, label: 'Git worktree ready' }, new AbortController().signal)).toEqual(ok(undefined))
-    expect(replaced).toBe(true)
-    expect(body).toContain('### 🤖 REPAIR · Git worktree ready')
+
+    expect(read().replaced).toBe(true)
+    expect(read().body).toContain('### 🤖 REPAIR · Git worktree ready')
+  })
+
+  it('says how long one phase has run, so a slow agent reads as alive', async () => {
+    const { controller, task, read } = harness()
+
+    // The clock reads 01:00, so this phase started 35 minutes ago.
+    expect(await controller.publishRepair(
+      task,
+      { percent: 70, label: 'Editing files', since: '2026-08-13T00:25:00.000Z' },
+      new AbortController().signal,
+    )).toEqual(ok(undefined))
+
+    expect(read().body).toContain('### 🤖 REPAIR · Editing files for 35 min')
+  })
+
+  it('leaves a phase that just started without a duration', async () => {
+    const { controller, task, read } = harness()
+
+    expect(await controller.publishRepair(
+      task,
+      { percent: 70, label: 'Editing files', since: '2026-08-13T00:59:40.000Z' },
+      new AbortController().signal,
+    )).toEqual(ok(undefined))
+
+    expect(read().body).toContain('### 🤖 REPAIR · Editing files\n')
   })
 })

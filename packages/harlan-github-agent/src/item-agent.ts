@@ -19,7 +19,7 @@ import type {
 } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { formatProgressBar } from './agent-progress.ts'
+import { formatPhaseDuration, formatProgressBar } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { issueTriageComment } from './issue-triage-comment.ts'
@@ -639,7 +639,7 @@ export function reviewOutcome(gates: ReviewGates): ReviewOutcomeName {
 function progressComment(headSha: string, progress: AgentProgress, at: string): string {
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->
-### 🤖 REVIEWING · ${progress.label}
+### 🤖 REVIEWING · ${progress.label}${formatPhaseDuration(progress.since, at)}
 
 ${automatedDisclosure({ kind: 'review', updatedAt: updatedAtLabel(at) })}
 
@@ -919,7 +919,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         number: task.pullRequestNumber,
         prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings),
         progress: {
-          currentPercent: 35,
+          current: { percent: 35, label: 'Git worktree ready' },
           report: progress => reportReviewProgress(options, task, 'review', progress, signal),
           work: 'review',
         },
@@ -1075,7 +1075,7 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
         number: task.issueNumber,
         prompt: issuePrompt(task, snapshot.value, workspace.value.path),
         progress: {
-          currentPercent: 35,
+          current: { percent: 35, label: 'Git worktree ready' },
           report: progress => Promise.resolve(saveAgentProgress(options, task, progress)),
           work: 'issue',
         },

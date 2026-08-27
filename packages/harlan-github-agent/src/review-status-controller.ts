@@ -2,7 +2,7 @@ import type { GitHubAgentSource, PublishedReviewStatus } from './github-agent-so
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ReviewStatusTaskPhase } from './types.ts'
-import { formatProgressBar } from './agent-progress.ts'
+import { formatPhaseDuration, formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { updatedAtLabel } from './text.ts'
@@ -35,7 +35,7 @@ function repairProgressComment(headSha: string, progress: AgentProgress, at: str
           : 'Repair creates its Git worktree.'
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->
-### 🤖 REPAIR · ${progress.label}
+### 🤖 REPAIR · ${progress.label}${formatPhaseDuration(progress.since, at)}
 
 ${automatedDisclosure({ kind: 'repair update', updatedAt: updatedAtLabel(at) })}
 

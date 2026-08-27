@@ -173,7 +173,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
         freshSession: true,
         number: task.pullRequestNumber,
-        progress: { currentPercent: 35, report: progress, work: 'fix' },
+        progress: { current: { percent: 35, label: 'Repair worktree ready' }, report: progress, work: 'fix' },
         prompt: prompt(task, findings),
         repository: task.repository,
         role: 'review_fix',
