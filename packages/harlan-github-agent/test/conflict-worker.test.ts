@@ -45,7 +45,7 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 }
 
 describe('conflict worker', () => {
-  it('runs the pinned Codex model and reasoning effort against the prepared worktree', async () => {
+  it('runs the Codex profile\'s conflict model against the prepared worktree', async () => {
     const repository = repositoryMapping()
     const current = pullRequestItem({ baseSha: 'current-base' })
     const capture: ProviderCapture = { requests: [] }
@@ -58,14 +58,14 @@ describe('conflict worker', () => {
 
     expect(result._tag).toBe('Ok')
     expect(capture.requests).toEqual([expect.objectContaining({
-      model: 'gpt-5.6-terra',
-      reasoningEffort: 'medium',
+      model: CODEX_AGENT_PROFILE.roles.conflict_resolution.model,
+      reasoningEffort: CODEX_AGENT_PROFILE.roles.conflict_resolution.reasoningEffort,
       sessionId: 'stale-session',
       workspace: '/tmp/worktree',
     })])
   })
 
-  it('runs DeepSeek at high reasoning when the provider is opencode', async () => {
+  it('runs the opencode profile\'s conflict model when the provider is opencode', async () => {
     const repository = repositoryMapping()
     const current = pullRequestItem({ baseSha: 'current-base' })
     const capture: ProviderCapture = { requests: [] }
@@ -77,10 +77,14 @@ describe('conflict worker', () => {
     const result = await worker.run(conflictTask(repository), new AbortController().signal)
 
     expect(result._tag).toBe('Ok')
+    // The model each profile pins moves whenever a provider ships a better one.
+    // What must hold is that the worker asks the profile for the running
+    // provider, so the assertion reads the profile rather than repeating it.
     expect(capture.requests[0]).toEqual(expect.objectContaining({
-      model: 'opencode-go/deepseek-v4-flash',
-      reasoningEffort: 'high',
+      model: OPENCODE_AGENT_PROFILE.roles.conflict_resolution.model,
+      reasoningEffort: OPENCODE_AGENT_PROFILE.roles.conflict_resolution.reasoningEffort,
     }))
+    expect(OPENCODE_AGENT_PROFILE.roles.conflict_resolution.model).not.toBe(CODEX_AGENT_PROFILE.roles.conflict_resolution.model)
   })
 
   it('accepts an outside contributor fork when the maintainer can modify the head', async () => {
