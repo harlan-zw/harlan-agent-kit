@@ -130,8 +130,8 @@ describe('listQueuedReviewStatuses', () => {
     const second = queuedRepair(store, 25, '2026-08-13T02:00:00.000Z')
 
     expect(store.listQueuedReviewStatuses()).toEqual([
-      expect.objectContaining({ pullRequestNumber: 24, position: 1, total: 2, commentId: first.commentId, publishedBody: first.body }),
-      expect.objectContaining({ pullRequestNumber: 25, position: 2, total: 2, commentId: second.commentId, publishedBody: second.body }),
+      expect.objectContaining({ pullRequestNumber: 24, queue: { _tag: 'Waiting', position: 1, total: 2 }, commentId: first.commentId, publishedBody: first.body }),
+      expect.objectContaining({ pullRequestNumber: 25, queue: { _tag: 'Waiting', position: 2, total: 2 }, commentId: second.commentId, publishedBody: second.body }),
     ])
   })
 
@@ -143,7 +143,7 @@ describe('listQueuedReviewStatuses', () => {
     const claimed = store.claimNextReviewFixTask('repair-agent', '2026-08-13T03:00:00.000Z', 60_000)
     expect(claimed?.pullRequestNumber).toBe(24)
     expect(store.listQueuedReviewStatuses()).toEqual([
-      expect.objectContaining({ pullRequestNumber: 25, position: 1, total: 1 }),
+      expect.objectContaining({ pullRequestNumber: 25, queue: { _tag: 'Waiting', position: 1, total: 1 } }),
     ])
   })
 
@@ -188,21 +188,34 @@ describe('listQueuedReviewStatuses', () => {
       expect.objectContaining({
         taskKind: 'adversarial_review',
         pullRequestNumber: 30,
-        position: 1,
-        total: 1,
+        queue: { _tag: 'Waiting', position: 1, total: 1 },
         commentId: 900,
         publishedBody: '### 🤖 REVIEW PAUSED',
       }),
     ])
   })
 
-  it('says nothing about a Task no agent can claim', () => {
+  it('reports the pause for a Task no agent can claim, so the comment stops claiming progress', () => {
     const store = createStore()
     queuedRepair(store, 24, '2026-08-13T01:00:00.000Z')
     store.setRepositoryPaused('harlan-zw/example', true)
 
-    expect(store.listQueuedReviewStatuses()).toEqual([])
+    expect(store.listQueuedReviewStatuses()).toEqual([
+      expect.objectContaining({ pullRequestNumber: 24, queue: { _tag: 'Paused' } }),
+    ])
     expect(store.claimNextReviewFixTask('repair-agent', '2026-08-13T03:00:00.000Z', 60_000)).toBeNull()
+  })
+
+  it('reports every Task of a paused repository as paused, never as a Queue position', () => {
+    const store = createStore()
+    queuedRepair(store, 24, '2026-08-13T01:00:00.000Z')
+    queuedRepair(store, 25, '2026-08-13T02:00:00.000Z')
+    store.setRepositoryPaused('harlan-zw/example', true)
+
+    expect(store.listQueuedReviewStatuses()).toEqual([
+      expect.objectContaining({ pullRequestNumber: 24, queue: { _tag: 'Paused' } }),
+      expect.objectContaining({ pullRequestNumber: 25, queue: { _tag: 'Paused' } }),
+    ])
   })
 })
 
@@ -328,8 +341,7 @@ describe('listQueuedReviewStatuses across revisions', () => {
         taskKind: 'adversarial_review',
         pullRequestNumber: 24,
         headSha: 'repaired24',
-        position: 1,
-        total: 1,
+        queue: { _tag: 'Waiting', position: 1, total: 1 },
         commentId: review.commentId,
         publishedBody: progress,
       }),

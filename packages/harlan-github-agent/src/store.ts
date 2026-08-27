@@ -383,11 +383,29 @@ interface QueuedReviewStatusRow {
   github_number: number
   revision_id: string
   head_sha: string
-  position: number
-  total: number
+  paused: number
+  position: number | null
+  total: number | null
   github_comment_id: number
   published_body: string
 }
+
+/**
+ * Why a queued Task has not started yet.
+ *
+ * A paused repository still queues Tasks and still owns the canonical comment,
+ * but no agent can claim one until the pause lifts. A Queue position there is a
+ * number that never moves, so the comment names the pause instead.
+ */
+export type ReviewQueueState
+  = | {
+    _tag: 'Waiting'
+    /** 1 for the Task the next free agent claims. */
+    position: number
+    /** Claimable queued Tasks of the same kind, this one included. */
+    total: number
+  }
+  | { _tag: 'Paused' }
 
 export interface QueuedReviewStatus {
   taskId: string
@@ -396,10 +414,7 @@ export interface QueuedReviewStatus {
   pullRequestNumber: number
   revisionId: string
   headSha: string
-  /** 1 for the Task the next free agent claims. */
-  position: number
-  /** Claimable queued Tasks of the same kind, this one included. */
-  total: number
+  queue: ReviewQueueState
   commentId: number
   /** What the canonical comment holds now, so an unchanged position writes nothing. */
   publishedBody: string
@@ -6992,20 +7007,23 @@ export function openJournalStore(
   }
 
   const listQueuedReviewStatuses: JournalStore['listQueuedReviewStatuses'] = () => (database.prepare(`
-    WITH claimable AS (
+    -- Every queued Task that owns a canonical comment, paused repositories
+    -- included. A paused repository queues work and writes no code, so its
+    -- comment still has to say why nothing is happening.
+    WITH candidates AS (
       SELECT
         worker_tasks.id AS task_id,
         'adversarial_review' AS task_kind,
         worker_tasks.subject_id,
         worker_tasks.revision_id,
-        worker_tasks.updated_at
+        worker_tasks.updated_at,
+        repositories.paused
       FROM worker_tasks
       JOIN subjects ON subjects.id = worker_tasks.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE worker_tasks.kind = 'adversarial_review' AND worker_tasks.state_tag = 'Queued'
         AND worker_tasks.revision_id = subjects.current_revision_id
         AND repositories.enabled = 1
-        AND repositories.paused = 0
         AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       UNION ALL
       SELECT
@@ -7013,14 +7031,14 @@ export function openJournalStore(
         'review_fix' AS task_kind,
         tasks.subject_id,
         tasks.revision_id,
-        tasks.updated_at
+        tasks.updated_at,
+        repositories.paused
       FROM tasks
       JOIN subjects ON subjects.id = tasks.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE tasks.kind = 'review_fix' AND tasks.state_tag = 'Queued'
         AND tasks.revision_id = subjects.current_revision_id
         AND repositories.enabled = 1
-        AND repositories.paused = 0
         AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
         AND EXISTS (
           SELECT 1 FROM pull_request_approvals
@@ -7028,38 +7046,44 @@ export function openJournalStore(
             AND pull_request_approvals.revision_id = tasks.revision_id
             AND pull_request_approvals.kind = 'fixes'
         )
-    )
+    ),
+    -- The Queue an agent actually draws from. A paused Task waits outside it,
+    -- so it takes no position and moves nobody else along.
+    claimable AS (SELECT * FROM candidates WHERE paused = 0)
     SELECT
-      claimable.task_id,
-      claimable.task_kind,
+      candidates.task_id,
+      candidates.task_kind,
       repositories.github AS repository,
       subjects.github_number,
-      claimable.revision_id,
+      candidates.revision_id,
       json_extract(revisions.payload, '$.headSha') AS head_sha,
+      candidates.paused,
       (
         SELECT COUNT(*) + 1 FROM claimable AS ahead
-        WHERE ahead.task_kind = claimable.task_kind
+        WHERE candidates.paused = 0
+          AND ahead.task_kind = candidates.task_kind
           AND (
-            ahead.updated_at < claimable.updated_at
-            OR (ahead.updated_at = claimable.updated_at AND ahead.task_id < claimable.task_id)
+            ahead.updated_at < candidates.updated_at
+            OR (ahead.updated_at = candidates.updated_at AND ahead.task_id < candidates.task_id)
           )
       ) AS position,
       (
-        SELECT COUNT(*) FROM claimable AS peer WHERE peer.task_kind = claimable.task_kind
+        SELECT COUNT(*) FROM claimable AS peer
+        WHERE candidates.paused = 0 AND peer.task_kind = candidates.task_kind
       ) AS total,
       COALESCE(published.github_comment_id, prompt.github_comment_id) AS github_comment_id,
       COALESCE(published.body, prompt.body) AS published_body
-    FROM claimable
-    JOIN subjects ON subjects.id = claimable.subject_id
+    FROM candidates
+    JOIN subjects ON subjects.id = candidates.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
-    JOIN revisions ON revisions.id = claimable.revision_id
+    JOIN revisions ON revisions.id = candidates.revision_id
     -- The Approval prompt is the canonical comment until a Task publishes one.
     LEFT JOIN approval_prompt_comments AS prompt
-      ON prompt.subject_id = claimable.subject_id AND prompt.revision_id = claimable.revision_id
+      ON prompt.subject_id = candidates.subject_id AND prompt.revision_id = candidates.revision_id
     LEFT JOIN review_status_commands AS published ON published.id = COALESCE(
       (
         SELECT candidate.id FROM review_status_commands AS candidate
-        WHERE candidate.task_kind = claimable.task_kind AND candidate.task_id = claimable.task_id
+        WHERE candidate.task_kind = candidates.task_kind AND candidate.task_id = candidates.task_id
           AND candidate.state_tag = 'Published'
         ORDER BY candidate.updated_at DESC, candidate.id DESC
         LIMIT 1
@@ -7073,7 +7097,7 @@ export function openJournalStore(
         SELECT candidate.id FROM review_status_commands AS candidate
         JOIN revisions AS candidate_revision ON candidate_revision.id = candidate.revision_id
         WHERE candidate.state_tag = 'Published'
-          AND candidate_revision.subject_id = claimable.subject_id
+          AND candidate_revision.subject_id = candidates.subject_id
         ORDER BY candidate.updated_at DESC, candidate.id DESC
         LIMIT 1
       )
@@ -7090,7 +7114,7 @@ export function openJournalStore(
       AND NOT EXISTS (
         SELECT 1 FROM review_status_commands AS final
         WHERE final.phase = 'terminal' AND final.state_tag = 'Published'
-          AND final.revision_id = claimable.revision_id
+          AND final.revision_id = candidates.revision_id
           AND final.expected_head_sha = json_extract(revisions.payload, '$.headSha')
       )
   `).all() as unknown as QueuedReviewStatusRow[]).map(row => ({
@@ -7100,8 +7124,9 @@ export function openJournalStore(
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,
     headSha: row.head_sha,
-    position: row.position,
-    total: row.total,
+    queue: row.paused === 1 || row.position === null || row.total === null
+      ? { _tag: 'Paused' as const }
+      : { _tag: 'Waiting' as const, position: row.position, total: row.total },
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
   }))
