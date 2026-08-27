@@ -15,6 +15,7 @@ import type {
   ReviewFinding,
   ReviewGates,
   ReviewGateState,
+  ReviewOutcomeName,
 } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -24,7 +25,7 @@ import { currentGitHubChecks } from './github-agent-source.ts'
 import { issueTriageComment } from './issue-triage-comment.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
 interface GateResponse {
@@ -603,7 +604,7 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
  * a pull request the agent had answered it did not review, which reads to
  * everyone as "the agent found defects here".
  */
-export function reviewOutcome(gates: ReviewGates): 'READY' | 'PENDING' | 'BLOCKED' {
+export function reviewOutcome(gates: ReviewGates): ReviewOutcomeName {
   const states = Object.values(gates).map(gate => gate._tag)
   if (gates.review._tag === 'Pending')
     return 'PENDING'
@@ -615,7 +616,7 @@ function progressComment(headSha: string, progress: AgentProgress, at: string): 
 <!-- reviewed-sha: ${headSha} -->
 ### 🤖 REVIEWING · ${progress.label}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'review', updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(progress.percent)}\`
 
@@ -629,11 +630,11 @@ function baselineWaitingComment(headSha: string, baseSha: string, at: string): s
 <!-- workflow-state: ${workflow} -->
 ### 🤖 WAITING
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated status. Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'status', updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(100)}\`
 
-Base branch CI fails at \`${baseSha}\`.
+Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
 
 Next: merge or repair the marked Baseline repair pull request.`
 }
@@ -644,7 +645,14 @@ function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFi
   const reason = result === 'PENDING'
     ? Object.values(gates).find(gate => gate._tag === 'Pending')
     : undefined
-  const disclosure = `> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required.${reason?._tag === 'Pending' ? ` Waiting: ${cleanLine(reason.reason)}` : ''}`
+  const disclosure = automatedDisclosure({
+    kind: 'review',
+    disclaimer: `It is not Harlan's personal review or approval.`,
+    notes: [
+      'A person still decides the merge.',
+      ...(reason?._tag === 'Pending' ? [`Waiting: ${cleanLine(reason.reason)}`] : []),
+    ],
+  })
   const findingLines = findings.map(finding => finding._tag === 'Fixed'
     ? `- **Fixed:** ${cleanLine(finding.summary)}`
     : finding.resolution === 'Dismissal'
@@ -790,6 +798,25 @@ function recordRunnerLostIncident(options: ReviewWorkerOptions, repository: stri
   })
 }
 
+/**
+ * Puts the Review verdict on the pull request itself.
+ *
+ * A person choosing what to review next reads the pull request list, where
+ * only labels show. The canonical comment already carries the verdict, so a
+ * failed stamp costs nothing the reader cannot recover and never fails the
+ * Review. It is reported the way every other cosmetic status write is.
+ */
+async function stampReviewOutcome(
+  options: ReviewWorkerOptions,
+  task: ClaimedAdversarialReviewTask,
+  outcome: ReviewOutcomeName,
+  signal: AbortSignal,
+): Promise<void> {
+  const stamped = await options.github.stampReviewOutcome(task.repositoryMapping, task.pullRequestNumber, outcome, signal)
+  if (stamped._tag === 'Err' && !signal.aborted)
+    options.onProgressPublishFailure?.(task, stamped.error)
+}
+
 export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
   return {
     async run(task, signal) {
@@ -832,6 +859,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           )
           if (waiting._tag === 'Err')
             return waiting
+          await stampReviewOutcome(options, task, 'PENDING', signal)
           return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
         }
       }
@@ -960,7 +988,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         })
         if (queued._tag === 'Queued') {
           const reported = await reportReviewProgress(options, task, 'review', { percent: 95, label: 'Repair queued' }, signal)
-          return reported._tag === 'Err' ? reported : ok({ evidence: reviewRunId })
+          if (reported._tag === 'Err')
+            return reported
+          // Repair owns the canonical comment from here, so this is the last
+          // point the Review can state its verdict on the pull request.
+          await stampReviewOutcome(options, task, outcome, signal)
+          return ok({ evidence: reviewRunId })
         }
         findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
           ? { ...finding, nextAction: queued.reason }
@@ -987,6 +1020,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         return err('The automated review comment could not be saved.')
       if (published._tag === 'Err')
         return published
+      await stampReviewOutcome(options, task, reviewOutcome(gates), signal)
       return ok({ evidence: reviewRunId })
     },
   }

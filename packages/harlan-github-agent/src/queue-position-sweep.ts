@@ -1,10 +1,10 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
-import type { JournalStore, QueuedReviewStatus } from './store.ts'
+import type { JournalStore, QueuedReviewStatus, ReviewQueueState } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 
 const workLabel: Record<QueuedReviewStatus['taskKind'], string> = {
   adversarial_review: 'Review',
@@ -22,23 +22,33 @@ function ordinal(position: number): string {
 /**
  * The canonical comment while its Task waits in the Queue.
  *
- * No timestamp and no estimate. The comment carries one changing fact, the
- * Queue position, so an unchanged position renders an identical body and the
- * sweep writes nothing. A timestamp here would edit every comment every pass.
+ * No timestamp, no estimate, and no Queue length. The comment carries one
+ * changing fact, this Task's own position, so a Task nobody overtook renders
+ * an identical body and the sweep writes nothing.
+ *
+ * The length used to appear as "3rd of 7". Every Task joining the Queue moved
+ * that number, so one new pull request rewrote the comment on every other
+ * waiting pull request, once per poll. A position moves only when the Task
+ * ahead leaves, which is the fact worth an edit.
  */
 export function queuePositionComment(status: QueuedReviewStatus): string {
   const work = workLabel[status.taskKind]
-  const ahead = status.position - 1
-  const next = ahead === 0
-    ? `${work} starts as soon as an agent is free.`
-    : ahead === 1
-      ? `${work} starts after the 1 Task ahead of it finishes.`
-      : `${work} starts after the ${ahead} Tasks ahead of it finish.`
+  const heading = status.queue._tag === 'Paused'
+    ? 'PAUSED'
+    : `QUEUED · ${ordinal(status.queue.position)}`
+  const ahead = status.queue._tag === 'Paused' ? 0 : status.queue.position - 1
+  const next = status.queue._tag === 'Paused'
+    ? `${work} starts when this repository resumes.`
+    : ahead === 0
+      ? `${work} starts as soon as an agent is free.`
+      : ahead === 1
+        ? `${work} starts after the 1 Task ahead of it finishes.`
+        : `${work} starts after the ${ahead} Tasks ahead of it finish.`
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${status.headSha} -->
-### 🤖 QUEUED · ${ordinal(status.position)} of ${status.total}
+### 🤖 ${heading}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). This comment updates as the Queue moves.
+${automatedDisclosure({ kind: 'review', notes: ['This comment updates as the Queue moves.'] })}
 
 \`${formatProgressBar(0)}\`
 
@@ -53,7 +63,7 @@ export interface QueuePositionSweepOptions {
 }
 
 export type QueuePositionOutcome
-  = | { _tag: 'Published', repository: string, pullRequestNumber: number, position: number, total: number }
+  = | { _tag: 'Published', repository: string, pullRequestNumber: number, queue: ReviewQueueState }
     | { _tag: 'CommentGone', repository: string, pullRequestNumber: number }
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
 
@@ -68,6 +78,10 @@ export type QueuePositionOutcome
  * Only a comment this service already published is rewritten. The edit cannot
  * open a comment, so a quiet pull request stays quiet and a comment a person
  * deleted stays deleted.
+ *
+ * A paused repository queues Tasks that no agent claims. Its comment used to
+ * keep whatever the last Task left on it, so a pause read as work in progress.
+ * The comment names the pause instead, and returns to a position on resume.
  *
  * An agent can claim the Task between the Queue read and the comment write,
  * because both GitHub round trips sit in between. No local check closes that
@@ -118,8 +132,7 @@ export async function publishQueuePositions(
           _tag: 'Published',
           repository: status.repository,
           pullRequestNumber: status.pullRequestNumber,
-          position: status.position,
-          total: status.total,
+          queue: status.queue,
         })
       // The claim was lost while the edit was in flight, so the claimed agent
       // now owns the comment. Nothing was saved and nothing needs to be.

@@ -1479,6 +1479,93 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
+  it('keeps a stopped Review eligible when the merge carried a head its Review never saw', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'repaired-before-merge',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the open pull request Revision.')
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'review',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 REVIEWING · Git worktree ready',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: 'Repair queued.',
+    })).toBe(true)
+
+    // A commit landed on the branch, then GitHub merged it. Two Revisions
+    // separate the merge from the head this Review answered for.
+    store.recordObservation({
+      externalId: 'repaired-head',
+      observedAt: '2026-08-13T01:03:00.000Z',
+      source: 'poll',
+      subject: { ...pullRequest, headSha: 'repaired24', updatedAt: '2026-08-13T01:03:00.000Z' },
+    })
+    store.recordObservation({
+      externalId: 'repaired-merged',
+      observedAt: '2026-08-13T01:04:00.000Z',
+      source: 'poll',
+      subject: {
+        ...pullRequest,
+        headSha: 'repaired24',
+        state: 'closed',
+        mergedAt: '2026-08-13T01:04:00.000Z',
+        updatedAt: '2026-08-13T01:04:00.000Z',
+      },
+    })
+
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
+      taskId: review.id,
+      revisionId: observed.revisionId,
+      headSha: pullRequest.headSha,
+      commentId: 42,
+    })])
+    expect(store.recordStoppedReviewStatus({
+      taskId: review.id,
+      taskKind: 'adversarial_review',
+      revisionId: observed.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 MERGED',
+      at: '2026-08-13T01:05:00.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([])
+  })
+
   it('lists the open pull requests this service opened, so a new one can stack on them', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

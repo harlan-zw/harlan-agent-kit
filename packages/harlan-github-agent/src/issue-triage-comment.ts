@@ -1,3 +1,5 @@
+import { automatedDisclosure } from './review-comment.ts'
+
 export const AUTOMATED_ISSUE_TRIAGE_MARKER = '<!-- harlan-agent-kit:issue-triage -->'
 
 export interface IssueTriageCommentInput {
@@ -20,9 +22,9 @@ function validityLabel(validity: IssueTriageCommentInput['validity']): string {
 
 export function issueTriageComment(input: IssueTriageCommentInput): string {
   return `${AUTOMATED_ISSUE_TRIAGE_MARKER}
-### 🤖 Issue triage
+### 🤖 ISSUE TRIAGE
 
-> Harlan Agent Kit posted this automated triage. It is not Harlan's personal assessment or commitment.
+${automatedDisclosure({ kind: 'triage', disclaimer: `It is not Harlan's personal assessment or commitment.` })}
 
 - **Validity:** ${validityLabel(input.validity)}
 - **Difficulty:** ${input.difficulty}/5

@@ -59,7 +59,7 @@ describe('approval controller', () => {
     })
 
     expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
-    expect(body).toContain('Harlan GitHub Agent posted this automated comment.')
+    expect(body).toContain('[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated status.')
     expect(body).toContain('<!-- reviewed-sha: abc123 -->')
     expect(body).toContain('`harlan-agent-review` label')
     expect(body).toContain('head commit `abc123`')
