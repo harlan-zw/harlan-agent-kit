@@ -85,7 +85,8 @@ describe('agent profile resolution', () => {
   it('applies one model and one reasoning effort to every role', () => {
     const profile = resolveAgentProfile({ provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'low' }, 3)
 
-    expect(Object.values(profile.roles)).toEqual(Array.from({ length: 8 }, () => ({ model: 'gpt-5.6-luna', reasoningEffort: 'low' })))
+    for (const role of Object.values(profile.roles))
+      expect(role).toEqual({ model: 'gpt-5.6-luna', reasoningEffort: 'low' })
   })
 
   it('takes agent capacity from the caller, because the service fixes it at start', () => {

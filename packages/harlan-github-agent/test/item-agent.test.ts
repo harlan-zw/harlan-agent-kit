@@ -137,6 +137,99 @@ describe('subject Workers', () => {
     expect(stamped).toEqual(['READY'])
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
+    expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
+    expect(capture.requests[0]?.prompt).toContain('Limit local commands to changed files, their direct dependants, and focused behavior')
+  })
+
+  it('skips the costly Review when pull request triage finds judgment-free work', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const comments: string[] = []
+    const stamped: string[] = []
+    const capture: ProviderCapture = { requests: [] }
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('A skipped Review must not consume the manual override.')),
+        editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
+        clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
+        listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
+        stampAgentLabel: (_repository, _number, outcome) => {
+          stamped.push(outcome)
+          return Promise.resolve(ok(undefined))
+        },
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok(['docs/guide.md'])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [] },
+          body: 'Correct a typo in the guide.',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
+      },
+      now: () => new Date('2026-08-28T01:00:00.000Z'),
+      preflightRepair: () => Promise.reject(new Error('A skipped Review must not run repair preflight.')),
+      pullRequestTriage: {
+        run: () => Promise.resolve(ok({
+          _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
+          reason: 'Only prose documentation changed.',
+        })),
+      },
+      store: {
+        queueReviewFixTaskForReview: () => { throw new Error('A skipped Review must not queue Repair work.') },
+        getRepairedHeadFindings: () => [],
+        getWorkerSession: () => null,
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
+        queueBaselineRepairForReview: () => { throw new Error('A skipped Review must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+        recordReviewRun: () => { throw new Error('A skipped Review must not record a Review run.') },
+        recordReviewPublication: () => { throw new Error('A skipped Review must not record a Review publication.') },
+      },
+      status: {
+        publish: (_task, _phase, body) => {
+          comments.push(body)
+          return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.reject(new Error('A skipped Review must not prepare a worktree.')),
+        verifyReview: () => Promise.reject(new Error('A skipped Review must not verify a worktree.')),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-28T02:00:00.000Z' },
+      updatedAt: '2026-08-28T01:00:00.000Z',
+      repositoryMapping: repositoryMapping(),
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: JSON.stringify({
+      _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
+      reason: 'Only prose documentation changed.',
+    }) }))
+    expect(stamped).toEqual(['ADVERSARIAL_REVIEW_SKIPPED'])
+    expect(comments[0]).toContain('REVIEW SKIPPED')
+    expect(comments[0]).toContain('harlan-agent-review')
+    expect(capture.requests).toEqual([])
   })
 
   it('does not start a second review for the same head commit', async () => {
@@ -887,10 +980,10 @@ describe('subject Workers', () => {
   it('publishes a valid issue triage result from a fresh retry session', async () => {
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
-    let triageBody = ''
+    let triageResult: unknown
     const worker = createIssueTriageWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        validity: 'valid',
+        _tag: 'READY_TO_IMPLEMENT',
         difficulty: 2,
         impact: 4,
         hasReproduction: true,
@@ -923,8 +1016,8 @@ describe('subject Workers', () => {
       },
       status: { publish: () => Promise.reject(new Error('Issue triage must not publish status.')) },
       triageStatus: {
-        publish: (_task, body) => {
-          triageBody = body
+        publish: (_task, response) => {
+          triageResult = response
           return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/issues/12#issuecomment-42' }))
         },
       },
@@ -949,7 +1042,7 @@ describe('subject Workers', () => {
       _tag: 'Ok',
       value: {
         evidence: JSON.stringify({
-          validity: 'valid',
+          _tag: 'READY_TO_IMPLEMENT',
           difficulty: 2,
           impact: 4,
           hasReproduction: true,
@@ -960,17 +1053,14 @@ describe('subject Workers', () => {
       },
     })
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium', sessionId: null })])
-    expect(triageBody).toBe(`<!-- harlan-agent-kit:issue-triage -->
-### 🤖 ISSUE TRIAGE
-
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated triage. It is not Harlan's personal assessment or commitment. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).
-
-- **Validity:** Valid
-- **Difficulty:** 2/5
-- **Impact:** 4/5
-- **Reproduction:** Yes
-- **Codebase review:** Not needed
-- **Summary:** The parser drops valid input.
-- **Next action:** Write a regression test and repair the parser.`)
+    expect(triageResult).toEqual({
+      _tag: 'READY_TO_IMPLEMENT',
+      difficulty: 2,
+      impact: 4,
+      hasReproduction: true,
+      needsCodebaseReview: false,
+      summary: 'The parser drops valid input.',
+      nextAction: 'Write a regression test and repair the parser.',
+    })
   })
 })

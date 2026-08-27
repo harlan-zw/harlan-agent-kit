@@ -37,6 +37,7 @@ import { createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
 import { createPullRequestStatusController } from './pull-request-status-controller.ts'
+import { createPullRequestTriageAgent } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
@@ -412,6 +413,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         )
       },
       preflightRepair: (repository: string, signal: AbortSignal) => preflightGitHubWriteAccess(tokens, repository, ['contents_write'], signal),
+      pullRequestTriage: createPullRequestTriageAgent({ activityLog, now, runtime, store, workspace: controllerRoot }),
       store,
       runtime,
       status: reviewStatus,

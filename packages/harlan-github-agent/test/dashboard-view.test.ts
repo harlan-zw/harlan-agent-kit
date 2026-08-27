@@ -19,6 +19,7 @@ import {
   queueDetail,
   queueStateLabel,
   queueWork,
+  recentlyFinished,
   repositoryState,
   reviewOutcomeLabel,
   reviewUsageLabel,
@@ -159,6 +160,23 @@ describe('buildHistory', () => {
   it('keeps a review task whose revision does not match any recorded review', () => {
     const history = buildHistory([reviewAgent({ revisionId: 'rev-b' })], [reviewTask])
     expect(history).toHaveLength(2)
+  })
+})
+
+describe('recentlyFinished', () => {
+  it('keeps the three newest finished records for the System pane', () => {
+    const tasks = [
+      triageTask,
+      { ...triageTask, id: 'task-2', updatedAt: '2026-08-14T11:46:00.000Z' },
+      { ...triageTask, id: 'task-3', updatedAt: '2026-08-14T11:47:00.000Z' },
+      { ...triageTask, id: 'task-4', updatedAt: '2026-08-14T11:48:00.000Z' },
+    ]
+
+    expect(recentlyFinished([], tasks).map(record => record.key)).toEqual([
+      'task-4',
+      'task-3',
+      'task-2',
+    ])
   })
 })
 

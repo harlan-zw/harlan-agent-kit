@@ -770,7 +770,7 @@ describe('journal store', () => {
       workerId: 'issue-worker',
       fence: task.state.fence,
       at: '2026-08-13T01:02:00.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })).toBe(true)
     expect(store.isIssueWorkApprovalReady('harlan-zw/example', 12, task.revisionId)).toBe(true)
     expect(store.approveIssueWork({
@@ -928,7 +928,7 @@ describe('journal store', () => {
       workerId: task.state.workerId,
       fence: task.state.fence,
       at: '2026-08-13T01:02:03.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })).toBe(true)
 
     const changed = store.recordObservation({
@@ -957,7 +957,7 @@ describe('journal store', () => {
       .toEqual(expect.objectContaining({ commentId: 42 }))
   })
 
-  it('queues trusted author issue work automatically after valid triage', () => {
+  it('queues trusted author Issue work only after Ready to implement triage', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     store.recordObservation({
@@ -975,7 +975,7 @@ describe('journal store', () => {
       workerId: 'issue-worker',
       fence: triage.state.fence,
       at: '2026-08-13T01:02:00.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })).toBe(true)
 
     expect(store.getDashboardSnapshot('2026-08-13T01:02:01.000Z').queue).toEqual([
@@ -1012,7 +1012,7 @@ describe('journal store', () => {
       workerId: triage.state.workerId,
       fence: triage.state.fence,
       at: '2026-08-13T01:02:00.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
 
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -1067,7 +1067,7 @@ describe('journal store', () => {
       workerId: triage.state.workerId,
       fence: triage.state.fence,
       at: '2026-08-13T01:02:00.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
 
     expect(store.getDashboardSnapshot('2026-08-13T01:02:01.000Z').queue).toContainEqual(expect.objectContaining({
@@ -1104,11 +1104,11 @@ describe('journal store', () => {
     expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)).toBeNull()
   })
 
-  it('does not queue issue work when triage needs information', () => {
+  it.each(['READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] as const)('does not queue issue work for the %s route', (route) => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     store.recordObservation({
-      externalId: 'issue-needs-information',
+      externalId: `issue-${route}`,
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
       subject: issueItem(),
@@ -1122,7 +1122,7 @@ describe('journal store', () => {
       workerId: 'issue-worker',
       fence: task.state.fence,
       at: '2026-08-13T01:02:00.000Z',
-      evidence: JSON.stringify({ validity: 'needs_information' }),
+      evidence: JSON.stringify({ _tag: route }),
     })
 
     expect(store.approveIssueWork({
@@ -2599,6 +2599,48 @@ describe('journal store', () => {
     expect(rerun?.state.fence).toBe(2)
   })
 
+  it('lets the manual Review label override a skipped triage result', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'review-triage-skip',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const first = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 10_000)
+    if (first === null)
+      throw new Error('Expected pull request triage.')
+    expect(store.completeWorkerTask({
+      taskId: first.id,
+      workerId: first.state.workerId,
+      fence: first.state.fence,
+      at: '2026-08-13T01:01:01.000Z',
+      evidence: JSON.stringify({ _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only prose changed.' }),
+    })).toBe(true)
+
+    store.recordObservation({
+      externalId: 'review-triage-manual-override',
+      observedAt: '2026-08-13T01:02:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        approvalLabels: ['review'],
+        mergeState: 'clean',
+        priorAutomatedReview: {
+          _tag: 'Found',
+          authorLogin: 'harlan-github-agent[bot]',
+          state: 'active',
+          url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+        },
+        updatedAt: '2026-08-13T01:02:00.000Z',
+      }),
+    })
+
+    const override = store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T01:02:01.000Z', 10_000)
+    expect(override).toEqual(expect.objectContaining({ id: first.id, revisionId: first.revisionId }))
+    expect(override?.state.fence).toBe(2)
+  })
+
   it('reviews the same head again after its base commit changes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -3298,7 +3340,7 @@ describe('journal store', () => {
       workerId: triage.state.workerId,
       fence: triage.state.fence,
       at: '2026-08-13T01:00:02.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
     store.approveIssueWork({
       repository: 'harlan-zw/example',
@@ -3332,7 +3374,7 @@ describe('journal store', () => {
       workerId: retriage.state.workerId,
       fence: retriage.state.fence,
       at: '2026-08-13T01:00:09.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
     expect(store.getDashboardSnapshot('2026-08-13T01:00:10.000Z').queue).toContainEqual(expect.objectContaining({
       number: 12,
@@ -3367,7 +3409,7 @@ describe('journal store', () => {
       workerId: triage.state.workerId,
       fence: triage.state.fence,
       at: '2026-08-13T01:00:02.000Z',
-      evidence: JSON.stringify({ validity: 'valid' }),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
     const rejected = 'The Agent returned invalid pull request text.'
     let taskId = ''

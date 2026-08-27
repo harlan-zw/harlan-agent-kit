@@ -52,7 +52,7 @@ function stagedIssueStore() {
   const triage = store.claimNextIssueTriageTask('triage', '2026-08-13T01:01:00.000Z', 60_000)
   if (triage === null || observed._tag !== 'Inserted')
     throw new Error('Expected issue triage.')
-  store.completeWorkerTask({ taskId: triage.id, workerId: 'triage', fence: triage.state.fence, at: '2026-08-13T01:01:01.000Z', evidence: JSON.stringify({ validity: 'valid' }) })
+  store.completeWorkerTask({ taskId: triage.id, workerId: 'triage', fence: triage.state.fence, at: '2026-08-13T01:01:01.000Z', evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }) })
   store.approveIssueWork({ repository: 'harlan-zw/example', issueNumber: 12, revisionId: observed.revisionId, at: '2026-08-13T01:01:02.000Z' })
   const task = store.claimNextIssueWorkTask('worker', '2026-08-13T01:01:03.000Z', 60_000)
   if (task === null)

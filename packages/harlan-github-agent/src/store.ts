@@ -1,5 +1,6 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { TransientKind } from './failure.ts'
+import type { IssueTriageState } from './issue-triage.ts'
 import type {
   AdversarialReviewTask,
   AgentProfile,
@@ -81,6 +82,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { isIssueTriageState } from './issue-triage.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { cleanLine } from './text.ts'
 
@@ -2180,6 +2182,13 @@ function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function issueTriageState(evidence: string | null): IssueTriageState | undefined {
+  if (evidence === null)
+    return undefined
+  const value = JSON.parse(evidence) as { _tag?: unknown }
+  return isIssueTriageState(value._tag) ? value._tag : undefined
+}
+
 const freshIssueTriageReason = 'Fresh triage is required before approved issue work can continue.'
 
 function revisionIdFor(subject: GitHubItem): string {
@@ -2579,10 +2588,10 @@ function dashboardQueue(
         case 'ActionRequired': return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: task.state.reason } }]
         case 'Failed': return [{ ...base, kind: 'issue', state: failedQueueState(task.state.reason, task.recoveryAttempts) }]
         case 'Completed': {
-          const triage = JSON.parse(task.state.evidence) as { validity?: unknown, nextAction?: unknown }
-          if (triage.validity === 'valid' && canWorkIssues(mapping))
+          const triage = JSON.parse(task.state.evidence) as { _tag?: unknown, nextAction?: unknown }
+          if (triage._tag === 'READY_TO_IMPLEMENT' && canWorkIssues(mapping))
             return [{ ...base, kind: 'issue', state: { _tag: 'AwaitingApproval', kind: 'issue_work' } }]
-          if (triage.validity === 'needs_information')
+          if (triage._tag === 'NEEDS_INFO')
             return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: typeof triage.nextAction === 'string' ? triage.nextAction : 'The issue needs more information.' } }]
           return []
         }
@@ -3194,6 +3203,7 @@ function planAdversarialReview(
   observedAt: string,
   mapping: RepositoryMapping,
   reviewApproved: boolean,
+  manualReviewRequested: boolean,
 ): void {
   const approvalRequired = subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, subject.author)
   const rerunRequested = database.prepare(`
@@ -3211,6 +3221,7 @@ function planAdversarialReview(
   const alreadyReviewed = subject.kind === 'pull_request'
     && subject.priorAutomatedReview._tag === 'Found'
     && !rerunRequested
+    && !(manualReviewRequested && localAttempt.revision_attempt === 0)
     && (localAttempt.any_attempt === 0 || localAttempt.revision_attempt === 1)
   const eligible = subject.kind === 'pull_request'
     && subject.state === 'open'
@@ -3254,6 +3265,24 @@ function planAdversarialReview(
       WHERE id = ? AND state_tag = 'Failed'
     `).run(observedAt, existing.id)
     recordWorkerTransition(database, { taskId: existing.id, from: 'Failed', to: 'Queued', reason: 'Retrying a recoverable review failure.', fence: existing.fence, at: observedAt })
+    return
+  }
+  if (existing?.state_tag === 'Completed' && manualReviewRequested && localAttempt.revision_attempt === 0) {
+    database.prepare(`
+      UPDATE worker_tasks
+      SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
+        worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
+        progress_label = 'Starting', updated_at = ?
+      WHERE id = ? AND state_tag = 'Completed'
+    `).run(observedAt, existing.id)
+    recordWorkerTransition(database, {
+      taskId: existing.id,
+      from: 'Completed',
+      to: 'Queued',
+      reason: 'The manual Review label overrode pull request triage.',
+      fence: existing.fence,
+      at: observedAt,
+    })
     return
   }
   const completedBaseline = subject.kind === 'pull_request' && existing?.state_tag === 'Completed' && localAttempt.revision_attempt === 0
@@ -3329,7 +3358,7 @@ function planIssueTriage(
     if (
       existing.state_tag === 'Completed'
       && existing.evidence !== null
-      && (JSON.parse(existing.evidence) as { validity?: unknown }).validity === 'valid'
+      && issueTriageState(existing.evidence) === 'READY_TO_IMPLEMENT'
       && subject.kind === 'issue'
       && canWorkIssues(mapping)
       && !requiresIssueApproval(mapping, subject.author)
@@ -4739,7 +4768,16 @@ export function openJournalStore(
           WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
         `).get(subject.id, revisionId) !== undefined
         planConflictResolution(database, input.subject, subject.id, revisionId, input.observedAt, mapping, reviewApproved)
-        planAdversarialReview(database, input.subject, subject.id, revisionId, input.observedAt, mapping, reviewApproved)
+        planAdversarialReview(
+          database,
+          input.subject,
+          subject.id,
+          revisionId,
+          input.observedAt,
+          mapping,
+          reviewApproved,
+          input.subject.kind === 'pull_request' && input.subject.approvalLabels.includes('review'),
+        )
         planIssueTriage(database, input.subject, subject.id, revisionId, input.observedAt, mapping)
       }
 
@@ -4858,7 +4896,7 @@ export function openJournalStore(
         mapping,
         author: pullRequest.author,
       })
-      planAdversarialReview(database, pullRequest, row.subject_id, input.revisionId, input.at, mapping, true)
+      planAdversarialReview(database, pullRequest, row.subject_id, input.revisionId, input.at, mapping, true, true)
       database.exec('COMMIT')
       return { _tag: inserted.changes === 1 ? 'Approved' : 'Duplicate', approval }
     }
@@ -4899,7 +4937,7 @@ export function openJournalStore(
       return { _tag: 'Rejected', reason: { _tag: 'NotAuthorized' } }
     if (!requiresIssueApproval(mapping, issue.author))
       return { _tag: 'Rejected', reason: { _tag: 'ApprovalNotRequired' } }
-    if (row.triage_evidence === null || (JSON.parse(row.triage_evidence) as { validity?: unknown }).validity !== 'valid')
+    if (issueTriageState(row.triage_evidence) !== 'READY_TO_IMPLEMENT')
       return { _tag: 'Rejected', reason: { _tag: 'TriageRequired' } }
 
     database.exec('BEGIN IMMEDIATE')
@@ -4947,7 +4985,7 @@ export function openJournalStore(
       && issue.state === 'open'
       && canWorkIssues(mapping)
       && requiresIssueApproval(mapping, issue.author)
-      && (JSON.parse(row.triage_evidence) as { validity?: unknown }).validity === 'valid'
+      && issueTriageState(row.triage_evidence) === 'READY_TO_IMPLEMENT'
   }
 
   const hasPullRequestApproval: JournalStore['hasPullRequestApproval'] = (repository, pullRequestNumber, revisionId, kind) => database.prepare(`
@@ -6161,7 +6199,7 @@ export function openJournalStore(
             subject.kind === 'issue'
             && canWorkIssues(mapping)
             && !requiresIssueApproval(mapping, subject.author)
-            && (JSON.parse(input.evidence) as { validity?: unknown }).validity === 'valid'
+            && issueTriageState(input.evidence) === 'READY_TO_IMPLEMENT'
           ) {
             queueIssueWork(database, row.subject_id, row.revision_id, subject, mapping, input.at)
           }
@@ -6580,7 +6618,7 @@ export function openJournalStore(
     -- lost and the next attempt sends it again. The worker and the fence prove
     -- this is the attempt that was authorized, because every re-claim raises the
     -- fence. One triage comment posted twelve minutes after a two minute lease,
-    -- and the deadlock that followed took a valid triage to Failed.
+    -- and the deadlock that followed took a completed triage to Failed.
     WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
       AND revision_id = (
         SELECT subjects.current_revision_id
@@ -6800,7 +6838,7 @@ export function openJournalStore(
     -- lost and the next attempt sends it again. The worker and the fence prove
     -- this is the attempt that was authorized, because every re-claim raises the
     -- fence. One triage comment posted twelve minutes after a two minute lease,
-    -- and the deadlock that followed took a valid triage to Failed.
+    -- and the deadlock that followed took a completed triage to Failed.
     WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
       AND (
         EXISTS (

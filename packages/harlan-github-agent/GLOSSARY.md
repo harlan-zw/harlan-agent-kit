@@ -30,6 +30,7 @@ did not cover it.
 | Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
 | Watch logs | System pane action | Observer | Opens one read-only live Task event stream | Watch logs |
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
+| Recently finished | derived dashboard state | System pane | Three newest finished Tasks or Review runs | Recently finished |
 | Self-hosted runner | Docker container labels | GitHub Actions | N per repository, independent of this service | self-hosted runner |
 | Conflict resolution | `tasks.kind` | Scheduler | One Task kind | conflict resolution |
 | Baseline repair | `tasks.kind` | Scheduler | One Task for one failing default branch commit | Baseline repair |
@@ -38,7 +39,9 @@ did not cover it.
 | Stack | `subjects` base ref, `publication_commands.base_ref` | GitHub | A pull request whose base is another pull request's head | stack |
 | Issue triage | `worker_tasks.kind` | Scheduler | One Task for one issue Revision | issue triage |
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
+| Issue triage label | `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-spec`, `harlan-agent-needs-info`, or `harlan-agent-wait-to-implement` | GitHub | One per triaged issue Revision | triage route |
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
+| Pull request triage | `pull_request_triage` Agent role | Runner | One low-cost decision per pull request head commit | pull request triage |
 | Take Ownership | `repositories.take_ownership` | Controller | One policy per Repository mapping | Take Ownership |
 | Publication command | `publication_commands` | Controller | One to one Task | none |
 | Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
@@ -321,7 +324,7 @@ Use Baseline repair. Do not use default branch CI fix or origin main CI fix.
 
 One Task that plans, implements, and verifies a change for one exact issue state.
 
-Harlan's valid issues authorize Issue work automatically. An outside contributor's issue requires Approval.
+An issue with the Ready to implement route authorizes Issue work. An outside contributor's issue also requires Approval.
 
 The Issue triage Agent continues its own session for Issue work.
 
@@ -331,9 +334,25 @@ One agent Task that assesses one exact issue state.
 
 `Triage` is GitHub's own word, both for the repository role and for the practice.
 
+It selects exactly one route: Ready to implement, Ready to spec, Needs info, or Wait to implement.
+
+### Issue triage label
+
+One GitHub label that records the current Issue triage route.
+
+The four labels are `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-spec`, `harlan-agent-needs-info`, and `harlan-agent-wait-to-implement`.
+
 ### Issue triage comment
 
 One self identified automated triage record on an issue. Re-runs update the canonical comment.
+
+### Pull request triage
+
+One low-cost Agent decision for one exact pull request head commit.
+
+It requires or skips an adversarial Review. Any uncertainty requires Review.
+
+`harlan-agent-review` requires Review and is the manual override. `harlan-agent-review-skipped` records a skipped Review.
 
 ### Take Ownership
 

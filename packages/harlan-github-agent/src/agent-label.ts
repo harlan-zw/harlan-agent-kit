@@ -1,3 +1,5 @@
+import type { IssueTriageState } from './issue-triage.ts'
+import type { PullRequestTriageState } from './pull-request-triage.ts'
 import type { RepositoryMapping, ReviewOutcomeName } from './types.ts'
 
 /**
@@ -9,7 +11,7 @@ import type { RepositoryMapping, ReviewOutcomeName } from './types.ts'
  * Agent is working on has no settled verdict, and a settled verdict means no
  * Agent is working.
  */
-export type AgentLabelState = ReviewOutcomeName | 'RUNNING'
+export type AgentLabelState = IssueTriageState | PullRequestTriageState | ReviewOutcomeName | 'RUNNING'
 
 export interface AgentLabelDefinition {
   name: string
@@ -46,6 +48,36 @@ export const AGENT_LABELS = {
     color: 'd73a4a',
     description: 'The automated Review found a material defect in this head commit.',
   },
+  ADVERSARIAL_REVIEW_REQUIRED: {
+    name: 'harlan-agent-review',
+    color: 'd73a4a',
+    description: 'Pull request triage requires an adversarial Review. Adding this label manually always forces one.',
+  },
+  ADVERSARIAL_REVIEW_SKIPPED: {
+    name: 'harlan-agent-review-skipped',
+    color: '6e7781',
+    description: 'Pull request triage found no need for an adversarial Review on this head commit.',
+  },
+  READY_TO_IMPLEMENT: {
+    name: 'harlan-agent-ready-to-implement',
+    color: '0e8a16',
+    description: 'Issue triage found bounded work ready for an implementation Agent.',
+  },
+  READY_TO_SPEC: {
+    name: 'harlan-agent-ready-to-spec',
+    color: '8250df',
+    description: 'Issue triage found work that needs a specification before implementation.',
+  },
+  NEEDS_INFO: {
+    name: 'harlan-agent-needs-info',
+    color: 'fbca04',
+    description: 'Issue triage needs more information before work can continue.',
+  },
+  WAIT_TO_IMPLEMENT: {
+    name: 'harlan-agent-wait-to-implement',
+    color: '6e7781',
+    description: 'Issue triage found work that should wait before implementation.',
+  },
 } as const satisfies Record<AgentLabelState, AgentLabelDefinition>
 
 /**
@@ -60,17 +92,38 @@ export interface AgentLabelPlan {
   remove: string[]
 }
 
-const ownedLabels = new Set(Object.values(AGENT_LABELS).map(label => label.name.toLowerCase()))
+const reviewStates = ['RUNNING', 'READY', 'PENDING', 'BLOCKED'] as const satisfies readonly AgentLabelState[]
+const issueTriageStates = ['READY_TO_IMPLEMENT', 'READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] as const satisfies readonly AgentLabelState[]
+const pullRequestTriageStates = ['ADVERSARIAL_REVIEW_REQUIRED', 'ADVERSARIAL_REVIEW_SKIPPED'] as const satisfies readonly AgentLabelState[]
+const ownedLabels = new Set(Object.entries(AGENT_LABELS)
+  .filter(([state]) => state !== 'ADVERSARIAL_REVIEW_REQUIRED')
+  .map(([, label]) => label.name.toLowerCase()))
+
+function mutuallyExclusiveLabels(state: AgentLabelState): Set<string> {
+  const states = (issueTriageStates as readonly AgentLabelState[]).includes(state)
+    ? issueTriageStates
+    : (pullRequestTriageStates as readonly AgentLabelState[]).includes(state)
+        ? pullRequestTriageStates
+        : reviewStates
+  return new Set(states.map(value => AGENT_LABELS[value].name.toLowerCase()))
+}
 
 export function planAgentLabels(state: AgentLabelState, current: string[]): AgentLabelPlan {
   const wanted = AGENT_LABELS[state]
   const present = current.map(label => label.toLowerCase())
+  const exclusive = mutuallyExclusiveLabels(state)
+  if (state === 'ADVERSARIAL_REVIEW_SKIPPED' && present.includes(AGENT_LABELS.ADVERSARIAL_REVIEW_REQUIRED.name)) {
+    return {
+      add: null,
+      remove: current.filter(label => label.toLowerCase() === wanted.name.toLowerCase()),
+    }
+  }
   return {
     add: present.includes(wanted.name.toLowerCase()) ? null : wanted,
-    // One Item is in one state. A second owned label on the same Item states a
-    // second one, so every other owned label goes.
+    // Review progress and issue triage answer different questions. Each axis
+    // keeps one label, and the two labels may coexist while Issue work runs.
     remove: current.filter(label =>
-      ownedLabels.has(label.toLowerCase()) && label.toLowerCase() !== wanted.name.toLowerCase()),
+      exclusive.has(label.toLowerCase()) && label.toLowerCase() !== wanted.name.toLowerCase()),
   }
 }
 

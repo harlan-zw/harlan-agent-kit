@@ -501,7 +501,7 @@ export interface ClaimedIssueWorkTask extends IssueWorkTask {
 
 export type AgentTask = ConflictResolutionTask | ReviewFixTask | BaselineRepairTask | AdversarialReviewTask | IssueTriageTask | IssueWorkTask
 export type ClaimedAgentTask = ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask
-export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'issue_triage' | 'issue_work' | 'routine_scan' | 'routine_fix'
+export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'pull_request_triage' | 'issue_triage' | 'issue_work' | 'routine_scan' | 'routine_fix'
 
 /**
  * Every Routine the service knows how to run.
