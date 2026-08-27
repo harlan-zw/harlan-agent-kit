@@ -19,7 +19,9 @@ Require an explicit configuration file. Start from `config.example.yml` only whe
 
 Use `github.allowed_owners` before GitHub App installation access. Ignore installations from every other GitHub owner. Scan only immediate directories under `~/pkg` and `~/sites` to find trusted local checkouts. Treat configured repositories as policy overrides. Never act on a checkout without matching its GitHub origin and App installation.
 
-Review every tracked pull request authored by `harlan-zw` without Approval. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Keep the label in place, so a later head commit stays approved for a fresh review. Bind Approval to the exact head commit; never let the label approve a head commit twice.
+Run low-cost Pull request triage for every tracked pull request authored by `harlan-zw`. Require an adversarial Review for code, tests, configuration, dependencies, workflows, schemas, generated runtime output, security boundaries, public APIs, performance-sensitive files, behavior claims, or uncertainty. Skip only clearly judgment-free prose, formatting, or comment-only changes. Stamp `harlan-agent-review-skipped` when Review is skipped.
+
+Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Bind Approval to the exact head commit; never let the label approve a head commit twice.
 
 Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
 
@@ -29,7 +31,7 @@ Enable issue triage by default on owned repositories. Keep it disabled on mainta
 
 Post one self identified automated triage comment after each completed issue triage. Update that canonical comment on reruns.
 
-After valid triage, continue automatically when the issue author appears in `writable_pr_authors`. For an outside contributor, wait for Harlan to add `harlan-agent-review` or select `Approve`. Bind Approval to the exact issue state.
+Stamp exactly one Issue triage route label: `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-spec`, `harlan-agent-needs-info`, or `harlan-agent-wait-to-implement`. Queue Issue work only after Ready to implement. For an outside contributor, also wait for Harlan to add `harlan-agent-review` or select `Approve`. Bind Approval to the exact issue state.
 
 Allow explicit `external_repositories` entries for public issue observation only. They receive no App token, create no Queue work, and permit no comments or edits. Use `issues: [NUMBER]` for exact issues or `issues: all` for current human issues.
 
@@ -69,7 +71,7 @@ A pinned Agent selection overrides it. Harlan switches the Agent provider, model
 
 Automatic selection picks the Agent provider by remaining capacity. It walks `order` and takes the first provider whose window has more than its own Reserve left. `order` defaults to opencode first, because opencode answers on the GLM Coding Plan. Codex publishes a seven-day window. opencode publishes the GLM Coding Plan five-hour and weekly windows, and the fuller window decides. When no provider may spend, the service stops claiming new agent Tasks and shows `Reserve reached` in the System pane. Active agents and Publications finish. Reaching a Reserve is normal state, not an Incident.
 
-For `codex`, use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair.
+For `codex`, use `gpt-5.6-luna` with low reasoning for Pull request triage. Use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair.
 
 For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role.
 
@@ -139,8 +141,8 @@ Enable the global mutation switch only after repository mappings and publication
 
 Use the exact issue state or pull request head commit for every dispatch.
 
-- New issue: apply `../issue-triage/SKILL.md`. Post its result through the controller as the canonical issue triage comment.
-- Open pull request: the controller applies `../adversarial-review/SKILL.md` completely. Give the Review Agent only the compact disproof contract. Do not make it reload controller authority, gates, status, publication, or Repair rules.
+- New issue: select one Issue triage route. Post its result and matching route label through the controller.
+- Open pull request: run Pull request triage first. If it requires Review, the controller applies `../adversarial-review/SKILL.md` completely. Give the Review Agent only the compact disproof contract. Do not make it reload controller authority, gates, status, publication, or Repair rules.
 - PR metadata: apply `../pr/SKILL.md`. Preserve its AI disclosure.
 - Work item lifecycle: apply `../take-ownership/SKILL.md` after eligibility passes.
 - Regression repair: apply `../unit-tests/SKILL.md` before the fix.
@@ -148,6 +150,8 @@ Use the exact issue state or pull request head commit for every dispatch.
 Keep one implementation Agent for an issue and its resulting pull request. Start one fresh Review Agent per head SHA.
 
 Preflight Repair authority before Review. Keep Review read only, and reject a Review worktree that changed.
+
+Use required CI for every repository-wide test, lint, typecheck, and build result. Review Agents may run only focused checks for changed files, their direct dependants, or one material finding. Never let a Review Agent run a full suite, repository typecheck, build, dev server, site crawl, or Lighthouse audit.
 
 Record every material finding. Never cap the finding count. Give Repair the exact stored findings.
 

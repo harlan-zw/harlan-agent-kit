@@ -385,6 +385,11 @@ export function buildHistory(reviewAgents: ReviewAgent[], tasks: AgentTask[]): H
   return [...reviews, ...settled].sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
 }
 
+/** The System pane keeps only enough finished work to confirm recent movement. */
+export function recentlyFinished(reviewAgents: ReviewAgent[], tasks: AgentTask[]): HistoryRecord[] {
+  return buildHistory(reviewAgents, tasks).slice(0, 3)
+}
+
 /**
  * What a card is for, as an icon and a word.
  *
@@ -399,6 +404,7 @@ export interface WorkChip {
 
 const workChips: Record<AgentRole, WorkChip> = {
   adversarial_review: { label: 'Review', icon: 'i-lucide-scan-eye' },
+  pull_request_triage: { label: 'Pull request triage', icon: 'i-lucide-list-checks' },
   review_fix: { label: 'Repair', icon: 'i-lucide-wrench' },
   conflict_resolution: { label: 'Conflict', icon: 'i-lucide-git-merge' },
   baseline_repair: { label: 'Baseline', icon: 'i-lucide-heart-pulse' },

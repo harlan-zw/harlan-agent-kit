@@ -51,6 +51,40 @@ describe('planAgentLabels', () => {
 
     expect(new Set(names).size).toBe(names.length)
   })
+
+  it('replaces one issue triage result without removing the Running label', () => {
+    expect(planAgentLabels('READY_TO_SPEC', [
+      'harlan-agent-running',
+      'harlan-agent-needs-info',
+    ])).toEqual({
+      add: AGENT_LABELS.READY_TO_SPEC,
+      remove: ['harlan-agent-needs-info'],
+    })
+  })
+
+  it('keeps the issue triage result while Issue work runs', () => {
+    expect(planAgentLabels('RUNNING', ['harlan-agent-ready-to-implement'])).toEqual({
+      add: AGENT_LABELS.RUNNING,
+      remove: [],
+    })
+  })
+
+  it('uses the existing Review label as the pull request triage override', () => {
+    expect(planAgentLabels('ADVERSARIAL_REVIEW_REQUIRED', [
+      'harlan-agent-review-skipped',
+      'bug',
+    ])).toEqual({
+      add: AGENT_LABELS.ADVERSARIAL_REVIEW_REQUIRED,
+      remove: ['harlan-agent-review-skipped'],
+    })
+  })
+
+  it('never replaces a manual Review override with Review skipped', () => {
+    expect(planAgentLabels('ADVERSARIAL_REVIEW_SKIPPED', [
+      'harlan-agent-review',
+      'harlan-agent-review-skipped',
+    ])).toEqual({ add: null, remove: ['harlan-agent-review-skipped'] })
+  })
 })
 
 describe('staleAgentLabels', () => {

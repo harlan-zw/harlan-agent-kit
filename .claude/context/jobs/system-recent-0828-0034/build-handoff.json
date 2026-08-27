@@ -1,0 +1,37 @@
+{
+  "schema_version": 4,
+  "job_id": "system-recent-0828-0034",
+  "created": "2026-08-27T14:36:55Z",
+  "git_hash": "0246c2a030739df1e92d83f7a2f067a245e4875f",
+  "dev_port": 42731,
+  "pages_changed": [
+    "packages/harlan-github-agent/dashboard/app/pages/index.vue"
+  ],
+  "components_created": [],
+  "routes_to_test": [
+    "/"
+  ],
+  "design_system_changes": false,
+  "theme_name": "minimal-control-room",
+  "contract_path": ".claude/context/jobs/system-recent-0828-0034/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met"
+  },
+  "self_assessment": {
+    "confidence": "medium",
+    "weakest_area": "The live smoke test used an empty dashboard snapshot.",
+    "hardest_decision": "Kept the System view to three rows so it confirms movement without replacing History."
+  },
+  "has_client_animations": false,
+  "known_limitations": [],
+  "next_steps": [],
+  "dark_mode_relevant": true
+}

@@ -19,6 +19,7 @@ import {
   queuedEntries,
   queueDetail,
   queueWork,
+  recentlyFinished,
   reviewOutcomeLabel,
   reviewOutcomeTone,
   stalledLabel,
@@ -79,6 +80,7 @@ const providerCapacities = computed(() => snapshot.value.providerCapacities.map(
   ...entry,
   presentation: providerCapacityPresentation(entry),
 })))
+const recentlyFinishedRecords = computed(() => recentlyFinished(reviewAgents.value, snapshot.value.tasks))
 
 /** Only offer a filter for work the board actually holds right now. */
 const availableWork = computed(() => {
@@ -264,6 +266,72 @@ useHead({
           <span class="font-mono text-xs text-dimmed">{{ incident.occurrences }}&times; · {{ relativeTime(incident.lastSeenAt) }}</span>
         </li>
       </ul>
+
+      <section class="mt-3" aria-labelledby="recently-finished-heading">
+        <div class="zone-header">
+          <h3 id="recently-finished-heading" class="field-label">
+            Recently finished
+          </h3>
+          <NuxtLink v-if="doneTotal > 0" to="/history" class="entity-link font-mono text-xs text-muted">
+            All history
+          </NuxtLink>
+          <hr class="zone-rule">
+        </div>
+
+        <ol v-if="recentlyFinishedRecords.length > 0" class="divide-y divide-default border-y border-default">
+          <li
+            v-for="record in recentlyFinishedRecords"
+            :key="record.key"
+            class="grid gap-x-4 gap-y-1 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          >
+            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <UBadge
+                v-if="record._tag === 'Review'"
+                size="sm"
+                :color="reviewOutcomeTone(record.agent)"
+                :class="statusClass(reviewOutcomeTone(record.agent))"
+                variant="subtle"
+              >
+                {{ reviewOutcomeLabel(record.agent) }}
+              </UBadge>
+              <UBadge
+                v-else
+                size="sm"
+                :color="taskStateTone(record.task)"
+                :class="taskStateTone(record.task) === 'neutral' ? undefined : statusClass(taskStateTone(record.task))"
+                variant="subtle"
+              >
+                {{ record.task.state._tag }}
+              </UBadge>
+              <WorkChip :work="record._tag === 'Review' ? 'adversarial_review' : taskWork(record.task)" />
+              <a
+                v-if="record._tag === 'Review'"
+                :href="record.agent.subjectUrl"
+                target="_blank"
+                rel="noreferrer"
+                class="entity-link min-w-0 truncate text-sm"
+              >
+                {{ record.agent.title }}
+              </a>
+              <a
+                v-else
+                :href="taskSubjectUrl(record.task)"
+                target="_blank"
+                rel="noreferrer"
+                class="entity-link min-w-0 truncate font-mono text-xs text-muted"
+              >
+                {{ record.task.repository }} · {{ taskIsIssue(record.task) ? 'Issue' : 'PR' }} #{{ taskNumber(record.task) }}
+              </a>
+            </div>
+            <time :datetime="record.at" class="font-mono text-xs text-dimmed sm:text-right">
+              {{ relativeTime(record.at) }}
+            </time>
+          </li>
+        </ol>
+        <p v-else class="font-mono text-sm text-dimmed">
+          Nothing has finished yet.
+        </p>
+      </section>
     </section>
 
     <!-- Filter by what the work is for, which is the question a full board raises first. -->

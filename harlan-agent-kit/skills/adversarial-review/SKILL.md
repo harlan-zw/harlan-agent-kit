@@ -97,7 +97,11 @@ Apply every adversarial check in the review contract to the complete diff and su
 
 Trace changed inputs through public boundaries, failures, cleanup, concurrency, persistence, and tests.
 
-Use required CI as the source for broad test, lint, typecheck, and build results. Do not repeat green CI locally. Run a focused test or command only to prove a material finding or verify behavior that CI does not cover.
+Treat required CI as the only source for repository-wide test, lint, typecheck, and build results.
+
+Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. If CI is missing or unavailable, set the gate to `PENDING`. Never recreate CI locally.
+
+Limit local commands to changed files, their direct dependants, and focused behavior. Run one focused test or command only to prove a material finding or verify touched behavior that CI does not cover.
 
 Ignore style-only preferences. Treat correctness, security, data loss, public API breakage, and missing regression coverage as material.
 

@@ -176,7 +176,7 @@ describe('approval controller', () => {
     expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
   })
 
-  it('leaves an outside issue Approval label until valid triage finishes', async () => {
+  it('leaves an outside issue Approval label until Ready to implement triage finishes', async () => {
     const calls: string[] = []
     const controller = createApprovalController({
       github: {

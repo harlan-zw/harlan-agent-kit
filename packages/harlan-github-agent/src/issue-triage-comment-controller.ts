@@ -1,15 +1,17 @@
 import type { GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
+import type { IssueTriageResult } from './issue-triage.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedIssueTriageTask } from './types.ts'
+import { issueTriageComment } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 
 export interface IssueTriageCommentController {
-  publish: (task: ClaimedIssueTriageTask, body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
+  publish: (task: ClaimedIssueTriageTask, result: IssueTriageResult, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
 }
 
 export interface IssueTriageCommentControllerOptions {
-  github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'upsertIssueTriageComment'>
+  github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'stampAgentLabel' | 'upsertIssueTriageComment'>
   leaseMilliseconds: number
   now: () => Date
   store: Pick<JournalStore, 'claimIssueTriageComment' | 'completeIssueTriageComment' | 'deferIssueTriageComment' | 'stageIssueTriageComment'>
@@ -18,8 +20,9 @@ export interface IssueTriageCommentControllerOptions {
 
 export function createIssueTriageCommentController(options: IssueTriageCommentControllerOptions): IssueTriageCommentController {
   return {
-    async publish(task, body, signal) {
+    async publish(task, result, signal) {
       const at = options.now().toISOString()
+      const body = issueTriageComment(result)
       const staged = options.store.stageIssueTriageComment({
         taskId: task.id,
         workerId: task.state.workerId,
@@ -74,6 +77,22 @@ export function createIssueTriageCommentController(options: IssueTriageCommentCo
           reason: published.error,
         })
         return published
+      }
+      const stamped = await options.github.stampAgentLabel(
+        command.repositoryMapping,
+        command.issueNumber,
+        result._tag,
+        signal,
+      )
+      if (stamped._tag === 'Err') {
+        options.store.deferIssueTriageComment({
+          commandId: command.id,
+          workerId: command.workerId,
+          fence: command.fence,
+          at: options.now().toISOString(),
+          reason: stamped.error,
+        })
+        return stamped
       }
       const completed = options.store.completeIssueTriageComment({
         commandId: command.id,
