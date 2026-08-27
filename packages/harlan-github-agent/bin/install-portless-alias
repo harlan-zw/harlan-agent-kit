@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+if ! command -v portless >/dev/null 2>&1; then
+  echo "Portless is required. Install it before registering the dashboard." >&2
+  exit 1
+fi
+
+portless alias harlan-github-agent 3210

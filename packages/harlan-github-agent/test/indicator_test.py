@@ -642,9 +642,9 @@ class AgentControlRequestTest(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(result, {'_tag': 'Paused', 'pausedAt': '2026-08-14T00:00:00.000Z'})
-        self.assertEqual(request.full_url, 'http://harlan-github-agent.local/api/agents/pause')
+        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/pause')
         self.assertEqual(request.get_method(), 'POST')
-        self.assertEqual(request.get_header('Origin'), 'http://harlan-github-agent.local')
+        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 3)
 
@@ -677,11 +677,11 @@ class AgentControlRequestTest(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(result, {'_tag': 'Ejected'})
-        self.assertEqual(request.full_url, 'http://harlan-github-agent.local/api/agents/eject')
+        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/eject')
         self.assertEqual(request.get_method(), 'POST')
         self.assertEqual(request.data, b'{"taskId":"task-123"}')
         self.assertEqual(request.get_header('Content-type'), 'application/json')
-        self.assertEqual(request.get_header('Origin'), 'http://harlan-github-agent.local')
+        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 10)
 
@@ -815,11 +815,11 @@ class AgentSelectionTest(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(result, {'provider': 'opencode', 'model': None, 'reasoningEffort': None})
-        self.assertEqual(request.full_url, 'http://harlan-github-agent.local/api/agents/select')
+        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/select')
         self.assertEqual(request.get_method(), 'POST')
         self.assertEqual(request.data, b'{"provider":"opencode","model":null,"reasoningEffort":null}')
         self.assertEqual(request.get_header('Content-type'), 'application/json')
-        self.assertEqual(request.get_header('Origin'), 'http://harlan-github-agent.local')
+        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 3)
 

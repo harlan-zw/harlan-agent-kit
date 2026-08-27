@@ -18,7 +18,7 @@ github:
 server:
   host: 127.0.0.1
   port: 3210
-  allowed_host: harlan-github-agent.local
+  allowed_origin: https://harlan-github-agent.localhost
 storage:
   path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
 mutations_enabled: false
@@ -44,6 +44,12 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('accepts the Portless dashboard origin', () => {
+    const parsed = parseConfigText(configText)
+
+    expect(parsed._tag === 'Ok' && parsed.value.server.allowedOrigin).toBe('https://harlan-github-agent.localhost')
+  })
+
   it('parses a precise repository policy', () => {
     const result = parseConfigText(configText)
 

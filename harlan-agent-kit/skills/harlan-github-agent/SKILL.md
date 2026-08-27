@@ -59,7 +59,7 @@ pnpm --filter harlan-github-agent dashboard:build
 pnpm --filter harlan-github-agent exec node --experimental-strip-types src/cli.ts --config /absolute/path/to/harlan-github-agent.yml
 ```
 
-Use `http://harlan-github-agent.local/`. Inspect `/health` first, then `/api/state`.
+Use `https://harlan-github-agent.localhost/`. Inspect `/health` first, then `/api/state`.
 
 Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and authenticated `gh` client.
 
@@ -78,13 +78,13 @@ A saved session belongs to the Agent provider that created it. Switching provide
 Switch the Agent selection with an authenticated request. Send the whole selection. A null model or Reasoning effort keeps that provider's own per-role default. A switch starts the next agent turn, and an agent already running keeps the model it started with.
 
 ```bash
-curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --header 'Content-Type: application/json' --request POST http://harlan-github-agent.local/api/agents/select --data '{"_tag":"Pinned","provider":"opencode","model":null,"reasoningEffort":null}'
+curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://harlan-github-agent.localhost' --header 'Content-Type: application/json' --request POST https://harlan-github-agent.localhost/api/agents/select --data '{"_tag":"Pinned","provider":"opencode","model":null,"reasoningEffort":null}'
 ```
 
 To follow the configuration file again, send Follow configuration. The service then reads `agent.provider` at every start.
 
 ```bash
-curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --header 'Content-Type: application/json' --request POST http://harlan-github-agent.local/api/agents/select --data '{"_tag":"FollowsConfiguration"}'
+curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://harlan-github-agent.localhost' --header 'Content-Type: application/json' --request POST https://harlan-github-agent.localhost/api/agents/select --data '{"_tag":"FollowsConfiguration"}'
 ```
 
 The controller creates every agent worktree from its mapped repository checkout with `wt`. The global Worktrunk configuration places it beside the checkout as `<repo>.<branch-slug>`. Workers must not create, enter, or remove worktrees themselves.
@@ -123,10 +123,10 @@ Before restarting, pause new agent work through the authenticated controller API
 ```bash
 agent_config=/absolute/path/to/harlan-github-agent.yml
 agent_password=$(< "$(dirname "$agent_config")/dashboard-password")
-curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --request POST http://harlan-github-agent.local/api/agents/pause
-curl --fail --silent --user "agent:$agent_password" http://harlan-github-agent.local/api/state | jq '.agentControl'
+curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://harlan-github-agent.localhost' --request POST https://harlan-github-agent.localhost/api/agents/pause
+curl --fail --silent --user "agent:$agent_password" https://harlan-github-agent.localhost/api/state | jq '.agentControl'
 systemctl --user restart harlan-github-agent
-curl --fail --silent --user "agent:$agent_password" --header 'Origin: http://harlan-github-agent.local' --request POST http://harlan-github-agent.local/api/agents/resume
+curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://harlan-github-agent.localhost' --request POST https://harlan-github-agent.localhost/api/agents/resume
 ```
 
 `conflict_resolution: true` permits a repository to queue conflict work. `mutations_enabled: true` lets the controller run and publish it.

@@ -130,7 +130,7 @@ const command = defineCommand({
       githubPrivateKey: privateKey.value,
       logger: consola,
     })
-    consola.success(`Dashboard: http://${validated.value.server.allowedHost}`)
+    consola.success(`Dashboard: ${validated.value.server.allowedOrigin}`)
     await waitForShutdown()
     const stopped = await stopWithin(service.stop, 10_000)
     if (!stopped) {

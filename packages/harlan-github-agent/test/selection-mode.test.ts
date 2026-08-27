@@ -183,13 +183,14 @@ describe('selection mode approval controller', () => {
 })
 
 describe('selection mode route', () => {
-  const allowedHost = 'harlan-github-agent.local'
+  const allowedOrigin = 'https://harlan-github-agent.localhost'
+  const allowedHost = new URL(allowedOrigin).host
   const dashboardPassword = 'test-password-with-at-least-32-bytes'
   const authorization = `Basic ${Buffer.from(`agent:${dashboardPassword}`).toString('base64')}`
 
   function createApp(recorded: string[]) {
     return createAgentApp({
-      allowedHost,
+      allowedOrigin,
       dashboardPassword,
       dashboardRoot: join(import.meta.dirname, 'fixtures', 'dashboard'),
       now: () => new Date('2026-08-13T01:00:00.000Z'),
@@ -218,7 +219,7 @@ describe('selection mode route', () => {
   function request(app: ReturnType<typeof createAgentApp>, body: unknown) {
     return app.request(`http://${allowedHost}/api/agents/selection-mode`, {
       method: 'POST',
-      headers: { authorization, 'host': allowedHost, 'origin': `http://${allowedHost}`, 'content-type': 'application/json' },
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
   }

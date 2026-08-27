@@ -66,7 +66,7 @@ export interface AgentConfig {
   server: {
     host: string
     port: number
-    allowedHost: string
+    allowedOrigin: string
   }
   storage: {
     path: string

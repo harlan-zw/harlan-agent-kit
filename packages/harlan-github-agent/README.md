@@ -89,7 +89,9 @@ Grant read access to metadata, contents, issues, checks, commit statuses, and ad
 
 A conflict fix also requires an owned repository, an allowed pull request author, an allowed branch prefix, and an unprotected head branch. The service pushes the checked commit from a clean bare Git repository.
 
-Open `http://harlan-github-agent.local/`. Use `agent` as the dashboard username.
+Register the dashboard with `./bin/install-portless-alias`.
+
+Open `https://harlan-github-agent.localhost/`. Use `agent` as the dashboard username.
 
 Select `Automatic` in the Agent provider control to pick the provider by remaining capacity. It walks `agent.order` and takes the first provider whose window has more than its `agent.reserve_percent` left.
 

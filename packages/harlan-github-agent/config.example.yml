@@ -21,7 +21,7 @@ github:
 server:
   host: 127.0.0.1
   port: 3210
-  allowed_host: harlan-github-agent.local
+  allowed_origin: https://harlan-github-agent.localhost
 storage:
   path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
 mutations_enabled: false
