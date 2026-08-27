@@ -9,15 +9,17 @@ export interface ReviewRerunSync {
   results: ReviewRerunResult[]
 }
 
+export interface ReviewRerunDependencies {
+  github: Pick<GitHubSource, 'listReviewRerunRequests'>
+  store: Pick<JournalStore, 'getDashboardSnapshot' | 'requestReviewRerun'>
+  allowedAuthors: string[]
+  now: () => Date
+  signal?: AbortSignal
+}
+
 export function syncReviewRerunRequests(
   repository: RepositoryMapping,
-  dependencies: {
-    github: Pick<GitHubSource, 'listReviewRerunRequests'>
-    store: Pick<JournalStore, 'getDashboardSnapshot' | 'requestReviewRerun'>
-    allowedAuthors: string[]
-    now: () => Date
-    signal?: AbortSignal
-  },
+  dependencies: ReviewRerunDependencies,
 ): Promise<Result<ReviewRerunSync, string>> {
   return dependencies.github.listReviewRerunRequests(repository, dependencies.signal).then((requests) => {
     if (requests._tag === 'Err')
@@ -47,4 +49,31 @@ export function syncReviewRerunRequests(
     })
     return ok({ repository: repository.github, results })
   })
+}
+
+/**
+ * Reads review commands only where an open pull request can accept one.
+ *
+ * Repository discovery can expose hundreds of installations. Polling every
+ * repository once per minute exhausted the GitHub App request quota, even when
+ * almost all repositories had no open pull requests. Sequential reads also
+ * avoid a secondary-rate-limit burst when several repositories are active.
+ */
+export async function syncOpenReviewRerunRequests(
+  repositories: RepositoryMapping[],
+  dependencies: ReviewRerunDependencies,
+): Promise<Array<Result<ReviewRerunSync, string>>> {
+  const openRepositories = new Set(dependencies.store
+    .getDashboardSnapshot(dependencies.now().toISOString())
+    .items
+    .flatMap(item => item.kind === 'pull_request' && item.state === 'open'
+      ? [item.repository.toLowerCase()]
+      : []))
+  const eligible = repositories.filter(repository => repository.enabled
+    && repository.pullRequestReview
+    && openRepositories.has(repository.github.toLowerCase()))
+  const results: Array<Result<ReviewRerunSync, string>> = []
+  for (const repository of eligible)
+    results.push(await syncReviewRerunRequests(repository, dependencies))
+  return results
 }
