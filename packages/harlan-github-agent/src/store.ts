@@ -3637,6 +3637,85 @@ const routineMigration = `
   PRAGMA user_version = 38;
 `
 
+/**
+ * Lets a Publication command belong to a Routine run as well as a Task.
+ *
+ * Publication was bound to `tasks(id)`, and `tasks.subject_id` is NOT NULL, so
+ * a Routine run could never own one. A Routine answers a clock and has no
+ * Item, which is the third place that assumption has surfaced after agent
+ * sessions and progress.
+ *
+ * Both owners keep a real foreign key rather than sharing one column behind a
+ * discriminator string. The CHECK then makes "exactly one owner" a constraint,
+ * so a command owned by both or by neither cannot be written at all.
+ */
+const polymorphicPublicationMigration = `
+  DROP INDEX IF EXISTS publication_commands_state_tag;
+  DROP INDEX IF EXISTS one_live_publication_command_per_task;
+
+  CREATE TABLE publication_commands_v39 (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id),
+    routine_run_id TEXT REFERENCES routine_runs(id),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Failed', 'Superseded')),
+    commit_sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    base_ref TEXT NOT NULL CHECK (base_ref != ''),
+    expected_head_sha TEXT NOT NULL,
+    head_ref TEXT NOT NULL,
+    artifact_ref TEXT NOT NULL,
+    patch_digest TEXT NOT NULL,
+    changed_files INTEGER NOT NULL CHECK (changed_files >= 0),
+    outcome_unknown INTEGER NOT NULL DEFAULT 0 CHECK (outcome_unknown IN (0, 1)),
+    reason TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    lease_expires_at TEXT,
+    published_at TEXT,
+    updated_at TEXT NOT NULL,
+    pull_request_title TEXT,
+    pull_request_body TEXT,
+    -- Exactly one owner. Never both, never neither.
+    CHECK ((task_id IS NULL) != (routine_run_id IS NULL)),
+    -- A pull request cannot merge into itself, so a stack can never name its own head.
+    CHECK (base_ref != head_ref),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (state_tag NOT IN ('Failed', 'Superseded') OR reason IS NOT NULL),
+    CHECK (state_tag != 'Published' OR published_at IS NOT NULL)
+  );
+
+  INSERT INTO publication_commands_v39 (
+    id, task_id, routine_run_id, state_tag, commit_sha, base_sha, base_ref, expected_head_sha,
+    head_ref, artifact_ref, patch_digest, changed_files, outcome_unknown, reason, worker_id,
+    fence, attempts, max_attempts, lease_expires_at, published_at, updated_at,
+    pull_request_title, pull_request_body
+  )
+  SELECT
+    id, task_id, NULL, state_tag, commit_sha, base_sha, base_ref, expected_head_sha,
+    head_ref, artifact_ref, patch_digest, changed_files, outcome_unknown, reason, worker_id,
+    fence, attempts, max_attempts, lease_expires_at, published_at, updated_at,
+    pull_request_title, pull_request_body
+  FROM publication_commands;
+
+  DROP TABLE publication_commands;
+  ALTER TABLE publication_commands_v39 RENAME TO publication_commands;
+
+  CREATE INDEX publication_commands_state_tag ON publication_commands(state_tag);
+  CREATE UNIQUE INDEX one_live_publication_command_per_task
+    ON publication_commands(task_id)
+    WHERE task_id IS NOT NULL AND state_tag IN ('Pending', 'Running', 'Published');
+  CREATE UNIQUE INDEX one_live_publication_command_per_routine_run
+    ON publication_commands(routine_run_id)
+    WHERE routine_run_id IS NOT NULL AND state_tag IN ('Pending', 'Running', 'Published');
+
+  PRAGMA user_version = 39;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -3662,7 +3741,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 38)
+  if (version === 39)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -3815,6 +3894,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 37) {
     applyMigration(database, routineMigration)
+    version = 38
+  }
+  if (version === 38) {
+    applyForeignKeyMigration(database, polymorphicPublicationMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
