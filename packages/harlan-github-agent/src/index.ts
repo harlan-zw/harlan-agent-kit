@@ -33,7 +33,7 @@ export { DEFAULT_CATCH_UP_MINUTES, DEFAULT_MISSED_HORIZON_MINUTES, dueRoutine, m
 export type { CronExpression, DueRoutine } from './routine-schedule.ts'
 export { parseRoutineSpec, ROUTINE_MODES, ROUTINE_NAMES, ROUTINE_SPEC_PATH } from './routine-spec.ts'
 export { startAgentServer } from './server.ts'
-export { startAgentService } from './service.ts'
+export { createPassIncidentRecorder, replaceServiceIncidents, startAgentService } from './service.ts'
 export { openJournalStore } from './store.ts'
 export { createTaskScheduler } from './task-scheduler.ts'
 export type * from './types.ts'

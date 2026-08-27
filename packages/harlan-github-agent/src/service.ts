@@ -89,6 +89,27 @@ function recordServiceIncident(
   })
 }
 
+/**
+ * Records one poll pass's failures, unless the pass was aborted.
+ *
+ * Stopping the service aborts every request still in flight, and each one
+ * rejects with an abort. Those rejects are the shutdown, not a fault. Recording
+ * them filled the System pane with dozens of Incidents on every restart and
+ * buried the real ones, so an aborted pass reports nothing and the next pass
+ * records the truth.
+ */
+export function createPassIncidentRecorder(options: {
+  now: () => Date
+  signal: AbortSignal
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>
+}): (operation: string, messages: readonly string[]) => void {
+  return (operation, messages) => {
+    if (options.signal.aborted)
+      return
+    replaceServiceIncidents(options.store, options.now().toISOString(), operation, messages)
+  }
+}
+
 /** Replaces one controller pass's Service Incidents with its current failures. */
 export function replaceServiceIncidents(
   store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
@@ -541,6 +562,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
     poll: async (signal) => {
+      const recordPassIncidents = createPassIncidentRecorder({ store, now, signal })
       const results = await reconcileAllRepositories(config.repositories, {
         ...(mutationSchedulers === undefined
           ? {}
@@ -587,7 +609,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         if (outcome._tag === 'Synced' && outcome.routines.length > 0)
           options.logger.info(`${repository}: ${outcome.routines.length} routines declared.`)
       })
-      replaceServiceIncidents(store, now().toISOString(), 'routine_spec', routineFailures)
+      recordPassIncidents('routine_spec', routineFailures)
 
       if (config.mutationsEnabled) {
         const planned = planRoutineRuns({ now, store })
@@ -610,12 +632,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           options.logger.info(`${result.value.repository}: queued a requested review rerun.`)
         }
       })
-      replaceServiceIncidents(store, now().toISOString(), 'review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+      recordPassIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       const statusSync = await pullRequestStatuses.sync(store.getDashboardSnapshot(now().toISOString()), signal)
       statusSync.errors.forEach((error) => {
         options.logger.error(`Pull request status: ${error}`)
       })
-      replaceServiceIncidents(store, now().toISOString(), 'pull_request_status', statusSync.errors)
+      recordPassIncidents('pull_request_status', statusSync.errors)
       if (mutationSchedulers !== undefined) {
         const stopped = await publishStoppedReviews({
           github: workerGithub,
@@ -635,7 +657,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             options.logger.error(`Stopped review comment: ${result.error}`)
           }
         })
-        replaceServiceIncidents(store, now().toISOString(), 'stopped_review_comment', stopped.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        recordPassIncidents('stopped_review_comment', stopped.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const positions = await publishQueuePositions({
           github: workerGithub,
           now,
@@ -656,7 +678,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             options.logger.error(`Queue position comment: ${result.error}`)
           }
         })
-        replaceServiceIncidents(store, now().toISOString(), 'queue_position_comment', positions.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        recordPassIncidents('queue_position_comment', positions.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       }
       // Only a pass where nothing succeeded describes an outage. Throwing for a
       // partial failure backed the poller off to its 15 minute ceiling and held
@@ -690,6 +712,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const worktreeSweeper = createPoller({
     intervalMilliseconds: 5 * 60_000,
     poll: async (signal) => {
+      const recordSweepIncidents = createPassIncidentRecorder({ store, now, signal })
       const checkouts = [...new Set(config.repositories.map(repository => repository.checkout))]
       const failures: string[] = []
       for (const checkout of checkouts) {
@@ -710,7 +733,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           failures.push(message)
         })
       }
-      replaceServiceIncidents(store, now().toISOString(), 'agent_worktree_sweep', failures)
+      recordSweepIncidents('agent_worktree_sweep', failures)
     },
     onError: error => options.logger.error(error),
   })
