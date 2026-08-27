@@ -40,7 +40,7 @@ import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCh
 import { err, ok } from './result.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
-import { syncReviewRerunRequests } from './review-rerun-controller.ts'
+import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
 import { startAgentServer } from './server.ts'
@@ -563,15 +563,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         if (retried > 0)
           options.logger.info(`Requeued ${retried} tasks after recoverable failures.`)
       }
-      const reruns = await Promise.all(config.repositories
-        .filter(repository => repository.enabled && repository.pullRequestReview)
-        .map(repository => syncReviewRerunRequests(repository, {
-          allowedAuthors: config.github.allowedOwners,
-          github,
-          store,
-          now,
-          signal,
-        })))
+      const reruns = await syncOpenReviewRerunRequests(config.repositories, {
+        allowedAuthors: config.github.allowedOwners,
+        github,
+        store,
+        now,
+        signal,
+      })
       reruns.forEach((result) => {
         if (result._tag === 'Err') {
           options.logger.error(`Review rerun command: ${result.error}`)
