@@ -22,10 +22,11 @@ function git(checkout: string, ...args: string[]): string {
   }).trim()
 }
 
+/** Stands in for the service, so Worktrunk hooks read the same caller it does. */
 function wt(checkout: string, ...args: string[]): string {
   return execFileSync('wt', ['-C', checkout, ...args], {
     encoding: 'utf8',
-    env: { HOME: process.env.HOME, PATH: process.env.PATH },
+    env: { HOME: process.env.HOME, PATH: process.env.PATH, HARLAN_GITHUB_AGENT: '1' },
   }).trim()
 }
 

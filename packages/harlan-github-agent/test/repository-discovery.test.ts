@@ -44,7 +44,10 @@ describe('repository discovery', () => {
     writeFileSync(join(checkout, 'README.md'), 'test\n')
     execFileSync('git', ['-C', checkout, 'add', 'README.md'])
     execFileSync('git', ['-C', checkout, 'commit', '-m', 'test'])
-    execFileSync('wt', ['-C', checkout, 'switch', '--create', 'fix/review', '--yes'])
+    // Stands in for the service, so Worktrunk hooks read the same caller it does.
+    execFileSync('wt', ['-C', checkout, 'switch', '--create', 'fix/review', '--yes'], {
+      env: { ...process.env, HARLAN_GITHUB_AGENT: '1' },
+    })
 
     expect(await discoverLocalCheckouts([root])).toEqual([{
       github: 'harlan-zw/example',
