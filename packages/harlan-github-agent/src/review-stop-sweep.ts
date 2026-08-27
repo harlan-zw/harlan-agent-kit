@@ -4,7 +4,7 @@ import type { JournalStore, StoppedReview } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
 export type StoppedReviewOutcome
@@ -40,7 +40,7 @@ export function stoppedReviewComment(
 <!-- workflow-state: ${workflow} -->
 ### 🤖 ${disposition._tag.toUpperCase()}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(100)}\`
 
@@ -54,7 +54,7 @@ GitHub ${action} this pull request. The unfinished automated review stopped.`
 <!-- reviewed-sha: ${review.headSha} -->
 ### 🤖 BLOCKED
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required. Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(100)}\`
 
@@ -66,13 +66,13 @@ ${findings.join('\n')}`
 <!-- reviewed-sha: ${review.headSha} -->
 ### 🤖 STOPPED
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required. Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(100)}\`
 
-The automated review stopped before it finished. Reason: ${cleanLine(review.reason)}
+The automated review stopped. Reason: ${cleanLine(review.reason)}
 
-Push a new commit or ask for a review rerun to start a new review.`
+Push a new commit to start a new review. To review this commit again, comment \`/harlan-agent rerun\`.`
 }
 
 /**

@@ -24,7 +24,7 @@ import { currentGitHubChecks } from './github-agent-source.ts'
 import { issueTriageComment } from './issue-triage-comment.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
 interface GateResponse {
@@ -615,7 +615,7 @@ function progressComment(headSha: string, progress: AgentProgress, at: string): 
 <!-- reviewed-sha: ${headSha} -->
 ### 🤖 REVIEWING · ${progress.label}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'review', updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(progress.percent)}\`
 
@@ -629,11 +629,11 @@ function baselineWaitingComment(headSha: string, baseSha: string, at: string): s
 <!-- workflow-state: ${workflow} -->
 ### 🤖 WAITING
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated status. Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'status', updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(100)}\`
 
-Base branch CI fails at \`${baseSha}\`.
+Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
 
 Next: merge or repair the marked Baseline repair pull request.`
 }
@@ -644,7 +644,14 @@ function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFi
   const reason = result === 'PENDING'
     ? Object.values(gates).find(gate => gate._tag === 'Pending')
     : undefined
-  const disclosure = `> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required.${reason?._tag === 'Pending' ? ` Waiting: ${cleanLine(reason.reason)}` : ''}`
+  const disclosure = automatedDisclosure({
+    kind: 'review',
+    disclaimer: `It is not Harlan's personal review or approval.`,
+    notes: [
+      'A person still decides the merge.',
+      ...(reason?._tag === 'Pending' ? [`Waiting: ${cleanLine(reason.reason)}`] : []),
+    ],
+  })
   const findingLines = findings.map(finding => finding._tag === 'Fixed'
     ? `- **Fixed:** ${cleanLine(finding.summary)}`
     : finding.resolution === 'Dismissal'

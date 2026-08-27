@@ -4,7 +4,7 @@ import type { JournalStore, QueuedReviewStatus } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 
 const workLabel: Record<QueuedReviewStatus['taskKind'], string> = {
   adversarial_review: 'Review',
@@ -38,7 +38,7 @@ export function queuePositionComment(status: QueuedReviewStatus): string {
 <!-- reviewed-sha: ${status.headSha} -->
 ### 🤖 QUEUED · ${ordinal(status.position)} of ${status.total}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). This comment updates as the Queue moves.
+${automatedDisclosure({ kind: 'review', notes: ['This comment updates as the Queue moves.'] })}
 
 \`${formatProgressBar(0)}\`
 

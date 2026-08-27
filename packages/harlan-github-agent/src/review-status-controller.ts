@@ -4,7 +4,7 @@ import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ReviewStatusTaskPhase } from './types.ts'
 import { formatProgressBar } from './agent-progress.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { updatedAtLabel } from './text.ts'
 
 export interface ReviewStatusController {
@@ -21,20 +21,23 @@ export interface ReviewStatusControllerOptions {
 }
 
 function repairProgressComment(headSha: string, progress: AgentProgress, at: string): string {
+  // Declarative, and about the Repair rather than the reader. These lines read
+  // as instructions to whoever opened the pull request when they are imperative,
+  // and every other automated comment states what the work does next.
   const next = progress.percent >= 90
-    ? 'Push the repair commit, then review the new head.'
+    ? 'Repair pushes its commit, then a new Review reads the new head.'
     : progress.percent >= 70
-      ? 'Verify the repair.'
+      ? 'Repair verifies its fix.'
       : progress.percent >= 55
-        ? 'Finish the repair.'
+        ? 'Repair finishes its fix.'
         : progress.percent >= 35
-          ? 'Repair the review findings.'
-          : 'Create a Git worktree.'
+          ? 'Repair fixes the Review findings.'
+          : 'Repair creates its Git worktree.'
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->
 ### 🤖 REPAIR · ${progress.label}
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated repair update. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: ${updatedAtLabel(at)}.
+${automatedDisclosure({ kind: 'repair update', updatedAt: updatedAtLabel(at) })}
 
 \`${formatProgressBar(progress.percent)}\`
 
