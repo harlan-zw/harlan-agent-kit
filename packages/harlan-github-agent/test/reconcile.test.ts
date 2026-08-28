@@ -68,7 +68,7 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
-  it('records our own Routine issue even when the allowlist lists only humans', async () => {
+  it('keeps a Routine candidate issue eligible for Issue triage', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
@@ -85,6 +85,7 @@ describe('gitHub reconciliation', () => {
       _tag: 'Ok',
       value: { repository: repository.github, subjects: 1, inserted: 1, duplicates: 0, stale: 0, closed: 0 },
     })
+    expect(store.claimNextIssueTriageTask('triage', '2026-08-13T01:00:01.000Z', 10_000)).not.toBeNull()
     store.close()
   })
 

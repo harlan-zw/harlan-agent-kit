@@ -3092,11 +3092,11 @@ function supersedeWorkerTasks(
   const rows = database.prepare(`
     SELECT id, state_tag, fence FROM worker_tasks
     WHERE subject_id = ? AND kind = ?
-      AND state_tag IN ('Queued', 'ActionRequired', 'Running')
+      AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Failed')
       AND (? IS NULL OR revision_id != ?)
   `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null) as unknown as Array<{
     id: string
-    state_tag: 'Queued' | 'ActionRequired' | 'Running'
+    state_tag: 'Queued' | 'ActionRequired' | 'Running' | 'Failed'
     fence: number
   }>
   rows.forEach((row) => {
@@ -3347,7 +3347,13 @@ function planIssueTriage(
   observedAt: string,
   mapping: RepositoryMapping,
 ): void {
-  const eligible = subject.kind === 'issue' && subject.state === 'open' && canWorkIssues(mapping)
+  const routineTrackingIssue = subject.kind === 'issue' && database.prepare(`
+    SELECT 1 FROM routines WHERE repository = ? AND tracking_issue_number = ?
+  `).get(subject.repository, subject.number) !== undefined
+  const eligible = subject.kind === 'issue'
+    && subject.state === 'open'
+    && !routineTrackingIssue
+    && canWorkIssues(mapping)
   if (!eligible) {
     supersedeWorkerTasks(database, subjectId, 'issue_triage', observedAt, 'The issue no longer needs triage.')
     supersedeTasks(database, subjectId, observedAt, 'The issue no longer authorizes work.', undefined, 'issue_work')

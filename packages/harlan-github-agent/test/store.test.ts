@@ -147,6 +147,91 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-28T21:00:07.000Z').routineRuns[0]?.reportState).toBe('Published')
   })
 
+  it('supersedes failed Issue triage when the issue becomes a Routine tracking issue', () => {
+    const store = createStore()
+    const repository = repositoryMapping()
+    const trackingIssue = issueItem({
+      number: 42,
+      author: 'harlan-github-agent[bot]',
+      routineFiled: true,
+    })
+    store.syncRepositories([repository], '2026-08-28T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'routine-tracking-issue-before-registration',
+      observedAt: '2026-08-28T00:01:00.000Z',
+      source: 'poll',
+      subject: trackingIssue,
+    })
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-28T00:01:0${attempt}.000Z`
+      const task = store.claimNextIssueTriageTask(`triage-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected Issue triage attempt ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'The issue changed before triage started.',
+      })
+    }
+    expect(store.listIncidents()).toHaveLength(1)
+
+    const [routine] = store.syncRoutines({
+      repository: repository.github,
+      specSha: 'abc123',
+      entries: [{
+        name: 'sentry-checkin',
+        crons: ['0 7 * * *'],
+        timeZone: 'Australia/Melbourne',
+        mode: 'report',
+        enabled: true,
+      }],
+      at: '2026-08-28T00:02:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    const run = store.openRoutineRun({
+      routineId: routine.id,
+      scheduledFor: '2026-08-28T07:00:00.000Z',
+      specSha: routine.specSha,
+      at: '2026-08-28T07:00:00.000Z',
+    })
+    if (run === null)
+      throw new Error('Expected a Routine run.')
+    store.stageRoutineReport({
+      command: routineReportCommand({
+        repository: routine.repository,
+        routineId: routine.id,
+        routineName: routine.name,
+        run: { id: run.id, scheduledFor: run.scheduledFor },
+        report: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
+      }),
+      at: '2026-08-28T07:00:01.000Z',
+    })
+    store.setRepositoryWritesEnabled(repository.github, true)
+    const report = store.claimNextRoutineReport('reporter', '2026-08-28T07:00:02.000Z', 60_000)
+    if (report === null)
+      throw new Error('Expected a Routine report.')
+    store.completeRoutineReport({
+      commandId: report.id,
+      workerId: report.workerId,
+      fence: report.fence,
+      at: '2026-08-28T07:00:03.000Z',
+      commentId: 1234,
+      trackingIssueNumber: trackingIssue.number,
+    })
+
+    store.recordObservation({
+      externalId: 'routine-tracking-issue-after-registration',
+      observedAt: '2026-08-28T07:01:00.000Z',
+      source: 'poll',
+      subject: trackingIssue,
+    })
+
+    expect(store.listIncidents()).toEqual([])
+  })
+
   it('persists Pause and reports when restart is safe', () => {
     const directory = mkdtempSync(join(tmpdir(), 'harlan-github-agent-'))
     temporaryDirectories.push(directory)
