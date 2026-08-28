@@ -17,6 +17,7 @@ export interface TerminalSessionInput {
 
 interface TerminalSessionOptions {
   codexPath?: string
+  environment?: NodeJS.ProcessEnv
   opencodePath?: string
   delayMilliseconds?: number
   terminalPath?: string
@@ -45,8 +46,8 @@ async function executable(path: string): Promise<Result<string, string>> {
     .catch(() => err(`Executable is unavailable: ${path}`))
 }
 
-async function executableOnPath(command: string): Promise<Result<string, string>> {
-  const directories = (process.env.PATH ?? '').split(delimiter).filter(directory => directory.length > 0)
+async function executableOnPath(command: string, environment: NodeJS.ProcessEnv): Promise<Result<string, string>> {
+  const directories = (environment.PATH ?? '').split(delimiter).filter(directory => directory.length > 0)
   for (const directory of directories) {
     const found = await executable(join(directory, command))
     if (found._tag === 'Ok')
@@ -56,6 +57,7 @@ async function executableOnPath(command: string): Promise<Result<string, string>
 }
 
 export function createTerminalSessionLauncher(options: TerminalSessionOptions = {}) {
+  const environment = options.environment ?? process.env
   const terminalPath = options.terminalPath ?? '/usr/bin/ghostty'
   const agentOverrides: Partial<Record<AgentProviderName, string | undefined>> = {
     codex: options.codexPath,
@@ -69,7 +71,7 @@ export function createTerminalSessionLauncher(options: TerminalSessionOptions = 
     const override = agentOverrides[input.provider]
     const [terminal, agent] = await Promise.all([
       executable(terminalPath),
-      override === undefined ? executableOnPath(agentCommands[input.provider]) : executable(override),
+      override === undefined ? executableOnPath(agentCommands[input.provider], environment) : executable(override),
     ])
     if (terminal._tag === 'Err')
       return terminal
@@ -86,7 +88,7 @@ export function createTerminalSessionLauncher(options: TerminalSessionOptions = 
         ...resumeArguments,
       ], {
         detached: true,
-        env: process.env,
+        env: environment,
         stdio: 'ignore',
       })
       child.on('error', error => options.onError?.(error))

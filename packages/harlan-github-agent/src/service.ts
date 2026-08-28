@@ -924,7 +924,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const dashboardShutdown = new AbortController()
   const app = createAgentApp({
     activityLog,
-    ejectAgent: createTerminalSessionLauncher({ onError: error => options.logger.error(error) }),
+    ejectAgent: createTerminalSessionLauncher({ environment: opencodeEnvironment.value, onError: error => options.logger.error(error) }),
     store: {
       approveIssueWork: store.approveIssueWork,
       approvePullRequest: store.approvePullRequest,

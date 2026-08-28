@@ -58,6 +58,18 @@ describe('loadAgentContext', () => {
 })
 
 describe('opencodeAgentEnvironment', () => {
+  it('keeps the standard OpenCode install reachable with a restricted service PATH', () => {
+    const result = opencodeAgentEnvironment({
+      context: { instructionPaths: ['/global/AGENTS.md'], skillDirectories: ['/skills/pr'] },
+      environment: { HOME: '/agent-home', PATH: '/usr/bin:/bin' },
+    })
+
+    expect(result._tag).toBe('Ok')
+    if (result._tag === 'Err')
+      return
+    expect(result.value.PATH).toBe('/agent-home/.opencode/bin:/usr/bin:/bin')
+  })
+
   it('adds global instructions and every skill without dropping existing configuration', () => {
     const result = opencodeAgentEnvironment({
       context: {
@@ -65,6 +77,7 @@ describe('opencodeAgentEnvironment', () => {
         skillDirectories: ['/kit/skills/pr', '/kit/skills/unit-tests'],
       },
       environment: {
+        HOME: '/agent-home',
         PATH: '/bin',
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
           instructions: ['/repo/CONTRIBUTING.md'],
@@ -77,7 +90,7 @@ describe('opencodeAgentEnvironment', () => {
     expect(result._tag).toBe('Ok')
     if (result._tag === 'Err')
       return
-    expect(result.value.PATH).toBe('/bin')
+    expect(result.value.PATH).toBe('/agent-home/.opencode/bin:/bin')
     expect(JSON.parse(result.value.OPENCODE_CONFIG_CONTENT ?? '')).toEqual({
       instructions: ['/repo/CONTRIBUTING.md', '/home/harlan/.codex/AGENTS.md'],
       share: 'disabled',

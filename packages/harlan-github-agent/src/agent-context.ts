@@ -1,7 +1,7 @@
 import type { Result } from './result.ts'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { delimiter, join, resolve } from 'node:path'
 import process from 'node:process'
 import { err, ok } from './result.ts'
 
@@ -35,6 +35,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)]
+}
+
+function opencodePath(environment: NodeJS.ProcessEnv): string {
+  const installationDirectory = join(environment.HOME ?? homedir(), '.opencode', 'bin')
+  const configuredDirectories = (environment.PATH ?? '')
+    .split(delimiter)
+    .filter(directory => directory.length > 0)
+  return unique([installationDirectory, ...configuredDirectories]).join(delimiter)
 }
 
 /** Resolves the context shared by every local Agent provider. */
@@ -131,6 +139,7 @@ export function opencodeAgentEnvironment(input: {
 
   return ok({
     ...input.environment,
+    PATH: opencodePath(input.environment),
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
       ...configuration,
       instructions: unique([...instructions.value, ...input.context.instructionPaths]),
