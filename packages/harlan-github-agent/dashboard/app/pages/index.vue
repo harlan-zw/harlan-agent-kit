@@ -251,9 +251,17 @@ useHead({
 <template>
   <div>
     <div v-if="ejectedSession" role="status" class="mb-6 rounded-md border border-primary/40 bg-primary/5 p-4 text-sm">
-      <p class="mb-2">
+      <p v-if="ejectedSession._tag === 'Ejected'" class="mb-2">
         Agent stopped. Resume {{ ejectedSession.repository }} #{{ ejectedSession.itemNumber }} on Hogwild.
       </p>
+      <template v-else>
+        <p class="mb-2">
+          Agent stop confirmation was delayed. Saved session: <code>{{ ejectedSession.sessionId }}</code>.
+        </p>
+        <p class="mb-2">
+          {{ ejectedSession.nextAction }}
+        </p>
+      </template>
       <div class="flex flex-wrap items-center gap-2">
         <code class="min-w-0 flex-1 break-all rounded bg-elevated px-2 py-1 font-mono text-xs">{{ ejectedSession.command }}</code>
         <UButton label="Copy command" icon="i-lucide-copy" size="xs" @click="copyToClipboard(ejectedSession.command)" />

@@ -8,6 +8,7 @@ import type {
   ReviewAgent,
   SelectionMode,
 } from '../../../src/types.ts'
+import type { EjectedSessionNotice } from '../utils/eject.ts'
 import { formatTimeAgo, useBrowserLocation, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
 import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import {
@@ -16,6 +17,7 @@ import {
   isSnapshotStale,
   taskNumber,
 } from '../utils/dashboard.ts'
+import { ejectRecoveryFromError, ejectSessionCommand } from '../utils/eject.ts'
 
 function emptySnapshot(): DashboardSnapshot {
   return {
@@ -63,7 +65,7 @@ function createDashboard() {
   const cancelErrors = ref<Record<string, string>>({})
   const ejectPending = ref<string>()
   const ejectErrors = ref<Record<string, string>>({})
-  const ejectedSession = ref<{ command: string, itemNumber: number, repository: string }>()
+  const ejectedSession = ref<EjectedSessionNotice>()
   const rerunPending = ref<string>()
   const rerunErrors = ref<Record<string, string>>({})
   const repositoryPending = ref<string>()
@@ -239,21 +241,20 @@ function createDashboard() {
     }>('/api/agents/eject', { method: 'POST', body: { taskId } })
       .then((ejected) => {
         const host = browserLocation.value.hostname ?? 'hogwild'
-        const shellQuote = '\''
-        const escapedShellQuote = '\'\\\'\''
-        const quote = (value: string): string => `${shellQuote}${value.replaceAll(shellQuote, escapedShellQuote)}${shellQuote}`
-        const agent = ejected.provider === 'codex'
-          ? ['/home/harlan/.local/bin/codex', 'resume', ejected.sessionId, '-c', 'tui.resume_cwd="session"']
-          : ['/home/harlan/.local/bin/opencode', '--session', ejected.sessionId]
-        const remoteCommand = agent.map(quote).join(' ')
         ejectedSession.value = {
-          command: `ssh -t ${quote(host)} ${quote(remoteCommand)}`,
+          _tag: 'Ejected',
+          command: ejectSessionCommand(ejected.provider, ejected.sessionId, host),
           itemNumber: ejected.itemNumber,
           repository: ejected.repository,
         }
         return loadState()
       })
       .catch((error: unknown) => {
+        const recovery = ejectRecoveryFromError(error, browserLocation.value.hostname ?? 'hogwild')
+        if (recovery !== undefined) {
+          ejectedSession.value = recovery
+          return loadState()
+        }
         ejectErrors.value = { ...ejectErrors.value, [taskId]: failed(error) }
       })
       .finally(() => {
