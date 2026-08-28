@@ -61,6 +61,19 @@ describe('hogwild status boundary', () => {
     })
   })
 
+  it('accepts fractional CPU time reported by systemd', () => {
+    const payload = structuredClone(activeStatus)
+    const jellyfin = payload.privateDetails.services[0]
+    if (jellyfin?.state._tag !== 'Active')
+      throw new Error('Expected an active Jellyfin fixture.')
+    jellyfin.state.metrics.cpuTimeSeconds = 8.25
+
+    expect(parseHogwildStatus(JSON.stringify(payload))).toEqual({
+      _tag: 'Ok',
+      value: payload.privateDetails,
+    })
+  })
+
   it('rejects public, malformed, and partial messages', () => {
     expect(parseHogwildStatus('{}')).toEqual({ _tag: 'Err', reason: 'Private Hogwild status is unavailable.' })
     expect(parseHogwildStatus('{')).toEqual({ _tag: 'Err', reason: 'Hogwild sent invalid JSON.' })
