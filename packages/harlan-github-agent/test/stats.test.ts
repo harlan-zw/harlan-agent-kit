@@ -133,6 +133,12 @@ describe('pull request triage Stats', () => {
     })).toEqual({ _tag: 'Duplicate' })
     expect(store.recordPullRequestTriageRun({
       ...input,
+      startedAt: '2026-08-02T00:03:01.000Z',
+      completedAt: '2026-08-02T00:03:02.000Z',
+      outcome: { _tag: 'ReviewSkipped' as const, reason: 'A retry reworded the same skip verdict.' },
+    })).toEqual({ _tag: 'Duplicate' })
+    expect(store.recordPullRequestTriageRun({
+      ...input,
       outcome: { _tag: 'ReviewRequired', reason: 'Runtime code changed.' },
     })).toEqual({ _tag: 'Conflict' })
     const stats = store.getStats({
