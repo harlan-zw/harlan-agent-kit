@@ -110,7 +110,6 @@ function defaultMapping(repository: InstalledRepository, checkout: string): Repo
     issueWork: ownership === 'owned',
     maxOpenPullRequests: null,
     pullRequestReview: true,
-    pullRequestConformance: true,
     conflictResolution: ownership === 'owned',
     takeOwnership: { _tag: 'Disabled' },
   }

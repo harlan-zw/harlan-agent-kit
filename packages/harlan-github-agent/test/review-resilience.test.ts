@@ -1,15 +1,13 @@
 import type { PullRequestReviewSnapshot } from '../src/github-agent-source.ts'
 import type { ReviewWorkerOptions } from '../src/item-agent.ts'
-import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput, ReviewFixQueueResult } from '../src/types.ts'
+import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput, ReviewFixQueueResult, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { classifyFailure } from '../src/failure.ts'
 import { createReviewWorker, REVIEW_CONVERSATION_CHARACTER_BUDGET, reviewConversationContext, reviewFindingFingerprint } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
-const passingGate = { state: 'passed' as const, reason: '', evidence: 'checked' }
 const soundPremise = { verdict: 'sound' as const, reason: 'The change can be repaired without replacing its intent.' }
 
 function materialFinding() {
@@ -71,6 +69,7 @@ function harness(input: {
   publish?: () => ReturnType<ReviewWorkerOptions['status']['publish']>
   preflightRepair?: ReviewWorkerOptions['preflightRepair']
   queueRepair?: () => ReviewFixQueueResult
+  reviewRuns?: ReviewRun[]
   verifyReview?: () => ReturnType<ReviewWorkerOptions['workspaces']['verifyReview']>
 }): Harness {
   const attempts: RecordReviewRunInput[] = []
@@ -119,6 +118,7 @@ function harness(input: {
         return { _tag: 'Queued', taskId: 'repair-task' }
       }),
       getRepairedHeadFindings: () => [],
+      listReviewRuns: () => input.reviewRuns ?? [],
       getWorkerSession: () => null,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -130,6 +130,7 @@ function harness(input: {
         attempts.push(attempt)
         return { _tag: 'Inserted', reviewRunId: attempt.id }
       },
+      supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordReviewPublication: publication => ({ _tag: 'Inserted', publicationId: publication.id }),
     },
     status: {
@@ -165,25 +166,109 @@ function harness(input: {
 }
 
 describe('review resilience', () => {
-  it('rejects Agent gate waits because the controller owns moving gates', async () => {
+  it('retries a failed terminal publication without another Agent turn', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const passed = { _tag: 'Passed' as const, evidence: [] }
+    const test = harness({
+      pullRequest,
+      response: {},
+      reviewRuns: [{
+        id: 'stored-review',
+        repository: 'harlan-zw/example',
+        pullRequestNumber: 24,
+        revisionId: 'revision-1',
+        headSha: 'abc123',
+        provider: 'codex',
+        sessionId: 'stored-session',
+        model: 'gpt-5.6-sol',
+        agentVersion: '0.0.0',
+        skillDigest: 'a'.repeat(64),
+        startedAt: '2026-08-13T00:40:00.000Z',
+        completedAt: '2026-08-13T00:55:00.000Z',
+        gates: { merge: passed, review: passed, ci: passed },
+        outcome: { _tag: 'Ready', confidence: 91 },
+        findings: [],
+        usage: { _tag: 'Unavailable' },
+        publications: [{
+          id: 'failed-publication',
+          reviewRunId: 'stored-review',
+          body: '### 🤖 READY · 91/100',
+          bodySha256: 'b'.repeat(64),
+          at: '2026-08-13T00:56:00.000Z',
+          result: { _tag: 'Failed', reason: 'GitHub timed out.' },
+        }],
+      }],
+    })
+    const task = reviewTask(pullRequest)
+    task.state = { ...task.state, fence: 2 }
+
+    const result = await createReviewWorker(test.options).run(task, new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    expect(test.provider.requests).toEqual([])
+    expect(test.attempts).toEqual([])
+    expect(test.comments.at(-1)).toContain('READY · 91/100')
+  })
+
+  it('retries a failed post-Agent GitHub read without another Agent turn', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const reviewRuns: ReviewRun[] = []
+    const test = harness({
+      pullRequest,
+      response: { findings: [], confidence: 91 },
+      reviewRuns,
+    })
+    let reads = 0
+    test.options.github.getPullRequestReviewSnapshot = () => {
+      reads += 1
+      return reads === 2
+        ? Promise.resolve(err('GitHub temporarily refused the final snapshot.'))
+        : Promise.resolve(ok(reviewSnapshot(pullRequest)))
+    }
+
+    const first = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(first).toEqual(err('GitHub temporarily refused the final snapshot.'))
+    expect(test.provider.requests).toHaveLength(1)
+    const attempt = test.attempts[0]
+    if (attempt === undefined)
+      throw new Error('Expected the durable Agent report.')
+    const { confidence, ...stored } = attempt
+    reviewRuns.push({
+      ...stored,
+      usage: attempt.usage ?? { _tag: 'Unavailable' },
+      outcome: { _tag: 'Ready', confidence },
+      publications: [],
+    })
+    const retry = reviewTask(pullRequest)
+    retry.state = { ...retry.state, fence: 2 }
+
+    const second = await createReviewWorker(test.options).run(retry, new AbortController().signal)
+
+    expect(second._tag).toBe('Ok')
+    expect(test.provider.requests).toHaveLength(1)
+    expect(test.comments.at(-1)).toContain('READY · 91/100')
+  })
+
+  it('accepts the minimal Agent report and derives every Review gate', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
       response: {
-        metadata: { state: 'waiting', reason: 'Required CI has not reported.', evidence: 'No checks exist.' },
-        review: passingGate,
-        verification: { state: 'waiting', reason: 'Required CI has not reported.', evidence: 'No checks exist.' },
         findings: [],
-        confidence: null,
+        confidence: 91,
       },
     })
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
-    expect(test.attempts).toHaveLength(0)
-    expect(test.comments.at(-1)).toContain('REVIEWING')
-    expect(test.comments.at(-1)).not.toContain('PENDING')
+    expect(result._tag).toBe('Ok')
+    expect(test.attempts[0]?.gates).toEqual({
+      merge: expect.objectContaining({ _tag: 'Passed' }),
+      review: expect.objectContaining({ _tag: 'Passed' }),
+      ci: expect.objectContaining({ _tag: 'Passed' }),
+    })
+    expect(test.comments.at(-1)).toContain('READY · 91/100')
   })
 
   it('keeps the newest discussion inside one bounded Review context', () => {
@@ -213,7 +298,7 @@ describe('review resilience', () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
-      response: { metadata: passingGate, review: passingGate, verification: passingGate, findings: [], confidence: 91 },
+      response: { findings: [], confidence: 91 },
     })
 
     await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
@@ -237,9 +322,6 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [
           { ...first, identity: `${shared}first` },
           { ...second, identity: `${shared}second` },
@@ -254,39 +336,11 @@ describe('review resilience', () => {
     expect(new Set(fingerprints).size).toBe(2)
   })
 
-  it('publishes nothing when the agent answers that it did not review', async () => {
-    // An unreliable model answers waiting on its own review gate after its
-    // first answer fails the schema. Publishing that reports a verdict nobody
-    // produced. nuxtseo.com#285 shipped BLOCKED with no findings that way.
-    const pullRequest = pullRequestItem({ mergeState: 'clean' })
-    const test = harness({
-      pullRequest,
-      response: {
-        metadata: passingGate,
-        review: { state: 'waiting', reason: 'No adversarial review was completed before the previous answer was rejected.', evidence: '' },
-        verification: passingGate,
-        findings: [],
-        confidence: null,
-      },
-    })
-
-    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
-
-    expect(result._tag).toBe('Err')
-    expect(test.comments.some(comment => comment.includes('BLOCKED') || comment.includes('READY'))).toBe(false)
-    // Attempts bound the retry, and no Recovery extends it.
-    expect(classifyFailure({ message: result._tag === 'Err' ? result.error : '' }))
-      .toEqual({ _tag: 'Permanent', kind: 'unknown' })
-  })
-
   it('keeps a finished review when a human comments while it runs', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [],
         confidence: 91,
       },
@@ -309,9 +363,6 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [],
         confidence: 91,
       },
@@ -324,7 +375,7 @@ describe('review resilience', () => {
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
     expect(result).toEqual({ _tag: 'Err', error: 'The pull request changed before the review completed.' })
-    expect(test.attempts).toEqual([])
+    expect(test.attempts).toHaveLength(1)
   })
 
   it('finishes a review whose progress comments GitHub refused', async () => {
@@ -332,9 +383,6 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [],
         confidence: 88,
       },
@@ -356,9 +404,6 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [],
         confidence: 91,
       },
@@ -382,9 +427,6 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [],
         confidence: 91,
       },
@@ -404,9 +446,6 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [],
         confidence: 84,
       },
@@ -419,14 +458,11 @@ describe('review resilience', () => {
     expect(test.attempts).toHaveLength(0)
   })
 
-  it('publishes a passing review that named no confidence', async () => {
+  it('rejects a passing review that named no confidence', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: passingGate,
-        verification: passingGate,
         findings: [],
         confidence: null,
       },
@@ -434,21 +470,16 @@ describe('review resilience', () => {
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    expect(result._tag).toBe('Ok')
-    expect(test.attempts[0]?.confidence).toBeUndefined()
-    expect(test.comments.at(-1)).toContain('### 🤖 READY')
-    expect(test.comments.at(-1)).not.toContain('/100')
+    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
+    expect(test.attempts).toEqual([])
   })
   it('queues exact findings for a fresh Repair Agent', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'reproduction' },
-        verification: passingGate,
         findings: [materialFinding()],
-        confidence: null,
+        confidence: 90,
       },
     })
 
@@ -456,7 +487,7 @@ describe('review resilience', () => {
 
     expect(result._tag).toBe('Ok')
     expect(test.queued).toBe(1)
-    expect(test.comments.at(-1)).toContain('REVIEWING · Repair queued')
+    expect(test.comments.at(-1)).toContain('REVIEWING · 95% · Repair queued')
   })
 
   it('keeps a stable finding identity when its code moves', async () => {
@@ -464,21 +495,15 @@ describe('review resilience', () => {
     const first = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'first proof' },
-        verification: passingGate,
         findings: [materialFinding()],
-        confidence: null,
+        confidence: 90,
       },
     })
     const moved = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'second proof' },
-        verification: passingGate,
         findings: [{ ...materialFinding(), path: 'src/new/parser.ts', line: 9 }],
-        confidence: null,
+        confidence: 90,
       },
     })
 
@@ -499,11 +524,8 @@ describe('review resilience', () => {
       pullRequest,
       snapshots: [snapshot],
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'proof' },
-        verification: passingGate,
         findings: [materialFinding()],
-        confidence: null,
+        confidence: 90,
       },
     })
 
@@ -520,11 +542,8 @@ describe('review resilience', () => {
       pullRequest,
       snapshots: [snapshot],
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'proof' },
-        verification: passingGate,
         findings: [materialFinding()],
-        confidence: null,
+        confidence: 90,
       },
     })
 
@@ -541,11 +560,8 @@ describe('review resilience', () => {
       pullRequest,
       preflightRepair: () => Promise.resolve(err(reason)),
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'proof' },
-        verification: passingGate,
         findings: [materialFinding()],
-        confidence: null,
+        confidence: 90,
       },
     })
 
@@ -566,11 +582,8 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'Material findings remain.', evidence: 'reproductions' },
-        verification: passingGate,
         findings,
-        confidence: null,
+        confidence: 90,
       },
     })
 
@@ -587,11 +600,8 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'A material finding remains.', evidence: 'reproduction' },
-        verification: passingGate,
         findings: [materialFinding()],
-        confidence: null,
+        confidence: 90,
       },
       queueRepair: () => ({ _tag: 'ActionRequired', reason: refusal }),
     })
@@ -609,11 +619,8 @@ describe('review resilience', () => {
       pullRequest,
       response: {
         premise: { verdict: 'wrong', reason: 'Safe repair would reverse the pull request intent.' },
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'The pull request premise is wrong.', evidence: 'architecture trace' },
-        verification: passingGate,
         findings: [materialFinding()],
-        confidence: null,
+        confidence: 90,
       },
     })
 
@@ -630,11 +637,8 @@ describe('review resilience', () => {
       pullRequest,
       response: {
         premise: { verdict: 'wrong', reason: 'Safe repair would restore the architecture this pull request removes.' },
-        metadata: passingGate,
-        review: { state: 'failed', reason: 'The pull request premise is wrong.', evidence: 'architecture trace' },
-        verification: passingGate,
         findings: [{ ...materialFinding(), regressionTest: null }],
-        confidence: null,
+        confidence: 90,
       },
     })
 

@@ -48,12 +48,22 @@ function finishReviewTask(store: ReturnType<typeof openJournalStore>, at: string
 
 function passedReviewGates(): ReviewGates {
   return {
-    head: { _tag: 'Passed', evidence: [{ label: 'head', sha256: 'a'.repeat(64) }] },
     merge: { _tag: 'Passed', evidence: [{ label: 'mergeability', sha256: 'b'.repeat(64) }] },
-    metadata: { _tag: 'Passed', evidence: [] },
     review: { _tag: 'Passed', evidence: [{ label: 'review', sha256: 'c'.repeat(64) }] },
-    verification: { _tag: 'Passed', evidence: [{ label: 'tests', sha256: 'd'.repeat(64) }] },
     ci: { _tag: 'Passed', evidence: [{ label: 'required-ci', sha256: 'e'.repeat(64) }] },
+  }
+}
+
+function settlementPublication(id: string) {
+  return {
+    id: `publication-${id}`,
+    body: '### 🤖 READY',
+    at: '2026-08-13T03:00:00.000Z',
+    result: {
+      _tag: 'Published' as const,
+      githubCommentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    },
   }
 }
 
@@ -2744,6 +2754,27 @@ describe('journal store', () => {
     })
   })
 
+  it('keeps Review work when the prior automated comment is still active', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'active-prior-review',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        mergeState: 'clean',
+        priorAutomatedReview: {
+          _tag: 'Found',
+          authorLogin: 'harlan-zw',
+          state: 'active',
+          url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+        },
+      }),
+    })
+
+    expect(store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)).not.toBeNull()
+  })
+
   it('reruns a completed review for the exact current head commit', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -3859,7 +3890,7 @@ describe('journal store', () => {
     expect(store.listReviewRuns('harlan-zw/example', 24)[0]?.outcome).toEqual({ _tag: 'Ready' })
   })
 
-  it('keeps the agent score on a review that only CI holds back', () => {
+  it('keeps the Agent score while controller gates settle', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
@@ -3890,12 +3921,12 @@ describe('journal store', () => {
       confidence: 79,
       findings: [],
     })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-waiting' })
-    // The score answers how sure the agent was, so it survives. The outcome
-    // answers whether every gate passed, so it names no score.
-    expect(store.listReviewRuns('harlan-zw/example', 24)[0]?.outcome).toEqual({ _tag: 'Pending' })
+    // The score answers how sure the agent was, so it survives independently
+    // from the moving controller outcome.
+    expect(store.listReviewRuns('harlan-zw/example', 24)[0]?.outcome).toEqual({ _tag: 'Pending', confidence: 79 })
   })
 
-  it('lists a review only CI holds back, with its published comment', () => {
+  it('lists a clean Review with a moving controller gate', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
@@ -3933,7 +3964,7 @@ describe('journal store', () => {
     })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-ci-pending' })
 
     // Nothing to restate until the verdict actually reached a comment.
-    expect(store.listCiPendingReviews()).toEqual([])
+    expect(store.listReviewGateRefreshes()).toEqual([])
 
     expect(store.recordReviewPublication({
       id: 'publication-ci-pending',
@@ -3947,7 +3978,7 @@ describe('journal store', () => {
       },
     })).toEqual({ _tag: 'Inserted', publicationId: 'publication-ci-pending' })
 
-    expect(store.listCiPendingReviews()).toEqual([expect.objectContaining({
+    expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({
       reviewRunId: 'attempt-ci-pending',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -3958,7 +3989,60 @@ describe('journal store', () => {
     })])
   })
 
-  it('drops a waiting review once a later run for the same head settles it', () => {
+  it('lists a clean review again when failed CI can pass on a rerun', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'ci-failed-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    finishReviewTask(store, '2026-08-13T01:00:30.000Z')
+
+    const gates = passedReviewGates()
+    gates.ci = {
+      _tag: 'Failed',
+      reason: 'Head CI: test failed.',
+      evidence: [{ label: 'head-ci', sha256: 'e'.repeat(64) }],
+    }
+    expect(store.recordReviewRun({
+      id: 'attempt-ci-failed',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates,
+      confidence: 91,
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'attempt-ci-failed' })
+    store.recordReviewPublication({
+      id: 'publication-ci-failed',
+      reviewRunId: 'attempt-ci-failed',
+      body: '### 🤖 BLOCKED',
+      at: '2026-08-13T01:03:00.000Z',
+      result: {
+        _tag: 'Published',
+        githubCommentId: 42,
+        url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+      },
+    })
+
+    expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({
+      reviewRunId: 'attempt-ci-failed',
+    })])
+  })
+
+  it('tracks the latest published review after a later run settles it', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
@@ -4008,10 +4092,10 @@ describe('journal store', () => {
     }
 
     run('attempt-waiting', waiting, '2026-08-13T01:02:00.000Z')
-    expect(store.listCiPendingReviews()).toHaveLength(1)
+    expect(store.listReviewGateRefreshes()).toHaveLength(1)
 
     run('attempt-settled', passedReviewGates(), '2026-08-13T01:20:00.000Z')
-    expect(store.listCiPendingReviews()).toEqual([])
+    expect(store.listReviewGateRefreshes().map(review => review.reviewRunId)).toEqual(['attempt-settled'])
   })
 
   it('lists the current-head review even when a superseded-revision run finished later', () => {
@@ -4089,7 +4173,7 @@ describe('journal store', () => {
       },
     })).toEqual({ _tag: 'Inserted', publicationId: 'publication-current-head-pending' })
 
-    expect(store.listCiPendingReviews().map(review => review.reviewRunId))
+    expect(store.listReviewGateRefreshes().map(review => review.reviewRunId))
       .toEqual(['attempt-current-head-pending'])
   })
 
@@ -4162,7 +4246,7 @@ describe('journal store', () => {
     expect(store.listReviewRuns(input.repository, input.pullRequestNumber)[0]?.usage).toEqual(input.usage)
   })
 
-  it('settles a CI-pending run once, and only while nothing else has settled it', () => {
+  it('refreshes each current Review run once while controller gates keep moving', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const observed = store.recordObservation({
@@ -4198,6 +4282,7 @@ describe('journal store', () => {
       gates: passedReviewGates(),
       confidence: 79,
       findings: [],
+      publication: settlementPublication('lost'),
     })).toEqual({ _tag: 'Rejected', reason: { _tag: 'RunNotFound' } })
 
     expect(store.supersedeReviewRun({
@@ -4208,6 +4293,7 @@ describe('journal store', () => {
       gates: passedReviewGates(),
       confidence: 79,
       findings: [],
+      publication: settlementPublication('1'),
     })).toEqual({ _tag: 'Inserted', reviewRunId: 'settlement-1' })
 
     // A replayed sweep that coins a fresh id finds the run already settled.
@@ -4219,6 +4305,7 @@ describe('journal store', () => {
       gates: passedReviewGates(),
       confidence: 79,
       findings: [],
+      publication: settlementPublication('2'),
     })).toEqual({ _tag: 'Rejected', reason: { _tag: 'AlreadySuperseded' } })
     // The identical settlement answers as a duplicate instead of failing.
     expect(store.supersedeReviewRun({
@@ -4229,11 +4316,25 @@ describe('journal store', () => {
       gates: passedReviewGates(),
       confidence: 79,
       findings: [],
+      publication: settlementPublication('1'),
     })).toEqual({ _tag: 'Duplicate', reviewRunId: 'settlement-1' })
 
+    const failed = passedReviewGates()
+    failed.ci = { _tag: 'Failed', reason: 'CI failed.', evidence: [{ label: 'ci', sha256: 'a'.repeat(64) }] }
+    expect(store.supersedeReviewRun({
+      ...seed,
+      id: 'settlement-3',
+      supersedesReviewRunId: 'settlement-1',
+      completedAt: '2026-08-13T05:00:00.000Z',
+      gates: failed,
+      confidence: 79,
+      findings: [],
+      publication: settlementPublication('3'),
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'settlement-3' })
+
     const runs = store.listReviewRuns('harlan-zw/example', 24)
-    expect(runs.map(run => run.id)).toEqual(['settlement-1'])
-    expect(store.listCiPendingReviews()).toEqual([])
+    expect(runs.map(run => run.id)).toEqual(['settlement-3'])
+    expect(store.listReviewGateRefreshes()).toHaveLength(1)
   })
 
   it('records comment publication failures for later analysis', () => {

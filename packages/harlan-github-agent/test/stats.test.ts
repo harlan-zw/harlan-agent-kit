@@ -18,11 +18,8 @@ function createStore() {
 
 function passedReviewGates(): ReviewGates {
   return {
-    head: { _tag: 'Passed', evidence: [] },
     merge: { _tag: 'Passed', evidence: [] },
-    metadata: { _tag: 'Passed', evidence: [] },
     review: { _tag: 'Passed', evidence: [] },
-    verification: { _tag: 'Passed', evidence: [] },
     ci: { _tag: 'Passed', evidence: [] },
   }
 }
@@ -236,6 +233,12 @@ describe('journal Stats evidence', () => {
       supersedesReviewRunId: 'stats-pending',
       completedAt: '2026-08-13T01:03:00.000Z',
       gates: passedReviewGates(),
+      publication: {
+        id: 'stats-publication',
+        body: '### 🤖 READY',
+        at: '2026-08-13T01:03:00.000Z',
+        result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+      },
     })
 
     const stats = store.getStats({

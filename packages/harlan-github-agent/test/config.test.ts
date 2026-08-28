@@ -37,7 +37,6 @@ repositories:
     writable_pr_head_prefixes: [fix/, feat/, chore/]
     issue_work: true
     pr_review: true
-    pr_conformance: true
     conflict_resolution: true
     take_ownership:
       enabled: false

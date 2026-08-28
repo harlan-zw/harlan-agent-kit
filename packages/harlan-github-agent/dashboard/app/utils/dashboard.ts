@@ -382,7 +382,7 @@ export function reviewOutcomeLabel(agent: ReviewAgent): string {
   return agent.outcome.confidence === undefined ? 'READY' : `READY · ${agent.outcome.confidence}/100`
 }
 
-const reviewGateNames = ['head', 'merge', 'metadata', 'review', 'verification', 'ci'] as const
+const reviewGateNames = ['merge', 'review', 'ci'] as const
 
 function reviewGateLabel(gate: typeof reviewGateNames[number]): string {
   return gate === 'ci' ? 'CI' : `${gate.charAt(0).toUpperCase()}${gate.slice(1)}`

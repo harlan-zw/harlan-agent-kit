@@ -21,7 +21,6 @@ export function repositoryMapping(overrides: Partial<RepositoryMapping> = {}): R
     issueWork: true,
     maxOpenPullRequests: null,
     pullRequestReview: true,
-    pullRequestConformance: true,
     conflictResolution: true,
     takeOwnership: { _tag: 'Disabled' },
     ...overrides,

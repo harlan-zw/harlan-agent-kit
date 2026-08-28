@@ -79,8 +79,7 @@ describe('review status controller', () => {
     expect(await controller.publishRepair(task, { percent: 35, label: 'Git worktree ready' }, new AbortController().signal)).toEqual(ok(undefined))
 
     expect(read().replaced).toBe(true)
-    expect(read().body).toContain('### 🤖 REPAIR · Git worktree ready')
-    expect(read().body).not.toMatch(/[▓░]|\b\d+%/)
+    expect(read().body).toContain('### 🤖 REPAIR · 35% · Git worktree ready')
   })
 
   it('says how long one phase has run, so a slow agent reads as alive', async () => {
@@ -93,7 +92,7 @@ describe('review status controller', () => {
       new AbortController().signal,
     )).toEqual(ok(undefined))
 
-    expect(read().body).toContain('### 🤖 REPAIR · Editing files for 35 min')
+    expect(read().body).toContain('### 🤖 REPAIR · 70% · Editing files for 35 min')
   })
 
   it('leaves a phase that just started without a duration', async () => {
@@ -105,6 +104,6 @@ describe('review status controller', () => {
       new AbortController().signal,
     )).toEqual(ok(undefined))
 
-    expect(read().body).toContain('### 🤖 REPAIR · Editing files\n')
+    expect(read().body).toContain('### 🤖 REPAIR · 70% · Editing files\n')
   })
 })

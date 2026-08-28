@@ -35,7 +35,7 @@ function repairProgressComment(headSha: string, progress: AgentProgress, at: str
           : 'Repair creates its Git worktree.'
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->
-### 🤖 REPAIR · ${progress.label}${formatPhaseDuration(progress.since, at)}
+### 🤖 REPAIR · ${progress.percent}% · ${progress.label}${formatPhaseDuration(progress.since, at)}
 
 ${automatedDisclosure({ kind: 'repair update', updatedAt: updatedAtLabel(at) })}
 

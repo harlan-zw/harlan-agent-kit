@@ -93,7 +93,6 @@ describe('repository discovery', () => {
         ownership: 'owned',
         issueWork: true,
         pullRequestReview: true,
-        pullRequestConformance: true,
         conflictResolution: true,
       }),
     ])

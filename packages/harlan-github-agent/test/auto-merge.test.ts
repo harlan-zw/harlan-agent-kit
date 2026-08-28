@@ -1,5 +1,5 @@
 import type { AutoMergePolicy } from '../src/auto-merge.ts'
-import type { ReviewFinding, ReviewGates, ReviewGateState, ReviewOutcome, ReviewRun } from '../src/types.ts'
+import type { ReviewFinding, ReviewGates, ReviewGateState, ReviewOutcome, ReviewPublication, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { AUTO_MERGE_LABEL, autoMergeDecision, hasAutoMergeLabel } from '../src/auto-merge.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -7,15 +7,21 @@ import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 const passed: ReviewGateState = { _tag: 'Passed', evidence: [] }
 
 const gates: ReviewGates = {
-  head: passed,
   merge: passed,
-  metadata: passed,
   review: passed,
-  verification: passed,
   ci: passed,
 }
 
-function attempt(overrides: { headSha?: string, outcome?: ReviewOutcome, findings?: ReviewFinding[], completedAt?: string } = {}): ReviewRun {
+const publication: ReviewPublication = {
+  id: 'publication-1',
+  reviewRunId: 'attempt-1',
+  body: '### 🤖 READY',
+  bodySha256: 'a'.repeat(64),
+  at: '2026-08-18T00:10:00.000Z',
+  result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+}
+
+function attempt(overrides: { headSha?: string, outcome?: ReviewOutcome, findings?: ReviewFinding[], completedAt?: string, publications?: ReviewPublication[] } = {}): ReviewRun {
   return {
     id: 'attempt-1',
     repository: 'harlan-zw/example',
@@ -33,7 +39,7 @@ function attempt(overrides: { headSha?: string, outcome?: ReviewOutcome, finding
     outcome: overrides.outcome ?? { _tag: 'Ready', confidence: 100 },
     findings: overrides.findings ?? [],
     usage: { _tag: 'Unavailable' },
-    publications: [],
+    publications: overrides.publications ?? [publication],
   }
 }
 
@@ -105,6 +111,13 @@ describe('auto merge decision', () => {
   it('holds when the review is not READY', () => {
     expect(decide({ attempts: [attempt({ outcome: { _tag: 'Blocked' } })] })._tag).toBe('Hold')
     expect(decide({ attempts: [] })._tag).toBe('Hold')
+  })
+
+  it('holds until the READY review is published', () => {
+    expect(decide({ attempts: [attempt({ publications: [] })] })).toEqual({
+      _tag: 'Hold',
+      reason: 'The current head commit has no published READY review.',
+    })
   })
 
   it('holds when confidence is below the minimum', () => {

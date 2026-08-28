@@ -9,10 +9,7 @@ import { ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const cleanReview = {
-  metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
   premise: { verdict: 'sound', reason: 'The change can remain intact.' },
-  review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
-  verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
   findings: [],
   confidence: 96,
 }
@@ -80,6 +77,8 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
+      listReviewRuns: () => [],
+      supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },

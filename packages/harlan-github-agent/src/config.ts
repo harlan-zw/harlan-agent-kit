@@ -353,7 +353,6 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
       ? openPullRequestsValue
       : undefined
   const pullRequestReview = requiredBoolean(value, 'pr_review', path, issues)
-  const pullRequestConformance = requiredBoolean(value, 'pr_conformance', path, issues)
   const conflictResolution = requiredBoolean(value, 'conflict_resolution', path, issues)
   const ownershipConfig = takeOwnership(value, path, repositoryOwnership, issues)
 
@@ -389,7 +388,6 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     || issueWork === undefined
     || maxOpenPullRequests === undefined
     || pullRequestReview === undefined
-    || pullRequestConformance === undefined
     || conflictResolution === undefined
     || ownershipConfig === undefined
   ) {
@@ -408,7 +406,6 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     issueWork,
     maxOpenPullRequests,
     pullRequestReview,
-    pullRequestConformance,
     conflictResolution,
     takeOwnership: ownershipConfig,
   }

@@ -31,11 +31,8 @@ describe('pull request status controller', () => {
       startedAt: '2026-08-13T10:00:00.000Z',
       completedAt: '2026-08-13T10:30:00.000Z',
       gates: {
-        head: { _tag: 'Passed' as const, evidence: [] },
         merge: { _tag: 'Passed' as const, evidence: [] },
-        metadata: { _tag: 'Passed' as const, evidence: [] },
         review: { _tag: 'Passed' as const, evidence: [] },
-        verification: { _tag: 'Passed' as const, evidence: [] },
         ci: { _tag: 'Passed' as const, evidence: [] },
       },
       outcome: { _tag: 'Ready' as const, confidence: 98 },
