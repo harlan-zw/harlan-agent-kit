@@ -13,6 +13,7 @@ import { currentBaseSha } from './github-base.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { isReviewRerunCommand } from './review-rerun.ts'
+import { isRoutineTrackingIssue } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 
 export interface GitHubReadError {
@@ -357,6 +358,12 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             // author allowlist never hides it from triage again.
             const labels = labelNames(issue.labels)
             const routineFiled = hasRoutineIssueLabel(labels)
+            const routineTracking = isRoutineTrackingIssue({
+              repository: repository.github,
+              title: issue.title,
+              body: issue.body,
+              labels,
+            })
             if (!isEligibleGitHubSubjectAuthor({
               login: issue.user?.login ?? 'ghost',
               type: issue.user?.type,
@@ -377,6 +384,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
               createdAt: issue.created_at,
               updatedAt: issue.updated_at,
               routineFiled,
+              routineTracking,
             }]
           })
 

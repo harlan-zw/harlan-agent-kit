@@ -2,7 +2,7 @@ import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { Candidate } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
-import { createRoutineReportController, routineReportBody, routineReportCommand, trackingIssueTitle } from '../src/routine-report-controller.ts'
+import { createRoutineReportController, isRoutineTrackingIssue, routineReportBody, routineReportCommand, trackingIssueBody, trackingIssueTitle } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -108,6 +108,22 @@ describe('writing what one run did', () => {
   it('names the tracking issue after the routine and its repository', () => {
     expect(trackingIssueTitle('sentry-checkin', 'harlan-zw/example'))
       .toBe('sentry-checkin: run log for harlan-zw/example')
+  })
+
+  it('recognises only the canonical tracking issue for a Routine label', () => {
+    const labels = ['routine:sentry-checkin']
+    expect(isRoutineTrackingIssue({
+      repository: 'harlan-zw/example',
+      title: trackingIssueTitle('sentry-checkin', 'harlan-zw/example'),
+      body: trackingIssueBody('sentry-checkin'),
+      labels,
+    })).toBe(true)
+    expect(isRoutineTrackingIssue({
+      repository: 'harlan-zw/example',
+      title: trackingIssueTitle('sentry-checkin', 'harlan-zw/example'),
+      body: 'Candidate details.',
+      labels,
+    })).toBe(false)
   })
 })
 
