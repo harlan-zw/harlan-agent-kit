@@ -1,7 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
-import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { TerminalSessionInput } from './terminal-session.ts'
 import type { DashboardSnapshot } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -22,7 +20,6 @@ export interface AgentAppOptions {
   eventIntervalMilliseconds?: number
   shutdownSignal?: AbortSignal
   activityLog?: Pick<AgentActivityLog, 'read'>
-  ejectAgent?: (input: TerminalSessionInput) => Promise<Result<void, string>>
 }
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
@@ -315,8 +312,6 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     }))
     if (body === undefined)
       throw createError({ status: 400, statusText: 'Bad Request', message: 'A valid task ID is required.' })
-    if (options.ejectAgent === undefined)
-      throw createError({ status: 501, statusText: 'Not Implemented', message: 'Interactive session launch is unavailable.' })
     const agent = dashboardSnapshot(options).agents.find(candidate => candidate._tag === 'ActiveAgent' && candidate.id === body.taskId)
     if (agent?._tag !== 'ActiveAgent')
       throw createError({ status: 404, statusText: 'Not Found', message: 'The running agent was not found.' })
@@ -325,16 +320,13 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const cancelled = options.store.cancelTask({ taskId: body.taskId, at: options.now().toISOString() })
     if (cancelled._tag === 'Rejected')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The agent already finished. Refresh before ejecting.' })
-    const launched = await options.ejectAgent({
-      taskId: body.taskId,
-      sessionId: agent.session.id,
+    return {
+      _tag: 'Ejected',
       provider: agent.provider,
+      sessionId: agent.session.id,
       repository: agent.repository,
       itemNumber: agent.itemNumber,
-    })
-    if (launched._tag === 'Err')
-      throw createError({ status: 500, statusText: 'Internal Server Error', message: launched.error })
-    return { _tag: 'Ejected' }
+    }
   })
 
   app.post('/api/repositories/writes/enable', event => setRepositoryWrites(options, event, true))

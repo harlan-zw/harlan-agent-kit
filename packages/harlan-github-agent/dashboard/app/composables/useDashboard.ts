@@ -8,7 +8,7 @@ import type {
   ReviewAgent,
   SelectionMode,
 } from '../../../src/types.ts'
-import { formatTimeAgo, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
+import { formatTimeAgo, useBrowserLocation, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
 import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import {
   agentStartState,
@@ -63,6 +63,7 @@ function createDashboard() {
   const cancelErrors = ref<Record<string, string>>({})
   const ejectPending = ref<string>()
   const ejectErrors = ref<Record<string, string>>({})
+  const ejectedSession = ref<{ command: string, itemNumber: number, repository: string }>()
   const rerunPending = ref<string>()
   const rerunErrors = ref<Record<string, string>>({})
   const repositoryPending = ref<string>()
@@ -70,6 +71,7 @@ function createDashboard() {
   const dismissErrors = ref<Record<string, string>>({})
 
   const visibility = useDocumentVisibility()
+  const browserLocation = useBrowserLocation()
   const now = useNow({ interval: 1_000 })
 
   const {
@@ -228,14 +230,35 @@ function createDashboard() {
   async function ejectAgent(taskId: string): Promise<void> {
     ejectPending.value = taskId
     ejectErrors.value = without(ejectErrors.value, taskId)
-    return $fetch('/api/agents/eject', { method: 'POST', body: { taskId } })
-      .then(() => loadState())
+    return $fetch<{
+      _tag: 'Ejected'
+      provider: 'codex' | 'opencode'
+      sessionId: string
+      repository: string
+      itemNumber: number
+    }>('/api/agents/eject', { method: 'POST', body: { taskId } })
+      .then((ejected) => {
+        const host = browserLocation.value.hostname ?? 'hogwild'
+        const agent = ejected.provider === 'codex'
+          ? `/home/harlan/.local/bin/codex resume ${ejected.sessionId} -c 'tui.resume_cwd="session"'`
+          : `/home/harlan/.local/bin/opencode --session ${ejected.sessionId}`
+        ejectedSession.value = {
+          command: `ssh -t ${host} ${agent}`,
+          itemNumber: ejected.itemNumber,
+          repository: ejected.repository,
+        }
+        return loadState()
+      })
       .catch((error: unknown) => {
         ejectErrors.value = { ...ejectErrors.value, [taskId]: failed(error) }
       })
       .finally(() => {
         ejectPending.value = undefined
       })
+  }
+
+  function clearEjectedSession(): void {
+    ejectedSession.value = undefined
   }
 
   async function approveQueueEntry(entry: QueueEntry): Promise<void> {
@@ -385,6 +408,8 @@ function createDashboard() {
     cancelErrors,
     ejectPending,
     ejectErrors,
+    ejectedSession,
+    clearEjectedSession,
     rerunPending,
     rerunErrors,
     repositoryPending,
@@ -431,7 +456,6 @@ type Dashboard = ReturnType<typeof createDashboard>
 let dashboard: Dashboard | undefined
 
 // The reactivity lives in createDashboard, inside a scope this owns for the app's lifetime.
-// eslint-disable-next-line harlanzw/vue-no-faux-composables
 export function useDashboard(): Dashboard {
   if (dashboard === undefined) {
     // A detached scope keeps the watchers and the event stream alive across

@@ -4,7 +4,6 @@ import { Buffer } from 'node:buffer'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
-import { ok } from '../src/result.ts'
 import { dashboardSnapshot } from './fixtures.ts'
 
 const allowedOrigin = 'https://harlan-github-agent.localhost'
@@ -386,7 +385,6 @@ describe('dashboard HTTP app', () => {
     const taskId = 'a'.repeat(64)
     const sessionId = '018f3c70-7b79-7be9-9c26-1c94e3a33430'
     const cancellations: unknown[] = []
-    const launches: unknown[] = []
     const snapshot = dashboardSnapshot({
       agents: [{
         _tag: 'ActiveAgent',
@@ -415,10 +413,6 @@ describe('dashboard HTTP app', () => {
       dashboardPassword,
       dashboardRoot,
       now,
-      ejectAgent: (input) => {
-        launches.push(input)
-        return Promise.resolve(ok(undefined))
-      },
       store: {
         ...agentControls,
         approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
@@ -440,9 +434,14 @@ describe('dashboard HTTP app', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ _tag: 'Ejected' })
+    expect(await response.json()).toEqual({
+      _tag: 'Ejected',
+      provider: 'codex',
+      sessionId,
+      repository: 'harlan-zw/example',
+      itemNumber: 24,
+    })
     expect(cancellations).toEqual([{ taskId, at: now().toISOString() }])
-    expect(launches).toEqual([{ taskId, sessionId, provider: 'codex', repository: 'harlan-zw/example', itemNumber: 24 }])
   })
 
   it('queues one review rerun from the dashboard', async () => {

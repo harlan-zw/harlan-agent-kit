@@ -57,7 +57,6 @@ import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
-import { createTerminalSessionLauncher } from './terminal-session.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
 import { agentWorktreeLeaseKey, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createReviewFixWorktreeManager, sweepAgentWorktrees } from './worktree.ts'
@@ -924,7 +923,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const dashboardShutdown = new AbortController()
   const app = createAgentApp({
     activityLog,
-    ejectAgent: createTerminalSessionLauncher({ environment: opencodeEnvironment.value, onError: error => options.logger.error(error) }),
     store: {
       approveIssueWork: store.approveIssueWork,
       approvePullRequest: store.approvePullRequest,

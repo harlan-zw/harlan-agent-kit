@@ -542,13 +542,6 @@ class IndicatorDisplayTest(unittest.TestCase):
                 'status': 'ready',
                 'agentControl': {'_tag': 'Running'},
                 'agents': [],
-                'routineRuns': [],
-                'queue': [],
-                'incidents': [],
-            }},
-            'hogwildAgent': {'_tag': 'Available', 'dashboard': {
-                'status': 'ready',
-                'agents': [],
                 'routineRuns': [run],
                 'queue': [],
                 'incidents': [],
@@ -740,9 +733,36 @@ class IndicatorDisplayTest(unittest.TestCase):
             '/usr/bin/ghostty',
             '--title=Watch logs · harlan-zw/example #24',
             '-e',
-            sys.executable,
-            str(indicator.WATCHER),
+            'ssh',
+            '-t',
+            'hogwild',
+            '/usr/bin/python3',
+            '/home/harlan/.local/share/harlan-github-agent/service/packages/harlan-github-agent/bin/harlan-github-agent-watch',
             'opencode',
+            'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
+        ], start_new_session=True)
+
+    def test_opens_the_ejected_session_on_hogwild(self):
+        ejected = {
+            '_tag': 'Ejected',
+            'provider': 'opencode',
+            'sessionId': 'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            indicator.open_ejected_session(ejected)
+
+        spawn.assert_called_once_with([
+            '/usr/bin/ghostty',
+            '--title=opencode · harlan-zw/example #24',
+            '-e',
+            'ssh',
+            '-t',
+            'hogwild',
+            '/home/harlan/.local/bin/opencode',
+            '--session',
             'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
         ], start_new_session=True)
 
@@ -777,9 +797,9 @@ class AgentControlRequestTest(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(result, {'_tag': 'Paused', 'pausedAt': '2026-08-14T00:00:00.000Z'})
-        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/pause')
+        self.assertEqual(request.full_url, 'https://hogwild.tailcad325.ts.net/api/agents/pause')
         self.assertEqual(request.get_method(), 'POST')
-        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
+        self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 3)
 
@@ -794,7 +814,7 @@ class AgentControlRequestTest(unittest.TestCase):
                 return False
 
             def read(self):
-                return b'{"_tag":"Ejected"}'
+                return b'{"_tag":"Ejected","provider":"opencode","sessionId":"ses_abc12345","repository":"harlan-zw/example","itemNumber":24}'
 
         def open_request(request, timeout):
             requests.append((request, timeout))
@@ -811,12 +831,18 @@ class AgentControlRequestTest(unittest.TestCase):
                 result = indicator.request_agent_eject('task-123')
 
         request, timeout = requests[0]
-        self.assertEqual(result, {'_tag': 'Ejected'})
-        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/eject')
+        self.assertEqual(result, {
+            '_tag': 'Ejected',
+            'provider': 'opencode',
+            'sessionId': 'ses_abc12345',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        })
+        self.assertEqual(request.full_url, 'https://hogwild.tailcad325.ts.net/api/agents/eject')
         self.assertEqual(request.get_method(), 'POST')
         self.assertEqual(request.data, b'{"taskId":"task-123"}')
         self.assertEqual(request.get_header('Content-type'), 'application/json')
-        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
+        self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 10)
 
@@ -967,11 +993,11 @@ class AgentSelectionTest(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(result, {'provider': 'opencode', 'model': None, 'reasoningEffort': None})
-        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/select')
+        self.assertEqual(request.full_url, 'https://hogwild.tailcad325.ts.net/api/agents/select')
         self.assertEqual(request.get_method(), 'POST')
         self.assertEqual(request.data, b'{"provider":"opencode","model":null,"reasoningEffort":null}')
         self.assertEqual(request.get_header('Content-type'), 'application/json')
-        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
+        self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 3)
 

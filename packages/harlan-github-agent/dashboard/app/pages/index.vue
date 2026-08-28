@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ActiveAgent, AgentRole, QueueEntry } from '../../../src/types.ts'
-import { useEventListener } from '@vueuse/core'
+import { useClipboard, useEventListener } from '@vueuse/core'
 import HogwildSparkline from '../_components/HogwildSparkline.vue'
 import {
   activeAgentActivity,
@@ -67,6 +67,8 @@ const {
   cancelAgentTask,
   ejectPending,
   ejectErrors,
+  ejectedSession,
+  clearEjectedSession,
   ejectAgent,
   taskFor,
   canRunReview,
@@ -81,6 +83,7 @@ const {
   dismissErrors,
   dismissKey,
 } = useDashboard()
+const { copy: copyToClipboard } = useClipboard()
 const { connection: hogwild, history: hogwildHistory } = useHogwildStatus()
 
 const doneOnBoard = 8
@@ -247,6 +250,16 @@ useHead({
 
 <template>
   <div>
+    <div v-if="ejectedSession" role="status" class="mb-6 rounded-md border border-primary/40 bg-primary/5 p-4 text-sm">
+      <p class="mb-2">
+        Agent stopped. Resume {{ ejectedSession.repository }} #{{ ejectedSession.itemNumber }} on Hogwild.
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <code class="min-w-0 flex-1 break-all rounded bg-elevated px-2 py-1 font-mono text-xs">{{ ejectedSession.command }}</code>
+        <UButton label="Copy command" icon="i-lucide-copy" size="xs" @click="copyToClipboard(ejectedSession.command)" />
+        <UButton label="Dismiss" color="neutral" variant="ghost" size="xs" @click="clearEjectedSession" />
+      </div>
+    </div>
     <section id="system" aria-labelledby="system-heading" class="mb-6 scroll-mt-20">
       <div class="zone-header">
         <h2 id="system-heading" class="field-label" :class="statusClass(system.tone)">
