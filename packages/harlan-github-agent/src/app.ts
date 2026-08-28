@@ -67,6 +67,7 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
     agents: snapshot.agents.map(agent => agent._tag === 'ActiveAgent'
       ? { ...agent, activity: activityLog.read(agent.id) }
       : agent),
+    routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog.read(run.id) })),
   }
 }
 

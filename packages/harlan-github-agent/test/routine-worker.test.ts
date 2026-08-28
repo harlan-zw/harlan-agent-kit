@@ -1,6 +1,7 @@
 import type { AgentEvent } from '../src/agent-provider.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
+import { createAgentActivityLog } from '../src/agent-activity.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
 import { createRoutineScanWorker, routineScanPrompt } from '../src/routine-worker.ts'
@@ -9,20 +10,11 @@ import { repositoryMapping } from './fixtures.ts'
 
 const now = () => new Date('2026-08-27T07:05:00.000Z')
 
-function claimedRun(overrides: Partial<ClaimedRoutineRun> = {}): ClaimedRoutineRun {
-  return {
-    id: 'harlan-zw/example:pr-triage:2026-08-27T07:00:00.000Z',
-    routineId: 'harlan-zw/example:pr-triage',
-    repository: 'harlan-zw/example',
-    repositoryMapping: repositoryMapping(),
-    name: 'pr-triage',
-    mode: 'propose',
-    scheduledFor: '2026-08-27T07:00:00.000Z',
-    specSha: 'abc123',
-    attempts: 1,
-    state: { _tag: 'Running', fence: 1, workerId: 'worker-1', leaseExpiresAt: '2026-08-27T08:00:00.000Z' },
-    ...overrides,
-  }
+function claimStoredRun(store: ReturnType<typeof openJournalStore>, at = now().toISOString()): ClaimedRoutineRun {
+  const task = store.claimNextRoutineRun('worker-1', at, 60 * 60_000)
+  if (task === null)
+    throw new Error('Expected a queued Routine run.')
+  return task
 }
 
 function scanning(answer: unknown, capture?: { prompts: string[] }) {
@@ -39,8 +31,14 @@ function scanning(answer: unknown, capture?: { prompts: string[] }) {
   }
 }
 
-function workerFor(store: ReturnType<typeof openJournalStore>, provider: ReturnType<typeof scanning>, maximumChangedFiles?: number) {
+function workerFor(
+  store: ReturnType<typeof openJournalStore>,
+  provider: ReturnType<typeof scanning>,
+  maximumChangedFiles?: number,
+  activityLog?: ReturnType<typeof createAgentActivityLog>,
+) {
   return createRoutineScanWorker({
+    ...(activityLog === undefined ? {} : { activityLog }),
     logger: { error: () => undefined, info: () => undefined },
     ...(maximumChangedFiles === undefined ? {} : { maximumChangedFiles }),
     now,
@@ -141,12 +139,46 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it('reports live progress and provider activity', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const task = claimStoredRun(store)
+      const activityLog = createAgentActivityLog()
+      const provider = {
+        name: 'codex' as const,
+        runTurn: () => (async function* (): AsyncIterable<AgentEvent> {
+          yield { _tag: 'SessionStarted', sessionId: 'session-1' }
+          yield { _tag: 'Reasoning', text: 'Checking the repository.' }
+          yield { _tag: 'CommandCompleted', command: 'pnpm test', output: 'passed', exitCode: 0 }
+          yield { _tag: 'Message', text: JSON.stringify({ candidates: [] }) }
+          yield { _tag: 'TurnCompleted' }
+        })(),
+      }
+
+      const result = await workerFor(store, provider, undefined, activityLog)
+        .run(task, new AbortController().signal)
+
+      expect(result).toMatchObject({ _tag: 'Ok' })
+      expect(activityLog.read(task.id)).toEqual([
+        { _tag: 'Reasoning', at: now().toISOString(), text: 'Checking the repository.' },
+        { _tag: 'Command', at: now().toISOString(), command: 'pnpm test', output: 'passed', exitCode: 0 },
+      ])
+      expect(store.listRoutineRuns(task.routineId)[0]).toMatchObject({
+        progress: { percent: 85, label: 'Preparing the Routine result' },
+      })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('records what the scan found', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
       const result = await workerFor(store, scanning({ candidates: [candidate] }))
-        .run(claimedRun(), new AbortController().signal)
+        .run(claimStoredRun(store), new AbortController().signal)
 
       expect(result).toMatchObject({ _tag: 'Ok' })
       expect(store.listCandidates('harlan-zw/example:pr-triage')).toMatchObject([{ fingerprint: candidate.fingerprint }])
@@ -162,7 +194,7 @@ describe('running one scan', () => {
       seed(store)
       await workerFor(store, scanning({
         candidates: [candidate, { ...candidate, fingerprint: 'src/big.ts', estimatedChangedFiles: 40 }],
-      })).run(claimedRun(), new AbortController().signal)
+      })).run(claimStoredRun(store), new AbortController().signal)
 
       expect(store.listCandidates('harlan-zw/example:pr-triage').map(entry => entry.fingerprint))
         .toEqual([candidate.fingerprint])
@@ -177,7 +209,15 @@ describe('running one scan', () => {
     try {
       seed(store)
       const worker = workerFor(store, scanning({ candidates: [candidate] }))
-      await worker.run(claimedRun(), new AbortController().signal)
+      const firstTask = claimStoredRun(store)
+      await worker.run(firstTask, new AbortController().signal)
+      store.completeRoutineRun({
+        taskId: firstTask.id,
+        workerId: firstTask.state.workerId,
+        fence: firstTask.state.fence,
+        at: '2026-08-27T07:06:00.000Z',
+        evidence: 'First scan completed.',
+      })
 
       store.openRoutineRun({
         routineId: 'harlan-zw/example:pr-triage',
@@ -185,8 +225,9 @@ describe('running one scan', () => {
         specSha: 'abc123',
         at: '2026-08-28T07:00:05.000Z',
       })
+      const secondTask = claimStoredRun(store, '2026-08-28T07:05:00.000Z')
       const second = await worker.run(
-        claimedRun({ id: 'harlan-zw/example:pr-triage:2026-08-28T07:00:00.000Z' }),
+        secondTask,
         new AbortController().signal,
       )
 
@@ -204,7 +245,7 @@ describe('running one scan', () => {
       seed(store)
       const capture = { prompts: [] as string[] }
       await workerFor(store, scanning({ candidates: [candidate] }, capture))
-        .run(claimedRun(), new AbortController().signal)
+        .run(claimStoredRun(store), new AbortController().signal)
 
       expect(capture.prompts[0]).toContain('Nothing has been rejected yet.')
     }
@@ -224,7 +265,7 @@ describe('running one scan', () => {
           yield { _tag: 'TurnCompleted' }
         })(),
       }
-      const result = await workerFor(store, provider).run(claimedRun(), new AbortController().signal)
+      const result = await workerFor(store, provider).run(claimStoredRun(store), new AbortController().signal)
 
       expect(result._tag).toBe('Err')
     }

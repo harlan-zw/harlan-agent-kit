@@ -37,6 +37,42 @@ function createApp(snapshot = dashboardSnapshot()) {
 }
 
 describe('dashboard HTTP app', () => {
+  it('attaches live activity to a running Routine', async () => {
+    const runId = 'routine-run-1'
+    const snapshot = dashboardSnapshot({
+      routineRuns: [{
+        id: runId,
+        routineId: 'harlan-zw/example:sentry-checkin',
+        repository: 'harlan-zw/example',
+        name: 'sentry-checkin',
+        scheduledFor: '2026-08-13T00:00:00.000Z',
+        specSha: 'abc123',
+        state: { _tag: 'Running', workerId: 'worker-1', leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+        fence: 1,
+        attempts: 1,
+        progress: { percent: 55, label: 'Checking the repository' },
+        activity: [],
+        createdAt: '2026-08-13T00:00:00.000Z',
+        updatedAt: now().toISOString(),
+      }],
+    })
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      activityLog: { read: id => id === runId ? [{ _tag: 'Reasoning', at: now().toISOString(), text: 'Reading Sentry issues.' }] : [] },
+      store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/state`, { headers: { authorization, host: allowedHost } })
+    const body = await response.json() as { routineRuns: Array<{ activity: unknown[] }> }
+
+    expect(body.routineRuns[0]?.activity).toEqual([
+      { _tag: 'Reasoning', at: now().toISOString(), text: 'Reading Sentry issues.' },
+    ])
+  })
+
   it('switches the Agent provider, model, and reasoning effort', async () => {
     const switches: unknown[] = []
     const app = createAgentApp({

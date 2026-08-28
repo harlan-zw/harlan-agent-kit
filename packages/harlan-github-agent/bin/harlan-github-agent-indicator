@@ -20,8 +20,8 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import AyatanaAppIndicator3, GLib, Gtk
 
 DASHBOARD_URL = 'https://harlan-github-agent.localhost/'
-DASHBOARD_API = f'{DASHBOARD_URL}api/state'
 DASHBOARD_ORIGIN = DASHBOARD_URL.rstrip('/')
+HOGWILD_DASHBOARD_URL = os.environ.get('HARLAN_GITHUB_AGENT_HOGWILD_URL', 'https://hogwild.tailcad325.ts.net/').rstrip('/') + '/'
 PASSWORD_FILE = Path.home() / '.config/harlan-github-agent/dashboard-password'
 APP_ICON = Path(__file__).resolve().parent.parent / 'assets/github-app-icon.png'
 WATCHER = Path(__file__).resolve().parent / 'harlan-github-agent-watch'
@@ -48,8 +48,8 @@ def dashboard_authorization():
     return f'Basic {credentials}'
 
 
-def request_dashboard():
-    request = urllib.request.Request(DASHBOARD_API, headers={'Authorization': dashboard_authorization()})
+def request_dashboard(url=DASHBOARD_URL):
+    request = urllib.request.Request(f'{url}api/state', headers={'Authorization': dashboard_authorization()})
     with urllib.request.urlopen(request, timeout=3) as response:
         return json.load(response)
 
@@ -100,25 +100,37 @@ def request_agent_eject(task_id):
         return json.load(response)
 
 
-def read_system_sources(fetch_dashboard):
+def read_system_sources(fetch_dashboard, fetch_hogwild_dashboard=None):
     try:
         harlan_github_agent = {'_tag': 'Available', 'dashboard': fetch_dashboard()}
     except Exception as caught:
         harlan_github_agent = {'_tag': 'Unavailable', 'message': str(caught)}
 
-    return {
+    sources = {
         'harlanGithubAgent': harlan_github_agent,
     }
+    if fetch_hogwild_dashboard is not None:
+        try:
+            sources['hogwildAgent'] = {'_tag': 'Available', 'dashboard': fetch_hogwild_dashboard()}
+        except Exception as caught:
+            sources['hogwildAgent'] = {'_tag': 'Unavailable', 'message': str(caught)}
+    return sources
 
 
 def loading_system_sources():
     return {
         'harlanGithubAgent': {'_tag': 'Loading'},
+        'hogwildAgent': {'_tag': 'Loading'},
     }
 
 
 def source_dashboard(sources):
     source = sources['harlanGithubAgent']
+    return source['dashboard'] if source['_tag'] == 'Available' else None
+
+
+def source_hogwild_dashboard(sources):
+    source = sources.get('hogwildAgent', {'_tag': 'Loading'})
     return source['dashboard'] if source['_tag'] == 'Available' else None
 
 
@@ -352,6 +364,19 @@ def active_agent_label(agent):
     return f"🟢 {agent_role_label(agent)} · {agent['repository']} #{agent['itemNumber']}"
 
 
+def active_routine_runs(dashboard):
+    if dashboard is None:
+        return []
+    return [
+        run for run in dashboard.get('routineRuns', [])
+        if run.get('state', {}).get('_tag') == 'Running'
+    ]
+
+
+def active_routine_label(run):
+    return f"🟢 Routine · {run['name']} · {run['repository']}"
+
+
 def concise_activity_text(value):
     text = ' '.join(str(value).split())
     return text if len(text) <= 72 else f'{text[:71].rstrip()}…'
@@ -543,11 +568,16 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
     dashboard = source_dashboard(sources)
     dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
     agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
+    hogwild_source = sources.get('hogwildAgent')
+    hogwild = source_hogwild_dashboard(sources)
+    routine_runs = [*active_routine_runs(dashboard), *active_routine_runs(hogwild)]
     queue = [] if dashboard is None else dashboard.get('queue', [])
     menu.append(section_item('Harlan GitHub Agent'))
-    menu.append(menu_item(harlan_github_agent_status_label(dashboard, agents, dashboard_error), enabled=False))
+    menu.append(menu_item(harlan_github_agent_status_label(dashboard, [*agents, *routine_runs], dashboard_error), enabled=False))
     if dashboard_error is not None:
         menu.append(menu_item(dashboard_error[:100], enabled=False))
+    if hogwild_source is not None and hogwild_source['_tag'] == 'Unavailable':
+        menu.append(menu_item(f"Hogwild unavailable · {hogwild_source['message'][:80]}", enabled=False))
     if action_error is not None:
         menu.append(menu_item(action_error[:100], enabled=False))
     menu.append(menu_item('Open dashboard', DASHBOARD_URL))
@@ -578,6 +608,15 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
             eject_item.connect('activate', lambda *_args, current=agent: confirm_agent_eject(current, eject_agent))
             links.append(eject_item)
             menu.append(submenu_item(active_agent_label(agent), links))
+
+        for run in routine_runs:
+            progress = run.get('progress', {'percent': 0, 'label': 'Starting'})
+            links = [menu_item(progress['label'], enabled=False)]
+            activity_label = active_agent_activity_label(run)
+            if activity_label is not None:
+                links.append(menu_item(activity_label, enabled=False))
+            links.append(menu_item('Open repository', f"https://github.com/{run['repository']}"))
+            menu.append(submenu_item(active_routine_label(run), links))
 
         incidents = dashboard.get('incidents', [])
         if incidents:
@@ -642,9 +681,10 @@ def main():
         refreshing['active'] = False
         dashboard = source_dashboard(sources)
         agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
+        routine_runs = [*active_routine_runs(dashboard), *active_routine_runs(source_hogwild_dashboard(sources))]
         dashboard_source = sources['harlanGithubAgent']
         dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
-        label, title = indicator_summary(dashboard, agents, dashboard_error)
+        label, title = indicator_summary(dashboard, [*agents, *routine_runs], dashboard_error)
         indicator.set_label(label, '🟢 99')
         indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
         indicator.set_title(title)
@@ -667,7 +707,7 @@ def main():
                     request_agent_eject(action['taskId'])
             except Exception as caught:
                 control_error = f"{action['label']} failed: {caught}"
-        sources = read_system_sources(request_dashboard)
+        sources = read_system_sources(request_dashboard, lambda: request_dashboard(HOGWILD_DASHBOARD_URL))
         GLib.idle_add(apply_state, sources, control_error)
 
     def refresh(*_args):

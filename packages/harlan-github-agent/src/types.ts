@@ -625,8 +625,14 @@ export interface RoutineRun {
   state: RoutineRunState
   fence: number
   attempts: number
+  progress: AgentProgress
   createdAt: string
   updatedAt: string
+}
+
+/** One Routine run as sent to the dashboard, with live process activity attached. */
+export interface DashboardRoutineRun extends RoutineRun {
+  activity: AgentActivityItem[]
 }
 
 /**
@@ -1138,7 +1144,7 @@ export interface DashboardSnapshot {
   items: ItemSummary[]
   tasks: DashboardTask[]
   routines: Routine[]
-  routineRuns: RoutineRun[]
+  routineRuns: DashboardRoutineRun[]
 }
 
 export type StoredAgentControl

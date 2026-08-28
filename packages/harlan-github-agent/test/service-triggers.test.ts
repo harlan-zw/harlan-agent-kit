@@ -51,6 +51,8 @@ describe('which triggers one machine answers', () => {
       state: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
       fence: 1,
       attempts: 1,
+      progress: { percent: 85, label: 'Preparing the Routine result' },
+      activity: [],
       createdAt: '2026-08-28T21:00:00.000Z',
       updatedAt: '2026-08-28T21:01:00.000Z',
     }],
