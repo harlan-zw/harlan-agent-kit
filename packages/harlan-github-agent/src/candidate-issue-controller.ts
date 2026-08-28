@@ -4,6 +4,8 @@ import type { JournalStore } from './store.ts'
 import type { Candidate, CandidateIssueCommand, ClaimedRoutineRun } from './types.ts'
 import { err, ok } from './result.ts'
 
+type CandidateIssueContext = Pick<ClaimedRoutineRun, 'repository' | 'name' | 'scheduledFor'>
+
 /** Marks every issue a Routine files, so a reader knows what opened it. */
 export function routineIssueLabel(name: ClaimedRoutineRun['name']): string {
   return `routine:${name}`
@@ -41,7 +43,7 @@ function displayableClaim(claim: string): string {
  * fingerprint goes in a comment so a person never has to read it, and the
  * ledger can still be matched to the issue by eye when something looks wrong.
  */
-export function candidateIssueBody(candidate: Candidate, routine: ClaimedRoutineRun): string {
+export function candidateIssueBody(candidate: Candidate, routine: CandidateIssueContext): string {
   return `${candidate.claim}
 
 **Target:** \`${candidate.target}\`
@@ -59,7 +61,7 @@ ${candidateFingerprintMarker(candidate.fingerprint)}
 /** One issue request per Candidate, ready for the controller to file. */
 export function candidateIssueCommands(
   candidates: readonly Candidate[],
-  routine: ClaimedRoutineRun,
+  routine: CandidateIssueContext,
 ): CandidateIssueCommand[] {
   return candidates.map((candidate) => {
     const claim = displayableClaim(candidate.claim)
