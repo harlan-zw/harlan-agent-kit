@@ -116,6 +116,7 @@ const permanentMessages = new Set<string>([
  * commit yet, and those must keep retrying.
  */
 const permanentPatterns: RegExp[] = [
+  /\bIssue work needs the GitHub App\b/i,
   /\bis still draft\b/i,
   // A quarantined repository stays quarantined until a person enables it, so
   // retrying only spends agent turns on a decision no agent can make.
