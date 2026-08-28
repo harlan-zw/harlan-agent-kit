@@ -14,6 +14,7 @@ import { parseAgentSelection } from './agent-profile.ts'
 export interface AgentAppOptions {
   store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
+  ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -25,6 +26,7 @@ export interface AgentAppOptions {
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
 const DASHBOARD_PAGES = ['history', 'watching', 'flow'] as const
+const EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS = 12_000
 
 const securityHeaders = {
   'cache-control': 'no-store',
@@ -67,6 +69,26 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
       : agent),
     routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog.read(run.id) })),
   }
+}
+
+function settleEjectedTask(options: AgentAppOptions, taskId: string): Promise<boolean> {
+  const settleTask = options.settleTask
+  if (settleTask === undefined)
+    return Promise.resolve(false)
+  const timeoutMilliseconds = options.ejectSettlementTimeoutMilliseconds ?? EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS
+  return new Promise((resolve) => {
+    let answered = false
+    const answer = (settled: boolean) => {
+      if (answered)
+        return
+      answered = true
+      clearTimeout(timeout)
+      resolve(settled)
+    }
+    const timeout = setTimeout(answer, timeoutMilliseconds, false)
+    timeout.unref()
+    settleTask(taskId).then(answer, () => answer(false))
+  })
 }
 
 async function setRepositoryWrites(options: AgentAppOptions, event: { req: { json: () => Promise<unknown> } }, writesEnabled: boolean): Promise<{ github: string, writesEnabled: boolean }> {
@@ -336,9 +358,20 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const cancelled = options.store.cancelTask({ taskId: body.taskId, at: options.now().toISOString() })
     if (cancelled._tag === 'Rejected')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The agent already finished. Refresh before ejecting.' })
-    const settled = await options.settleTask(body.taskId)
-    if (!settled)
-      throw createError({ status: 503, statusText: 'Service Unavailable', message: 'The agent stopped, but its session transfer could not be confirmed.' })
+    const settled = await settleEjectedTask(options, body.taskId)
+    if (!settled) {
+      throw createError({
+        status: 503,
+        statusText: 'Service Unavailable',
+        message: 'The agent stop could not be confirmed.',
+        data: {
+          _tag: 'EjectDelayed',
+          provider: session.provider,
+          sessionId: session.id,
+          nextAction: 'Stop Harlan GitHub Agent. Then resume this saved session.',
+        },
+      })
+    }
     return {
       _tag: 'Ejected',
       provider: session.provider,

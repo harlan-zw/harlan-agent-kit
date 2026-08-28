@@ -514,6 +514,138 @@ describe('dashboard HTTP app', () => {
     expect((await request).status).toBe(200)
   })
 
+  it('keeps the Eject request open when settlement takes more than ten seconds', async () => {
+    vi.useFakeTimers()
+    try {
+      const taskId = 'a'.repeat(64)
+      const snapshot = dashboardSnapshot({
+        agents: [{
+          _tag: 'ActiveAgent',
+          id: taskId,
+          provider: 'opencode',
+          role: 'adversarial_review',
+          author: 'harlan-zw',
+          session: { _tag: 'Connected', id: 'ses_abc12345' },
+          repository: 'harlan-zw/example',
+          repositoryUrl: 'https://github.com/harlan-zw/example',
+          subjectKind: 'pull_request',
+          itemNumber: 24,
+          title: 'Fix parser',
+          subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
+          headSha: 'abc123',
+          commitUrl: 'https://github.com/harlan-zw/example/commit/abc123',
+          startedAt: now().toISOString(),
+          updatedAt: now().toISOString(),
+          progress: { percent: 40, label: 'Reviewing' },
+          activity: [],
+          state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+        }],
+      })
+      const app = createAgentApp({
+        allowedOrigin,
+        dashboardPassword,
+        dashboardRoot,
+        now,
+        settleTask: () => new Promise(resolve => setTimeout(resolve, 11_000, true)),
+        store: {
+          ...agentControls,
+          approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          cancelTask: () => ({ _tag: 'Cancelled' }),
+          getDashboardSnapshot: () => snapshot,
+          listReviewRuns: () => [],
+          requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        },
+      })
+      let response: Response | undefined
+
+      const request = Promise.resolve(app.request(`http://${allowedHost}/api/agents/eject`, {
+        method: 'POST',
+        headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
+        body: JSON.stringify({ taskId }),
+      })).then((value) => {
+        response = value
+        return value
+      })
+      await vi.advanceTimersByTimeAsync(10_001)
+
+      expect(response).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(999)
+      expect((await request).status).toBe(200)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('returns a safe recovery path when the running Agent does not settle', async () => {
+    vi.useFakeTimers()
+    try {
+      const taskId = 'a'.repeat(64)
+      const sessionId = 'ses_abc12345'
+      const snapshot = dashboardSnapshot({
+        agents: [{
+          _tag: 'ActiveAgent',
+          id: taskId,
+          provider: 'opencode',
+          role: 'adversarial_review',
+          author: 'harlan-zw',
+          session: { _tag: 'Connected', id: sessionId },
+          repository: 'harlan-zw/example',
+          repositoryUrl: 'https://github.com/harlan-zw/example',
+          subjectKind: 'pull_request',
+          itemNumber: 24,
+          title: 'Fix parser',
+          subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
+          headSha: 'abc123',
+          commitUrl: 'https://github.com/harlan-zw/example/commit/abc123',
+          startedAt: now().toISOString(),
+          updatedAt: now().toISOString(),
+          progress: { percent: 40, label: 'Reviewing' },
+          activity: [],
+          state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+        }],
+      })
+      const app = createAgentApp({
+        allowedOrigin,
+        dashboardPassword,
+        dashboardRoot,
+        now,
+        settleTask: () => new Promise(() => {}),
+        store: {
+          ...agentControls,
+          approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          cancelTask: () => ({ _tag: 'Cancelled' }),
+          getDashboardSnapshot: () => snapshot,
+          listReviewRuns: () => [],
+          requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        },
+      })
+
+      const request = Promise.resolve(app.request(`http://${allowedHost}/api/agents/eject`, {
+        method: 'POST',
+        headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
+        body: JSON.stringify({ taskId }),
+      }))
+      await vi.advanceTimersByTimeAsync(12_000)
+      const response = await request
+
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual(expect.objectContaining({
+        data: {
+          _tag: 'EjectDelayed',
+          provider: 'opencode',
+          sessionId,
+          nextAction: 'Stop Harlan GitHub Agent. Then resume this saved session.',
+        },
+      }))
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('rejects an invalid provider session before cancelling its Task', async () => {
     const taskId = 'a'.repeat(64)
     const cancellations: unknown[] = []

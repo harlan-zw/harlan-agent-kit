@@ -1,5 +1,5 @@
 import type { Result } from './result.ts'
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync, unlinkSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
 import { err, ok } from './result.ts'
@@ -23,6 +23,7 @@ export type CombineServiceStateError
     | { _tag: 'SourceBusy', source: 'GitHub' | 'Routine' }
     | { _tag: 'RepositoryMissing', repository: string }
     | { _tag: 'StateConflict', reason: string }
+    | { _tag: 'OutputPublicationFailed', path: string, reason: string }
 
 export interface CombineServiceStateInput {
   githubPath: string
@@ -32,6 +33,9 @@ export interface CombineServiceStateInput {
 }
 
 type SourceName = 'GitHub' | 'Routine'
+type CombineOperation
+  = | { _tag: 'ReadSource', source: SourceName }
+    | { _tag: 'PublishOutput' }
 
 function quoted(value: string): string {
   return `"${value.replaceAll('"', '""')}"`
@@ -188,42 +192,50 @@ export async function combineServiceState(
   let githubSource: DatabaseSync | null = null
   let routineSource: DatabaseSync | null = null
   let combined: DatabaseSync | null = null
+  let operation: CombineOperation = { _tag: 'ReadSource', source: 'GitHub' }
   try {
+    operation = { _tag: 'ReadSource', source: 'GitHub' }
     githubSource = new DatabaseSync(githubPath, { readOnly: true })
-    routineSource = new DatabaseSync(routinePath, { readOnly: true })
-    await Promise.all([snapshot(githubSource, githubSnapshot), snapshot(routineSource, routineSnapshot)])
+    await snapshot(githubSource, githubSnapshot)
     githubSource.close()
     githubSource = null
+
+    operation = { _tag: 'ReadSource', source: 'Routine' }
+    routineSource = new DatabaseSync(routinePath, { readOnly: true })
+    await snapshot(routineSource, routineSnapshot)
     routineSource.close()
     routineSource = null
 
-    const github = new DatabaseSync(githubSnapshot, { readOnly: true })
-    const routine = new DatabaseSync(routineSnapshot, { readOnly: true })
-    try {
-      const githubVersion = (github.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-      const routineVersion = (routine.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-      if (githubVersion !== routineVersion)
-        return err({ _tag: 'SchemaMismatch', githubVersion, routineVersion })
-      const githubError = sourceCheck(github, 'GitHub')
-      if (githubError !== null)
-        return err(githubError)
-      const routineError = sourceCheck(routine, 'Routine')
-      if (routineError !== null)
-        return err(routineError)
-      const githubRepositories = new Set(
-        (github.prepare('SELECT github FROM repositories').all() as unknown as Array<{ github: string }>)
-          .map(row => row.github),
-      )
-      const missing = (routine.prepare('SELECT DISTINCT repository FROM routines ORDER BY repository').all() as unknown as Array<{ repository: string }>)
-        .find(row => !githubRepositories.has(row.repository))
-      if (missing !== undefined)
-        return err({ _tag: 'RepositoryMissing', repository: missing.repository })
-    }
-    finally {
-      github.close()
-      routine.close()
-    }
+    operation = { _tag: 'ReadSource', source: 'GitHub' }
+    githubSource = new DatabaseSync(githubSnapshot, { readOnly: true })
+    const githubVersion = (githubSource.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+    const githubError = sourceCheck(githubSource, 'GitHub')
+    const githubRepositories = new Set(
+      (githubSource.prepare('SELECT github FROM repositories').all() as unknown as Array<{ github: string }>)
+        .map(row => row.github),
+    )
+    githubSource.close()
+    githubSource = null
 
+    operation = { _tag: 'ReadSource', source: 'Routine' }
+    routineSource = new DatabaseSync(routineSnapshot, { readOnly: true })
+    const routineVersion = (routineSource.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+    const routineError = sourceCheck(routineSource, 'Routine')
+    const missing = (routineSource.prepare('SELECT DISTINCT repository FROM routines ORDER BY repository').all() as unknown as Array<{ repository: string }>)
+      .find(row => !githubRepositories.has(row.repository))
+    routineSource.close()
+    routineSource = null
+
+    if (githubVersion !== routineVersion)
+      return err({ _tag: 'SchemaMismatch', githubVersion, routineVersion })
+    if (githubError !== null)
+      return err(githubError)
+    if (routineError !== null)
+      return err(routineError)
+    if (missing !== undefined)
+      return err({ _tag: 'RepositoryMissing', repository: missing.repository })
+
+    operation = { _tag: 'PublishOutput' }
     const githubForBackup = new DatabaseSync(githubSnapshot, { readOnly: true })
     try {
       await snapshot(githubForBackup, combinedPath)
@@ -258,12 +270,13 @@ export async function combineServiceState(
         return err({ _tag: 'OutputExists', path: outputPath })
       throw error
     }
-    unlinkSync(combinedPath)
     return ok(result)
   }
   catch (error) {
-    const source: SourceName = githubSource === null ? 'Routine' : 'GitHub'
-    return err({ _tag: 'SourceInvalid', source, reason: error instanceof Error ? error.message : String(error) })
+    const reason = error instanceof Error ? error.message : String(error)
+    return operation._tag === 'ReadSource'
+      ? err({ _tag: 'SourceInvalid', source: operation.source, reason })
+      : err({ _tag: 'OutputPublicationFailed', path: outputPath, reason })
   }
   finally {
     combined?.close()

@@ -1,12 +1,14 @@
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -891,7 +893,39 @@ class AgentControlRequestTest(unittest.TestCase):
         self.assertEqual(request.get_header('Content-type'), 'application/json')
         self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
-        self.assertEqual(timeout, 10)
+        self.assertEqual(timeout, 30)
+
+    def test_reports_the_saved_session_without_resuming_when_eject_settlement_is_delayed(self):
+        body = json.dumps({
+            'statusCode': 503,
+            'data': {
+                '_tag': 'EjectDelayed',
+                'provider': 'opencode',
+                'sessionId': 'ses_abc12345',
+                'nextAction': 'Stop Harlan GitHub Agent. Then resume this saved session.',
+            },
+        }).encode()
+        response = urllib.error.HTTPError(
+            'https://hogwild.tailcad325.ts.net/api/agents/eject',
+            503,
+            'Service Unavailable',
+            {},
+            io.BytesIO(body),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            password_file = Path(directory) / 'dashboard-password'
+            password_file.write_text('secret\n')
+            with patch.object(indicator, 'PASSWORD_FILE', password_file), patch.object(
+                indicator.urllib.request,
+                'urlopen',
+                side_effect=response,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    'Saved session ses_abc12345. Stop Harlan GitHub Agent. Then resume this saved session.',
+                ):
+                    indicator.request_agent_eject('task-123')
 
 
 class AgentSelectionTest(unittest.TestCase):

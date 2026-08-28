@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, symlinkSync, truncateSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -159,5 +159,37 @@ describe('combining service state', () => {
     finally {
       untouched.close()
     }
+  })
+
+  it.each([
+    ['GitHub', 'github'],
+    ['Routine', 'routine'],
+  ] as const)('attributes a corrupt %s source precisely', async (source, key) => {
+    const path = paths()
+    seedGitHubState(path.github)
+    seedRoutineState(path.routine)
+    truncateSync(path[key], 64)
+
+    const result = await combineServiceState({ githubPath: path.github, routinePath: path.routine, outputPath: path.output })
+
+    expect(result).toEqual({
+      _tag: 'Err',
+      error: expect.objectContaining({ _tag: 'SourceInvalid', source }),
+    })
+    expect(existsSync(path.output)).toBe(false)
+  })
+
+  it('attributes a failure while publishing the output precisely', async () => {
+    const path = paths()
+    seedGitHubState(path.github)
+    seedRoutineState(path.routine)
+    symlinkSync('missing.sqlite', path.output)
+
+    const result = await combineServiceState({ githubPath: path.github, routinePath: path.routine, outputPath: path.output })
+
+    expect(result).toEqual({
+      _tag: 'Err',
+      error: expect.objectContaining({ _tag: 'OutputPublicationFailed', path: path.output }),
+    })
   })
 })
