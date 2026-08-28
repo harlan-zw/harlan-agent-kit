@@ -10,11 +10,12 @@ import { dirname, extname, join, relative } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createError, createEventStream, H3 } from 'h3'
+import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'pauseAgents' | 'recordAgentFeedback' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -407,6 +408,19 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (repository === null || !/^[^/]+\/[^/]+$/.test(repository) || !Number.isSafeInteger(pullRequestNumber) || pullRequestNumber < 1)
       throw createError({ status: 400, statusText: 'Bad Request', message: 'Valid repository and pull_request query values are required.' })
     return { runs: options.store.listReviewRuns(repository, pullRequestNumber) }
+  })
+
+  app.post('/api/reviews/feedback', async (event) => {
+    const input = parseAgentFeedback(await event.req.json().catch(() => {
+      // Parsing below reports malformed JSON as a bad request.
+      return undefined
+    }))
+    if (input._tag === 'Err')
+      throw createError({ status: 400, statusText: 'Bad Request', message: input.error })
+    const result = options.store.recordAgentFeedback({ ...input.value, at: options.now().toISOString() })
+    if (result._tag === 'Rejected')
+      throw createError({ status: 404, statusText: 'Not Found', message: 'The review was not found.' })
+    return result
   })
 
   app.get('/api/stats', (event) => {

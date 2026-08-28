@@ -30,6 +30,9 @@ const {
   rerunPending,
   rerunErrors,
   rerunReview,
+  feedbackPending,
+  feedbackErrors,
+  recordAgentFeedback,
   isCurrentRevision,
   itemKey,
 } = useDashboard()
@@ -40,6 +43,7 @@ const reviewGateNames = ['merge', 'review', 'ci'] as const
 const { copy, isSupported: clipboardSupported } = useClipboard()
 const copiedSession = ref<string>()
 const expanded = ref<Record<string, boolean>>({})
+const feedbackReasons = ref<Record<string, string>>({})
 const outcomeFilter = ref<'all' | HistoryCategory>('all')
 
 const outcomeFilters: Array<{ label: string, value: 'all' | HistoryCategory }> = [
@@ -103,6 +107,17 @@ function copySession(sessionId: string): void {
   void copy(sessionId).then(() => {
     copiedSession.value = sessionId
   })
+}
+
+function feedbackReason(id: string): string {
+  return feedbackReasons.value[id]?.trim() ?? ''
+}
+
+function saveFeedback(agent: ReviewAgent, kind: 'Useful' | 'Noisy' | 'Wrong'): void {
+  const reason = feedbackReason(agent.id)
+  void recordAgentFeedback(agent.id, kind === 'Useful'
+    ? { _tag: 'Useful', reason: reason || null }
+    : { _tag: kind, reason })
 }
 
 useHead({
@@ -299,6 +314,37 @@ useHead({
                 </ul>
                 <p v-else class="text-sm text-muted">
                   No material findings.
+                </p>
+              </div>
+
+              <div class="mt-6 border-t border-default pt-5">
+                <p class="field-label mb-2">
+                  Agent feedback
+                </p>
+                <p class="mb-3 text-sm text-muted">
+                  This helps the weekly Routine propose small skill improvements.
+                </p>
+                <textarea
+                  v-model="feedbackReasons[record.agent.id]"
+                  rows="2"
+                  class="w-full rounded-md border border-default bg-default px-3 py-2 text-sm"
+                  placeholder="Reason, required for Noisy or Wrong"
+                  :aria-label="`Agent feedback reason for review ${record.agent.id}`"
+                />
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                  <UButton size="xs" color="success" variant="soft" :loading="feedbackPending === record.agent.id" :disabled="feedbackPending !== undefined" @click="saveFeedback(record.agent, 'Useful')">
+                    Useful
+                  </UButton>
+                  <UButton size="xs" color="warning" variant="soft" :loading="feedbackPending === record.agent.id" :disabled="feedbackPending !== undefined || feedbackReason(record.agent.id).length === 0" @click="saveFeedback(record.agent, 'Noisy')">
+                    Noisy
+                  </UButton>
+                  <UButton size="xs" color="error" variant="soft" :loading="feedbackPending === record.agent.id" :disabled="feedbackPending !== undefined || feedbackReason(record.agent.id).length === 0" @click="saveFeedback(record.agent, 'Wrong')">
+                    Wrong
+                  </UButton>
+                  <span v-if="record.agent.feedback" class="text-xs text-muted">Saved: {{ record.agent.feedback._tag }}</span>
+                </div>
+                <p v-if="feedbackErrors[record.agent.id]" class="status-error mt-2 text-sm" role="alert">
+                  {{ feedbackErrors[record.agent.id] }}
                 </p>
               </div>
             </div>

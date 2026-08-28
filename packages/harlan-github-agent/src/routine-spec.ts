@@ -13,7 +13,7 @@ export const ROUTINE_SPEC_PATH = '.github/harlan-agent.yml'
  * source code, so a pull request can change it, and a name it could invent
  * would be a name it could point at anything.
  */
-export const ROUTINE_NAMES = ['sentry-checkin', 'pr-triage'] as const satisfies readonly RoutineName[]
+export const ROUTINE_NAMES = ['sentry-checkin', 'pr-triage', 'agent-feedback'] as const satisfies readonly RoutineName[]
 
 export const ROUTINE_MODES = ['report', 'propose'] as const satisfies readonly RoutineMode[]
 

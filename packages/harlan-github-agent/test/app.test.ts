@@ -42,6 +42,7 @@ const agentControls = {
   setSelectionMode: (mode: SelectionMode) => mode,
   dismissItem: () => ({ _tag: 'Dismissed' as const }),
   restoreItem: () => ({ _tag: 'Restored' as const }),
+  recordAgentFeedback: () => ({ _tag: 'Rejected' as const, reason: { _tag: 'ReviewRunNotFound' as const } }),
 }
 
 afterEach(() => vi.useRealTimers())
@@ -57,6 +58,42 @@ function createApp(snapshot = dashboardSnapshot()) {
 }
 
 describe('dashboard HTTP app', () => {
+  it('records parsed Agent feedback', async () => {
+    const recorded: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        recordAgentFeedback(input) {
+          recorded.push(input)
+          return { _tag: 'Recorded', feedback: { ...input.feedback, updatedAt: input.at } }
+        },
+      },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/reviews/feedback`, {
+      method: 'POST',
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
+      body: JSON.stringify({ reviewRunId: 'review-1', feedback: { _tag: 'Wrong', reason: 'It did not reproduce.' } }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(recorded).toEqual([{
+      reviewRunId: 'review-1',
+      feedback: { _tag: 'Wrong', reason: 'It did not reproduce.' },
+      at: now().toISOString(),
+    }])
+  })
+
   it('attaches live activity to a running Routine', async () => {
     const runId = 'routine-run-1'
     const snapshot = dashboardSnapshot({

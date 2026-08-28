@@ -1,5 +1,6 @@
 import type {
   ActiveAgent,
+  AgentFeedbackInput,
   AgentSelection,
   AgentTask,
   DashboardSnapshot,
@@ -68,6 +69,8 @@ function createDashboard() {
   const ejectedSession = ref<EjectedSessionNotice>()
   const rerunPending = ref<string>()
   const rerunErrors = ref<Record<string, string>>({})
+  const feedbackPending = ref<string>()
+  const feedbackErrors = ref<Record<string, string>>({})
   const repositoryPending = ref<string>()
   const dismissPending = ref<string>()
   const dismissErrors = ref<Record<string, string>>({})
@@ -213,6 +216,19 @@ function createDashboard() {
       })
       .finally(() => {
         rerunPending.value = undefined
+      })
+  }
+
+  async function recordAgentFeedback(reviewRunId: string, feedback: AgentFeedbackInput): Promise<void> {
+    feedbackPending.value = reviewRunId
+    feedbackErrors.value = without(feedbackErrors.value, reviewRunId)
+    return $fetch('/api/reviews/feedback', { method: 'POST', body: { reviewRunId, feedback } })
+      .then(() => loadState())
+      .catch((error: unknown) => {
+        feedbackErrors.value = { ...feedbackErrors.value, [reviewRunId]: failed(error) }
+      })
+      .finally(() => {
+        feedbackPending.value = undefined
       })
   }
 
@@ -417,6 +433,8 @@ function createDashboard() {
     clearEjectedSession,
     rerunPending,
     rerunErrors,
+    feedbackPending,
+    feedbackErrors,
     repositoryPending,
     dismissPending,
     dismissErrors,
@@ -443,6 +461,7 @@ function createDashboard() {
     setRepositoryPaused,
     setRepositoryWritesEnabled,
     rerunReview,
+    recordAgentFeedback,
     cancelAgentTask,
     ejectAgent,
     approveQueueEntry,
@@ -461,6 +480,7 @@ type Dashboard = ReturnType<typeof createDashboard>
 let dashboard: Dashboard | undefined
 
 // The reactivity lives in createDashboard, inside a scope this owns for the app's lifetime.
+// eslint-disable-next-line harlanzw/vue-no-faux-composables -- This returns the shared reactive dashboard scope.
 export function useDashboard(): Dashboard {
   if (dashboard === undefined) {
     // A detached scope keeps the watchers and the event stream alive across

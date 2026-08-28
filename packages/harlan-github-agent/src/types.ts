@@ -293,6 +293,36 @@ export interface ReviewPublication {
   result: ReviewPublicationResult
 }
 
+/** One explicit human judgment about one Review run. */
+export type AgentFeedback
+  = | { _tag: 'Useful', reason: string | null, updatedAt: string }
+    | { _tag: 'Noisy', reason: string, updatedAt: string }
+    | { _tag: 'Wrong', reason: string, updatedAt: string }
+
+export type AgentFeedbackInput
+  = | { _tag: 'Useful', reason: string | null }
+    | { _tag: 'Noisy', reason: string }
+    | { _tag: 'Wrong', reason: string }
+
+/** One Agent feedback signal with the Review evidence needed to improve a skill. */
+export interface AgentFeedbackSignal {
+  reviewRunId: string
+  repository: string
+  pullRequestNumber: number
+  headSha: string
+  completedAt: string
+  durationMs: number
+  reviewRunsForHead: number
+  usage: AgentTokenUsage
+  outcome: ReviewOutcome
+  findings: ReviewFinding[]
+  feedback: AgentFeedback
+}
+
+export type RecordAgentFeedbackResult
+  = | { _tag: 'Recorded', feedback: AgentFeedback }
+    | { _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }
+
 export interface ReviewRun {
   id: string
   repository: string
@@ -310,10 +340,11 @@ export interface ReviewRun {
   gates: ReviewGates
   outcome: ReviewOutcome
   findings: ReviewFinding[]
+  feedback: AgentFeedback | null
   publications: ReviewPublication[]
 }
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'outcome' | 'publications' | 'usage'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'feedback' | 'outcome' | 'publications' | 'usage'> {
   confidence?: number
   /** Omitted callers are stored explicitly as unavailable. */
   usage?: AgentTokenUsage
@@ -507,7 +538,7 @@ export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair'
  * A repository spec selects from this list and never extends it, so a pull
  * request can change a schedule and can never name new work.
  */
-export type RoutineName = 'sentry-checkin' | 'pr-triage'
+export type RoutineName = 'sentry-checkin' | 'pr-triage' | 'agent-feedback'
 
 /**
  * What a Routine run does with what it finds.
@@ -547,6 +578,12 @@ export interface CandidateIssueCommand {
   routineName: RoutineName
   title: string
   body: string
+}
+
+/** Trusted Routine provenance for one issue the controller filed. */
+export interface RoutineIssueSource {
+  routineName: RoutineName
+  target: string
 }
 
 /** One leased Candidate issue command, ready for the controller to file. */

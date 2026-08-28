@@ -4,6 +4,9 @@ import type { IssueTriageState } from './issue-triage.ts'
 import type { RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
+  AgentFeedback,
+  AgentFeedbackInput,
+  AgentFeedbackSignal,
   AgentProfile,
   AgentProgress,
   AgentRole,
@@ -48,6 +51,7 @@ import type {
   PullRequestApprovalState,
   QueueEntry,
   QueueState,
+  RecordAgentFeedbackResult,
   RecordReviewPublicationInput,
   RecordReviewPublicationResult,
   RecordReviewRunInput,
@@ -67,6 +71,7 @@ import type {
   ReviewRun,
   ReviewStatusTaskPhase,
   Routine,
+  RoutineIssueSource,
   RoutineReportCommand,
   RoutineReportCommandState,
   RoutineRun,
@@ -617,6 +622,8 @@ export interface JournalStore {
   listRoutineRuns: (routineId: string, limit?: number) => RoutineRun[]
   recordCandidates: (input: { routineId: string, runId: string, candidates: ReadonlyArray<Omit<Candidate, 'id' | 'routineId' | 'runId' | 'result' | 'createdAt' | 'updatedAt'>>, at: string }) => Candidate[]
   listCandidates: (routineId: string) => Candidate[]
+  /** Finds controller-owned Routine provenance for one published Candidate issue. */
+  getRoutineIssueSource: (repository: string, issueNumber: number) => RoutineIssueSource | null
   /** Requests one issue per Candidate. Answers how many are new. */
   stageCandidateIssues: (input: { commands: readonly CandidateIssueCommand[], at: string }) => number
   claimNextCandidateIssue: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedCandidateIssueCommand | null
@@ -747,6 +754,10 @@ export interface JournalStore {
     url: string
   }) => boolean
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
+  /** Replaces one person's explicit judgment about one Review run. */
+  recordAgentFeedback: (input: { reviewRunId: string, feedback: AgentFeedbackInput, at: string }) => RecordAgentFeedbackResult
+  /** Newest explicit judgments with the Review evidence needed by the feedback Routine. */
+  listAgentFeedback: (limit?: number) => AgentFeedbackSignal[]
   /** Exact open findings the current Review handed to its Repair Task. */
   getReviewFixFindings: (repository: string, pullRequestNumber: number, revisionId: string) => ReviewFinding[]
   /**
@@ -934,6 +945,9 @@ interface ReviewRunRow {
   outcome_tag: 'Ready' | 'Pending' | 'Blocked'
   confidence: number | null
   findings: string
+  feedback_tag: AgentFeedback['_tag'] | null
+  feedback_reason: string | null
+  feedback_updated_at: string | null
 }
 
 interface DashboardReviewRunRow extends ReviewRunRow {
@@ -2287,6 +2301,11 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     gates: JSON.parse(row.gates) as ReviewGates,
     outcome,
     findings: JSON.parse(row.findings) as ReviewFinding[],
+    feedback: row.feedback_tag === null || row.feedback_updated_at === null
+      ? null
+      : row.feedback_tag === 'Useful'
+        ? { _tag: 'Useful', reason: row.feedback_reason, updatedAt: row.feedback_updated_at }
+        : { _tag: row.feedback_tag, reason: row.feedback_reason ?? '', updatedAt: row.feedback_updated_at },
     publications,
   }
 }
@@ -4037,6 +4056,21 @@ const statsMigration = `
   PRAGMA user_version = 45;
 `
 
+/** Stores one replaceable human judgment for one immutable Review run. */
+const agentFeedbackMigration = `
+  CREATE TABLE agent_feedback (
+    review_run_id TEXT PRIMARY KEY REFERENCES review_runs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('Useful', 'Noisy', 'Wrong')),
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (kind = 'Useful' OR (reason IS NOT NULL AND trim(reason) != ''))
+  );
+
+  CREATE INDEX agent_feedback_updated ON agent_feedback(updated_at DESC);
+  PRAGMA user_version = 46;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4062,7 +4096,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 45)
+  if (version === 46)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4243,6 +4277,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 44) {
     applyMigration(database, statsMigration)
+    version = 45
+  }
+  if (version === 45) {
+    applyMigration(database, agentFeedbackMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -4435,6 +4473,9 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       review_runs.outcome_tag,
       review_runs.confidence,
       review_runs.findings,
+      agent_feedback.kind AS feedback_tag,
+      agent_feedback.reason AS feedback_reason,
+      agent_feedback.updated_at AS feedback_updated_at,
       json_extract(revisions.payload, '$.title') AS title,
       json_extract(revisions.payload, '$.author') AS author,
       json_extract(revisions.payload, '$.url') AS subject_url,
@@ -4443,6 +4484,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
     JOIN subjects ON subjects.id = review_runs.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = review_runs.revision_id AND revisions.subject_id = subjects.id
+    LEFT JOIN agent_feedback ON agent_feedback.review_run_id = review_runs.id
     WHERE review_runs.kind = 'adversarial_review'
       AND NOT EXISTS (
         SELECT 1 FROM review_runs AS settled
@@ -5665,6 +5707,84 @@ export function openJournalStore(
     return row.total
   }
 
+  const recordAgentFeedback: JournalStore['recordAgentFeedback'] = (input) => {
+    const exists = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.reviewRunId)
+    if (exists === undefined)
+      return { _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }
+    database.prepare(`
+      INSERT INTO agent_feedback (review_run_id, kind, reason, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (review_run_id) DO UPDATE SET
+        kind = excluded.kind,
+        reason = excluded.reason,
+        updated_at = excluded.updated_at
+    `).run(input.reviewRunId, input.feedback._tag, input.feedback.reason, input.at, input.at)
+    return { _tag: 'Recorded', feedback: { ...input.feedback, updatedAt: input.at } }
+  }
+
+  const listAgentFeedback: JournalStore['listAgentFeedback'] = (limit = 10) => {
+    const safeLimit = Math.max(0, Math.min(100, Math.trunc(limit)))
+    const rows = database.prepare(`
+      SELECT
+        review_runs.id,
+        repositories.github AS repository,
+        subjects.github_number,
+        review_runs.head_sha,
+        review_runs.started_at,
+        review_runs.completed_at,
+        review_runs.usage,
+        review_runs.outcome_tag,
+        review_runs.confidence,
+        review_runs.findings,
+        agent_feedback.kind AS feedback_tag,
+        agent_feedback.reason AS feedback_reason,
+        agent_feedback.updated_at AS feedback_updated_at,
+        (
+          SELECT COUNT(*) FROM review_runs AS repeated
+          WHERE repeated.subject_id = review_runs.subject_id
+            AND repeated.head_sha = review_runs.head_sha
+            AND repeated.kind = 'adversarial_review'
+            AND repeated.supersedes_review_run_id IS NULL
+        ) AS review_runs_for_head
+      FROM agent_feedback
+      JOIN review_runs ON review_runs.id = agent_feedback.review_run_id
+      JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      ORDER BY agent_feedback.updated_at DESC, review_runs.id
+      LIMIT ?
+    `).all(safeLimit) as unknown as Array<{
+      id: string
+      repository: string
+      github_number: number
+      head_sha: string
+      started_at: string
+      completed_at: string
+      usage: string
+      outcome_tag: ReviewOutcome['_tag']
+      confidence: number | null
+      findings: string
+      feedback_tag: AgentFeedback['_tag']
+      feedback_reason: string | null
+      feedback_updated_at: string
+      review_runs_for_head: number
+    }>
+    return rows.map((row): AgentFeedbackSignal => ({
+      reviewRunId: row.id,
+      repository: row.repository,
+      pullRequestNumber: row.github_number,
+      headSha: row.head_sha,
+      completedAt: row.completed_at,
+      durationMs: Date.parse(row.completed_at) - Date.parse(row.started_at),
+      reviewRunsForHead: row.review_runs_for_head,
+      usage: agentTokenUsageFromJson(row.usage),
+      outcome: row.confidence === null ? { _tag: row.outcome_tag } : { _tag: row.outcome_tag, confidence: row.confidence },
+      findings: JSON.parse(row.findings) as ReviewFinding[],
+      feedback: row.feedback_tag === 'Useful'
+        ? { _tag: 'Useful', reason: row.feedback_reason, updatedAt: row.feedback_updated_at }
+        : { _tag: row.feedback_tag, reason: row.feedback_reason ?? '', updatedAt: row.feedback_updated_at },
+    }))
+  }
+
   const listReviewRuns: JournalStore['listReviewRuns'] = (repository, pullRequestNumber) => {
     const reviewRuns = database.prepare(`
       SELECT
@@ -5684,10 +5804,14 @@ export function openJournalStore(
         review_runs.gates,
         review_runs.outcome_tag,
         review_runs.confidence,
-        review_runs.findings
+        review_runs.findings,
+        agent_feedback.kind AS feedback_tag,
+        agent_feedback.reason AS feedback_reason,
+        agent_feedback.updated_at AS feedback_updated_at
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
+      LEFT JOIN agent_feedback ON agent_feedback.review_run_id = review_runs.id
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
         AND NOT EXISTS (
@@ -8993,6 +9117,19 @@ export function openJournalStore(
     (database.prepare('SELECT * FROM candidates WHERE routine_id = ? ORDER BY created_at').all(routineId) as unknown as CandidateRow[])
       .map(readCandidate)
 
+  const getRoutineIssueSource: JournalStore['getRoutineIssueSource'] = (repository, issueNumber) => {
+    const row = database.prepare(`
+      SELECT candidate_issue_commands.routine_name, candidates.target
+      FROM candidate_issue_commands
+      JOIN candidates ON candidates.id = candidate_issue_commands.candidate_id
+      WHERE candidate_issue_commands.repository = ?
+        AND candidate_issue_commands.github_issue_number = ?
+        AND candidate_issue_commands.state_tag = 'Published'
+      LIMIT 1
+    `).get(repository, issueNumber) as { routine_name: RoutineIssueSource['routineName'], target: string } | undefined
+    return row === undefined ? null : { routineName: row.routine_name, target: row.target }
+  }
+
   /**
    * Returns a Running Routine run whose lease expired to the queue.
    *
@@ -9431,6 +9568,7 @@ export function openJournalStore(
     openRoutineRun,
     skipRoutineRun,
     getRoutineRun: readRunById,
+    getRoutineIssueSource,
     listRoutineRuns,
     recordCandidates,
     listCandidates,
@@ -9501,7 +9639,9 @@ export function openJournalStore(
     countOpenPullRequests,
     getReviewFixFindings,
     getRepairedHeadFindings,
+    listAgentFeedback,
     listReviewRuns,
+    recordAgentFeedback,
     needsAttentionTask,
     dismissItem,
     restoreItem,

@@ -202,6 +202,7 @@ describe('selection mode route', () => {
         getStats: () => { throw new Error('Unexpected Stats request.') },
         listReviewRuns: () => [],
         pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
+        recordAgentFeedback: () => ({ _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }),
         requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
         resumeAgents: () => ({ _tag: 'Running' as const }),
         selectAgent: selection => selection,

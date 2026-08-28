@@ -48,6 +48,7 @@ did not cover it.
 | Take Ownership | `repositories.take_ownership` | Controller | One policy per Repository mapping | Take Ownership |
 | Publication command | `publication_commands` | Controller | One to one Task | none |
 | Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
+| Agent feedback | `agent_feedback` | Controller | One per Review run | Agent feedback |
 | Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
 | Review gate | `review_runs.gates` | Controller | Three per Review run | gate |
 | Review outcome | `review_runs.outcome_tag` | Controller | One per Review run | READY, PENDING, or BLOCKED |
@@ -409,6 +410,14 @@ The total input, cached input, cache write, output, and reasoning tokens one Rev
 
 Use `Unavailable` when the Agent provider reports no usage. Never infer usage from text length.
 
+### Agent feedback
+
+One explicit human judgment about one Review run: Useful, Noisy, or Wrong.
+
+Noisy and Wrong need a reason. Useful may include a reason.
+
+Use Agent feedback. Do not use rating, vote, or reaction.
+
 ### Review gate
 
 One required condition for a Review outcome.
@@ -516,6 +525,7 @@ Evidence that a skill, policy, or workflow should change.
 | subject, work item, entity | Item | One concept, and Item follows GitHub Projects |
 | worker, for the thing that answers a turn | Agent | Two words for the running agent. `worker_id` keeps the word, because there it means Lease holder |
 | attempt as a noun, pass | Review run | Named after GitHub's check run |
+| rating, vote, reaction | Agent feedback | One explicit judgment about one Review run |
 | annotation | Review finding | GitHub anchors annotations to a line; findings are prose |
 | needs attention, stuck, human required | Action required | GitHub's own check conclusion |
 | waiting, in progress | PENDING | GitHub's own check status and review state |

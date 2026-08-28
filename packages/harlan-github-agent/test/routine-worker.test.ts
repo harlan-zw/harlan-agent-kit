@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
-import { createRoutineScanWorker, routineScanPrompt } from '../src/routine-worker.ts'
+import { createRoutineScanWorker, routineScanPrompt, selectRoutineCandidates } from '../src/routine-worker.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -73,6 +73,40 @@ const candidate = {
 }
 
 describe('building the scan prompt', () => {
+  it('keeps Agent feedback proposals inside one skill file', () => {
+    expect(selectRoutineCandidates('agent-feedback', [
+      { ...candidate, target: 'src/controller.ts' },
+      { ...candidate, fingerprint: 'skill-a', target: 'harlan-agent-kit/skills/adversarial-review/SKILL.md' },
+      { ...candidate, fingerprint: 'skill-b', target: 'harlan-agent-kit/skills/pr-triage/SKILL.md' },
+    ])).toEqual([{ ...candidate, fingerprint: 'skill-a', target: 'harlan-agent-kit/skills/adversarial-review/SKILL.md' }])
+  })
+
+  it('passes explicit signals to the Agent feedback skill as evidence', () => {
+    const prompt = routineScanPrompt({
+      mode: 'propose',
+      name: 'agent-feedback',
+      rejected: [],
+      repository: 'harlan-zw/harlan-agent-kit',
+      feedback: [{
+        reviewRunId: 'review-1',
+        repository: 'harlan-zw/example',
+        pullRequestNumber: 24,
+        headSha: 'abc123',
+        completedAt: '2026-08-29T00:00:00.000Z',
+        durationMs: 2_000,
+        reviewRunsForHead: 1,
+        usage: { _tag: 'Unavailable' },
+        outcome: { _tag: 'Ready' },
+        findings: [],
+        feedback: { _tag: 'Wrong', reason: 'The finding did not reproduce.', updatedAt: '2026-08-29T00:01:00.000Z' },
+      }],
+    })
+
+    expect(prompt).toContain('harlan-agent-kit/skills/agent-feedback/SKILL.md')
+    expect(prompt).toContain('The finding did not reproduce.')
+    expect(prompt).toContain('controller defect')
+  })
+
   it('names the skill that answers the routine', () => {
     const prompt = routineScanPrompt({ mode: 'propose', name: 'sentry-checkin', rejected: [], repository: 'harlan-zw/example' })
 
@@ -139,6 +173,33 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it('refuses the global Agent feedback Routine in another repository', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
+      store.syncRoutines({
+        repository: 'harlan-zw/example',
+        specSha: 'abc123',
+        entries: [{ name: 'agent-feedback', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+        at: '2026-08-27T00:00:00.000Z',
+      })
+      store.openRoutineRun({
+        routineId: 'harlan-zw/example:agent-feedback',
+        scheduledFor: '2026-08-27T07:00:00.000Z',
+        specSha: 'abc123',
+        at: '2026-08-27T07:00:05.000Z',
+      })
+
+      const result = await workerFor(store, scanning({ candidates: [] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+
+      expect(result).toEqual({ _tag: 'Err', error: 'The Agent feedback Routine only runs in harlan-zw/harlan-agent-kit.' })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('reports live progress and provider activity', async () => {
     const store = openJournalStore(':memory:')
     try {

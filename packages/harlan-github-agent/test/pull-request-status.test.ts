@@ -38,6 +38,7 @@ describe('pull request status controller', () => {
       outcome: { _tag: 'Ready' as const, confidence: 98 },
       findings: [],
       usage: { _tag: 'Unavailable' as const },
+      feedback: null,
       publications: [],
       title: 'Fix the broken thing',
       author: 'harlan-zw',
