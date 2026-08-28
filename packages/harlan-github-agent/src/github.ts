@@ -291,7 +291,10 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
         return octokit
       return octokit.value.rest.pulls.get({ owner, repo, pull_number: number, ...(signal === undefined ? {} : { request: { signal } }) })
         .then(async (response) => {
-          const baseSha = await currentBaseSha(octokit.value, owner, repo, response.data.base.ref, signal)
+          // A closed stacked pull request may outlive its deleted base branch.
+          const baseSha = response.data.state === 'closed'
+            ? response.data.base.sha
+            : await currentBaseSha(octokit.value, owner, repo, response.data.base.ref, signal)
           return ok(pullRequestItem(repository, response.data, baseSha, options.actorLogin(repository)))
         })
         .catch((error: unknown): Result<GitHubPullRequestItem, GitHubReadError> => {
