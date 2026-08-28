@@ -1660,6 +1660,105 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
+  it('retires the inherited sibling comment of a stopped Repair', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'inherited-comment-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the open pull request Revision.')
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'review',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 REVIEWING · Git worktree ready',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    const gates = passedReviewGates()
+    gates.review = { _tag: 'Failed', reason: 'The boundary accepts invalid input.', evidence: [] }
+    store.recordReviewRun({
+      id: 'inherited-comment-attempt',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: review.revisionId,
+      headSha: pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'inherited-comment-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:02:03.000Z',
+      completedAt: '2026-08-13T01:02:30.000Z',
+      gates,
+      findings: [{ _tag: 'Open', summary: 'Invalid input crosses the boundary.', nextAction: 'Parse the input before use.' }],
+    })
+    expect(store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:03:00.000Z',
+    })._tag).toBe('Queued')
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:03:01.000Z',
+      evidence: 'Waiting for Repair repair-task.',
+    })).toBe(true)
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:03:02.000Z', 600_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    // The Repair stops before publishing any progress of its own, so the
+    // sweep row carries the Repair Task identity and the Review's comment.
+    expect(store.failTask({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:04:00.000Z',
+      reason: 'Repository policy does not authorize an automated repair.',
+    })).toBe('Failed')
+    const stopped = store.listStoppedReviews()
+    expect(stopped).toEqual([expect.objectContaining({
+      taskKind: 'review_fix',
+      taskId: repair.id,
+      commentId: 42,
+    })])
+
+    expect(store.recordDeletedReviewComment({
+      taskKind: stopped[0]!.taskKind,
+      taskId: stopped[0]!.taskId,
+      commentId: stopped[0]!.commentId,
+      at: '2026-08-13T01:05:00.000Z',
+      reason: 'A person deleted the comment.',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([])
+  })
+
   it('keeps a stopped Review eligible after GitHub closes its pull request Revision', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

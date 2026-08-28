@@ -729,7 +729,13 @@ export interface JournalStore {
    * sweep that sees false here has lost the comment to the claimed agent.
    */
   isQueuedReviewStatus: (input: { taskId: string, taskKind: 'adversarial_review' | 'review_fix' }) => boolean
-  /** Retires a publication after its canonical comment disappeared or moved on. */
+  /**
+   * Retires a publication after its canonical comment disappeared or moved on.
+   *
+   * The match is the comment identity alone. A stopped Repair inherits the
+   * sibling Review's canonical comment, so the Task pair on the sweep row does
+   * not name the row that carried the comment; the comment id does.
+   */
   recordDeletedReviewComment: (input: {
     taskKind: 'adversarial_review' | 'review_fix'
     taskId: string
@@ -8649,8 +8655,8 @@ export function openJournalStore(
   const recordDeletedReviewComment: JournalStore['recordDeletedReviewComment'] = input => database.prepare(`
     UPDATE review_status_commands
     SET state_tag = 'Superseded', reason = ?, updated_at = ?
-    WHERE task_kind = ? AND task_id = ? AND state_tag = 'Published' AND github_comment_id = ?
-  `).run(input.reason, input.at, input.taskKind, input.taskId, input.commentId).changes > 0
+    WHERE state_tag = 'Published' AND github_comment_id = ?
+  `).run(input.reason, input.at, input.commentId).changes > 0
 
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
