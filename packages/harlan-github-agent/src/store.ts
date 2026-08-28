@@ -626,7 +626,7 @@ export interface JournalStore {
   failCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   /** Requests the run log entry for one run. Answers false when it already exists. */
   stageRoutineReport: (input: { command: RoutineReportCommand, at: string }) => boolean
-  claimNextRoutineReport: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineReportCommand | null
+  claimNextRoutineReport: (workerId: string, now: string, leaseMilliseconds: number, excludedCommandIds?: readonly string[]) => ClaimedRoutineReportCommand | null
   completeRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, trackingIssueNumber: number }) => boolean
   failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
@@ -9031,7 +9031,7 @@ export function openJournalStore(
     input.at,
   ).changes === 1
 
-  const claimNextRoutineReport: JournalStore['claimNextRoutineReport'] = (workerId, now, leaseMilliseconds) => {
+  const claimNextRoutineReport: JournalStore['claimNextRoutineReport'] = (workerId, now, leaseMilliseconds, excludedCommandIds = []) => {
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare(`
@@ -9041,6 +9041,9 @@ export function openJournalStore(
         WHERE state_tag = 'Running' AND lease_expires_at <= ?
       `).run(now, now)
 
+      const exclusion = excludedCommandIds.length === 0
+        ? ''
+        : `AND routine_report_commands.id NOT IN (${excludedCommandIds.map(() => '?').join(', ')})`
       const row = database.prepare(`
         SELECT
           routine_report_commands.id,
@@ -9058,19 +9061,20 @@ export function openJournalStore(
         WHERE routine_report_commands.state_tag = 'Pending'
           AND repositories.enabled = 1
           AND repositories.writes_enabled = 1
+          ${exclusion}
         ORDER BY routine_report_commands.created_at, routine_report_commands.id
         LIMIT 1
-      `).get() as unknown as {
-        id: string
-        routine_id: string
-        run_id: string
-        repository: string
-        routine_name: string
-        body: string
-        fence: number
-        tracking_issue_number: number | null
-        policy_json: string
-      } | undefined
+      `).get(...excludedCommandIds) as unknown as {
+            id: string
+            routine_id: string
+            run_id: string
+            repository: string
+            routine_name: string
+            body: string
+            fence: number
+            tracking_issue_number: number | null
+            policy_json: string
+          } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return null
