@@ -10,7 +10,9 @@ export HOME="$test_root/home"
 export HOGWILD_SERVICE_TEST_CALLS="$test_root/calls"
 export HOGWILD_SERVICE_TEST_HASH=''
 export HOGWILD_SERVICE_TEST_OVERRIDE_HASH=''
+export HOGWILD_SERVICE_TEST_SAFE_AFTER=1
 export HOGWILD_SERVICE_TEST_STATE="$test_root/control-state"
+export HOGWILD_SERVICE_TEST_STATE_POLLS="$test_root/state-polls"
 
 mkdir -p "$HOME/.codex" "$HOME/.config/harlan-github-agent" "$test_root/bin"
 printf '%s\n' '# Global Agent instructions' > "$HOME/.codex/AGENTS.md"
@@ -20,6 +22,7 @@ expected_override_hash=$(/usr/bin/sha256sum "$script_dir/hogwild-service.conf" |
 export HOGWILD_SERVICE_TEST_HASH="$expected_hash"
 export HOGWILD_SERVICE_TEST_OVERRIDE_HASH="$expected_override_hash"
 printf '%s\n' 'Running' > "$HOGWILD_SERVICE_TEST_STATE"
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
 
 printf '%s\n' \
   '#!/usr/bin/env bash' \
@@ -35,7 +38,18 @@ printf '%s\n' \
   'printf '\''curl %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
   'if [[ "$*" == *api/agents/pause* ]]; then printf '\''Paused\n'\'' > "$HOGWILD_SERVICE_TEST_STATE"; printf '\''{"_tag":"Paused"}\n'\''; exit; fi' \
   'if [[ "$*" == *api/agents/resume* ]]; then printf '\''Running\n'\'' > "$HOGWILD_SERVICE_TEST_STATE"; printf '\''{"_tag":"Running"}\n'\''; exit; fi' \
-  'if [[ "$*" == *api/state* ]]; then state=$(cat "$HOGWILD_SERVICE_TEST_STATE"); if [[ "$state" == Paused ]]; then printf '\''{"agentControl":{"_tag":"Paused","safeToRestart":true}}\n'\''; else printf '\''{"agentControl":{"_tag":"Running"}}\n'\''; fi; fi' \
+  'if [[ "$*" == *api/state* ]]; then' \
+  '  state=$(cat "$HOGWILD_SERVICE_TEST_STATE")' \
+  '  if [[ "$state" == Paused ]]; then' \
+  '    polls=$(($(cat "$HOGWILD_SERVICE_TEST_STATE_POLLS") + 1))' \
+  '    printf '\''%s\n'\'' "$polls" > "$HOGWILD_SERVICE_TEST_STATE_POLLS"' \
+  '    safe=false' \
+  '    if ((polls >= HOGWILD_SERVICE_TEST_SAFE_AFTER)); then safe=true; fi' \
+  '    printf '\''{"agentControl":{"_tag":"Paused","safeToRestart":%s}}\n'\'' "$safe"' \
+  '  else' \
+  '    printf '\''{"agentControl":{"_tag":"Running"}}\n'\''' \
+  '  fi' \
+  'fi' \
   > "$test_root/bin/curl"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$test_root/bin/sleep"
 chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/curl" "$test_root/bin/sleep"
@@ -76,6 +90,16 @@ export HOGWILD_SERVICE_TEST_HASH="$expected_hash"
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
 if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'Hogwild update changed an existing Pause' >&2
+  exit 1
+fi
+
+: > "$HOGWILD_SERVICE_TEST_CALLS"
+printf '%s\n' 'Running' > "$HOGWILD_SERVICE_TEST_STATE"
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_SAFE_AFTER=61
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
+if [ "$(cat "$HOGWILD_SERVICE_TEST_STATE_POLLS")" -lt 61 ]; then
+  printf '%s\n' 'Hogwild update stopped waiting before the Agent drained' >&2
   exit 1
 fi
 

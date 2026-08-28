@@ -8,6 +8,8 @@ HOGWILD_ORIGIN="${HARLAN_GITHUB_AGENT_HOGWILD_ORIGIN:-https://hogwild.tailcad325
 REMOTE_HOME="${HARLAN_GITHUB_AGENT_HOGWILD_HOME:-/home/harlan}"
 CONTEXT_FILE="${HARLAN_GITHUB_AGENT_CONTEXT_FILE:-$HOME/.codex/AGENTS.md}"
 PASSWORD_FILE="${HARLAN_GITHUB_AGENT_PASSWORD_FILE:-$HOME/.config/harlan-github-agent/dashboard-password}"
+readonly DRAIN_POLL_SECONDS=2
+readonly MAXIMUM_DRAIN_SECONDS=$((50 * 60))
 REMOTE_CHECKOUT="$REMOTE_HOME/.local/share/harlan-github-agent/service"
 REMOTE_CONTEXT="$REMOTE_HOME/.codex/AGENTS.md"
 REMOTE_CONTEXT_NEXT="$REMOTE_CONTEXT.next"
@@ -62,12 +64,13 @@ prepare_restart() {
       exit 1
       ;;
   esac
+  # Agent leases last up to 45 minutes. Keep five minutes for publication.
   local attempt
-  for attempt in $(seq 1 60); do
+  for attempt in $(seq 1 $((MAXIMUM_DRAIN_SECONDS / DRAIN_POLL_SECONDS))); do
     if controller_request "$HOGWILD_ORIGIN/api/state" | jq --exit-status '.agentControl.safeToRestart == true' >/dev/null; then
       return
     fi
-    sleep 2
+    sleep "$DRAIN_POLL_SECONDS"
   done
   echo "Hogwild did not become safe to restart." >&2
   exit 1
