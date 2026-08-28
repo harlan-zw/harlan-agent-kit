@@ -463,7 +463,7 @@ class IndicatorDisplayTest(unittest.TestCase):
 
         self.assertEqual(
             indicator.active_agent_label(agent),
-            '🟢 Issue triage · harlan-zw/example #12',
+            '🟢 Issue triage · 57% · harlan-zw/example #12',
         )
 
     def test_reads_live_activity_without_inventing_completion(self):
@@ -522,8 +522,7 @@ class IndicatorDisplayTest(unittest.TestCase):
             if item.get_label().startswith('🟢 Issue triage') and item.get_submenu() is not None
         )
         labels = menu_labels(active.get_submenu())
-        self.assertEqual(labels[:2], ['Running tests and checks', 'Running pnpm test'])
-        self.assertFalse(any('%' in label or '▓' in label or '░' in label for label in labels))
+        self.assertEqual(labels[:2], ['70% · Running tests and checks', 'Running pnpm test'])
 
     def test_system_pane_shows_a_running_routine_and_its_live_activity(self):
         run = {
@@ -573,7 +572,7 @@ class IndicatorDisplayTest(unittest.TestCase):
         )
         self.assertEqual(
             menu_labels(routine.get_submenu()),
-            ['Checking the repository', 'Reading Sentry issues.', 'Open repository'],
+            ['55% · Checking the repository', 'Reading Sentry issues.', 'Open repository'],
         )
         self.assertIn('🟢 1 agent running · Queue empty', menu_labels(stub.menus[0]))
 

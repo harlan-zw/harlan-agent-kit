@@ -360,8 +360,18 @@ def agent_role_label(agent):
     return AGENT_ROLE_LABELS[agent['role']]
 
 
+def agent_progress_percent(agent):
+    percent = (agent.get('progress') or {}).get('percent')
+    return percent if type(percent) is int and 0 <= percent <= 100 else 0
+
+
+def agent_progress_label(agent):
+    progress = agent.get('progress') or {}
+    return f"{agent_progress_percent(agent)}% · {progress.get('label') or 'Starting'}"
+
+
 def active_agent_label(agent):
-    return f"🟢 {agent_role_label(agent)} · {agent['repository']} #{agent['itemNumber']}"
+    return f"🟢 {agent_role_label(agent)} · {agent_progress_percent(agent)}% · {agent['repository']} #{agent['itemNumber']}"
 
 
 def active_routine_runs(dashboard):
@@ -590,10 +600,9 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
         if selection_label is not None:
             menu.append(menu_item(selection_label, enabled=False))
         for agent in agents:
-            progress = agent.get('progress', {'percent': 0, 'label': 'Starting'})
             kind = 'issue' if agent.get('subjectKind') == 'issue' else 'pull request'
             links = [
-                menu_item(progress['label'], enabled=False),
+                menu_item(agent_progress_label(agent), enabled=False),
             ]
             activity_label = active_agent_activity_label(agent)
             if activity_label is not None:
@@ -610,8 +619,7 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
             menu.append(submenu_item(active_agent_label(agent), links))
 
         for run in routine_runs:
-            progress = run.get('progress', {'percent': 0, 'label': 'Starting'})
-            links = [menu_item(progress['label'], enabled=False)]
+            links = [menu_item(agent_progress_label(run), enabled=False)]
             activity_label = active_agent_activity_label(run)
             if activity_label is not None:
                 links.append(menu_item(activity_label, enabled=False))
