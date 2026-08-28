@@ -22,10 +22,12 @@ export interface OpencodeProviderOptions {
   binaryPath?: string
   /** Stops a run once its session has read this many cached context tokens. */
   cachedContextBudget?: number
+  /** Exact environment shared with every OpenCode process. */
+  environment?: NodeJS.ProcessEnv
   /** Kills a run that has printed nothing for this long. */
   idleTimeoutMilliseconds?: number
   /** Injected for tests. Returns the raw NDJSON line stream of one run. */
-  spawnOpencode?: (args: string[], workspace: string) => OpencodeProcess
+  spawnOpencode?: (args: string[], workspace: string, environment: NodeJS.ProcessEnv) => OpencodeProcess
 }
 
 interface OpencodeToolPart {
@@ -169,14 +171,15 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
   const binaryPath = options.binaryPath ?? 'opencode'
   const idleTimeoutMilliseconds = options.idleTimeoutMilliseconds ?? 10 * 60_000
   const cachedContextBudget = options.cachedContextBudget ?? DEFAULT_CACHED_CONTEXT_BUDGET
-  const spawnOpencode = options.spawnOpencode ?? ((args, workspace) => spawn(binaryPath, args, {
+  const environment = options.environment ?? process.env
+  const spawnOpencode = options.spawnOpencode ?? ((args, workspace, environment) => spawn(binaryPath, args, {
     cwd: workspace,
-    env: process.env,
+    env: environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   }))
 
   async function* runOnce(request: AgentTurnRequest, prompt: string): AsyncGenerator<AgentEvent> {
-    const child = spawnOpencode(opencodeArguments(request, prompt), request.workspace)
+    const child = spawnOpencode(opencodeArguments(request, prompt), request.workspace, environment)
     const abort = () => child.kill('SIGTERM')
     request.signal.addEventListener('abort', abort, { once: true })
     let standardError = ''
