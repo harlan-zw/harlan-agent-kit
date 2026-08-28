@@ -260,12 +260,12 @@ function parseServiceState(value: unknown): HogwildServiceState | undefined {
     return { _tag: value._tag }
   if (value._tag !== 'Active' || !isRecord(value.metrics))
     return undefined
-  const cpuTimeSeconds = count(value.metrics.cpuTimeSeconds)
+  const cpuTimeSeconds = value.metrics.cpuTimeSeconds
   const memoryBytes = count(value.metrics.memoryBytes)
   const restarts = count(value.metrics.restarts)
   const tasks = count(value.metrics.tasks)
   const uptimeSeconds = count(value.metrics.uptimeSeconds)
-  if (cpuTimeSeconds === undefined
+  if (!nonNegativeNumber(cpuTimeSeconds)
     || memoryBytes === undefined
     || restarts === undefined
     || tasks === undefined
