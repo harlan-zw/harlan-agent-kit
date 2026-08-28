@@ -37,7 +37,7 @@ type HogwildServiceName = HogwildStatus['services'][number]['name']
 
 export interface HogwildHistory {
   load: number[]
-  serviceMemory: Record<HogwildServiceName, number[]>
+  serviceMemoryMb: Record<HogwildServiceName, number[]>
   temperatures: Record<'CPU' | 'Storage', number[]>
   updatedAt: number
 }
@@ -55,7 +55,7 @@ const temperatureNames = ['CPU', 'Storage'] as const
 export function emptyHogwildHistory(): HogwildHistory {
   return {
     load: [],
-    serviceMemory: {
+    serviceMemoryMb: {
       'AdGuard Home': [],
       'Cloudflare Tunnel': [],
       'GitHub runner': [],
@@ -76,10 +76,10 @@ export function appendHogwildSample(history: HogwildHistory, status: HogwildStat
   const services = new Map(status.services.map(service => [service.name, service.state]))
   return {
     load: appendSample(history.load, status.load[0], limit),
-    serviceMemory: Object.fromEntries(serviceNames.map((name) => {
+    serviceMemoryMb: Object.fromEntries(serviceNames.map((name) => {
       const state = services.get(name)
       return [name, state?._tag === 'Active'
-        ? appendSample(history.serviceMemory[name], state.metrics.memoryBytes, limit)
+        ? appendSample(history.serviceMemoryMb[name], state.metrics.memoryBytes / 1024 ** 2, limit)
         : []]
     })) as Record<HogwildServiceName, number[]>,
     temperatures: {

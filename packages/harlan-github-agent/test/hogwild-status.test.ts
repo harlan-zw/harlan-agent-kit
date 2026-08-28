@@ -120,7 +120,7 @@ describe('hogwild status boundary', () => {
 
     expect(history.load).toEqual([0.4, 0.6])
     expect(history.temperatures.CPU).toEqual([42, 42])
-    expect(history.serviceMemory.Jellyfin).toEqual([110_100_480, 110_100_480])
+    expect(history.serviceMemoryMb.Jellyfin).toEqual([105, 105])
   })
 
   it('projects three or more readings into an accessible sparkline', () => {

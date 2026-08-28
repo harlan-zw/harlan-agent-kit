@@ -327,7 +327,7 @@ useHead({
                   {{ formatHogwildTemperature(temperature) }}
                   <HogwildSparkline
                     :data="hogwildHistory.temperatures[temperature.name]"
-                    :label="`${temperature.name} temperature`"
+                    :label="`${temperature.name} temperature in °C`"
                   />
                 </span>
               </dd>
@@ -375,8 +375,8 @@ useHead({
                   {{ formatHogwildServiceMetrics(service.state.metrics) }}
                 </p>
                 <HogwildSparkline
-                  :data="hogwildHistory.serviceMemory[service.name]"
-                  :label="`${service.name} memory`"
+                  :data="hogwildHistory.serviceMemoryMb[service.name]"
+                  :label="`${service.name} memory in MB`"
                 />
               </div>
             </li>
