@@ -191,4 +191,47 @@ describe('active task leases', () => {
 
     expect(store.listActiveTaskLeases()).not.toContainEqual({ taskId: claimed.id, fence: claimed.state.fence })
   })
+
+  it('keeps a claimed Routine live and drops it once the run completes', () => {
+    const store = openJournalStore(':memory:')
+    stores.push(store)
+    store.syncRepositories([repositoryMapping()], '2026-08-28T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{
+        name: 'sentry-checkin',
+        crons: ['0 7 * * *'],
+        timeZone: 'Australia/Melbourne',
+        mode: 'report',
+        enabled: true,
+      }],
+      at: '2026-08-28T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    const run = store.openRoutineRun({
+      routineId: routine.id,
+      scheduledFor: '2026-08-28T21:00:00.000Z',
+      specSha: routine.specSha,
+      at: '2026-08-28T21:00:00.000Z',
+    })
+    if (run === null)
+      throw new Error('Expected a Routine run.')
+    const claimed = store.claimNextRoutineRun('worker-1', '2026-08-28T21:00:01.000Z', 60_000)
+    if (claimed === null)
+      throw new Error('Expected a claimed Routine run.')
+
+    expect(store.listActiveTaskLeases()).toContainEqual({ taskId: claimed.id, fence: claimed.state.fence })
+
+    store.completeRoutineRun({
+      taskId: claimed.id,
+      workerId: claimed.state.workerId,
+      fence: claimed.state.fence,
+      at: '2026-08-28T21:00:30.000Z',
+      evidence: 'done',
+    })
+
+    expect(store.listActiveTaskLeases()).not.toContainEqual({ taskId: claimed.id, fence: claimed.state.fence })
+  })
 })
