@@ -223,6 +223,11 @@ export interface GitHubAgentSourceOptions {
   /** The login the controller posts as, which depends on how the repository authenticates. */
   actorLogin: (repository: RepositoryMapping) => string
   createClient?: (token: string) => Octokit
+  /** A former writer whose active marked comments remain canonical after an authentication change. */
+  legacyActor?: {
+    login: string
+    tokens: GitHubTokenProvider
+  }
   tokens: GitHubTokenProvider
   userAgent?: string
 }
@@ -328,8 +333,8 @@ function pullRequestItem(
 }
 
 export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource {
-  const client = async (repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> => {
-    const token = await options.tokens.getToken(repository, access, signal)
+  const clientWith = async (tokens: GitHubTokenProvider, repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> => {
+    const token = await tokens.getToken(repository, access, signal)
     return token._tag === 'Err'
       ? err(token.error.message)
       : ok(options.createClient?.(token.value.token) ?? createAuthenticatedClient({
@@ -337,10 +342,12 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           repository,
           signal,
           token: token.value.token,
-          tokens: options.tokens,
+          tokens,
           userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
         }))
   }
+  const client = (repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> =>
+    clientWith(options.tokens, repository, access, signal)
 
   return {
     async listPullRequestFiles(repository, pullRequestNumber, signal) {
@@ -747,6 +754,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const headSha = automatedReviewHead(body)
         if (headSha === undefined)
           return err('The automated review comment is missing its head commit marker.')
+        const actor = options.actorLogin(repository).toLowerCase()
         const priorReview = priorAutomatedReviewForHead(comments.flatMap(comment =>
           comment.body === undefined || comment.body === null || comment.user?.login === undefined
             ? []
@@ -756,23 +764,41 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                 body: comment.body,
                 url: comment.html_url,
               }]), headSha, options.actorLogin(repository))
-        if (priorReview._tag === 'Found' && !replacePriorReview)
+        const legacyActor = options.legacyActor
+        const adoptablePrior = priorReview._tag === 'Found'
+          && legacyActor !== undefined
+          && priorReview.authorLogin.toLowerCase() === legacyActor.login.toLowerCase()
+          && (priorReview.state === 'active' || replacePriorReview)
+          ? comments.findLast(comment =>
+              comment.html_url === priorReview.url
+              && comment.user?.login.toLowerCase() === legacyActor.login.toLowerCase()
+              && comment.body?.includes(AUTOMATED_REVIEW_MARKER)
+              && automatedReviewHead(comment.body)?.toLowerCase() === headSha.toLowerCase())
+          : undefined
+        if (priorReview._tag === 'Found' && adoptablePrior === undefined && !replacePriorReview)
           return err(`The current head commit already has an automated review by @${priorReview.authorLogin}: ${priorReview.url}`)
         const existing = commentId === null
-          ? comments
-            .filter(comment => comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body?.includes(AUTOMATED_REVIEW_MARKER))
+          ? adoptablePrior ?? comments
+            .filter(comment => comment.user?.login.toLowerCase() === actor && comment.body?.includes(AUTOMATED_REVIEW_MARKER))
             .sort((left, right) => right.id - left.id)[0]
           : comments.find(comment => comment.id === commentId)
-        if (existing !== undefined && existing.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase())
+        const adopted = existing !== undefined && existing.id === adoptablePrior?.id
+        if (existing !== undefined && existing.user?.login.toLowerCase() !== actor && !adopted)
           return err('The stored automated review comment belongs to another GitHub actor.')
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
+        const writer = adopted && legacyActor !== undefined
+          ? await clientWith(legacyActor.tokens, repository.github, 'item_write', signal)
+          : octokit
+        if (writer._tag === 'Err')
+          return writer
         const written = existing === undefined
-          ? await octokit.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body, ...requestOptions })
-          : await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body, ...requestOptions })
-        const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+          ? await writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body, ...requestOptions })
+          : await writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body, ...requestOptions })
+        const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+        const writerLogin = adopted && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
         if (
-          confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
+          confirmed.data.user?.login.toLowerCase() !== writerLogin
           || confirmed.data.body !== body
           || !confirmed.data.body.includes(AUTOMATED_REVIEW_MARKER)
         ) {

@@ -2,6 +2,7 @@ import type { ConsolaInstance } from 'consola'
 import type { Server } from 'srvx'
 import type { AgentProviderName } from './agent-provider.ts'
 import type { GitIdentity } from './git-identity.ts'
+import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { Result } from './result.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
@@ -309,17 +310,19 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   // A repository the App cannot reach is answered with Harlan's own account.
   const actorLogin = (repository: RepositoryMapping): string => repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN
+  const appTokens = createGitHubAppTokenProvider({
+    appId: config.github.appId,
+    privateKey: options.githubPrivateKey,
+  })
+  const userTokens = createUserTokenProvider({ readToken: signal => userAccess.token(signal) })
   const routedTokens = createRoutedTokenProvider({
-    app: createGitHubAppTokenProvider({
-      appId: config.github.appId,
-      privateKey: options.githubPrivateKey,
-    }),
-    user: createUserTokenProvider({ readToken: signal => userAccess.token(signal) }),
+    app: appTokens,
+    user: userTokens,
     usesUserToken: repository => userRepositoryNames.has(repository.toLowerCase()),
   })
   // Write authority belongs at the credential boundary. Every current and
   // future mutation needs one of these write credentials before it can leave.
-  const tokens = createGitHubWriteGate({
+  const gatedTokens = (source: GitHubTokenProvider): GitHubTokenProvider => createGitHubWriteGate({
     mayWrite: github => store.mayWriteRepository(github),
     onRefused: (github) => {
       store.recordIncident({
@@ -332,8 +335,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         at: now().toISOString(),
       })
     },
-    source: routedTokens,
+    source,
   })
+  const tokens = gatedTokens(routedTokens)
+  const legacyUserTokens = gatedTokens(userTokens)
   const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff })
   const pullRequestStatuses = createPullRequestStatusController({
     github,
@@ -349,7 +354,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   // Ephemeral: what each running agent is doing right now, never persisted.
   const activityLog = createAgentActivityLog()
-  const workerGithub = createGitHubAgentSource({ actorLogin, tokens })
+  const workerGithub = createGitHubAgentSource({
+    actorLogin,
+    legacyActor: { login: userLogin, tokens: legacyUserTokens },
+    tokens,
+  })
   const mutationSchedulers = await (async () => {
     if (!config.mutationsEnabled)
       return undefined
