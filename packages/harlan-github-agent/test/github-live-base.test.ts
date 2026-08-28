@@ -56,6 +56,34 @@ describe('live pull request base', () => {
     expect(result).toEqual(ok(expect.objectContaining({ baseSha: liveBaseSha })))
   })
 
+  it('reads a closed pull request after its base branch was deleted', async () => {
+    const closed = {
+      ...pullRequest(),
+      state: 'closed',
+      merged_at: '2026-08-13T11:00:00.000Z',
+      base: { sha: historicBaseSha, ref: 'deleted-stack-base' },
+    }
+    const client = {
+      rest: {
+        pulls: { get: () => Promise.resolve({ data: closed }) },
+        repos: { getBranch: () => Promise.reject(new Error('Branch not found')) },
+      },
+    } as unknown as Octokit
+    const source = createGitHubSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      issueCutoff: '2026-07-01',
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequest(repositoryMapping(), 24)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      state: 'closed',
+      baseSha: historicBaseSha,
+    })))
+  })
+
   it('reads base checks from the current base branch commit', async () => {
     const checkedRefs: string[] = []
     const client = {
