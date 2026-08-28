@@ -224,6 +224,25 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
       { _tag: 'Failed', reason: 'The opencode session stopped sending output.' },
     ])
   })
+
+  it('ends a completed turn even when the opencode process stays alive', async () => {
+    const provider = createOpencodeProvider({
+      idleTimeoutMilliseconds: 1_000,
+      spawnOpencode: () => spawn(process.execPath, ['-e', `
+        process.stdout.write(${JSON.stringify([
+          `${JSON.stringify(textLine)}\n`,
+          `${JSON.stringify({ type: 'step_finish', sessionID: 'ses_abc12345', part: { reason: 'stop' } })}\n`,
+        ].join(''))})
+        setInterval(() => {}, 1000)
+      `], { stdio: ['ignore', 'pipe', 'pipe'] }),
+    })
+
+    expect(await collect(provider.runTurn(request()))).toEqual([
+      { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
+      { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'TurnCompleted' },
+    ])
+  })
 })
 
 describe('extractJsonObject', () => {

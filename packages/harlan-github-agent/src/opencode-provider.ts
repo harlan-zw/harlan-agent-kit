@@ -189,7 +189,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     })
     const exited = new Promise<OpencodeExit>((resolve) => {
       child.once('error', error => resolve({ _tag: 'SpawnFailed', error }))
-      child.once('close', (code, signal) => resolve({ _tag: 'Exited', code, signal }))
+      child.once('exit', (code, signal) => resolve({ _tag: 'Exited', code, signal }))
     })
 
     // A silent run means a wedged agent, and its Task holds its lease until the
@@ -210,6 +210,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     let usage: Extract<AgentTokenUsage, { _tag: 'Available' }> = { _tag: 'Available', input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }
     let usageAvailable = false
     let overBudget = false
+    let completed = false
     try {
       for await (const raw of createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY })) {
         const line = raw.trim()
@@ -245,10 +246,16 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         if (event !== undefined) {
           if (event._tag === 'Failed')
             failed = true
-          if (event._tag === 'TurnCompleted' && usageAvailable)
-            yield { _tag: 'Usage', usage }
+          if (event._tag === 'TurnCompleted') {
+            completed = true
+            if (usageAvailable)
+              yield { _tag: 'Usage', usage }
+            child.kill('SIGTERM')
+          }
           yield event
         }
+        if (completed)
+          break
         // A stopping step ends the turn by itself, so the budget never discards
         // an answer the session already paid for. Every other step means one
         // more full read of the context, so stop paying for it now. SIGKILL,
@@ -272,7 +279,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         yield { _tag: 'Failed', reason: 'The opencode session stopped sending output.' }
         return
       }
-      if (exit.code !== 0 && !failed)
+      if (exit.code !== 0 && !failed && !completed)
         yield { _tag: 'Failed', reason: opencodeFailureReason(standardError, exit) }
     }
     finally {
