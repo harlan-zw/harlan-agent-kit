@@ -4839,6 +4839,16 @@ export function openJournalStore(
           )
           return
         }
+        if (input.subject.kind === 'pull_request') {
+          supersedeTasks(
+            database,
+            subject.id,
+            input.observedAt,
+            'A newer pull request Revision replaced this Repair.',
+            revisionId,
+            'review_fix',
+          )
+        }
         if (input.subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, input.subject.author)) {
           const approvedRepair = database.prepare(`
             SELECT 1
