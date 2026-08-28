@@ -1,0 +1,48 @@
+{
+  "schema_version": 4,
+  "job_id": "hogwild-system-20260828-1645",
+  "created": "2026-08-28T07:12:43Z",
+  "git_hash": "1f54fd574546d1c57587fdd89c6ded94f637e91c",
+  "dev_port": 61293,
+  "pages_changed": [
+    "packages/harlan-github-agent/dashboard/app/pages/index.vue"
+  ],
+  "components_created": [
+    "packages/harlan-github-agent/dashboard/app/_components/HogwildSparkline.vue"
+  ],
+  "routes_to_test": [
+    "/"
+  ],
+  "design_system_changes": false,
+  "theme_name": "minimal-control-room",
+  "contract_path": ".claude/context/jobs/hogwild-system-20260828-1645/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met",
+    "C10": "met",
+    "C11": "met",
+    "C12": "met",
+    "C13": "met",
+    "C14": "met",
+    "C15": "met",
+    "C16": "met"
+  },
+  "self_assessment": {
+    "confidence": "high",
+    "weakest_area": "Sparklines need three live polls and reset after a page reload.",
+    "hardest_decision": "Kept history browser-local so Hogwild remains the only collector."
+  },
+  "has_client_animations": false,
+  "known_limitations": [
+    "Sparkline history is not persisted across page reloads."
+  ],
+  "next_steps": [],
+  "dark_mode_relevant": true
+}
