@@ -10,12 +10,34 @@ export function trackingIssueTitle(name: RoutineName, repository: string): strin
   return `${name}: run log for ${repository}`
 }
 
-export function trackingIssueBody(name: RoutineName): string {
+function trackingIssueBodyText(name: string): string {
   return `Every run of the \`${name}\` routine reports here, including the runs that found nothing and the runs that were skipped.
 
 Close a proposal's own issue to reject it. Closing this one stops the log, not the routine.
 
 > The Harlan Agent Kit opened this issue automatically. It is not Harlan's own report.`
+}
+
+export function trackingIssueBody(name: RoutineName): string {
+  return trackingIssueBodyText(name)
+}
+
+/** Recognises a run log even when another controller filed it. */
+export function isRoutineTrackingIssue(input: {
+  repository: string
+  title: string
+  body: string | null | undefined
+  labels: readonly string[]
+}): boolean {
+  const prefix = 'routine:'
+  return input.labels.some((label) => {
+    if (!label.toLowerCase().startsWith(prefix))
+      return false
+    const routineName = label.slice(prefix.length)
+    return routineName.length > 0
+      && input.title.toLowerCase() === `${routineName}: run log for ${input.repository}`.toLowerCase()
+      && input.body === trackingIssueBodyText(routineName)
+  })
 }
 
 /** What one finished run did, in the words the log records. */

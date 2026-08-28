@@ -6,6 +6,7 @@ import { err } from './result.ts'
 
 export interface TaskScheduler {
   runNow: () => Promise<void>
+  settle: (taskId: string) => Promise<boolean>
   start: () => void
   stop: () => Promise<void>
 }
@@ -42,6 +43,7 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
   let stopped = true
   let timer: NodeJS.Timeout | undefined
   let controller: AbortController | undefined
+  let activeTaskId: string | undefined
   let active: Promise<void> = Promise.resolve()
 
   async function execute(): Promise<void> {
@@ -57,10 +59,10 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
       if (task === null)
         return
       settled = task
-      options.onTaskStarted?.(task)
-
       controller = new AbortController()
       const executionController = controller
+      activeTaskId = task.id
+      options.onTaskStarted?.(task)
       const heartbeat = setInterval(() => {
         const renewed = options.store.heartbeatTask({
           taskId: task.id,
@@ -132,6 +134,8 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
       })
     }
     finally {
+      if (settled !== undefined && activeTaskId === settled.id)
+        activeTaskId = undefined
       permit.release()
       if (settled !== undefined)
         options.onTaskSettled?.(settled.id, settled)
@@ -157,6 +161,14 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
     void runNow().finally(schedule)
   }
 
+  async function settle(taskId: string): Promise<boolean> {
+    if (activeTaskId !== taskId)
+      return false
+    controller?.abort()
+    await active
+    return true
+  }
+
   async function stop(): Promise<void> {
     stopped = true
     if (timer !== undefined)
@@ -165,5 +177,5 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
     await active
   }
 
-  return { runNow, start, stop }
+  return { runNow, settle, start, stop }
 }

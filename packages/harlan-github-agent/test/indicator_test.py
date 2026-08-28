@@ -1,12 +1,14 @@
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -542,13 +544,6 @@ class IndicatorDisplayTest(unittest.TestCase):
                 'status': 'ready',
                 'agentControl': {'_tag': 'Running'},
                 'agents': [],
-                'routineRuns': [],
-                'queue': [],
-                'incidents': [],
-            }},
-            'hogwildAgent': {'_tag': 'Available', 'dashboard': {
-                'status': 'ready',
-                'agents': [],
                 'routineRuns': [run],
                 'queue': [],
                 'incidents': [],
@@ -740,11 +735,85 @@ class IndicatorDisplayTest(unittest.TestCase):
             '/usr/bin/ghostty',
             '--title=Watch logs · harlan-zw/example #24',
             '-e',
-            sys.executable,
-            str(indicator.WATCHER),
-            'opencode',
-            'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
+            'ssh',
+            '-t',
+            'hogwild',
+            '/usr/bin/python3 /home/harlan/.local/share/harlan-github-agent/service/packages/harlan-github-agent/bin/harlan-github-agent-watch opencode ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
         ], start_new_session=True)
+
+    def test_does_not_open_a_watch_terminal_for_an_invalid_session(self):
+        agent = {
+            'id': 'task-123',
+            'provider': 'opencode',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+            'session': {'_tag': 'Connected', 'id': 'ses_abc12345;touch_/tmp/pwned'},
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(ValueError, 'Invalid opencode session ID'):
+                indicator.open_agent_watch(agent)
+
+        spawn.assert_not_called()
+
+    def test_opens_the_ejected_session_on_hogwild(self):
+        ejected = {
+            '_tag': 'Ejected',
+            'provider': 'opencode',
+            'sessionId': 'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            indicator.open_ejected_session(ejected)
+
+        spawn.assert_called_once_with([
+            '/usr/bin/ghostty',
+            '--title=opencode · harlan-zw/example #24',
+            '-e',
+            'ssh',
+            '-t',
+            'hogwild',
+            '/home/harlan/.local/bin/opencode --session ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
+        ], start_new_session=True)
+
+    def test_opens_a_valid_codex_session_on_hogwild(self):
+        ejected = {
+            '_tag': 'Ejected',
+            'provider': 'codex',
+            'sessionId': '0f0e0d0c-0b0a-4968-8956-2631d0c871f9',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            indicator.open_ejected_session(ejected)
+
+        spawn.assert_called_once_with([
+            '/usr/bin/ghostty',
+            '--title=Codex · harlan-zw/example #24',
+            '-e',
+            'ssh',
+            '-t',
+            'hogwild',
+            "/home/harlan/.local/bin/codex resume 0f0e0d0c-0b0a-4968-8956-2631d0c871f9 -c 'tui.resume_cwd=\"session\"'",
+        ], start_new_session=True)
+
+    def test_does_not_open_an_ejected_terminal_for_an_invalid_session(self):
+        ejected = {
+            '_tag': 'Ejected',
+            'provider': 'opencode',
+            'sessionId': 'ses_abc12345;touch_/tmp/pwned',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(ValueError, 'Invalid opencode session ID'):
+                indicator.open_ejected_session(ejected)
+
+        spawn.assert_not_called()
 
 
 class AgentControlRequestTest(unittest.TestCase):
@@ -777,9 +846,9 @@ class AgentControlRequestTest(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(result, {'_tag': 'Paused', 'pausedAt': '2026-08-14T00:00:00.000Z'})
-        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/pause')
+        self.assertEqual(request.full_url, 'https://hogwild.tailcad325.ts.net/api/agents/pause')
         self.assertEqual(request.get_method(), 'POST')
-        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
+        self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 3)
 
@@ -794,7 +863,7 @@ class AgentControlRequestTest(unittest.TestCase):
                 return False
 
             def read(self):
-                return b'{"_tag":"Ejected"}'
+                return b'{"_tag":"Ejected","provider":"opencode","sessionId":"ses_abc12345","repository":"harlan-zw/example","itemNumber":24}'
 
         def open_request(request, timeout):
             requests.append((request, timeout))
@@ -811,14 +880,52 @@ class AgentControlRequestTest(unittest.TestCase):
                 result = indicator.request_agent_eject('task-123')
 
         request, timeout = requests[0]
-        self.assertEqual(result, {'_tag': 'Ejected'})
-        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/eject')
+        self.assertEqual(result, {
+            '_tag': 'Ejected',
+            'provider': 'opencode',
+            'sessionId': 'ses_abc12345',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        })
+        self.assertEqual(request.full_url, 'https://hogwild.tailcad325.ts.net/api/agents/eject')
         self.assertEqual(request.get_method(), 'POST')
         self.assertEqual(request.data, b'{"taskId":"task-123"}')
         self.assertEqual(request.get_header('Content-type'), 'application/json')
-        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
+        self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
-        self.assertEqual(timeout, 10)
+        self.assertEqual(timeout, 30)
+
+    def test_reports_the_saved_session_without_resuming_when_eject_settlement_is_delayed(self):
+        body = json.dumps({
+            'statusCode': 503,
+            'data': {
+                '_tag': 'EjectDelayed',
+                'provider': 'opencode',
+                'sessionId': 'ses_abc12345',
+                'nextAction': 'Stop Harlan GitHub Agent. Then resume this saved session.',
+            },
+        }).encode()
+        response = urllib.error.HTTPError(
+            'https://hogwild.tailcad325.ts.net/api/agents/eject',
+            503,
+            'Service Unavailable',
+            {},
+            io.BytesIO(body),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            password_file = Path(directory) / 'dashboard-password'
+            password_file.write_text('secret\n')
+            with patch.object(indicator, 'PASSWORD_FILE', password_file), patch.object(
+                indicator.urllib.request,
+                'urlopen',
+                side_effect=response,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    'Saved session ses_abc12345. Stop Harlan GitHub Agent. Then resume this saved session.',
+                ):
+                    indicator.request_agent_eject('task-123')
 
 
 class AgentSelectionTest(unittest.TestCase):
@@ -967,11 +1074,11 @@ class AgentSelectionTest(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(result, {'provider': 'opencode', 'model': None, 'reasoningEffort': None})
-        self.assertEqual(request.full_url, 'https://harlan-github-agent.localhost/api/agents/select')
+        self.assertEqual(request.full_url, 'https://hogwild.tailcad325.ts.net/api/agents/select')
         self.assertEqual(request.get_method(), 'POST')
         self.assertEqual(request.data, b'{"provider":"opencode","model":null,"reasoningEffort":null}')
         self.assertEqual(request.get_header('Content-type'), 'application/json')
-        self.assertEqual(request.get_header('Origin'), 'https://harlan-github-agent.localhost')
+        self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 3)
 

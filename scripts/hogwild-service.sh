@@ -11,6 +11,10 @@ PASSWORD_FILE="${HARLAN_GITHUB_AGENT_PASSWORD_FILE:-$HOME/.config/harlan-github-
 REMOTE_CHECKOUT="$REMOTE_HOME/.local/share/harlan-github-agent/service"
 REMOTE_CONTEXT="$REMOTE_HOME/.codex/AGENTS.md"
 REMOTE_CONTEXT_NEXT="$REMOTE_CONTEXT.next"
+SERVICE_OVERRIDE_FILE="$SCRIPT_DIR/hogwild-service.conf"
+REMOTE_OVERRIDE_DIR="$REMOTE_HOME/.config/systemd/user/harlan-github-agent.service.d"
+REMOTE_OVERRIDE="$REMOTE_OVERRIDE_DIR/hogwild.conf"
+REMOTE_OVERRIDE_NEXT="$REMOTE_OVERRIDE.next"
 
 resume_required=false
 
@@ -29,6 +33,10 @@ require_inputs() {
   fi
   if [ ! -f "$PASSWORD_FILE" ]; then
     echo "The dashboard password does not exist: $PASSWORD_FILE" >&2
+    exit 1
+  fi
+  if [ ! -f "$SERVICE_OVERRIDE_FILE" ]; then
+    echo "The Hogwild service settings do not exist: $SERVICE_OVERRIDE_FILE" >&2
     exit 1
   fi
 }
@@ -96,6 +104,21 @@ sync_context() {
   ssh -o BatchMode=yes "$HOGWILD_HOST" "chmod 644 '$REMOTE_CONTEXT_NEXT' && mv '$REMOTE_CONTEXT_NEXT' '$REMOTE_CONTEXT'"
 }
 
+sync_service_override() {
+  local local_hash remote_hash
+  local_hash=$(sha256sum "$SERVICE_OVERRIDE_FILE" | cut -d' ' -f1)
+  ssh -o BatchMode=yes "$HOGWILD_HOST" "mkdir -p '$REMOTE_OVERRIDE_DIR'"
+  scp -q "$SERVICE_OVERRIDE_FILE" "$HOGWILD_HOST:$REMOTE_OVERRIDE_NEXT"
+  remote_hash=$(ssh -o BatchMode=yes "$HOGWILD_HOST" "sha256sum '$REMOTE_OVERRIDE_NEXT'" | cut -d' ' -f1)
+  if [ "$local_hash" != "$remote_hash" ]; then
+    ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$REMOTE_OVERRIDE_NEXT'"
+    echo "Hogwild received different service settings." >&2
+    exit 1
+  fi
+  ssh -o BatchMode=yes "$HOGWILD_HOST" \
+    "chmod 644 '$REMOTE_OVERRIDE_NEXT' && mv '$REMOTE_OVERRIDE_NEXT' '$REMOTE_OVERRIDE' && systemctl --user daemon-reload"
+}
+
 remote_service() {
   local command=$1
   local ref=${2:-}
@@ -117,12 +140,14 @@ case "$command" in
     fi
     prepare_restart
     sync_context
+    sync_service_override
     remote_service update "$ref"
     resume_agents
     ;;
   restart)
     prepare_restart
     sync_context
+    sync_service_override
     remote_service restart
     resume_agents
     ;;

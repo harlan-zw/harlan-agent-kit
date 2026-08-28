@@ -9,19 +9,22 @@ trap 'rm -rf "$test_root"' EXIT
 export HOME="$test_root/home"
 export HOGWILD_SERVICE_TEST_CALLS="$test_root/calls"
 export HOGWILD_SERVICE_TEST_HASH=''
+export HOGWILD_SERVICE_TEST_OVERRIDE_HASH=''
 export HOGWILD_SERVICE_TEST_STATE="$test_root/control-state"
 
 mkdir -p "$HOME/.codex" "$HOME/.config/harlan-github-agent" "$test_root/bin"
 printf '%s\n' '# Global Agent instructions' > "$HOME/.codex/AGENTS.md"
 printf '%s\n' 'password' > "$HOME/.config/harlan-github-agent/dashboard-password"
 expected_hash=$(/usr/bin/sha256sum "$HOME/.codex/AGENTS.md" | cut -d' ' -f1)
+expected_override_hash=$(/usr/bin/sha256sum "$script_dir/hogwild-service.conf" | cut -d' ' -f1)
 export HOGWILD_SERVICE_TEST_HASH="$expected_hash"
+export HOGWILD_SERVICE_TEST_OVERRIDE_HASH="$expected_override_hash"
 printf '%s\n' 'Running' > "$HOGWILD_SERVICE_TEST_STATE"
 
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''ssh %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
-  'if [[ "$*" == *sha256sum* ]]; then printf '\''%s  /home/harlan/.codex/AGENTS.md\n'\'' "$HOGWILD_SERVICE_TEST_HASH"; fi' \
+  'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  /home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum* ]]; then printf '\''%s  /home/harlan/.codex/AGENTS.md\n'\'' "$HOGWILD_SERVICE_TEST_HASH"; fi' \
   > "$test_root/bin/ssh"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
@@ -42,10 +45,12 @@ PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update
 pause_line=$(grep -n '/api/agents/pause' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 copy_line=$(grep -n '^scp .*AGENTS.md .*hogwild:/home/harlan/.codex/AGENTS.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 install_line=$(grep -nF "mv '/home/harlan/.codex/AGENTS.md.next' '/home/harlan/.codex/AGENTS.md'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+limits_copy_line=$(grep -n '^scp .*hogwild-service.conf .*hogwild:/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+limits_install_line=$(grep -nF "mv '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next' '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 update_line=$(grep -nF "bash -s -- 'update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 resume_line=$(grep -n '/api/agents/resume' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 
-if ! ((pause_line < copy_line && copy_line < install_line && install_line < update_line && update_line < resume_line)); then
+if ! ((pause_line < copy_line && copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < update_line && update_line < resume_line)); then
   printf '%s\n' 'Hogwild update did not pause, sync, update, and resume in order' >&2
   exit 1
 fi

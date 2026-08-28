@@ -2365,7 +2365,7 @@ function githubSubjectFromRow(row: SubjectRow): GitHubItem {
   }
 
   if (row.kind === 'issue')
-    return { ...base, kind: 'issue', approvalLabels: [], routineFiled: false }
+    return { ...base, kind: 'issue', approvalLabels: [], routineFiled: false, routineTracking: false }
 
   if (row.draft === null || row.base_sha === null || row.head_sha === null || row.head_repository === null || row.head_ref === null || row.merge_state === null)
     throw new Error(`Pull request ${row.repository}#${row.github_number} has incomplete state.`)
@@ -3351,9 +3351,12 @@ function planIssueTriage(
   observedAt: string,
   mapping: RepositoryMapping,
 ): void {
-  const routineTrackingIssue = subject.kind === 'issue' && database.prepare(`
-    SELECT 1 FROM routines WHERE repository = ? AND tracking_issue_number = ?
-  `).get(subject.repository, subject.number) !== undefined
+  const routineTrackingIssue = subject.kind === 'issue' && (
+    subject.routineTracking === true
+    || database.prepare(`
+      SELECT 1 FROM routines WHERE repository = ? AND tracking_issue_number = ?
+    `).get(subject.repository, subject.number) !== undefined
+  )
   const eligible = subject.kind === 'issue'
     && subject.state === 'open'
     && !routineTrackingIssue
@@ -5107,6 +5110,7 @@ export function openJournalStore(
             kind: 'issue',
             approvalLabels: [],
             routineFiled: false,
+            routineTracking: false,
             repository: current.repository,
             number: current.number,
             state: 'closed',

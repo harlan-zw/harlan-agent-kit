@@ -140,6 +140,8 @@ export interface GitHubIssueItem extends GitHubItemBase {
    * again before triage ever read it, because the agent filed it.
    */
   routineFiled: boolean
+  /** True when this is a Routine run log, including one filed by another controller. */
+  routineTracking: boolean
 }
 
 export interface GitHubPullRequestItem extends GitHubItemBase {

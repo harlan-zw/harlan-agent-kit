@@ -88,6 +88,7 @@ function issueItem(repository: string, issue: PublicIssueSnapshot): GitHubIssueI
     kind: 'issue',
     approvalLabels: [],
     routineFiled: false,
+    routineTracking: false,
     repository,
     number: issue.number,
     state: issue.state,

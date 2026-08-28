@@ -1,8 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
-import type { Result } from './result.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
-import type { TerminalSessionInput } from './terminal-session.ts'
 import type { DashboardSnapshot } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -17,6 +15,8 @@ import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
   store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  settleTask?: (taskId: string) => Promise<boolean>
+  ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -24,11 +24,11 @@ export interface AgentAppOptions {
   eventIntervalMilliseconds?: number
   shutdownSignal?: AbortSignal
   activityLog?: Pick<AgentActivityLog, 'read'>
-  ejectAgent?: (input: TerminalSessionInput) => Promise<Result<void, string>>
 }
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
 const DASHBOARD_PAGES = ['history', 'watching', 'flow', 'stats'] as const
+const EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS = 12_000
 
 const securityHeaders = {
   'cache-control': 'no-store',
@@ -71,6 +71,26 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
       : agent),
     routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog.read(run.id) })),
   }
+}
+
+function settleEjectedTask(options: AgentAppOptions, taskId: string): Promise<boolean> {
+  const settleTask = options.settleTask
+  if (settleTask === undefined)
+    return Promise.resolve(false)
+  const timeoutMilliseconds = options.ejectSettlementTimeoutMilliseconds ?? EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS
+  return new Promise((resolve) => {
+    let answered = false
+    const answer = (settled: boolean) => {
+      if (answered)
+        return
+      answered = true
+      clearTimeout(timeout)
+      resolve(settled)
+    }
+    const timeout = setTimeout(answer, timeoutMilliseconds, false)
+    timeout.unref()
+    settleTask(taskId).then(answer, () => answer(false))
+  })
 }
 
 async function setRepositoryWrites(options: AgentAppOptions, event: { req: { json: () => Promise<unknown> } }, writesEnabled: boolean): Promise<{ github: string, writesEnabled: boolean }> {
@@ -162,6 +182,16 @@ interface IssueApprovalRequest {
 
 interface CancelTaskRequest {
   taskId: string
+}
+
+type ParsedAgentSession
+  = | { _tag: 'Codex', id: string, provider: 'codex' }
+    | { _tag: 'Opencode', id: string, provider: 'opencode' }
+
+function parseAgentSession(provider: 'codex' | 'opencode', id: string): ParsedAgentSession | undefined {
+  if (provider === 'codex')
+    return /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id) ? { _tag: 'Codex', id, provider } : undefined
+  return /^ses_[a-z\d]{8,}$/i.test(id) ? { _tag: 'Opencode', id, provider } : undefined
 }
 
 interface ReviewRerunRequest {
@@ -328,26 +358,40 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     }))
     if (body === undefined)
       throw createError({ status: 400, statusText: 'Bad Request', message: 'A valid task ID is required.' })
-    if (options.ejectAgent === undefined)
-      throw createError({ status: 501, statusText: 'Not Implemented', message: 'Interactive session launch is unavailable.' })
     const agent = dashboardSnapshot(options).agents.find(candidate => candidate._tag === 'ActiveAgent' && candidate.id === body.taskId)
     if (agent?._tag !== 'ActiveAgent')
       throw createError({ status: 404, statusText: 'Not Found', message: 'The running agent was not found.' })
     if (agent.session._tag !== 'Connected')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The agent session is still starting.' })
+    const session = parseAgentSession(agent.provider, agent.session.id)
+    if (session === undefined)
+      throw createError({ status: 409, statusText: 'Conflict', message: 'The saved agent session is invalid.' })
+    if (options.settleTask === undefined)
+      throw createError({ status: 503, statusText: 'Service Unavailable', message: 'The agent session cannot be transferred safely.' })
     const cancelled = options.store.cancelTask({ taskId: body.taskId, at: options.now().toISOString() })
     if (cancelled._tag === 'Rejected')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The agent already finished. Refresh before ejecting.' })
-    const launched = await options.ejectAgent({
-      taskId: body.taskId,
-      sessionId: agent.session.id,
-      provider: agent.provider,
+    const settled = await settleEjectedTask(options, body.taskId)
+    if (!settled) {
+      throw createError({
+        status: 503,
+        statusText: 'Service Unavailable',
+        message: 'The agent stop could not be confirmed.',
+        data: {
+          _tag: 'EjectDelayed',
+          provider: session.provider,
+          sessionId: session.id,
+          nextAction: 'Stop Harlan GitHub Agent. Then resume this saved session.',
+        },
+      })
+    }
+    return {
+      _tag: 'Ejected',
+      provider: session.provider,
+      sessionId: session.id,
       repository: agent.repository,
       itemNumber: agent.itemNumber,
-    })
-    if (launched._tag === 'Err')
-      throw createError({ status: 500, statusText: 'Internal Server Error', message: launched.error })
-    return { _tag: 'Ejected' }
+    }
   })
 
   app.post('/api/repositories/writes/enable', event => setRepositoryWrites(options, event, true))
