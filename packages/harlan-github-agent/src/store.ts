@@ -630,6 +630,7 @@ export interface JournalStore {
   failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
+  updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
   completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   failRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   closeMissingItems: (github: string, seen: Array<{ kind: GitHubItem['kind'], number: number }>, observedAt: string) => number
@@ -3992,6 +3993,14 @@ const routineRunLogMigration = `
   PRAGMA user_version = 43;
 `
 
+/** Gives Routine runs the same durable phase record as every Item-bound Agent task. */
+const routineProgressMigration = `
+  ALTER TABLE routine_runs ADD COLUMN progress_percent INTEGER NOT NULL DEFAULT 0 CHECK (progress_percent BETWEEN 0 AND 100);
+  ALTER TABLE routine_runs ADD COLUMN progress_label TEXT NOT NULL DEFAULT 'Starting';
+
+  PRAGMA user_version = 44;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4017,7 +4026,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 43)
+  if (version === 44)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4190,6 +4199,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 42) {
     applyMigration(database, routineRunLogMigration)
+    version = 43
+  }
+  if (version === 43) {
+    applyMigration(database, routineProgressMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -7700,6 +7713,7 @@ export function openJournalStore(
       .flatMap(routine => listRoutineRuns(routine.id, 5))
       .sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor))
       .slice(0, 50)
+      .map(run => ({ ...run, activity: [] }))
     const rejectedIssueWorkResults = new Map((database.prepare(`
       SELECT task_transitions.task_id, COUNT(*) AS occurrences
       FROM task_transitions
@@ -8492,6 +8506,8 @@ export function openJournalStore(
     lease_expires_at: string | null
     fence: number
     attempts: number
+    progress_percent: number
+    progress_label: string
     created_at: string
     updated_at: string
   }
@@ -8525,6 +8541,7 @@ export function openJournalStore(
     state: readRoutineRunState(row),
     fence: row.fence,
     attempts: row.attempts,
+    progress: { percent: row.progress_percent, label: row.progress_label },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })
@@ -8697,7 +8714,7 @@ export function openJournalStore(
     database.prepare(`
       UPDATE routine_runs
       SET state_tag = 'Queued', worker_id = NULL, lease_expires_at = NULL,
-        fence = fence + 1, updated_at = ?
+        fence = fence + 1, progress_percent = 0, progress_label = 'Starting', updated_at = ?
       WHERE state_tag = 'Running' AND lease_expires_at <= ?
     `).run(now, now)
   }
@@ -8748,7 +8765,7 @@ export function openJournalStore(
       const claimed = database.prepare(`
         UPDATE routine_runs
         SET state_tag = 'Running', worker_id = ?, lease_expires_at = ?, fence = ?,
-          attempts = attempts + 1, updated_at = ?
+          attempts = attempts + 1, progress_percent = 10, progress_label = 'Routine loaded', updated_at = ?
         WHERE id = ? AND state_tag = 'Queued' AND fence = ?
       `).run(workerId, leaseExpiresAt, fence, now, row.id, row.fence).changes === 1
       if (!claimed) {
@@ -8784,6 +8801,16 @@ export function openJournalStore(
     `).run(leaseExpiresAt, input.taskId, input.workerId, input.fence, input.at).changes === 1
   }
 
+  const updateRoutineRunProgress: JournalStore['updateRoutineRunProgress'] = (input) => {
+    if (!Number.isInteger(input.progress.percent) || input.progress.percent < 0 || input.progress.percent > 100)
+      return false
+    return database.prepare(`
+      UPDATE routine_runs
+      SET progress_percent = ?, progress_label = ?, updated_at = ?
+      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+    `).run(input.progress.percent, input.progress.label, input.at, input.taskId, input.workerId, input.fence).changes === 1
+  }
+
   const completeRoutineRun: JournalStore['completeRoutineRun'] = input =>
     database.prepare(`
       UPDATE routine_runs
@@ -8808,9 +8835,12 @@ export function openJournalStore(
     const retrying = row.attempts < row.max_attempts
     const changed = database.prepare(`
       UPDATE routine_runs
-      SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+      SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL,
+        progress_percent = CASE WHEN ? = 'Queued' THEN 0 ELSE progress_percent END,
+        progress_label = CASE WHEN ? = 'Queued' THEN 'Starting' ELSE progress_label END,
+        updated_at = ?
       WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-    `).run(retrying ? 'Queued' : 'Failed', input.reason, input.at, input.taskId, input.workerId, input.fence).changes === 1
+    `).run(retrying ? 'Queued' : 'Failed', input.reason, retrying ? 'Queued' : 'Failed', retrying ? 'Queued' : 'Failed', input.at, input.taskId, input.workerId, input.fence).changes === 1
     if (!changed)
       return 'Rejected'
     return retrying ? 'Retrying' : 'Failed'
@@ -9116,6 +9146,7 @@ export function openJournalStore(
     failRoutineReport,
     claimNextRoutineRun,
     heartbeatRoutineRun,
+    updateRoutineRunProgress,
     completeRoutineRun,
     failRoutineRun,
     isIssueWorkApprovalReady,

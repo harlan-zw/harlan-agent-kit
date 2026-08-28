@@ -336,6 +336,30 @@ useHead({
             <p v-if="record.presentation.detail" class="text-xs text-muted sm:col-span-2">
               {{ record.presentation.detail }}
             </p>
+            <details v-if="record.latestRun && record.latestRun.activity.length > 0" class="text-xs sm:col-span-2">
+              <summary class="cursor-pointer font-mono text-dimmed">
+                Terminal · {{ record.latestRun.activity.length }} step{{ record.latestRun.activity.length === 1 ? '' : 's' }}
+              </summary>
+              <ol class="terminal mt-2 space-y-1 font-mono text-xs">
+                <li v-for="(item, itemIndex) in record.latestRun.activity" :key="itemIndex">
+                  <template v-if="item._tag === 'Command'">
+                    <p>
+                      <span class="mr-1.5 text-dimmed" aria-hidden="true">$</span>
+                      <span>{{ item.command }}</span>
+                      <span v-if="item.exitCode !== null && item.exitCode !== 0" class="status-error"> exit {{ item.exitCode }}</span>
+                    </p>
+                    <pre v-if="item.output.length > 0">{{ item.output }}</pre>
+                  </template>
+                  <p v-else-if="item._tag === 'FileChange'">
+                    <span class="text-dimmed">edited</span>
+                    {{ item.changes.map(change => change.path).join(', ') }}
+                  </p>
+                  <p v-else class="text-dimmed">
+                    {{ item.text }}
+                  </p>
+                </li>
+              </ol>
+            </details>
           </li>
         </ol>
       </section>

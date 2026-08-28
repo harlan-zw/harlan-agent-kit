@@ -1,3 +1,4 @@
+import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
@@ -115,11 +116,12 @@ ${input.mode === 'report'
 }
 
 export interface RoutineScanWorkerOptions {
+  activityLog?: Pick<AgentActivityLog, 'record'>
   logger: { error: (message: string) => void, info: (message: string) => void }
   maximumChangedFiles?: number
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'listCandidates' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport'>
+  store: Pick<JournalStore, 'listCandidates' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareRoutine'>
 }
 
@@ -153,8 +155,26 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       if (workspace._tag === 'Err')
         return workspace
 
+      const reportProgress = (progress: { percent: number, label: string }): Result<void, string> => options.store.updateRoutineRunProgress({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        progress,
+        at: options.now().toISOString(),
+      })
+        ? ok(undefined)
+        : err('The Routine lease ended before progress could be saved.')
+      const ready = reportProgress({ percent: 35, label: 'Git worktree ready' })
+      if (ready._tag === 'Err')
+        return ready
+
       const turn = await runAgentTurn(
-        { now: options.now, runtime: options.runtime, store: sessionlessStore },
+        {
+          ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
+          now: options.now,
+          runtime: options.runtime,
+          store: sessionlessStore,
+        },
         {
           freshSession: true,
           // A Routine answers a clock, so it belongs to no issue or pull
@@ -171,6 +191,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           schema: CANDIDATE_SCHEMA,
           taskId: task.id,
           workspace: workspace.value.path,
+          progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'routine' },
         },
         signal,
       )

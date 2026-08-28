@@ -525,6 +525,58 @@ class IndicatorDisplayTest(unittest.TestCase):
         self.assertEqual(labels[:2], ['Running tests and checks', 'Running pnpm test'])
         self.assertFalse(any('%' in label or '▓' in label or '░' in label for label in labels))
 
+    def test_system_pane_shows_a_running_routine_and_its_live_activity(self):
+        run = {
+            'id': 'routine-run-1',
+            'repository': 'harlan-zw/example',
+            'name': 'sentry-checkin',
+            'state': {'_tag': 'Running'},
+            'progress': {'percent': 55, 'label': 'Checking the repository'},
+            'activity': [{
+                '_tag': 'Reasoning',
+                'at': '2026-08-14T00:00:00.000Z',
+                'text': 'Reading Sentry issues.',
+            }],
+        }
+        sources = {
+            'harlanGithubAgent': {'_tag': 'Available', 'dashboard': {
+                'status': 'ready',
+                'agentControl': {'_tag': 'Running'},
+                'agents': [],
+                'routineRuns': [],
+                'queue': [],
+                'incidents': [],
+            }},
+            'hogwildAgent': {'_tag': 'Available', 'dashboard': {
+                'status': 'ready',
+                'agents': [],
+                'routineRuns': [run],
+                'queue': [],
+                'incidents': [],
+            }},
+        }
+        stub = StubIndicator()
+
+        indicator.build_menu(
+            stub,
+            sources,
+            None,
+            lambda: None,
+            lambda *_args: None,
+            lambda *_args: None,
+            lambda *_args: None,
+        )
+
+        routine = next(
+            item for item in stub.menus[0].get_children()
+            if item.get_label().startswith('🟢 Routine')
+        )
+        self.assertEqual(
+            menu_labels(routine.get_submenu()),
+            ['Checking the repository', 'Reading Sentry issues.', 'Open repository'],
+        )
+        self.assertIn('🟢 1 agent running · Queue empty', menu_labels(stub.menus[0]))
+
     def test_uses_canonical_labels_for_every_agent_role(self):
         labels = {
             'adversarial_review': 'Adversarial review',

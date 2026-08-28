@@ -1,4 +1,4 @@
-import type { ActiveAgent, DashboardTask, Incident, QueueEntry, ReviewAgent, Routine, RoutineRun } from '../src/types.ts'
+import type { ActiveAgent, DashboardRoutineRun, DashboardTask, Incident, QueueEntry, ReviewAgent, Routine } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import {
   activeAgentActivity,
@@ -82,7 +82,7 @@ function routine(overrides: Partial<Routine> = {}): Routine {
   }
 }
 
-function routineRun(overrides: Partial<RoutineRun> = {}): RoutineRun {
+function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRoutineRun {
   return {
     id: 'routine-run-1',
     routineId: 'harlan-zw/example:sentry-checkin',
@@ -93,6 +93,8 @@ function routineRun(overrides: Partial<RoutineRun> = {}): RoutineRun {
     state: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
     fence: 1,
     attempts: 1,
+    progress: { percent: 85, label: 'Preparing the Routine result' },
+    activity: [],
     createdAt: '2026-08-27T21:00:00.000Z',
     updatedAt: '2026-08-27T21:01:00.000Z',
     ...overrides,
@@ -693,6 +695,11 @@ describe('system pane', () => {
       detail: 'Sentry timed out.',
     })
     expect(routineRunPresentation(undefined)).toEqual({ label: 'Never run', tone: 'neutral' })
+    expect(routineRunPresentation(routineRun({ state: { _tag: 'Running', workerId: 'worker-1', leaseExpiresAt: '2026-08-28T22:00:00.000Z' } }))).toEqual({
+      label: 'Running',
+      tone: 'primary',
+      detail: 'Preparing the Routine result',
+    })
   })
 
   it('links a Routine to its tracking issue', () => {

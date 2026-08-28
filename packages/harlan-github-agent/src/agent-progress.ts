@@ -1,7 +1,7 @@
 import type { AgentEvent } from './agent-provider.ts'
 import type { AgentProgress } from './types.ts'
 
-export type AgentProgressWork = 'review' | 'issue' | 'conflict' | 'fix' | 'baseline'
+export type AgentProgressWork = 'review' | 'issue' | 'conflict' | 'fix' | 'baseline' | 'routine'
 
 const changedFilesLabel: Record<AgentProgressWork, string> = {
   review: 'Reviewing changed files',
@@ -9,6 +9,7 @@ const changedFilesLabel: Record<AgentProgressWork, string> = {
   conflict: 'Resolving merge conflicts',
   fix: 'Repairing review findings',
   baseline: 'Repairing the default branch',
+  routine: 'Checking the repository',
 }
 
 const resultLabel: Record<AgentProgressWork, string> = {
@@ -17,6 +18,7 @@ const resultLabel: Record<AgentProgressWork, string> = {
   conflict: 'Checking the conflict fix',
   fix: 'Checking the repair',
   baseline: 'Checking the default branch repair',
+  routine: 'Preparing the Routine result',
 }
 
 /**

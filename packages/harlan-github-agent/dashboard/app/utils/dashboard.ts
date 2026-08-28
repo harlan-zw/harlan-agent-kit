@@ -4,6 +4,7 @@ import type {
   AgentRole,
   AgentStartState,
   AgentTask,
+  DashboardRoutineRun,
   DashboardSnapshot,
   DashboardTask,
   Incident,
@@ -52,7 +53,7 @@ export interface ProviderCapacityPresentation {
 
 export interface ScheduledRoutineRecord {
   routine: Routine
-  latestRun: RoutineRun | undefined
+  latestRun: DashboardRoutineRun | undefined
 }
 
 export interface RoutineRunPresentation {
@@ -62,8 +63,8 @@ export interface RoutineRunPresentation {
 }
 
 /** Pairs each declared Routine with the newest run the snapshot retained. */
-export function scheduledRoutineRecords(routines: readonly Routine[], runs: readonly RoutineRun[]): ScheduledRoutineRecord[] {
-  const newest = new Map<string, RoutineRun>()
+export function scheduledRoutineRecords(routines: readonly Routine[], runs: readonly DashboardRoutineRun[]): ScheduledRoutineRecord[] {
+  const newest = new Map<string, DashboardRoutineRun>()
   runs.forEach((run) => {
     const current = newest.get(run.routineId)
     if (current === undefined || run.scheduledFor > current.scheduledFor)
@@ -78,7 +79,7 @@ export function routineRunPresentation(run: RoutineRun | undefined): RoutineRunP
     return { label: 'Never run', tone: 'neutral' }
   switch (run.state._tag) {
     case 'Queued': return { label: 'Queued', tone: 'neutral' }
-    case 'Running': return { label: 'Running', tone: 'primary' }
+    case 'Running': return { label: 'Running', tone: 'primary', detail: run.progress.label }
     case 'Completed': return { label: 'Completed', tone: 'success', detail: run.state.evidence }
     case 'Failed': return { label: 'Failed', tone: 'error', detail: run.state.reason }
     case 'Skipped': return { label: 'Skipped', tone: 'neutral', detail: run.state.reason }

@@ -520,6 +520,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         permits,
         // A scan is read only, so it needs no write access to start.
         worker: createRoutineScanWorker({
+          activityLog,
           logger: {
             error: message => options.logger.error(message),
             info: message => options.logger.info(message),
