@@ -4,7 +4,7 @@ import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } fro
 import { spawn } from 'node:child_process'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
-import { agentProviderFailureReason, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
+import { agentProviderFailureReason, agentTextEvent, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
 const fileTools = new Set(['edit', 'write', 'patch', 'multiedit'])
@@ -113,8 +113,12 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
     return { _tag: 'Failed', reason: agentProviderFailureReason('opencode', errorMessage(line.error)) }
   if (line.type === 'reasoning')
     return { _tag: 'Reasoning', text: text(line.part?.text) }
-  if (line.type === 'text')
-    return { _tag: 'Message', text: extractJsonObject(text(line.part?.text)) }
+  if (line.type === 'text') {
+    const event = agentTextEvent(text(line.part?.text))
+    return event._tag === 'Message'
+      ? { ...event, text: extractJsonObject(event.text) }
+      : event
+  }
   if (line.type === 'step_finish' && text(line.part?.reason) === 'stop')
     return { _tag: 'TurnCompleted' }
   if (line.type === 'tool_use' && line.part !== undefined) {

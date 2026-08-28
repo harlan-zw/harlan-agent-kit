@@ -459,13 +459,37 @@ class IndicatorDisplayTest(unittest.TestCase):
         agent = {
             'role': 'issue_triage',
             'progress': {'percent': 57, 'label': 'Checking issue context'},
+            'activity': [],
             'repository': 'harlan-zw/example',
             'itemNumber': 12,
         }
 
         self.assertEqual(
             indicator.active_agent_label(agent),
-            '🟢 Issue triage · 57% · harlan-zw/example #12',
+            '🟢 Issue triage · harlan-zw/example #12',
+        )
+
+    def test_labels_active_agents_with_the_percentage_the_agent_reported(self):
+        agent = {
+            'role': 'issue_triage',
+            'progress': {'percent': 70, 'label': 'Running tests and checks'},
+            'activity': [{
+                '_tag': 'Progress',
+                'at': '2026-08-14T00:00:00.000Z',
+                'percent': 25,
+                'text': 'next-step (waitlist flow read).',
+            }],
+            'repository': 'harlan-zw/example',
+            'itemNumber': 12,
+        }
+
+        self.assertEqual(
+            indicator.active_agent_label(agent),
+            '🟢 Issue triage · 25% · harlan-zw/example #12',
+        )
+        self.assertEqual(
+            indicator.active_agent_activity_label(agent),
+            '25% · next-step (waitlist flow read).',
         )
 
     def test_reads_live_activity_without_inventing_completion(self):
@@ -524,7 +548,7 @@ class IndicatorDisplayTest(unittest.TestCase):
             if item.get_label().startswith('🟢 Issue triage') and item.get_submenu() is not None
         )
         labels = menu_labels(active.get_submenu())
-        self.assertEqual(labels[:2], ['70% · Running tests and checks', 'Running pnpm test'])
+        self.assertEqual(labels[:2], ['Running tests and checks', 'Running pnpm test'])
 
     def test_system_pane_shows_a_running_routine_and_its_live_activity(self):
         run = {
@@ -567,7 +591,7 @@ class IndicatorDisplayTest(unittest.TestCase):
         )
         self.assertEqual(
             menu_labels(routine.get_submenu()),
-            ['55% · Checking the repository', 'Reading Sentry issues.', 'Open repository'],
+            ['Checking the repository', 'Reading Sentry issues.', 'Open repository'],
         )
         self.assertIn('🟢 1 agent running · Queue empty', menu_labels(stub.menus[0]))
 

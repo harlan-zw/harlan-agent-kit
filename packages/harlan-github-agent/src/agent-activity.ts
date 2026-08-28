@@ -36,6 +36,8 @@ export function truncateOutput(text: string): string {
  * Returns undefined for events that say nothing about what the agent is doing.
  */
 export function agentActivityFromEvent(event: AgentEvent, at: string): AgentActivityItem | undefined {
+  if (event._tag === 'Progress')
+    return { _tag: 'Progress', at, percent: event.percent, text: redactSecrets(event.text) }
   if (event._tag === 'CommandCompleted') {
     return {
       _tag: 'Command',

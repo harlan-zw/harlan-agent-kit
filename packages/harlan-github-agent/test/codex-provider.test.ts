@@ -51,6 +51,17 @@ describe('codexAgentEvent', () => {
     expect(codexAgentEvent({ type: 'turn.failed', error: { message: 'Usage limit reached.' } } as ThreadEvent))
       .toEqual({ _tag: 'Failed', reason: 'The codex session failed: Usage limit reached.' })
   })
+
+  it('reads the Agent percentage from an intermediate progress message', () => {
+    expect(codexAgentEvent({
+      type: 'item.completed',
+      item: { id: 'message-1', type: 'agent_message', text: '▓▓▓░░ 57% next-step (reviewed API routes).' },
+    } as ThreadEvent)).toEqual({
+      _tag: 'Progress',
+      percent: 57,
+      text: 'next-step (reviewed API routes).',
+    })
+  })
 })
 
 describe('createCodexProvider', () => {

@@ -49,6 +49,18 @@ describe('agentActivityFromEvent', () => {
   it('ignores events that say nothing about what the agent is doing', () => {
     expect(agentActivityFromEvent({ _tag: 'SessionStarted', sessionId: 'session-1' }, '2026-08-14T00:00:00.000Z')).toBeUndefined()
   })
+
+  it('records the percentage the Agent reported', () => {
+    expect(agentActivityFromEvent(
+      { _tag: 'Progress', percent: 25, text: 'next-step (waitlist flow read).' },
+      '2026-08-14T00:00:00.000Z',
+    )).toEqual({
+      _tag: 'Progress',
+      at: '2026-08-14T00:00:00.000Z',
+      percent: 25,
+      text: 'next-step (waitlist flow read).',
+    })
+  })
 })
 
 describe('createAgentActivityLog', () => {

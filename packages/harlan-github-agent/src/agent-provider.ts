@@ -42,6 +42,7 @@ export type AgentEvent
     | { _tag: 'CommandCompleted', command: string, output: string, exitCode: number | null }
     | { _tag: 'FileChanged', changes: Array<{ path: string, kind: 'add' | 'delete' | 'update' }> }
     | { _tag: 'Reasoning', text: string }
+    | { _tag: 'Progress', percent: number, text: string }
     | { _tag: 'WebSearch' }
     | { _tag: 'Message', text: string }
     | { _tag: 'Usage', usage: Extract<AgentTokenUsage, { _tag: 'Available' }> }
@@ -49,6 +50,21 @@ export type AgentEvent
     /** The session read its whole Context budget, so the provider stopped it. */
     | { _tag: 'ContextBudgetExhausted', cachedTokensRead: number }
     | { _tag: 'Failed', reason: string }
+
+const agentProgressPrefix = /^[▓░]+[ \t]+(\d{1,3})%[ \t]+/
+
+/** Separates an Agent progress report from its final result message. */
+export function agentTextEvent(text: string): Extract<AgentEvent, { _tag: 'Message' | 'Progress' }> {
+  const candidate = text.trim()
+  const match = agentProgressPrefix.exec(candidate)
+  const percent = Number(match?.[1])
+  if (match === null || !Number.isInteger(percent) || percent < 0 || percent > 100)
+    return { _tag: 'Message', text }
+  const detail = candidate.slice(match[0].length).trim()
+  return detail.length > 0 && !detail.includes('\n') && !detail.includes('\r')
+    ? { _tag: 'Progress', percent, text: detail }
+    : { _tag: 'Message', text }
+}
 
 export interface AgentTurnRequest {
   /** Provider-specific model identifier taken from the worker profile. */

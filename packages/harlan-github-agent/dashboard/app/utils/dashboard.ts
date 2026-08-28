@@ -265,6 +265,14 @@ export function activeAgentActivity(agent: ActiveAgent): AgentActivityPresentati
     return { at: activity.at, text: conciseActivityText(text), tone: 'muted' }
   }
 
+  if (activity._tag === 'Progress') {
+    return {
+      at: activity.at,
+      text: conciseActivityText(`${activity.percent}% · ${activity.text}`),
+      tone: 'muted',
+    }
+  }
+
   return {
     at: activity.at,
     text: conciseActivityText(activity.text) || 'Planning the next step',
