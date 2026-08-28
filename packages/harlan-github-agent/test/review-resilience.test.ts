@@ -165,20 +165,14 @@ function harness(input: {
 }
 
 describe('review resilience', () => {
-  it('retries when required CI settles after the Agent answered waiting', async () => {
+  it('rejects Agent gate waits because the controller owns moving gates', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
-    const initial = reviewSnapshot(pullRequest)
-    const frozen = reviewSnapshot(pullRequest)
-    initial.requiredChecks = { _tag: 'Declared', contexts: ['test'] }
-    initial.checks = { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'in_progress', conclusion: null }] }
-    frozen.requiredChecks = { _tag: 'Declared', contexts: ['test'] }
     const test = harness({
       pullRequest,
-      snapshots: [initial, frozen],
       response: {
-        metadata: { state: 'waiting', reason: 'Required CI has not concluded.', evidence: 'CI is pending.' },
+        metadata: { state: 'waiting', reason: 'Required CI has not reported.', evidence: 'No checks exist.' },
         review: passingGate,
-        verification: { state: 'waiting', reason: 'Required CI is pending.', evidence: 'CI is pending.' },
+        verification: { state: 'waiting', reason: 'Required CI has not reported.', evidence: 'No checks exist.' },
         findings: [],
         confidence: null,
       },
@@ -186,7 +180,7 @@ describe('review resilience', () => {
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    expect(result).toEqual(err('Required CI settled during the review. Retry with the current check results.'))
+    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
     expect(test.attempts).toHaveLength(0)
     expect(test.comments.at(-1)).toContain('REVIEWING')
     expect(test.comments.at(-1)).not.toContain('PENDING')
@@ -268,9 +262,9 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
-        metadata: { state: 'waiting', reason: 'No prior review context was retained from the rejected response.', evidence: '' },
+        metadata: passingGate,
         review: { state: 'waiting', reason: 'No adversarial review was completed before the previous answer was rejected.', evidence: '' },
-        verification: { state: 'waiting', reason: 'No verification run was performed in this session.', evidence: '' },
+        verification: passingGate,
         findings: [],
         confidence: null,
       },
