@@ -247,7 +247,7 @@ describe('recentlyFinished', () => {
 })
 
 describe('history outcome visibility', () => {
-  it('states how many issues a blocked review found', () => {
+  it('does not promise a Repair before its Task exists', () => {
     const blocked = reviewAgent({
       outcome: { _tag: 'Blocked' },
       findings: [{
@@ -258,7 +258,7 @@ describe('history outcome visibility', () => {
       }],
     })
 
-    expect(reviewOutcomeDetail(blocked)).toBe('1 issue found. Repair follows automatically.')
+    expect(reviewOutcomeDetail(blocked)).toBe('1 issue found.')
   })
 
   it('names the unsettled gate and reason for a pending review', () => {
@@ -668,6 +668,19 @@ describe('system pane', () => {
 
     expect(agentStartState(snapshot)).toEqual({ _tag: 'ReserveReached' })
     expect(systemState(snapshot)).toEqual({ label: 'Reserve reached', tone: 'warning' })
+  })
+
+  it('does not call the System healthy when an Agent provider is unavailable', () => {
+    const snapshot = dashboardSnapshot({
+      mutationsEnabled: true,
+      agentStart: { _tag: 'Available' },
+      providerCapacities: [
+        { ...capacity, capacity: { _tag: 'Unavailable', reason: 'spawn codex ENOENT' } },
+        { provider: 'opencode', reservePercent: 20, capacity: { _tag: 'Available', usedPercent: 29, resetsAt: '2026-08-28T12:00:00.000Z' } },
+      ],
+    })
+
+    expect(systemState(snapshot)).toEqual({ label: 'Agent provider unavailable', tone: 'warning' })
   })
 
   it('puts an Incident needing a person above capacity status', () => {

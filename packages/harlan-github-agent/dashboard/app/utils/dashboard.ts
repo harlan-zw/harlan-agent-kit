@@ -155,6 +155,8 @@ export function systemState(snapshot: DashboardSnapshot): { label: string, tone:
     return { label: 'Retrying', tone: 'warning' }
   if (start._tag === 'ReserveReached')
     return { label: 'Reserve reached', tone: 'warning' }
+  if (snapshot.providerCapacities.some(entry => entry.capacity._tag === 'Unavailable'))
+    return { label: 'Agent provider unavailable', tone: 'warning' }
   return { label: 'Healthy', tone: 'success' }
 }
 
@@ -398,8 +400,6 @@ export function reviewOutcomeDetail(agent: ReviewAgent): string {
   const openFindings = agent.findings.filter(finding => finding._tag === 'Open')
   if (openFindings.length > 0) {
     const count = `${openFindings.length} issue${openFindings.length === 1 ? '' : 's'} found.`
-    if (openFindings.every(finding => finding.resolution === 'Repair'))
-      return `${count} Repair follows automatically.`
     if (openFindings.some(finding => finding.resolution === 'Dismissal'))
       return `${count} Dismissal recommended.`
     return count

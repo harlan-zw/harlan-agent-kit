@@ -95,6 +95,58 @@ describe('dashboard HTTP app', () => {
     ])
   })
 
+  it('streams live Agent activity when durable state does not change', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const shutdown = new AbortController()
+    const taskId = 'a'.repeat(64)
+    const activity: Array<{ _tag: 'Reasoning', at: string, text: string }> = []
+    const snapshot = dashboardSnapshot({
+      agents: [{
+        _tag: 'ActiveAgent',
+        id: taskId,
+        provider: 'codex',
+        role: 'adversarial_review',
+        author: 'harlan-zw',
+        session: { _tag: 'Starting' },
+        repository: 'harlan-zw/example',
+        repositoryUrl: 'https://github.com/harlan-zw/example',
+        subjectKind: 'pull_request',
+        itemNumber: 24,
+        title: 'Fix parser',
+        subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
+        startedAt: now().toISOString(),
+        updatedAt: now().toISOString(),
+        progress: { percent: 40, label: 'Reviewing' },
+        activity: [],
+        state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      }],
+    })
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      eventIntervalMilliseconds: 1_000,
+      now,
+      shutdownSignal: shutdown.signal,
+      activityLog: { read: id => id === taskId ? activity : [] },
+      store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } })
+    const reader = response.body!.getReader()
+    await reader.read()
+    activity.push({ _tag: 'Reasoning', at: now().toISOString(), text: 'Reading the changed files.' })
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    const update = await Promise.race([
+      reader.read(),
+      new Promise<undefined>(resolve => setTimeout(resolve, 50, undefined)),
+    ])
+    shutdown.abort()
+    await reader.cancel()
+    expect(new TextDecoder().decode(update?.value)).toContain('Reading the changed files.')
+  })
+
   it('switches the Agent provider, model, and reasoning effort', async () => {
     const switches: unknown[] = []
     const app = createAgentApp({

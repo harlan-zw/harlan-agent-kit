@@ -163,7 +163,7 @@ function hasDashboardAccess(request: Request, password: string): boolean {
 }
 
 function observableState(options: AgentAppOptions): string {
-  const snapshot = options.store.getDashboardSnapshot(options.now().toISOString())
+  const snapshot = dashboardSnapshot(options)
   return JSON.stringify({ ...snapshot, generatedAt: '' })
 }
 
