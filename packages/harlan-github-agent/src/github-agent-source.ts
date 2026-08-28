@@ -716,20 +716,38 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const actor = options.actorLogin(repository).toLowerCase()
       return octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
         .then(async (existing) => {
-          if (existing.data.user?.login.toLowerCase() !== actor)
-            return err('The stored automated review comment belongs to another GitHub actor.')
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
             return err('The stored automated review comment belongs to another pull request.')
+          const legacyActor = options.legacyActor
+          const existingHead = automatedReviewHead(existing.data.body ?? '')?.toLowerCase()
+          const expectedHead = automatedReviewHead(expectedBody)?.toLowerCase()
+          const nextHead = automatedReviewHead(body)?.toLowerCase()
+          const legacyOwned = legacyActor !== undefined
+            && existing.data.user?.login.toLowerCase() === legacyActor.login.toLowerCase()
+            && existing.data.body?.includes(AUTOMATED_REVIEW_MARKER)
+            && expectedBody.includes(AUTOMATED_REVIEW_MARKER)
+            && body.includes(AUTOMATED_REVIEW_MARKER)
+            && existingHead !== undefined
+            && existingHead === expectedHead
+            && existingHead === nextHead
+          if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
+            return err('The stored automated review comment belongs to another GitHub actor.')
           if (existing.data.body === body && existing.data.html_url !== undefined)
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           if (existing.data.body !== expectedBody)
             return ok({ _tag: 'Changed' as const })
-          await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
+          const writer = legacyOwned && legacyActor !== undefined
+            ? await clientWith(legacyActor.tokens, repository.github, 'item_write', signal)
+            : octokit
+          if (writer._tag === 'Err')
+            return writer
+          await writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
           // The compare and swap above is a client side read then write, so a
           // concurrent writer can land between the two. Reading back is the
           // only way to see that the written body no longer holds.
-          const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
-          if (confirmed.data.user?.login.toLowerCase() !== actor)
+          const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
+          const writerLogin = legacyOwned && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
+          if (confirmed.data.user?.login.toLowerCase() !== writerLogin)
             return err('GitHub did not confirm the edited automated review comment.')
           if (confirmed.data.body !== body)
             return ok({ _tag: 'Changed' as const })
