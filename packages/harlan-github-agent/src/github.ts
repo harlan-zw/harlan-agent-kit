@@ -102,6 +102,17 @@ export function isAutomatedGitHubActor(
   return actor.type === 'Bot' || login.includes('bot') || login.startsWith('app/')
 }
 
+export function isEligibleGitHubSubjectAuthor(
+  actor: { login: string, type?: string | undefined },
+  subject:
+    | { kind: 'issue', routineFiled: boolean }
+    | { kind: 'pull_request', allowedAuthors: readonly string[] },
+): boolean {
+  if (subject.kind === 'issue')
+    return subject.routineFiled || !isAutomatedGitHubActor(actor)
+  return !isAutomatedGitHubActor(actor, subject.allowedAuthors)
+}
+
 export function isIssueAtOrAfterCutoff(createdAt: string, cutoff: string): boolean {
   return Date.parse(createdAt) >= Date.parse(`${cutoff}T00:00:00.000Z`)
 }
@@ -346,10 +357,10 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             // author allowlist never hides it from triage again.
             const labels = labelNames(issue.labels)
             const routineFiled = hasRoutineIssueLabel(labels)
-            if (!routineFiled && isAutomatedGitHubActor({
+            if (!isEligibleGitHubSubjectAuthor({
               login: issue.user?.login ?? 'ghost',
               type: issue.user?.type,
-            }, repository.writablePullRequestAuthors)) {
+            }, { kind: 'issue', routineFiled })) {
               return []
             }
             if (!isIssueAtOrAfterCutoff(issue.created_at, options.issueCutoff))
@@ -369,10 +380,10 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             }]
           })
 
-        const eligiblePullRows = pullRows.filter(pull => !isAutomatedGitHubActor({
+        const eligiblePullRows = pullRows.filter(pull => isEligibleGitHubSubjectAuthor({
           login: pull.user?.login ?? 'ghost',
           type: pull.user?.type,
-        }, repository.writablePullRequestAuthors))
+        }, { kind: 'pull_request', allowedAuthors: repository.writablePullRequestAuthors }))
         const pullRequests: GitHubItem[] = await mapConcurrent(eligiblePullRows, 4, async (pull) => {
           const [detail, comments] = await Promise.all([
             octokit.value.rest.pulls.get({ owner, repo, pull_number: pull.number, ...requestOptions }).then(response => response.data),

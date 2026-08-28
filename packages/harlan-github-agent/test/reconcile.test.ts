@@ -26,6 +26,48 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
+  it('closes an allowed bot issue and clears its failed triage incident', async () => {
+    const store = openJournalStore(':memory:')
+    const botIssue = issueItem({ author: AGENT_ACTOR_LOGIN })
+    const repository = repositoryMapping({ writablePullRequestAuthors: ['harlan-zw', AGENT_ACTOR_LOGIN] })
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'allowed-bot-issue',
+      observedAt: '2026-08-13T00:01:00.000Z',
+      source: 'poll',
+      subject: botIssue,
+    })
+
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-13T00:01:0${attempt}.000Z`
+      const task = store.claimNextIssueTriageTask(`worker-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected Issue triage attempt ${attempt}.`)
+      store.failWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'The issue changed before triage started.',
+      })
+    }
+    expect(store.listIncidents()).toHaveLength(1)
+
+    const result = await reconcileRepository(repository, {
+      github: { listOpenItems: () => Promise.resolve(ok([botIssue])) },
+      store,
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+    })
+
+    expect(result).toEqual({
+      _tag: 'Ok',
+      value: { repository: repository.github, subjects: 0, inserted: 0, duplicates: 0, stale: 0, closed: 1 },
+    })
+    expect(store.resolveStaleTaskIncidents('2026-08-13T01:00:01.000Z')).toBe(1)
+    expect(store.listIncidents()).toEqual([])
+    store.close()
+  })
+
   it('records our own Routine issue even when the allowlist lists only humans', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
