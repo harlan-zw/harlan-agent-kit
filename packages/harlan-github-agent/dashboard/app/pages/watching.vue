@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useEventListener } from '@vueuse/core'
-import { repositoryState, statusClass } from '../utils/dashboard.ts'
+import { repositoryState, repositoryWritesControl, statusClass } from '../utils/dashboard.ts'
 
 const {
   snapshot,
@@ -121,8 +121,10 @@ useHead({
                 {{ repository.ownership }}
               </td>
               <td class="py-2.5 pr-4">
+                <!-- An external watch has no repositories row, so an enable action could only answer 404. -->
+                <span v-if="repositoryWritesControl(repository)._tag === 'External'" class="font-mono text-sm text-dimmed">n/a</span>
                 <UButton
-                  v-if="repository.writesEnabled"
+                  v-else-if="repository.writesEnabled"
                   size="xs"
                   color="neutral"
                   variant="ghost"

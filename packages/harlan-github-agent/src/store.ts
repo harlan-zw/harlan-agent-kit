@@ -67,6 +67,7 @@ import type {
   ReviewStatusTaskPhase,
   Routine,
   RoutineReportCommand,
+  RoutineReportCommandState,
   RoutineRun,
   RoutineRunState,
   RoutineSpecEntry,
@@ -7716,14 +7717,25 @@ export function openJournalStore(
     const tasks = taskRows(database).map(taskFromRow)
     const routines = listRoutines()
     const candidatesByRoutine = new Map(routines.map(routine => [routine.id, listCandidates(routine.id)]))
-    const routineRuns = routines
+    const latestRoutineRuns = routines
       .flatMap(routine => listRoutineRuns(routine.id, 5))
       .sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor))
       .slice(0, 50)
+    // One report command per run, so the dashboard can tell a published run
+    // from one still waiting on GitHub writes.
+    const reportStateRows = latestRoutineRuns.length === 0
+      ? []
+      : database.prepare(`
+          SELECT run_id, state_tag FROM routine_report_commands
+          WHERE run_id IN (${latestRoutineRuns.map(() => '?').join(', ')})
+        `).all(...latestRoutineRuns.map(run => run.id)) as unknown as Array<{ run_id: string, state_tag: RoutineReportCommandState }>
+    const reportStatesByRun = new Map(reportStateRows.map(row => [row.run_id, row.state_tag]))
+    const routineRuns = latestRoutineRuns
       .map(run => ({
         ...run,
         candidates: (candidatesByRoutine.get(run.routineId) ?? []).filter(candidate => candidate.runId === run.id),
         activity: [],
+        reportState: reportStatesByRun.get(run.id) ?? null,
       }))
     const rejectedIssueWorkResults = new Map((database.prepare(`
       SELECT task_transitions.task_id, COUNT(*) AS occurrences

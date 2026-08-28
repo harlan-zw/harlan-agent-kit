@@ -635,7 +635,12 @@ export interface RoutineRun {
 export interface DashboardRoutineRun extends RoutineRun {
   candidates: Candidate[]
   activity: AgentActivityItem[]
+  /** State of this run's tracking-issue report command, or null when none was staged. */
+  reportState: RoutineReportCommandState | null
 }
+
+/** The lifecycle of one Routine run's tracking-issue report. */
+export type RoutineReportCommandState = 'Pending' | 'Running' | 'Published' | 'Failed'
 
 /**
  * What happened to one Candidate.

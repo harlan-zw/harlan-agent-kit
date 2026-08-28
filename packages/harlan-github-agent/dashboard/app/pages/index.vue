@@ -25,6 +25,7 @@ import {
   recentlyFinished,
   reviewOutcomeLabel,
   reviewOutcomeTone,
+  routineReportPending,
   routineRunPresentation,
   routineTrackingUrl,
   scheduledRoutineRecords,
@@ -94,6 +95,7 @@ const routineRecords = computed(() => {
     presentation: routineRunPresentation(record.latestRun),
     trackingUrl: routineTrackingUrl(record.routine),
     writesEnabled: repositoryWrites.get(record.routine.repository) ?? false,
+    reportPublished: record.latestRun?.reportState === 'Published',
   }))
 })
 
@@ -341,7 +343,7 @@ useHead({
               {{ record.presentation.detail }}
             </p>
             <p
-              v-if="record.latestRun && !record.writesEnabled && ['Completed', 'Skipped'].includes(record.latestRun.state._tag)"
+              v-if="record.latestRun && routineReportPending(record.latestRun, record.writesEnabled, record.reportPublished)"
               class="status-warning text-xs sm:col-span-2"
             >
               Report pending.
