@@ -92,6 +92,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
         incidents.push(incident)
         return { ...incident, id: 'incident-1', occurrences: 1, firstSeenAt: incident.at, lastSeenAt: incident.at } satisfies Incident
       },
+      recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
       queueBaselineRepairForReview: () => {
         baselineRepairs += 1
         return { _tag: 'Queued', taskId: 'baseline-task' }

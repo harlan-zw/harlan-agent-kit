@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ReviewAgent } from '../../../src/types.ts'
-import type { HistoryCategory } from '../utils/dashboard.ts'
+import type { HistoryCategory, HistoryRecord } from '../utils/dashboard.ts'
 import { useClipboard } from '@vueuse/core'
 import {
   buildHistory,
@@ -10,6 +10,7 @@ import {
   reviewOutcomeLabel,
   reviewOutcomeTone,
   reviewUsageLabel,
+  routineRunPresentation,
   statusClass,
   taskIsIssue,
   taskKindLabel,
@@ -32,6 +33,7 @@ const {
   isCurrentRevision,
   itemKey,
 } = useDashboard()
+const route = useRoute()
 
 const reviewGateNames = ['head', 'merge', 'metadata', 'review', 'verification', 'ci'] as const
 
@@ -49,12 +51,39 @@ const outcomeFilters: Array<{ label: string, value: 'all' | HistoryCategory }> =
   { label: 'Superseded', value: 'superseded' },
 ]
 
-const records = computed(() => buildHistory(reviewAgents.value, snapshot.value.tasks))
+const records = computed(() => buildHistory(reviewAgents.value, snapshot.value.tasks, snapshot.value.routineRuns))
+
+function recordWork(record: HistoryRecord): string {
+  if (record._tag === 'Review')
+    return 'adversarial_review'
+  if (record._tag === 'Routine')
+    return 'routine_scan'
+  return taskWork(record.task)
+}
+
+function localDate(at: string): string {
+  const date = new Date(at)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const statsFilter = computed(() => ({
+  from: typeof route.query.from === 'string' ? route.query.from : undefined,
+  to: typeof route.query.to === 'string' ? route.query.to : undefined,
+  work: typeof route.query.work === 'string' ? route.query.work : undefined,
+}))
 
 const filtered = computed(() => records.value.filter((record) => {
-  if (outcomeFilter.value === 'all')
-    return true
-  return historyCategory(record) === outcomeFilter.value
+  if (outcomeFilter.value !== 'all' && historyCategory(record) !== outcomeFilter.value)
+    return false
+  if (statsFilter.value.work !== undefined && recordWork(record) !== statsFilter.value.work)
+    return false
+  const date = localDate(record.at)
+  if (statsFilter.value.from !== undefined && date < statsFilter.value.from)
+    return false
+  return statsFilter.value.to === undefined || date <= statsFilter.value.to
 }))
 
 function isExpanded(id: string): boolean {
@@ -107,6 +136,13 @@ useHead({
       </div>
     </div>
 
+    <div v-if="statsFilter.from || statsFilter.to || statsFilter.work" class="mb-4 flex flex-wrap items-center justify-between gap-3 border-l-2 border-primary pl-4 text-sm">
+      <span class="text-muted">Showing evidence for the selected Stats range.</span>
+      <UButton to="/history" size="xs" color="neutral" variant="ghost">
+        Clear Stats filter
+      </UButton>
+    </div>
+
     <ol v-if="filtered.length > 0" class="divide-y divide-default border-y border-default">
       <li v-for="record in filtered" :id="record._tag === 'Review' ? `agent-${record.agent.id}` : undefined" :key="record.key">
         <!-- Work that produces no review still gets a line, so nothing finishes invisibly. -->
@@ -139,6 +175,28 @@ useHead({
               {{ taskStateDetail(record.task) }}
             </p>
           </div>
+        </div>
+
+        <div v-else-if="record._tag === 'Routine'" class="grid gap-x-4 gap-y-1 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <UBadge
+              :color="routineRunPresentation(record.run).tone"
+              :class="routineRunPresentation(record.run).tone === 'neutral' ? undefined : statusClass(routineRunPresentation(record.run).tone)"
+              variant="subtle"
+            >
+              {{ routineRunPresentation(record.run).label }}
+            </UBadge>
+            <WorkChip work="routine_scan" />
+            <span class="text-sm">{{ record.run.name }}</span>
+            <span class="font-mono text-xs text-dimmed">{{ record.run.repository }}</span>
+          </div>
+          <p class="font-mono text-xs text-dimmed md:text-right">
+            {{ relativeTime(record.at) }}
+          </p>
+          <p v-if="routineRunPresentation(record.run).detail" class="text-sm text-muted md:col-span-2">
+            {{ routineRunPresentation(record.run).detail }}
+            <span v-if="record.run.candidates.length > 0"> {{ record.run.candidates.length }} candidate{{ record.run.candidates.length === 1 ? '' : 's' }} recorded.</span>
+          </p>
         </div>
 
         <article v-else>

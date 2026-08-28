@@ -89,6 +89,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -144,6 +145,7 @@ describe('subject Workers', () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const comments: string[] = []
     const stamped: string[] = []
+    const triageRuns: unknown[] = []
     const capture: ProviderCapture = { requests: [] }
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
@@ -187,6 +189,10 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: (input) => {
+          triageRuns.push(input)
+          return { _tag: 'Inserted' }
+        },
         queueBaselineRepairForReview: () => { throw new Error('A skipped Review must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -229,6 +235,10 @@ describe('subject Workers', () => {
     expect(comments[0]).toContain('REVIEW SKIPPED')
     expect(comments[0]).toContain('harlan-agent-review')
     expect(capture.requests).toEqual([])
+    expect(triageRuns).toEqual([expect.objectContaining({
+      taskId: 'review-task',
+      outcome: { _tag: 'ReviewSkipped', reason: 'Only prose documentation changed.' },
+    })])
   })
 
   it('does not start a second review for the same head commit', async () => {
@@ -273,6 +283,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -372,6 +383,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: (input) => {
@@ -479,6 +491,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: (input) => {
@@ -595,6 +608,7 @@ describe('subject Workers', () => {
         },
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: (input) => {
@@ -673,6 +687,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => {
           baselineQueued = true
           return { _tag: 'Queued', taskId: 'baseline-task' }
@@ -762,6 +777,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => ({
           _tag: 'NotAuthorized',
           reason: 'Repository policy does not authorize Baseline repair for this base commit.',
@@ -851,6 +867,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A stacked pull request must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
@@ -936,6 +953,7 @@ describe('subject Workers', () => {
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A Baseline repair must not queue another Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),

@@ -1,4 +1,5 @@
 import type { AgentSelection } from '../src/agent-profile.ts'
+import type { StatsRange, StatsSnapshot } from '../src/stats.ts'
 import type { SelectionMode } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { join } from 'node:path'
@@ -10,9 +11,29 @@ const allowedOrigin = 'https://harlan-github-agent.localhost'
 const allowedHost = new URL(allowedOrigin).host
 const dashboardPassword = 'test-password-with-at-least-32-bytes'
 const authorization = `Basic ${Buffer.from(`agent:${dashboardPassword}`).toString('base64')}`
-const now = () => new Date('2026-08-13T01:00:00.000Z')
+function now() {
+  return new Date('2026-08-13T01:00:00.000Z')
+}
 const dashboardRoot = join(import.meta.dirname, 'fixtures', 'dashboard')
+function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
+  return {
+    generatedAt,
+    range,
+    previousRange: { from: '2026-06-14T00:00:00.000Z', to: range.from },
+    coverage: { pullRequestTriage: { _tag: 'Complete' } },
+    summary: {
+      changedPullRequests: { value: 0, previous: 0 },
+      conflictResolutions: { value: 0, previous: 0 },
+      fixCommits: { value: 0, previous: 0 },
+      openedPullRequests: { value: 0, previous: 0 },
+      reviewFindings: { value: 0, previous: 0 },
+    },
+    days: [],
+    work: [],
+  }
+}
 const agentControls = {
+  getStats: (range: StatsRange, generatedAt: string) => statsSnapshot(range, generatedAt),
   pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
   resumeAgents: (_at: string) => ({ _tag: 'Running' as const }),
   selectAgent: (selection: AgentSelection, _at: string) => selection,
@@ -267,6 +288,54 @@ describe('dashboard HTTP app', () => {
     )
 
     expect(response.status).toBe(400)
+  })
+
+  it('returns Stats for one date range', async () => {
+    const requests: Array<{ range: StatsRange, generatedAt: string }> = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        getStats(range, generatedAt) {
+          requests.push({ range, generatedAt })
+          return statsSnapshot(range, generatedAt)
+        },
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+
+    const response = await app.request(
+      `http://${allowedHost}/api/stats?from=2026-07-14T00%3A00%3A00.000Z&to=2026-08-13T00%3A00%3A00.000Z&time_zone=Australia%2FMelbourne`,
+      { headers: { authorization, host: allowedHost } },
+    )
+
+    expect(response.status).toBe(200)
+    expect(requests).toEqual([{
+      generatedAt: now().toISOString(),
+      range: {
+        from: '2026-07-14T00:00:00.000Z',
+        to: '2026-08-13T00:00:00.000Z',
+        timeZone: 'Australia/Melbourne',
+      },
+    }])
+  })
+
+  it('rejects an invalid Stats date range', async () => {
+    const response = await createApp().request(
+      `http://${allowedHost}/api/stats?from=2026-08-13T00%3A00%3A00.000Z&to=2026-07-14T00%3A00%3A00.000Z&time_zone=UTC`,
+      { headers: { authorization, host: allowedHost } },
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual(expect.objectContaining({ message: 'The end date must follow the start date.' }))
   })
 
   it('records a local Review and repair approval for the exact Revision', async () => {

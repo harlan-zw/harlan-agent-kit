@@ -43,6 +43,7 @@ const blockingIncidents = computed(() => incidents.value.filter(incident => inci
 const pages = computed(() => [
   { to: '/', label: 'Board', icon: 'i-lucide-columns-3', count: decisions.value.length, tone: 'warning' as const },
   { to: '/history', label: 'History', icon: 'i-lucide-history', count: 0, tone: 'warning' as const },
+  { to: '/stats', label: 'Stats', icon: 'i-lucide-chart-no-axes-column', count: 0, tone: 'warning' as const },
   { to: '/watching', label: 'Watching', icon: 'i-lucide-radio', count: unhealthyRepositories.value, tone: 'error' as const },
   { to: '/flow', label: 'Flow', icon: 'i-lucide-git-branch', count: 0, tone: 'warning' as const },
 ])

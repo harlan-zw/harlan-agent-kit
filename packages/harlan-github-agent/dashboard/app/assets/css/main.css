@@ -8,6 +8,7 @@
 
 :root {
   color-scheme: light dark;
+  --ui-primary: var(--ui-color-primary-700);
   --ui-radius: 0.375rem;
   --ui-bg: oklch(98.5% 0 0);
   --ui-bg-muted: oklch(96.5% 0 0);
@@ -21,6 +22,7 @@
 }
 
 .dark {
+  --ui-primary: var(--ui-color-primary-400);
   --ui-bg: oklch(14.5% 0 0);
   --ui-bg-muted: oklch(17.5% 0 0);
   --ui-bg-elevated: oklch(19.5% 0 0);

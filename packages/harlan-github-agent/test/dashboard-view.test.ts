@@ -211,6 +211,11 @@ describe('buildHistory', () => {
     const history = buildHistory([reviewAgent({ revisionId: 'rev-b' })], [reviewTask])
     expect(history).toHaveLength(2)
   })
+
+  it('keeps a finished Routine as evidence', () => {
+    const history = buildHistory([], [], [routineRun()])
+    expect(history).toEqual([expect.objectContaining({ _tag: 'Routine', key: 'routine-run-1' })])
+  })
 })
 
 describe('recentlyFinished', () => {

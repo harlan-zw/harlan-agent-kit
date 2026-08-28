@@ -958,6 +958,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }
         return { ...current, agentStart: resolveAgentStartState(current) }
       },
+      getStats: store.getStats,
       listReviewRuns: store.listReviewRuns,
       pauseAgents: store.pauseAgents,
       requestReviewRerun: store.requestReviewRerun,

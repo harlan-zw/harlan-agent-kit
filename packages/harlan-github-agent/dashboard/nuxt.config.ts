@@ -1,5 +1,6 @@
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-13',
+  pages: { pattern: ['**/*.vue', '!**/_*.vue'] },
   css: ['~/assets/css/main.css'],
   devtools: { enabled: true },
   modules: ['@nuxt/ui', '@nuxt/fonts', '@nuxt/icon', '@vueuse/nuxt'],
@@ -27,6 +28,11 @@ export default defineNuxtConfig({
   ui: {
     theme: {
       colors: ['primary', 'success', 'warning', 'error', 'neutral'],
+    },
+  },
+  nitro: {
+    prerender: {
+      routes: ['/', '/history', '/stats', '/watching', '/flow'],
     },
   },
 })

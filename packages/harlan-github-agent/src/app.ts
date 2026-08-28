@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot } from './types.ts'
 import { Buffer } from 'node:buffer'
@@ -10,9 +11,10 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createError, createEventStream, H3 } from 'h3'
 import { parseAgentSelection } from './agent-profile.ts'
+import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -25,7 +27,7 @@ export interface AgentAppOptions {
 }
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
-const DASHBOARD_PAGES = ['history', 'watching', 'flow'] as const
+const DASHBOARD_PAGES = ['history', 'watching', 'flow', 'stats'] as const
 const EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS = 12_000
 
 const securityHeaders = {
@@ -218,6 +220,17 @@ function reviewRerunRequest(value: unknown): ReviewRerunRequest | undefined {
   return body as unknown as ReviewRerunRequest
 }
 
+function statsRangeMessage(error: StatsRangeError): string {
+  switch (error._tag) {
+    case 'MissingFrom':
+    case 'InvalidFrom': return 'Choose a valid start date.'
+    case 'MissingTo':
+    case 'InvalidTo': return 'Choose a valid end date.'
+    case 'InvalidTimeZone': return 'Choose a supported time zone.'
+    case 'EmptyRange': return 'The end date must follow the start date.'
+  }
+}
+
 function approvalRequest(value: unknown): ApprovalRequest | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     return undefined
@@ -394,6 +407,18 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (repository === null || !/^[^/]+\/[^/]+$/.test(repository) || !Number.isSafeInteger(pullRequestNumber) || pullRequestNumber < 1)
       throw createError({ status: 400, statusText: 'Bad Request', message: 'Valid repository and pull_request query values are required.' })
     return { runs: options.store.listReviewRuns(repository, pullRequestNumber) }
+  })
+
+  app.get('/api/stats', (event) => {
+    const query = new URL(event.req.url).searchParams
+    const range = parseStatsRange({
+      from: query.get('from') ?? undefined,
+      to: query.get('to') ?? undefined,
+      timeZone: query.get('time_zone') ?? undefined,
+    })
+    if (range._tag === 'Err')
+      throw createError({ status: 400, statusText: 'Bad Request', message: statsRangeMessage(range.error) })
+    return options.store.getStats(range.value, options.now().toISOString())
   })
 
   app.post('/api/approvals', async (event) => {

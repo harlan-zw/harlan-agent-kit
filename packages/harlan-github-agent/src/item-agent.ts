@@ -83,7 +83,7 @@ export interface ItemAgentOptions {
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   pullRequestTriage?: PullRequestTriageAgent
-  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -922,10 +922,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         freshReviewSession = true
       }
       else if (task.rerun._tag === 'NotRequested' && options.pullRequestTriage !== undefined) {
+        const triageStartedAt = options.now().toISOString()
         const files = await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
         const triage = files._tag === 'Err'
           ? files
           : await options.pullRequestTriage.run(task, { body: snapshot.value.body, changedFiles: files.value }, signal)
+        let statsOutcome: { _tag: 'ReviewRequired' | 'ReviewRequiredAfterFailure', reason: string }
         if (triage._tag === 'Ok' && triage.value._tag === 'ADVERSARIAL_REVIEW_SKIPPED') {
           // A person may add the manual override while the cheap Agent runs.
           // Re-read labels before settling so that late authority always wins.
@@ -942,10 +944,28 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
                 reviewSkippedComment(task.pullRequest.headSha, triage.value, options.now().toISOString()),
                 signal,
               )
-              if (published._tag === 'Ok')
+              if (published._tag === 'Ok') {
+                const recorded = options.store.recordPullRequestTriageRun({
+                  taskId: task.id,
+                  repository: task.repository,
+                  pullRequestNumber: task.pullRequestNumber,
+                  revisionId: task.revisionId,
+                  headSha: task.pullRequest.headSha,
+                  startedAt: triageStartedAt,
+                  completedAt: options.now().toISOString(),
+                  outcome: { _tag: 'ReviewSkipped', reason: triage.value.reason },
+                })
+                if (recorded._tag === 'Conflict')
+                  return err('The pull request already has a different triage decision.')
+                if (recorded._tag === 'Rejected')
+                  return err('The pull request changed before its triage decision was recorded.')
                 return ok({ evidence: JSON.stringify(triage.value) })
+              }
             }
           }
+          statsOutcome = manuallyOverridden
+            ? { _tag: 'ReviewRequired', reason: 'A manual Review override arrived before triage finished.' }
+            : { _tag: 'ReviewRequired', reason: 'The Review skip could not be published safely.' }
           freshReviewSession = true
         }
         else if (triage._tag === 'Ok') {
@@ -961,9 +981,27 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
             if (consumed._tag === 'Err')
               options.onProgressPublishFailure?.(task, consumed.error)
           }
+          statsOutcome = { _tag: 'ReviewRequired', reason: triage.value.reason }
           freshReviewSession = true
         }
-        // A failed or malformed triage answer cannot waive the Review.
+        else {
+          // A failed or malformed triage answer cannot waive the Review.
+          statsOutcome = { _tag: 'ReviewRequiredAfterFailure', reason: triage.error }
+        }
+        const recorded = options.store.recordPullRequestTriageRun({
+          taskId: task.id,
+          repository: task.repository,
+          pullRequestNumber: task.pullRequestNumber,
+          revisionId: task.revisionId,
+          headSha: task.pullRequest.headSha,
+          startedAt: triageStartedAt,
+          completedAt: options.now().toISOString(),
+          outcome: statsOutcome,
+        })
+        if (recorded._tag === 'Conflict')
+          return err('The pull request already has a different triage decision.')
+        if (recorded._tag === 'Rejected')
+          return err('The pull request changed before its triage decision was recorded.')
       }
       const markedBaselineRepair = snapshot.value.pullRequest.purpose._tag === 'BaselineRepair'
       const repairsBaseline = markedBaselineRepair
