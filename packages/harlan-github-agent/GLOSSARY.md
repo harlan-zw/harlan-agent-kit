@@ -49,8 +49,8 @@ did not cover it.
 | Publication command | `publication_commands` | Controller | One to one Task | none |
 | Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
 | Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
-| Review gate | `review_runs.gates` | Adversarial review | Six per Review run | gate |
-| Review outcome | `review_runs.outcome_tag` | Adversarial review | One per Review run | READY, PENDING, or BLOCKED |
+| Review gate | `review_runs.gates` | Controller | Three per Review run | gate |
+| Review outcome | `review_runs.outcome_tag` | Controller | One per Review run | READY, PENDING, or BLOCKED |
 | Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task | none |
 | Review finding | `review_runs.findings` | Adversarial review | N per Review run | issue |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
@@ -397,7 +397,9 @@ The controller verifies the expected head SHA before each write. Agents cannot e
 
 One agent turn that produces one automated review.
 
-A Review run stores its Revision, gate evidence, Review findings, Review outcome, agent version, and timestamps.
+A Review run stores its Revision, Agent report, controller gate evidence, Review outcome, agent version, and timestamps.
+
+Store it before later GitHub reads or writes. A failed controller operation resumes from the Review run.
 
 Named after GitHub's `check run`, which has the same shape: one execution against one commit that reports a conclusion. Do not use attempt, pass, or session.
 
@@ -411,7 +413,7 @@ Use `Unavailable` when the Agent provider reports no usage. Never infer usage fr
 
 One required condition for a Review outcome.
 
-Use only head, merge, metadata, review, verification, and CI gates.
+Use only merge, review, and CI gates. Head stability is an invariant checked before publication.
 
 A Review gate is this service's own condition. GitHub's `required check` is a different thing, so never call a Review gate a check, and never call a GitHub check a gate.
 
@@ -419,7 +421,7 @@ A Review gate is this service's own condition. GitHub's `required check` is a di
 
 One deterministic result derived from all Review gates.
 
-Use `READY`, `PENDING`, or `BLOCKED`. Only `READY` carries confidence, and confidence is optional.
+Use `READY`, `PENDING`, or `BLOCKED`. Only `READY` shows confidence.
 
 `PENDING` and `BLOCKED` are GitHub's own words: `PENDING` is a check status and a review state, `blocked` is a mergeable state. Do not use waiting, in progress, or failed.
 
@@ -467,7 +469,7 @@ One GitHub label, `harlan-agent-auto-merge`, that hands a pull request to GitHub
 
 Only a user with write access can label a pull request, so the label cannot come from an outside contributor. Without it, the pull request waits for Harlan.
 
-After a `READY` Review outcome at or above the configured confidence, the service enables GitHub's auto-merge at the exact head SHA. **GitHub performs the merge**, once GitHub's own branch protection is satisfied. A new push cancels it, because GitHub cancels auto-merge on a moved head SHA.
+After a published `READY` Review outcome at or above the configured confidence, the service enables GitHub's auto-merge at the exact head SHA. **GitHub performs the merge**, once GitHub's own branch protection is satisfied. A new push cancels it, because GitHub cancels auto-merge on a moved head SHA.
 
 Auto merge never changes whether a pull request is reviewed. Automated review runs either way.
 

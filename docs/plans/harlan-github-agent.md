@@ -211,7 +211,6 @@ repositories:
     default_branch: main
     issue_work: true
     pr_review: true
-    pr_conformance: true
     take_ownership:
       enabled: true
       production_url: https://example.com

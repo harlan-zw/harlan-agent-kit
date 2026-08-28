@@ -33,7 +33,6 @@ export interface RepositoryMapping {
   /** New issue work stops when this repository reaches the limit. */
   maxOpenPullRequests: number | null
   pullRequestReview: boolean
-  pullRequestConformance: boolean
   conflictResolution: boolean
   takeOwnership: TakeOwnershipConfig
 }
@@ -244,11 +243,8 @@ export type ReviewGateState
     | { _tag: 'Failed', reason: string, evidence: ReviewEvidence[] }
 
 export interface ReviewGates {
-  head: ReviewGateState
   merge: ReviewGateState
-  metadata: ReviewGateState
   review: ReviewGateState
-  verification: ReviewGateState
   ci: ReviewGateState
 }
 
@@ -277,10 +273,9 @@ export type ReviewFinding
     }
 
 export type ReviewOutcome
-  /** `confidence` is absent when the agent passed every gate but named no score. */
   = | { _tag: 'Ready', confidence?: number | undefined }
-    | { _tag: 'Pending' }
-    | { _tag: 'Blocked' }
+    | { _tag: 'Pending', confidence?: number | undefined }
+    | { _tag: 'Blocked', confidence?: number | undefined }
 
 /** How a Review outcome is spelled where a person reads it, in the canonical comment heading and on the pull request label. */
 export type ReviewOutcomeName = Uppercase<ReviewOutcome['_tag']>
@@ -345,15 +340,14 @@ export type RecordReviewRunResult
     | { _tag: 'Conflict', reviewRunId: string }
     | { _tag: 'Rejected', reason: RecordReviewRunRejection }
 
-/**
- * One CI re-gate settlement for a Review run that only CI held back.
- *
- * The settlement carries the restated answer of the same agent turn and links
- * to the run it supersedes, so the journal counts that turn once.
- */
+/** One published controller-gate refresh for an existing Agent report. */
 export interface SupersedeReviewRunInput extends RecordReviewRunInput {
-  /** The Review run whose only unsettled gate was CI. */
+  /** The Review run whose moving controller gates were refreshed. */
   supersedesReviewRunId: string
+  /** The matching GitHub comment write, stored in the same transaction. */
+  publication: Omit<RecordReviewPublicationInput, 'reviewRunId' | 'result'> & {
+    result: Extract<ReviewPublicationResult, { _tag: 'Published' }>
+  }
 }
 
 export type SupersedeReviewRunRejection

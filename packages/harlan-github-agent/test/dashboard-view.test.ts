@@ -148,11 +148,8 @@ function reviewAgent(overrides: Partial<ReviewAgent> = {}): ReviewAgent {
     pullRequestStatus: { _tag: 'Open' },
     updatedAt: '2026-08-14T11:30:00.000Z',
     gates: {
-      head: { _tag: 'Passed', evidence: [] },
       merge: { _tag: 'Passed', evidence: [] },
-      metadata: { _tag: 'Passed', evidence: [] },
       review: { _tag: 'Passed', evidence: [] },
-      verification: { _tag: 'Passed', evidence: [] },
       ci: { _tag: 'Passed', evidence: [] },
     },
     outcome: { _tag: 'Ready', confidence: 90 },

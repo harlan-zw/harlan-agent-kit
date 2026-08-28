@@ -1,9 +1,9 @@
 import type { GitHubCheck } from '../src/github-agent-source.ts'
-import type { CiPendingReview } from '../src/store.ts'
+import type { ReviewGateRefresh } from '../src/store.ts'
 import type { ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
-import { publishResolvedCiReviews } from '../src/review-ci-sweep.ts'
+import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -13,13 +13,10 @@ function passed(label: string) {
   return { _tag: 'Passed' as const, evidence: [{ label, sha256: 'a'.repeat(64) }] }
 }
 
-function waitingOnBaseCi(): ReviewGates {
+function pendingControllerGates(): ReviewGates {
   return {
-    head: passed('head'),
     merge: passed('mergeability'),
-    metadata: passed('metadata'),
     review: passed('review'),
-    verification: passed('verification'),
     ci: {
       _tag: 'Pending',
       reason: 'Base branch CI: deploy (pro-admin) is still running.',
@@ -28,7 +25,7 @@ function waitingOnBaseCi(): ReviewGates {
   }
 }
 
-function pendingReview(overrides: Partial<CiPendingReview> = {}): CiPendingReview {
+function gateRefresh(overrides: Partial<ReviewGateRefresh> = {}): ReviewGateRefresh {
   return {
     reviewRunId: 'run-1',
     repository: 'harlan-zw/example',
@@ -43,7 +40,7 @@ function pendingReview(overrides: Partial<CiPendingReview> = {}): CiPendingRevie
     startedAt: '2026-08-27T08:11:00.000Z',
     completedAt: '2026-08-27T08:20:00.000Z',
     usage: { _tag: 'Unavailable' },
-    gates: waitingOnBaseCi(),
+    gates: pendingControllerGates(),
     findings: [],
     confidence: 88,
     commentId: 42,
@@ -84,12 +81,12 @@ interface Recorded {
 }
 
 function harness(options: {
-  review?: CiPendingReview
+  review?: ReviewGateRefresh
   live?: ReturnType<typeof snapshot>
   edit?: () => Promise<any>
 }) {
   const recorded: Recorded = { runs: [], stamped: [] }
-  const run = async () => publishResolvedCiReviews({
+  const run = async () => refreshReviewGates({
     github: {
       getPullRequestReviewSnapshot: () => Promise.resolve(options.live ?? snapshot([check()])),
       editReviewStatus: (_repository, _number, commentId, expectedBody, body) => {
@@ -108,7 +105,7 @@ function harness(options: {
     now: () => new Date('2026-08-27T11:15:00.000Z'),
     repositories: [repositoryMapping()],
     store: {
-      listCiPendingReviews: () => [options.review ?? pendingReview()],
+      listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
       supersedeReviewRun: (input) => {
         recorded.runs.push({
           id: input.id,
@@ -124,7 +121,7 @@ function harness(options: {
   return { recorded, run }
 }
 
-describe('publishResolvedCiReviews', () => {
+describe('refreshReviewGates', () => {
   it('turns a review waiting on base branch CI into READY once CI passes', async () => {
     const { recorded, run } = harness({})
 
@@ -165,9 +162,10 @@ describe('publishResolvedCiReviews', () => {
     const results = await run()
 
     expect(results).toEqual([ok({
-      _tag: 'StillWaiting',
+      _tag: 'Unchanged',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
+      outcome: 'PENDING',
       reason: 'Base branch CI: deploy (pro-admin) is still running.',
     })])
     expect(recorded.edited).toBeUndefined()
@@ -212,7 +210,7 @@ describe('publishResolvedCiReviews', () => {
     expect(recorded.runs).toEqual([])
   })
 
-  it('leaves a conflicted pull request alone instead of restating the stale verdict on it', async () => {
+  it('publishes BLOCKED when the merge gate becomes conflicting', async () => {
     const conflicted = snapshot([check()])
     if (conflicted._tag !== 'Ok')
       throw new Error('Expected a snapshot.')
@@ -223,14 +221,14 @@ describe('publishResolvedCiReviews', () => {
     const results = await run()
 
     expect(results).toEqual([ok({
-      _tag: 'StillWaiting',
+      _tag: 'Republished',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
-      reason: 'GitHub does not report the pull request as mergeable.',
+      outcome: 'BLOCKED',
     })])
-    expect(recorded.edited).toBeUndefined()
-    expect(recorded.runs).toEqual([])
-    expect(recorded.stamped).toEqual([])
+    expect(recorded.edited?.body).toContain('Blocked: The pull request has merge conflicts.')
+    expect(recorded.runs).toHaveLength(1)
+    expect(recorded.stamped).toEqual(['BLOCKED'])
   })
 
   it('writes nothing when a person deleted the canonical comment', async () => {
@@ -249,7 +247,7 @@ describe('publishResolvedCiReviews', () => {
   })
 })
 
-describe('publishResolvedCiReviews against the journal store', () => {
+describe('refreshReviewGates against the journal store', () => {
   afterEach(() => {
     stores.splice(0).forEach(store => store.close())
   })
@@ -267,7 +265,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
 
-    const gates = waitingOnBaseCi()
+    const gates = pendingControllerGates()
     gates.merge = { _tag: 'Pending', reason: 'GitHub has not resolved mergeability.', evidence: [{ label: 'mergeability', sha256: 'd'.repeat(64) }] }
     expect(store.recordReviewRun({
       id: 'run-pending',
@@ -296,7 +294,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
     })).toEqual({ _tag: 'Inserted', publicationId: 'publication-pending' })
 
     const stamped: string[] = []
-    const results = await publishResolvedCiReviews({
+    const results = await refreshReviewGates({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -317,7 +315,10 @@ describe('publishResolvedCiReviews against the journal store', () => {
       outcome: 'READY',
     })])
     expect(stamped).toEqual(['READY'])
-    expect(store.listCiPendingReviews()).toEqual([])
+    expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({
+      reviewRunId: expect.any(String),
+      confidence: 88,
+    })])
     const settledRun = store.getDashboardSnapshot('2026-08-27T11:16:00.000Z')
       .agents
       .find(agent => agent._tag === 'ReviewAgent')
@@ -327,7 +328,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
     expect(settledRun.gates.merge._tag).toBe('Passed')
   })
 
-  it('keeps one journal entry for the agent turn the CI re-gate settles', async () => {
+  it('keeps one journal entry when controller gates refresh', async () => {
     const store = openJournalStore(':memory:')
     stores.push(store)
     store.syncRepositories([repositoryMapping()], '2026-08-27T08:00:00.000Z')
@@ -358,7 +359,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
       startedAt: '2026-08-27T08:11:00.000Z',
       completedAt: '2026-08-27T08:20:00.000Z',
       usage: { _tag: 'Available', input: 10, cachedInput: 0, cacheWrite: 0, output: 5, reasoning: 0 },
-      gates: waitingOnBaseCi(),
+      gates: pendingControllerGates(),
       confidence: 88,
       findings: [],
     })).toEqual({ _tag: 'Inserted', reviewRunId: 'run-pending' })
@@ -370,7 +371,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
       result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
     })).toEqual({ _tag: 'Inserted', publicationId: 'publication-pending' })
 
-    const results = await publishResolvedCiReviews({
+    const results = await refreshReviewGates({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
@@ -386,7 +387,7 @@ describe('publishResolvedCiReviews against the journal store', () => {
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
     })])
-    expect(store.listCiPendingReviews()).toEqual([])
+    expect(store.listReviewGateRefreshes()).toEqual([])
 
     const reviewAgents = store.getDashboardSnapshot('2026-08-27T11:16:00.000Z')
       .agents
@@ -396,8 +397,8 @@ describe('publishResolvedCiReviews against the journal store', () => {
     const settledRun = reviewAgents[0]
     if (settledRun?._tag !== 'ReviewAgent')
       throw new Error('Expected the settled Review run on the dashboard.')
-    expect(settledRun.outcome).toEqual({ _tag: 'Ready', confidence: 88 })
-    expect(settledRun.gates.ci._tag).toBe('Passed')
+    expect(settledRun.outcome).toEqual({ _tag: 'Pending', confidence: 88 })
+    expect(settledRun.gates.ci._tag).toBe('Pending')
     expect(settledRun.usage).toEqual({ _tag: 'Available', input: 10, cachedInput: 0, cacheWrite: 0, output: 5, reasoning: 0 })
   })
 })

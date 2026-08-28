@@ -44,9 +44,9 @@ import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
 import { err, ok } from './result.ts'
-import { publishResolvedCiReviews } from './review-ci-sweep.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
+import { refreshReviewGates } from './review-gate-sweep.ts'
 import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
@@ -821,7 +821,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-        const settled = await publishResolvedCiReviews({
+        const settled = await refreshReviewGates({
           github: workerGithub,
           now,
           repositories: config.repositories,
@@ -830,17 +830,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         settled.forEach((result) => {
           if (result._tag === 'Ok') {
             if (result.value._tag === 'Republished')
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: CI settled, so the review now reads ${result.value.outcome}.`)
+              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: controller gates changed, so the Review now reads ${result.value.outcome}.`)
             else if (result.value._tag === 'CommentGone')
               options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the review comment was deleted, so nothing was written.`)
             else if (result.value._tag === 'Superseded')
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the head commit moved, so the waiting review was left alone.`)
+              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the head commit moved, so the prior Review was left alone.`)
           }
           else {
             options.logger.error(`Waiting review: ${result.error}`)
           }
         })
-        recordPassIncidents('waiting_review_ci', settled.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        recordPassIncidents('review_gate_refresh', settled.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const positions = await publishQueuePositions({
           github: workerGithub,
           now,

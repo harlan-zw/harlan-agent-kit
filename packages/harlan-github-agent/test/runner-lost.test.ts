@@ -10,10 +10,7 @@ import { ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const cleanReview = {
-  metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
   premise: { verdict: 'sound', reason: 'The change can remain intact.' },
-  review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
-  verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
   findings: [],
   confidence: 96,
 }
@@ -88,6 +85,8 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
+      listReviewRuns: () => [],
+      supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: (incident) => {
         incidents.push(incident)
         return { ...incident, id: 'incident-1', occurrences: 1, firstSeenAt: incident.at, lastSeenAt: incident.at } satisfies Incident

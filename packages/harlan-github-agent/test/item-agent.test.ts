@@ -43,10 +43,7 @@ describe('subject Workers', () => {
     let attempt: RecordReviewRunInput | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
-        review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
-        verification: { state: 'passed', reason: '', evidence: 'focused tests passed' },
         findings: [],
         confidence: 96,
       }), capture)),
@@ -88,6 +85,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
@@ -129,11 +128,11 @@ describe('subject Workers', () => {
 
     expect(result._tag).toBe('Ok')
     expect(comments).toHaveLength(6)
-    expect(comments[0]).toContain('REVIEWING · Pull request loaded')
-    expect(comments[2]).toContain('REVIEWING · Running tests and checks')
-    expect(comments[3]).toContain('REVIEWING · Preparing the review comment')
+    expect(comments[0]).toContain('REVIEWING · 10% · Pull request loaded')
+    expect(comments[2]).toContain('REVIEWING · 70% · Running tests and checks')
+    expect(comments[3]).toContain('REVIEWING · 85% · Preparing the review comment')
     expect(comments[5]).toContain('READY · 96/100')
-    expect(comments.join('\n')).not.toMatch(/[▓░]|\b\d+%/)
+    expect(comments.join('\n')).toMatch(/\b(?:10|35|55|70|90)%/)
     expect(stamped).toEqual(['READY'])
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
@@ -188,6 +187,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A skipped Review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: (input) => {
           triageRuns.push(input)
@@ -282,6 +283,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
@@ -334,10 +337,7 @@ describe('subject Workers', () => {
     let worktreeVerified = false
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
-        review: { state: 'failed', reason: 'The parser drops data.', evidence: 'focused reproduction proves the defect' },
-        verification: { state: 'passed', reason: '', evidence: 'the regression test is specified' },
         findings: [{
           identity: 'buffered-byte-loss',
           path: 'src/parser.ts',
@@ -347,7 +347,7 @@ describe('subject Workers', () => {
           summary: 'The parser drops data.',
           nextAction: 'Preserve the buffered bytes.',
         }],
-        confidence: null,
+        confidence: 90,
       }))),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -382,6 +382,8 @@ describe('subject Workers', () => {
         },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
@@ -442,9 +444,6 @@ describe('subject Workers', () => {
     let attempt: RecordReviewRunInput | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
-        review: { state: 'failed', reason: 'The premise removes required durability.', evidence: 'cross-process cleanup reads the persisted lease journal' },
-        verification: { state: 'passed', reason: '', evidence: 'the persistence boundary proves the premise is unsafe' },
         premise: {
           verdict: 'wrong',
           reason: 'Safe worktree cleanup requires controller state shared across processes and restarts.',
@@ -458,7 +457,7 @@ describe('subject Workers', () => {
           summary: 'The pull request removes state required for safe worktree cleanup.',
           nextAction: 'Restore persistent journal storage.',
         }],
-        confidence: null,
+        confidence: 90,
       }))),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -490,6 +489,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A wrong premise must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
@@ -544,10 +545,7 @@ describe('subject Workers', () => {
     let askedForHeadSha: string | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
-        review: { state: 'failed', reason: 'The parser drops data.', evidence: 'focused reproduction proves the defect' },
-        verification: { state: 'passed', reason: '', evidence: 'the regression test is specified' },
         findings: [{
           identity: 'buffered-byte-loss',
           path: 'src/parser.ts',
@@ -557,7 +555,7 @@ describe('subject Workers', () => {
           summary: 'The parser still drops data on split UTF-8 sequences.',
           nextAction: 'Preserve the buffered bytes.',
         }],
-        confidence: null,
+        confidence: 90,
       }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -607,6 +605,8 @@ describe('subject Workers', () => {
           }]
         },
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
@@ -686,6 +686,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => {
@@ -739,10 +741,7 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
-        review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
-        verification: { state: 'passed', reason: '', evidence: 'build passes' },
         findings: [],
         confidence: 91,
       }), capture)),
@@ -776,6 +775,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => ({
@@ -828,10 +829,7 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
-        review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
-        verification: { state: 'passed', reason: '', evidence: 'build passes' },
         findings: [],
         confidence: 90,
       }), capture)),
@@ -866,6 +864,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A stacked pull request must not queue Baseline repair.') },
@@ -914,10 +914,7 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        metadata: { state: 'passed', reason: '', evidence: 'metadata aligned' },
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
-        review: { state: 'passed', reason: '', evidence: 'full diff reviewed' },
-        verification: { state: 'passed', reason: '', evidence: 'build passes with the fix' },
         findings: [],
         confidence: 88,
       }), capture)),
@@ -952,6 +949,8 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A Baseline repair must not queue another Baseline repair.') },

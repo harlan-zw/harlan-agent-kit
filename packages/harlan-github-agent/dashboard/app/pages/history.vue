@@ -35,7 +35,7 @@ const {
 } = useDashboard()
 const route = useRoute()
 
-const reviewGateNames = ['head', 'merge', 'metadata', 'review', 'verification', 'ci'] as const
+const reviewGateNames = ['merge', 'review', 'ci'] as const
 
 const { copy, isSupported: clipboardSupported } = useClipboard()
 const copiedSession = ref<string>()

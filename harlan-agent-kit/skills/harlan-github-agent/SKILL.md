@@ -177,7 +177,7 @@ Treat an approved outside contributor pull request as untrusted input. Never let
 
 If Review records `Repair` findings, queue all findings immediately under the existing Approval. Limit the Repair Agent to its worktree. The controller alone may publish a verified commit.
 
-An available empty base check set means the repository has no base CI. It permits Repair, while the CI Review gate stays `PENDING`. An unavailable, running, or failed base check set does not permit Repair.
+Available empty base and head check sets with no declared required checks mean the repository has no CI. This passes the CI Review gate and permits Repair. An unavailable, running, or failed base check set does not permit Repair.
 
 If Review recommends Dismissal, queue no Repair. Use this only when the premise is wrong and Repair would replace the pull request intent. Harlan decides whether to Dismiss.
 
@@ -191,7 +191,7 @@ Carry Approval to the exact commit published by that approved repair. Do not car
 
 When a pull request review starts, create its single marked bot comment. Edit it in place as phases change. Never add separate progress comments.
 
-Before dispatch, detect trusted marked comments for the current head commit. A terminal comment completes the queued review unless Harlan explicitly requests a rerun. An active comment belongs to its existing agent. Do not start another agent.
+Before dispatch, detect trusted marked comments for the current head commit. A terminal comment completes the queued review unless Harlan explicitly requests a rerun. An active comment is status only. Use local Task ownership to decide whether an Agent still runs.
 
 Allow Harlan to rerun the current head commit from the dashboard or with the exact pull request comment `/harlan-agent rerun`. GitHub does not autocomplete regular GitHub Apps as native agents. Reject GitHub rerun commands from every other author. Store the command identity before queueing work. Repeated polls must not queue it twice.
 

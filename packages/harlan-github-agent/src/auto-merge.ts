@@ -59,6 +59,8 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   const attempt = readyAttemptForHead(attempts, pullRequest.headSha)
   if (attempt === undefined || attempt.outcome._tag !== 'Ready')
     return { _tag: 'Hold', reason: 'The current head commit has no READY review.' }
+  if (!attempt.publications.some(publication => publication.result._tag === 'Published'))
+    return { _tag: 'Hold', reason: 'The current head commit has no published READY review.' }
   if (attempt.findings.some(finding => finding._tag === 'Open'))
     return { _tag: 'Hold', reason: 'The review left an open finding.' }
   const confidence = attempt.outcome.confidence

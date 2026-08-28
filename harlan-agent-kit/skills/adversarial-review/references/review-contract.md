@@ -22,29 +22,39 @@ Treat style-only preferences as non-blocking. Treat correctness, security, data 
 
 ## Outcome gates
 
-Record `passed`, `waiting`, or `failed` for every gate:
+The controller records `Passed`, `Pending`, or `Failed` for three gates:
 
-| Gate | Passed | Waiting | Failed |
+| Gate | Passed | Pending | Failed |
 | --- | --- | --- | --- |
-| Head | Base current; reviewed SHA unchanged | Head or base state unavailable | Head changed after review freeze |
 | Merge | GitHub reports conflict-free | Mergeability unknown | Conflicts present |
-| Metadata | Required metadata aligned | Required metadata review incomplete | Required metadata cannot be aligned |
-| Review | Full diff reviewed; zero open material findings or requested changes | Review incomplete or PR is a draft | Material finding or requested change remains |
-| Verification | Focused behavior checks passed when needed, or CI covers the reviewed behavior | A material finding cannot be verified and CI does not cover it | A focused behavior check failed |
+| Review | The Agent report has zero material findings | Never, a valid Agent report completes this gate | One or more material findings remain |
 | CI | Every required check passed | Required CI unavailable, running, or blocked by a confirmed base failure with repair active | The PR caused required CI failure, or baseline repair exhausted its attempts |
+
+No declared checks, plus available empty base and head check snapshots, passes CI.
+An unavailable snapshot or a declared check with no result stays `Pending`.
+
+Head stability is an invariant. Store the Agent report against its exact
+Revision before later GitHub reads. If the head moved, keep that history but
+never publish it against the new head. Metadata and focused verification are
+Review evidence, not separate workflow gates.
 
 Derive one outcome without judgment:
 
-1. Any `failed` gate gives `BLOCKED`.
-2. Otherwise, any `waiting` gate gives `PENDING`.
-3. Every gate `passed` gives `READY`.
+1. Any `Failed` gate gives `BLOCKED`.
+2. Otherwise, any `Pending` gate gives `PENDING`.
+3. Every gate `Passed` gives `READY`.
 
-Gate outcomes are deterministic. Confidence never changes an outcome. Do not give
+Gate outcomes are deterministic. Confidence never changes an outcome. Do not show
 `PENDING` or `BLOCKED` a confidence score or call either a sign-off.
+
+The Agent returns only the premise, material findings, and confidence. It never
+returns workflow state. The controller derives every gate and the outcome.
 
 ## Confidence
 
-Calculate confidence only for `READY`. Start at 100 after all gates pass.
+The Agent calculates confidence for every report. Start at 100 after the
+adversarial review completes. The controller keeps it while merge or CI moves,
+but shows it only after every gate passes.
 
 Deduct:
 
@@ -70,7 +80,7 @@ Use this marker exactly:
 
 Create the marked comment when review starts. Edit that same comment after each phase transition. Never create a second progress comment.
 
-Before dispatch, find trusted marked comments for the current head commit. Trust the GitHub App and repository owners, members, or collaborators. Ignore marked comments from outside contributors. A terminal comment means the head commit is already reviewed. A `REVIEWING` comment means another agent has the review. Do not start another agent.
+Before dispatch, find trusted marked comments for the current head commit. Trust the GitHub App and repository owners, members, or collaborators. Ignore marked comments from outside contributors. A terminal comment means the head commit is already reviewed. A `REVIEWING` comment is status only. Local Task ownership decides whether work is active.
 
 For comments created before the hidden head commit marker, recognize `- Reviewed \`HEAD_SHA\` against`. Write only the current format.
 
@@ -79,16 +89,14 @@ Use this nonterminal shape:
 ```markdown
 <!-- harlan-agent-kit:pr-triage -->
 <!-- reviewed-sha: HEAD_SHA -->
-### 🤖 REVIEWING · PHASE
+### 🤖 REVIEWING · 35% · PHASE
 
 > [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: UTC_TIME.
-
-`▓▓░░░ 35%`
 
 Next: SHORT_ACTION
 ```
 
-Use the percentage reported by the agent. Update only at a phase transition or changed blocker. Keep findings out until verified.
+Use the controller's phase percentage. Update only at a phase transition or changed blocker. Keep findings out until verified.
 
 Keep the reviewed SHA in hidden metadata. Render one robot emoji. Put disclosure,
 policy, waiting state, and human ownership in one blockquoted line. The visible
@@ -101,7 +109,6 @@ review body only reports material issues found or fixed.
 
 > [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required.
 
-`▓▓▓▓▓ 100%`
 ```
 
 When Review found issues, show every material finding once:
@@ -166,12 +173,12 @@ Build `payload.json` from the final body with `jq`; do not interpolate JSON manu
 
 ## Local journal
 
-When `harlan-github-agent` dispatches Review, record one immutable Review run
-against the exact Revision before publication. Store the six gates, evidence
-digests, Review findings, derived outcome, agent version, skill digest, and
-timestamps. Store duration and Agent provider token usage. Use an explicit
-unavailable state when the provider reports no usage. Store confidence only for
-`READY`.
+When `harlan-github-agent` dispatches Review, record one immutable Review run against the exact Revision.
+Record it before any later GitHub read or Publication.
+Store the three gates, evidence digests, Review findings, Review outcome, Agent version, skill digest, and timestamps.
+Store duration and Agent provider token usage.
+Use an explicit unavailable state when the Agent provider reports no usage.
+Keep the Agent confidence for every report. Show it only for `READY`.
 
 For an outside contributor, reject the Review run unless the same Revision has Review and repair Approval. Queue verified repairs under that Approval.
 
@@ -179,7 +186,10 @@ Carry Approval only to an exact repair commit published by the controller for th
 
 After each GitHub write, record one Publication with the exact Markdown and the
 GitHub comment ID and URL. If the write fails, record the attempted Markdown and
-failure reason. Never store secrets or full tool transcripts.
+failure reason. Retry that controller write from the stored Review run. Never
+repeat the Agent turn for a later GitHub read or write failure. Refresh merge
+and CI gates as often as they move on the same head commit. Never store secrets
+or full tool transcripts.
 
 Reject a Review run when its Revision or head SHA does not match. Reject duplicate
 identifiers with different content. A dispatched review remains incomplete until

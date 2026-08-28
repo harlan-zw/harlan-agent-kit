@@ -99,7 +99,7 @@ Trace changed inputs through public boundaries, failures, cleanup, concurrency, 
 
 Treat required CI as the only source for repository-wide test, lint, typecheck, and build results.
 
-Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. If CI is missing or unavailable, set the gate to `PENDING`. Never recreate CI locally.
+Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. Continue the review when CI is missing or unavailable. The controller owns that gate. Never recreate CI locally.
 
 Limit local commands to changed files, their direct dependants, and focused behavior. Run one focused test or command only to prove a material finding or verify touched behavior that CI does not cover.
 
@@ -137,7 +137,7 @@ Never blame a pull request for a confirmed baseline failure. For a maintained or
 
 ### 8. Freeze the outcome
 
-Apply the exact `READY`, `PENDING`, or `BLOCKED` gates from the review contract. Calculate confidence only for `READY`.
+Return only the premise, material findings, and confidence. The controller applies the exact `READY`, `PENDING`, or `BLOCKED` gates from the review contract.
 
 Refetch the PR immediately before posting. If the head SHA changed, restart the review.
 
