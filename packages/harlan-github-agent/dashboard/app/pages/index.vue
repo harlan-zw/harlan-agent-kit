@@ -40,6 +40,12 @@ import {
   waitingEntries,
   workChipEntries,
 } from '../utils/dashboard.ts'
+import {
+  formatHogwildHost,
+  formatHogwildLoad,
+  formatHogwildServiceMetrics,
+  formatHogwildTemperature,
+} from '../utils/hogwild-status.ts'
 
 const {
   snapshot,
@@ -74,6 +80,7 @@ const {
   dismissErrors,
   dismissKey,
 } = useDashboard()
+const { connection: hogwild, history: hogwildHistory } = useHogwildStatus()
 
 const doneOnBoard = 8
 
@@ -88,6 +95,10 @@ const providerCapacities = computed(() => snapshot.value.providerCapacities.map(
   presentation: providerCapacityPresentation(entry),
 })))
 const recentlyFinishedRecords = computed(() => recentlyFinished(reviewAgents.value, snapshot.value.tasks))
+const hogwildStatus = computed(() => hogwild.value._tag === 'Connected' ? hogwild.value.status : undefined)
+const hogwildUpdatedAt = computed(() => hogwildStatus.value === undefined
+  ? null
+  : new Date(hogwildStatus.value.updatedAt).toISOString())
 const routineRecords = computed(() => {
   const repositoryWrites = new Map(snapshot.value.repositories.map(repository => [repository.github, repository.writesEnabled]))
   return scheduledRoutineRecords(snapshot.value.routines, snapshot.value.routineRuns).map(record => ({
@@ -287,6 +298,94 @@ useHead({
           <span class="font-mono text-xs text-dimmed">{{ incident.occurrences }}&times; · {{ relativeTime(incident.lastSeenAt) }}</span>
         </li>
       </ul>
+
+      <section v-if="hogwild._tag !== 'NotOnHogwild'" class="mt-3" aria-labelledby="hogwild-heading">
+        <div class="zone-header">
+          <h3 id="hogwild-heading" class="field-label">
+            Hogwild
+          </h3>
+          <span v-if="hogwild._tag === 'Connected'" class="font-mono text-xs status-success">
+            Live · Updated {{ relativeTime(hogwildUpdatedAt) }}
+          </span>
+          <span v-else-if="hogwild._tag === 'Connecting'" class="font-mono text-xs text-muted">Connecting</span>
+          <span v-else class="font-mono text-xs status-warning">Unavailable</span>
+          <hr class="zone-rule">
+        </div>
+
+        <template v-if="hogwildStatus">
+          <dl class="divide-y divide-default border-y border-default">
+            <div class="grid gap-1 py-2 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-baseline sm:gap-4">
+              <dt class="field-label">
+                Temperatures
+              </dt>
+              <dd v-if="hogwildStatus.temperatures._tag === 'Available'" class="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <span
+                  v-for="temperature in hogwildStatus.temperatures.values"
+                  :key="temperature.name"
+                  class="inline-flex items-center gap-2 font-mono text-xs text-muted"
+                >
+                  {{ formatHogwildTemperature(temperature) }}
+                  <HogwildSparkline
+                    :data="hogwildHistory.temperatures[temperature.name]"
+                    :label="`${temperature.name} temperature`"
+                  />
+                </span>
+              </dd>
+              <dd v-else class="font-mono text-xs text-muted">
+                Unavailable
+              </dd>
+            </div>
+            <div class="grid gap-1 py-2 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-baseline sm:gap-4">
+              <dt class="field-label">
+                Load average
+              </dt>
+              <dd class="flex flex-wrap items-center justify-between gap-2 font-mono text-xs text-muted">
+                <span>{{ formatHogwildLoad(hogwildStatus.load) }}</span>
+                <HogwildSparkline :data="hogwildHistory.load" label="One minute load average" />
+              </dd>
+            </div>
+            <div class="grid gap-1 py-2 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-baseline sm:gap-4">
+              <dt class="field-label">
+                Host
+              </dt>
+              <dd class="break-words font-mono text-xs text-muted">
+                {{ formatHogwildHost(hogwildStatus.host) }}
+              </dd>
+            </div>
+          </dl>
+
+          <div class="zone-header mt-3">
+            <h4 class="field-label">
+              Services
+            </h4>
+            <span class="font-mono text-xs text-dimmed">{{ hogwildStatus.services.length }}</span>
+            <hr class="zone-rule">
+          </div>
+          <ol class="divide-y divide-default border-y border-default">
+            <li v-for="service in hogwildStatus.services" :key="service.name" class="py-2">
+              <div class="flex items-baseline justify-between gap-4">
+                <span class="text-sm text-default">{{ service.name }}</span>
+                <span
+                  class="font-mono text-xs"
+                  :class="statusClass(service.state._tag === 'Active' ? 'success' : 'warning')"
+                >{{ service.state._tag }}</span>
+              </div>
+              <div v-if="service.state._tag === 'Active'" class="mt-1 flex flex-wrap items-center justify-between gap-2">
+                <p class="break-words font-mono text-xs text-muted">
+                  {{ formatHogwildServiceMetrics(service.state.metrics) }}
+                </p>
+                <HogwildSparkline
+                  :data="hogwildHistory.serviceMemory[service.name]"
+                  :label="`${service.name} memory`"
+                />
+              </div>
+            </li>
+          </ol>
+        </template>
+        <p v-else class="font-mono text-sm text-dimmed">
+          {{ hogwild._tag === 'Connecting' ? 'Waiting for private host status.' : hogwild.reason }}
+        </p>
+      </section>
 
       <section v-if="routineRecords.length > 0" class="mt-3" aria-labelledby="routines-heading">
         <div class="zone-header">
