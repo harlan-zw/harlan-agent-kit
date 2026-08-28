@@ -43,7 +43,7 @@ did not cover it.
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
 | Issue triage label | `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-spec`, `harlan-agent-needs-info`, or `harlan-agent-wait-to-implement` | GitHub | One per triaged issue Revision | triage route |
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
-| Pull request triage | `pull_request_triage` Agent role | Runner | One low-cost decision per pull request head commit | pull request triage |
+| Pull request triage | Pull request title or `pull_request_triage` Agent role | Controller, Runner | One deterministic or low-cost decision per pull request head commit | pull request triage |
 | Take Ownership | `repositories.take_ownership` | Controller | One policy per Repository mapping | Take Ownership |
 | Publication command | `publication_commands` | Controller | One to one Task | none |
 | Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
@@ -362,9 +362,11 @@ One self identified automated triage record on an issue. Re-runs update the cano
 
 ### Pull request triage
 
-One low-cost Agent decision for one exact pull request head commit.
+One routing decision for one exact pull request head commit.
 
-It requires or skips an adversarial Review. Any uncertainty requires Review.
+A conventional non-breaking `chore:` title skips Review without starting an Agent.
+
+Every other pull request uses a low-cost Agent decision. It requires or skips an adversarial Review. Any uncertainty requires Review.
 
 `harlan-agent-review` requires Review and is the manual override. `harlan-agent-review-skipped` records a skipped Review.
 

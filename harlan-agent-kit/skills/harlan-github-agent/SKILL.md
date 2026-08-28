@@ -19,7 +19,11 @@ Require an explicit configuration file. Start from `config.example.yml` only whe
 
 Use `github.allowed_owners` before GitHub App installation access. Ignore installations from every other GitHub owner. Scan only immediate directories under `~/pkg` and `~/sites` to find trusted local checkouts. Treat configured repositories as policy overrides. Never act on a checkout without matching its GitHub origin and App installation.
 
-Run low-cost Pull request triage for every tracked pull request authored by `harlan-zw`. Require an adversarial Review for code, tests, configuration, dependencies, workflows, schemas, generated runtime output, security boundaries, public APIs, performance-sensitive files, behavior claims, or uncertainty. Skip only clearly judgment-free prose, formatting, or comment-only changes. Stamp `harlan-agent-review-skipped` when Review is skipped.
+Skip a tracked pull request with a conventional non-breaking `chore:` title before starting an Agent.
+For every other tracked pull request authored by `harlan-zw`, run low-cost Pull request triage.
+Require an adversarial Review for code, tests, configuration, dependencies, workflows, schemas, generated runtime output, security boundaries, public APIs, performance-sensitive files, behavior claims, or uncertainty.
+Skip only clearly judgment-free prose, formatting, or comment-only changes.
+Stamp `harlan-agent-review-skipped` when Review is skipped.
 
 Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Bind Approval to the exact head commit; never let the label approve a head commit twice.
 
