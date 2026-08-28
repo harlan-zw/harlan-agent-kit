@@ -95,6 +95,7 @@ export function createRoutineReportController(options: RoutineReportControllerOp
   return {
     publishPending: async (signal, limit = 3) => {
       const results: Array<Result<{ repository: string, issueNumber: number }, string>> = []
+      const attemptedCommandIds: string[] = []
       for (let written = 0; written < limit; written += 1) {
         if (signal.aborted)
           return results
@@ -102,9 +103,11 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           options.workerId,
           options.now().toISOString(),
           leaseMilliseconds,
+          attemptedCommandIds,
         )
         if (command === null)
           return results
+        attemptedCommandIds.push(command.id)
 
         const fail = (message: string): void => {
           if (signal.aborted)

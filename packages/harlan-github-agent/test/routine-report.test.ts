@@ -193,7 +193,7 @@ describe('publishing the run log', () => {
     }
   })
 
-  it('remembers no tracking issue when the comment failed, so a retry does not log twice', async () => {
+  it('tries a failed report once per pass and remembers no tracking issue', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
@@ -207,8 +207,68 @@ describe('publishing the run log', () => {
       const failed = await createRoutineReportController({ github: refusing, now, store, workerId: 'reporter' })
         .publishPending(new AbortController().signal)
 
+      expect(failed).toHaveLength(1)
       expect(failed[0]?._tag).toBe('Err')
       expect(store.listRoutines('harlan-zw/example')[0]?.trackingIssueNumber).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('publishes another repository after one report fails', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      const working = repositoryMapping({ github: 'harlan-zw/working', checkout: '/home/harlan/pkg/working' })
+      store.syncRepositories([repositoryMapping(), working], '2026-08-27T07:10:01.000Z')
+      store.setRepositoryWritesEnabled(working.github, true)
+      store.syncRoutines({
+        repository: working.github,
+        specSha: 'def456',
+        entries: [{ name: 'pr-triage', crons: ['0 8 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+        at: '2026-08-27T07:10:02.000Z',
+      })
+      const workingRoutineId = `${working.github}:pr-triage`
+      const workingRun = store.openRoutineRun({
+        routineId: workingRoutineId,
+        scheduledFor: '2026-08-27T08:00:00.000Z',
+        specSha: 'def456',
+        at: '2026-08-27T07:10:03.000Z',
+      })
+      if (workingRun === null)
+        throw new Error('the second run must open')
+      store.stageRoutineReport({
+        command: routineReportCommand({
+          repository: working.github,
+          routineId: workingRoutineId,
+          routineName: 'pr-triage',
+          run: workingRun,
+          report: { _tag: 'Completed', evidence: 'second run' },
+        }),
+        at: '2026-08-27T07:10:04.000Z',
+      })
+      const comments: Calls['comments'] = []
+      const github: GitHubIssuePublisher = {
+        createIssue: async input => input.repository.github === 'harlan-zw/example'
+          ? { _tag: 'Err' as const, error: { repository: input.repository.github, message: 'Issues are disabled.' } }
+          : ok({ number: 42, url: 'https://github.com/harlan-zw/working/issues/42' }),
+        createComment: async (input) => {
+          comments.push({ issueNumber: input.issueNumber, body: input.body })
+          return ok({ id: 900 + comments.length })
+        },
+        findOpenIssueByFingerprint: async () => ok(null),
+      }
+
+      const results = await createRoutineReportController({ github, now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(results).toEqual([
+        { _tag: 'Err', error: 'harlan-zw/example: Issues are disabled.' },
+        { _tag: 'Ok', value: { repository: 'harlan-zw/working', issueNumber: 42 } },
+      ])
+      expect(comments).toHaveLength(1)
     }
     finally {
       store.close()
