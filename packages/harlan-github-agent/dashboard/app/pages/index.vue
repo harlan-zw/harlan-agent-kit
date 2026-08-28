@@ -87,11 +87,15 @@ const providerCapacities = computed(() => snapshot.value.providerCapacities.map(
   presentation: providerCapacityPresentation(entry),
 })))
 const recentlyFinishedRecords = computed(() => recentlyFinished(reviewAgents.value, snapshot.value.tasks))
-const routineRecords = computed(() => scheduledRoutineRecords(snapshot.value.routines, snapshot.value.routineRuns).map(record => ({
-  ...record,
-  presentation: routineRunPresentation(record.latestRun),
-  trackingUrl: routineTrackingUrl(record.routine),
-})))
+const routineRecords = computed(() => {
+  const repositoryWrites = new Map(snapshot.value.repositories.map(repository => [repository.github, repository.writesEnabled]))
+  return scheduledRoutineRecords(snapshot.value.routines, snapshot.value.routineRuns).map(record => ({
+    ...record,
+    presentation: routineRunPresentation(record.latestRun),
+    trackingUrl: routineTrackingUrl(record.routine),
+    writesEnabled: repositoryWrites.get(record.routine.repository) ?? false,
+  }))
+})
 
 /** Only offer a filter for work the board actually holds right now. */
 const availableWork = computed(() => {
@@ -336,6 +340,33 @@ useHead({
             <p v-if="record.presentation.detail" class="text-xs text-muted sm:col-span-2">
               {{ record.presentation.detail }}
             </p>
+            <p
+              v-if="record.latestRun && !record.writesEnabled && ['Completed', 'Skipped'].includes(record.latestRun.state._tag)"
+              class="status-warning text-xs sm:col-span-2"
+            >
+              Report pending.
+              <NuxtLink to="/watching" class="entity-link">
+                Enable writes in Watching.
+              </NuxtLink>
+            </p>
+            <details v-if="record.latestRun && record.latestRun.candidates.length > 0" class="text-xs sm:col-span-2">
+              <summary class="cursor-pointer font-mono text-dimmed">
+                {{ record.latestRun.candidates.length }} found
+              </summary>
+              <ul class="mt-2 grid gap-3" role="list">
+                <li v-for="candidate in record.latestRun.candidates" :key="candidate.id" class="rounded-md border border-default bg-muted/40 p-3">
+                  <p class="text-sm text-default">
+                    {{ candidate.claim }}
+                  </p>
+                  <p class="mt-2 break-all font-mono text-xs text-muted">
+                    Target: {{ candidate.target }}
+                  </p>
+                  <p class="mt-1 break-all font-mono text-xs text-muted">
+                    Verify with: {{ candidate.verification }}
+                  </p>
+                </li>
+              </ul>
+            </details>
             <details v-if="record.latestRun && record.latestRun.activity.length > 0" class="text-xs sm:col-span-2">
               <summary class="cursor-pointer font-mono text-dimmed">
                 Terminal · {{ record.latestRun.activity.length }} step{{ record.latestRun.activity.length === 1 ? '' : 's' }}

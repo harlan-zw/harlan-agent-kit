@@ -835,6 +835,7 @@ export interface JournalStore {
 interface RepositoryRow {
   github: string
   enabled: number
+  writes_enabled: number
   ownership: RepositoryStatus['ownership']
   last_attempt_at: string | null
   last_success_at: string | null
@@ -7631,9 +7632,12 @@ export function openJournalStore(
       SELECT (
         EXISTS (SELECT 1 FROM tasks WHERE state_tag IN ('Running', 'Publishing'))
         OR EXISTS (SELECT 1 FROM worker_tasks WHERE state_tag = 'Running')
+        OR EXISTS (SELECT 1 FROM routine_runs WHERE state_tag = 'Running')
         OR EXISTS (SELECT 1 FROM publication_commands WHERE state_tag IN ('Pending', 'Running'))
         OR EXISTS (SELECT 1 FROM review_status_commands WHERE state_tag = 'Running')
         OR EXISTS (SELECT 1 FROM issue_triage_comment_commands WHERE state_tag = 'Running')
+        OR EXISTS (SELECT 1 FROM candidate_issue_commands WHERE state_tag = 'Running')
+        OR EXISTS (SELECT 1 FROM routine_report_commands WHERE state_tag = 'Running')
       ) AS busy
     `).get() as { busy: number }
     return row.busy === 0
@@ -7644,6 +7648,7 @@ export function openJournalStore(
       SELECT
         repositories.github,
         repositories.enabled,
+        repositories.writes_enabled,
         repositories.ownership,
         repositories.last_attempt_at,
         repositories.last_success_at,
@@ -7695,6 +7700,7 @@ export function openJournalStore(
     const repositories: RepositoryStatus[] = repositoryRows.map(row => ({
       github: row.github,
       enabled: row.enabled === 1,
+      writesEnabled: row.writes_enabled === 1,
       ownership: row.ownership,
       lastAttemptAt: row.last_attempt_at,
       lastSuccessAt: row.last_success_at,
@@ -7709,11 +7715,16 @@ export function openJournalStore(
     const items = subjectRows.map(row => subjectFromRow(database, row))
     const tasks = taskRows(database).map(taskFromRow)
     const routines = listRoutines()
+    const candidatesByRoutine = new Map(routines.map(routine => [routine.id, listCandidates(routine.id)]))
     const routineRuns = routines
       .flatMap(routine => listRoutineRuns(routine.id, 5))
       .sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor))
       .slice(0, 50)
-      .map(run => ({ ...run, activity: [] }))
+      .map(run => ({
+        ...run,
+        candidates: (candidatesByRoutine.get(run.routineId) ?? []).filter(candidate => candidate.runId === run.id),
+        activity: [],
+      }))
     const rejectedIssueWorkResults = new Map((database.prepare(`
       SELECT task_transitions.task_id, COUNT(*) AS occurrences
       FROM task_transitions
@@ -9061,6 +9072,8 @@ export function openJournalStore(
           attempts = attempts + 1, updated_at = ?
         WHERE id = ? AND state_tag = 'Pending' AND fence = ?
       `).run(workerId, leaseExpiresAt, fence, now, row.id, row.fence).changes === 1
+      const candidates = (database.prepare('SELECT * FROM candidates WHERE run_id = ? ORDER BY created_at').all(row.run_id) as unknown as CandidateRow[])
+        .map(readCandidate)
       database.exec('COMMIT')
       if (!claimed)
         return null
@@ -9073,6 +9086,7 @@ export function openJournalStore(
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
         body: row.body,
         trackingIssueNumber: row.tracking_issue_number,
+        candidates,
         fence,
         workerId,
       }

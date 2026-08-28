@@ -106,6 +106,7 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
     repository: {
       github: watch.github,
       enabled: true,
+      writesEnabled: false,
       ownership: 'external' as const,
       lastAttemptAt: null,
       lastSuccessAt: null,

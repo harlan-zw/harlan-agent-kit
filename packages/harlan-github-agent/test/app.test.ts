@@ -51,6 +51,7 @@ describe('dashboard HTTP app', () => {
         fence: 1,
         attempts: 1,
         progress: { percent: 55, label: 'Checking the repository' },
+        candidates: [],
         activity: [],
         createdAt: '2026-08-13T00:00:00.000Z',
         updatedAt: now().toISOString(),

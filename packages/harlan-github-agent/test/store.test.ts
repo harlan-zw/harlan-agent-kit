@@ -905,9 +905,11 @@ describe('journal store', () => {
     // Discovery admitted it. Nothing has trusted it to write yet.
     expect(store.mayWriteRepository('harlan-zw/example')).toBe(false)
     expect(store.mayWriteRepository('nuxt/nuxt')).toBe(false)
+    expect(store.getDashboardSnapshot('2026-08-13T00:01:00.000Z').repositories[0]?.writesEnabled).toBe(false)
 
     expect(store.setRepositoryWritesEnabled('harlan-zw/example', true)).toBe(true)
     expect(store.mayWriteRepository('harlan-zw/example')).toBe(true)
+    expect(store.getDashboardSnapshot('2026-08-13T00:02:00.000Z').repositories[0]?.writesEnabled).toBe(true)
 
     expect(store.setRepositoryWritesEnabled('harlan-zw/example', false)).toBe(true)
     expect(store.mayWriteRepository('harlan-zw/example')).toBe(false)

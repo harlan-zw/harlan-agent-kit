@@ -94,6 +94,7 @@ function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRout
     fence: 1,
     attempts: 1,
     progress: { percent: 85, label: 'Preparing the Routine result' },
+    candidates: [],
     activity: [],
     createdAt: '2026-08-27T21:00:00.000Z',
     updatedAt: '2026-08-27T21:01:00.000Z',
@@ -561,9 +562,9 @@ describe('task presentation', () => {
 
 describe('repositoryState', () => {
   it('ranks an error above a missing first poll', () => {
-    expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: 'boom', subjectCount: 0 }).tone).toBe('error')
-    expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null, subjectCount: 0 }).tone).toBe('warning')
-    expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: null, subjectCount: 0 }).tone).toBe('success')
+    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: 'boom', subjectCount: 0 }).tone).toBe('error')
+    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null, subjectCount: 0 }).tone).toBe('warning')
+    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: null, subjectCount: 0 }).tone).toBe('success')
   })
 })
 

@@ -7,6 +7,7 @@ const {
   relativeTime,
   repositoryPending,
   setRepositoryPaused,
+  setRepositoryWritesEnabled,
   restoreItem,
   dismissPending,
   dismissErrors,
@@ -70,7 +71,7 @@ useHead({
       </div>
 
       <div class="overflow-x-auto border-y border-default">
-        <table v-if="filteredRepositories.length > 0" class="w-full min-w-[38rem] border-collapse text-left">
+        <table v-if="filteredRepositories.length > 0" class="w-full min-w-[44rem] border-collapse text-left">
           <caption class="sr-only">
             Repository health and latest poll state
           </caption>
@@ -87,6 +88,9 @@ useHead({
               </th>
               <th scope="col" class="py-2 pr-4">
                 Authority
+              </th>
+              <th scope="col" class="py-2 pr-4">
+                Writes
               </th>
               <th scope="col" class="py-2 pr-4">
                 Agents
@@ -115,6 +119,34 @@ useHead({
               </td>
               <td class="py-2.5 pr-4 font-mono text-sm text-dimmed">
                 {{ repository.ownership }}
+              </td>
+              <td class="py-2.5 pr-4">
+                <UButton
+                  v-if="repository.writesEnabled"
+                  size="xs"
+                  color="neutral"
+                  variant="ghost"
+                  icon="i-lucide-lock-open"
+                  :loading="repositoryPending === repository.github"
+                  :disabled="repositoryPending !== undefined"
+                  :aria-label="`Disable writes for ${repository.github}`"
+                  @click="setRepositoryWritesEnabled(repository.github, false)"
+                >
+                  Enabled
+                </UButton>
+                <ConfirmButton
+                  v-else
+                  label="Disabled"
+                  confirm-label="Enable writes"
+                  :aria-label="`Enable writes for ${repository.github}`"
+                  :confirm-aria-label="`Confirm enabling writes for ${repository.github}`"
+                  color="warning"
+                  icon="i-lucide-lock"
+                  size="xs"
+                  :loading="repositoryPending === repository.github"
+                  :disabled="repositoryPending !== undefined"
+                  @confirm="setRepositoryWritesEnabled(repository.github, true)"
+                />
               </td>
               <td class="py-2.5 pr-4">
                 <UButton

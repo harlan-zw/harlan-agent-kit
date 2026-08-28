@@ -312,4 +312,22 @@ describe('filing the issues Candidates propose', () => {
       store.close()
     }
   })
+
+  it('keeps restart unsafe while an issue write holds its lease', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)).not.toBeNull()
+      store.pauseAgents(now().toISOString())
+
+      expect(store.getDashboardSnapshot(now().toISOString()).agentControl).toMatchObject({ safeToRestart: false })
+    }
+    finally {
+      store.close()
+    }
+  })
 })
