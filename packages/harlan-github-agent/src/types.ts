@@ -878,6 +878,7 @@ export interface AgentProgress {
 export type AgentActivityItem
   = | { _tag: 'Command', at: string, command: string, output: string, exitCode: number | null }
     | { _tag: 'FileChange', at: string, changes: Array<{ path: string, kind: 'add' | 'delete' | 'update' }> }
+    | { _tag: 'Progress', at: string, percent: number, text: string }
     | { _tag: 'Reasoning', at: string, text: string }
 
 export interface ActiveAgent {

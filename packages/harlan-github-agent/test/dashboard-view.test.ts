@@ -515,6 +515,21 @@ describe('activeAgentActivity', () => {
     })
   })
 
+  it('shows the percentage the Agent reported', () => {
+    expect(activeAgentActivity(activeAgent({
+      activity: [{
+        _tag: 'Progress',
+        at: '2026-08-14T11:59:00.000Z',
+        percent: 25,
+        text: 'next-step (waitlist flow read).',
+      }],
+    }))).toEqual({
+      at: '2026-08-14T11:59:00.000Z',
+      text: '25% · next-step (waitlist flow read).',
+      tone: 'muted',
+    })
+  })
+
   it('stays absent until the Agent reports structured activity', () => {
     expect(activeAgentActivity(activeAgent())).toBeUndefined()
   })

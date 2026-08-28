@@ -120,6 +120,24 @@ describe('opencodeAgentEvent', () => {
     expect(opencodeAgentEvent(textLine)).toEqual({ _tag: 'Message', text: '{"outcome":"resolved"}' })
   })
 
+  it('reads the Agent percentage from an intermediate progress message', () => {
+    expect(opencodeAgentEvent({
+      type: 'text',
+      part: { type: 'text', text: '▓▓▓░░ 25% next-step (waitlist flow read). Now inspect the runtime.' },
+    })).toEqual({
+      _tag: 'Progress',
+      percent: 25,
+      text: 'next-step (waitlist flow read). Now inspect the runtime.',
+    })
+  })
+
+  it('keeps the final JSON when it follows a quoted progress line', () => {
+    expect(opencodeAgentEvent({
+      type: 'text',
+      part: { type: 'text', text: '▓▓▓░░ 25% quoted evidence\n{"outcome":"resolved"}' },
+    })).toEqual({ _tag: 'Message', text: '{"outcome":"resolved"}' })
+  })
+
   it('reports a session error as a turn failure', () => {
     expect(opencodeAgentEvent({ type: 'error', error: { name: 'ProviderError', data: { message: 'Rate limited.' } } }))
       .toEqual({ _tag: 'Failed', reason: 'The opencode session failed: Rate limited.' })

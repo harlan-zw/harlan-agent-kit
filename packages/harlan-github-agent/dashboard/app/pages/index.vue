@@ -508,6 +508,9 @@ useHead({
                     <span class="text-dimmed">edited</span>
                     {{ item.changes.map(change => change.path).join(', ') }}
                   </p>
+                  <p v-else-if="item._tag === 'Progress'" class="text-dimmed">
+                    {{ item.percent }}% · {{ item.text }}
+                  </p>
                   <p v-else class="text-dimmed">
                     {{ item.text }}
                   </p>
@@ -917,6 +920,9 @@ useHead({
                   <p v-else-if="item._tag === 'FileChange'">
                     <span class="text-dimmed">edited</span>
                     {{ item.changes.map(change => change.path).join(', ') }}
+                  </p>
+                  <p v-else-if="item._tag === 'Progress'" class="text-dimmed">
+                    {{ item.percent }}% · {{ item.text }}
                   </p>
                   <p v-else class="text-dimmed">
                     {{ item.text }}

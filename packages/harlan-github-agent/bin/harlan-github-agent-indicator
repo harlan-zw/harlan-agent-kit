@@ -409,18 +409,23 @@ def agent_role_label(agent):
     return AGENT_ROLE_LABELS[agent['role']]
 
 
-def agent_progress_percent(agent):
-    percent = (agent.get('progress') or {}).get('percent')
-    return percent if type(percent) is int and 0 <= percent <= 100 else 0
-
-
 def agent_progress_label(agent):
     progress = agent.get('progress') or {}
-    return f"{agent_progress_percent(agent)}% · {progress.get('label') or 'Starting'}"
+    return progress.get('label') or 'Starting'
+
+
+def agent_reported_progress_percent(agent):
+    for item in reversed(agent.get('activity') or []):
+        percent = item.get('percent')
+        if item.get('_tag') == 'Progress' and type(percent) is int and 0 <= percent <= 100:
+            return percent
+    return None
 
 
 def active_agent_label(agent):
-    return f"🟢 {agent_role_label(agent)} · {agent_progress_percent(agent)}% · {agent['repository']} #{agent['itemNumber']}"
+    percent = agent_reported_progress_percent(agent)
+    progress = '' if percent is None else f' · {percent}%'
+    return f"🟢 {agent_role_label(agent)}{progress} · {agent['repository']} #{agent['itemNumber']}"
 
 
 def active_routine_runs(dashboard):
@@ -460,6 +465,10 @@ def active_agent_activity_label(agent):
         return concise_activity_text(f'Edited {paths[0]}' if len(paths) == 1 else f'Edited {len(paths)} files')
     if kind == 'Reasoning':
         return concise_activity_text(latest.get('text') or 'Planning the next step')
+    if kind == 'Progress':
+        percent = latest.get('percent')
+        if type(percent) is int and 0 <= percent <= 100:
+            return concise_activity_text(f"{percent}% · {latest.get('text') or 'Working'}")
     return None
 
 
