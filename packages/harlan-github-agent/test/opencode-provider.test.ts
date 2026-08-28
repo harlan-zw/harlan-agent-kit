@@ -163,6 +163,22 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
       .toEqual([{ _tag: 'Failed', reason: `The opencode session failed: spawn ${binaryPath} ENOENT` }])
   })
 
+  it('starts OpenCode with the prepared Agent environment', async () => {
+    let launchedEnvironment: NodeJS.ProcessEnv | undefined
+    const environment = { PATH: '/bin', OPENCODE_CONFIG_CONTENT: '{"instructions":["/global/AGENTS.md"]}' }
+    const provider = createOpencodeProvider({
+      environment,
+      spawnOpencode: (args, workspace, receivedEnvironment) => {
+        launchedEnvironment = receivedEnvironment
+        return replay([textLine])(args)
+      },
+    })
+
+    await collect(provider.runTurn(request()))
+
+    expect(launchedEnvironment).toBe(environment)
+  })
+
   it('reports the session before the events it produced', async () => {
     const provider = createOpencodeProvider({ spawnOpencode: replay([bashLine, textLine]) })
 

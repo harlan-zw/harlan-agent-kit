@@ -10,6 +10,7 @@ import type { ClaimedAgentTask, DashboardSnapshot, RepositoryMapping, ServiceTri
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createAgentActivityLog } from './agent-activity.ts'
+import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
 import { agentLabelItem } from './agent-label.ts'
 import { createAgentPermitPool } from './agent-permit-pool.ts'
 import { AGENT_PROVIDER_NAMES, agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
@@ -193,6 +194,12 @@ export async function resolveUserLogin(
 
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
   const now = options.now ?? (() => new Date())
+  const agentContext = await loadAgentContext(defaultAgentContextPaths())
+  if (agentContext._tag === 'Err')
+    throw new Error(agentContext.error)
+  const opencodeEnvironment = opencodeAgentEnvironment({ context: agentContext.value, environment: process.env })
+  if (opencodeEnvironment._tag === 'Err')
+    throw new Error(opencodeEnvironment.error)
   const [installedRepositories, localCheckouts] = await Promise.all([
     discoverGitHubAppRepositories({
       appId: options.config.github.appId,
@@ -258,7 +265,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     chooseProvider,
     configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
-    providers: { codex: createCodexProvider(), opencode: createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET }) },
+    providers: {
+      codex: createCodexProvider(),
+      opencode: createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }),
+    },
     selection: store.getAgentSelection,
   })
   const profile = runtime().profile
