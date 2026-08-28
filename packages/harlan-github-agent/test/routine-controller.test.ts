@@ -120,6 +120,57 @@ describe('syncing one repository Routine spec', () => {
       store.close()
     }
   })
+
+  it('requests saved Candidates when a report Routine changes to propose', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      await syncRepositoryRoutines(repositoryMapping(), {
+        github: githubReturning(ok({ _tag: 'Present', specSha: 'report-sha', text: specText })),
+        now: at('2026-08-27T00:00:00.000Z'),
+        store,
+      })
+      const run = store.openRoutineRun({
+        routineId: 'harlan-zw/example:sentry-checkin',
+        scheduledFor: '2026-08-27T07:00:00.000Z',
+        specSha: 'report-sha',
+        at: '2026-08-27T07:00:05.000Z',
+      })
+      if (run === null)
+        throw new Error('Expected a Routine run.')
+      const [candidate] = store.recordCandidates({
+        routineId: run.routineId,
+        runId: run.id,
+        candidates: [{
+          fingerprint: 'src/cache.ts#stale-fallback',
+          target: 'src/cache.ts',
+          claim: 'The stale fallback differs between cache readers.',
+          verification: 'pnpm test',
+          estimatedChangedFiles: 2,
+        }],
+        at: '2026-08-27T07:05:00.000Z',
+      })
+      if (candidate === undefined)
+        throw new Error('Expected a saved Candidate.')
+
+      await syncRepositoryRoutines(repositoryMapping(), {
+        github: githubReturning(ok({
+          _tag: 'Present',
+          specSha: 'propose-sha',
+          text: specText.replace('timezone: UTC', 'timezone: UTC\n    mode: propose'),
+        })),
+        now: at('2026-08-27T08:00:00.000Z'),
+        store,
+      })
+
+      expect(store.claimNextCandidateIssue('controller-1', '2026-08-27T08:01:00.000Z', 60_000))
+        .toMatchObject({ candidateId: candidate.id })
+    }
+    finally {
+      store.close()
+    }
+  })
 })
 
 describe('planning the Routine runs that are due', () => {

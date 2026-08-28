@@ -616,6 +616,7 @@ export interface JournalStore {
   openRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, at: string }) => RoutineRun | null
   /** Records an instant that fell outside the catch-up window, so a missed run stays visible. */
   skipRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, reason: string, at: string }) => RoutineRun | null
+  getRoutineRun: (runId: string) => RoutineRun | null
   listRoutineRuns: (routineId: string, limit?: number) => RoutineRun[]
   recordCandidates: (input: { routineId: string, runId: string, candidates: ReadonlyArray<Omit<Candidate, 'id' | 'routineId' | 'runId' | 'result' | 'createdAt' | 'updatedAt'>>, at: string }) => Candidate[]
   listCandidates: (routineId: string) => Candidate[]
@@ -9163,6 +9164,7 @@ export function openJournalStore(
     listRoutines,
     openRoutineRun,
     skipRoutineRun,
+    getRoutineRun: readRunById,
     listRoutineRuns,
     recordCandidates,
     listCandidates,

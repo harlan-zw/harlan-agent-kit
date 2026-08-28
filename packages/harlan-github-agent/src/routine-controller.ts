@@ -1,6 +1,7 @@
 import type { GitHubSource } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { RepositoryMapping, Routine, RoutineRun } from './types.ts'
+import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
 import { dueRoutine, parseCron } from './routine-schedule.ts'
 import { parseRoutineSpec } from './routine-spec.ts'
@@ -16,7 +17,7 @@ export interface RoutineSyncDependencies {
   github: Pick<GitHubSource, 'readRoutineSpec'>
   now: () => Date
   signal?: AbortSignal
-  store: Pick<JournalStore, 'syncRoutines'>
+  store: Pick<JournalStore, 'getRoutineRun' | 'listCandidates' | 'stageCandidateIssues' | 'syncRoutines'>
 }
 
 /**
@@ -79,15 +80,29 @@ export async function syncRepositoryRoutines(
     }
   }
 
-  return {
-    _tag: 'Synced',
-    routines: dependencies.store.syncRoutines({
-      repository: repository.github,
-      specSha: source.value.specSha,
-      entries: spec.value.routines,
-      at,
-    }),
-  }
+  const routines = dependencies.store.syncRoutines({
+    repository: repository.github,
+    specSha: source.value.specSha,
+    entries: spec.value.routines,
+    at,
+  })
+  const commands = routines
+    .filter(routine => routine.mode === 'propose')
+    .flatMap(routine => dependencies.store.listCandidates(routine.id)
+      .filter(candidate => candidate.result._tag === 'Proposed')
+      .flatMap((candidate) => {
+        const run = dependencies.store.getRoutineRun(candidate.runId)
+        if (run === null)
+          throw new Error(`Candidate ${candidate.id} belongs to a missing Routine run.`)
+        return candidateIssueCommands([candidate], {
+          repository: routine.repository,
+          name: routine.name,
+          scheduledFor: run.scheduledFor,
+        })
+      }))
+  dependencies.store.stageCandidateIssues({ commands, at })
+
+  return { _tag: 'Synced', routines }
 }
 
 export interface RoutinePlanDependencies {
