@@ -1,5 +1,8 @@
 import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
 import { spawn } from 'node:child_process'
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
 import { extractJsonObject } from '../src/agent-provider.ts'
@@ -128,6 +131,38 @@ describe('opencodeAgentEvent', () => {
 })
 
 describe('createOpencodeProvider', () => {
+  it('finds the installed opencode command through PATH', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'opencode-provider-'))
+    const binary = join(workspace, 'opencode')
+    const originalPath = process.env.PATH
+    await writeFile(binary, `#!/bin/sh
+printf '%s\\n' '${JSON.stringify(textLine)}'
+`)
+    await chmod(binary, 0o755)
+    process.env.PATH = workspace
+
+    try {
+      const provider = createOpencodeProvider()
+
+      expect(await collect(provider.runTurn(request({ workspace })))).toEqual([
+        { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
+        { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      ])
+    }
+    finally {
+      process.env.PATH = originalPath
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a missing command as a turn failure', async () => {
+    const binaryPath = '/missing/opencode'
+    const provider = createOpencodeProvider({ binaryPath })
+
+    expect(await collect(provider.runTurn(request({ workspace: process.cwd() }))))
+      .toEqual([{ _tag: 'Failed', reason: `The opencode session failed: spawn ${binaryPath} ENOENT` }])
+  })
+
   it('reports the session before the events it produced', async () => {
     const provider = createOpencodeProvider({ spawnOpencode: replay([bashLine, textLine]) })
 

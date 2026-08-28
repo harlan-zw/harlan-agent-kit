@@ -3,8 +3,7 @@ import type { Result } from './result.ts'
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import process from 'node:process'
 import { err, ok } from './result.ts'
 
@@ -34,24 +33,44 @@ const providerLabels: Record<AgentProviderName, string> = {
   opencode: 'opencode',
 }
 
+/** Launch turns through PATH, so the terminal resumes the same binary. */
+const agentCommands: Record<AgentProviderName, string> = {
+  codex: 'codex',
+  opencode: 'opencode',
+}
+
 async function executable(path: string): Promise<Result<string, string>> {
   return access(path, constants.X_OK)
     .then(() => ok(path))
     .catch(() => err(`Executable is unavailable: ${path}`))
 }
 
+async function executableOnPath(command: string): Promise<Result<string, string>> {
+  const directories = (process.env.PATH ?? '').split(delimiter).filter(directory => directory.length > 0)
+  for (const directory of directories) {
+    const found = await executable(join(directory, command))
+    if (found._tag === 'Ok')
+      return found
+  }
+  return err(`Executable is unavailable: ${command}`)
+}
+
 export function createTerminalSessionLauncher(options: TerminalSessionOptions = {}) {
   const terminalPath = options.terminalPath ?? '/usr/bin/ghostty'
-  const agentPaths: Record<AgentProviderName, string> = {
-    codex: options.codexPath ?? join(homedir(), '.local', 'bin', 'codex'),
-    opencode: options.opencodePath ?? join(homedir(), '.opencode', 'bin', 'opencode'),
+  const agentOverrides: Partial<Record<AgentProviderName, string | undefined>> = {
+    codex: options.codexPath,
+    opencode: options.opencodePath,
   }
   const delayMilliseconds = options.delayMilliseconds ?? 6_000
 
   return async (input: TerminalSessionInput): Promise<Result<void, string>> => {
     if (!sessionPatterns[input.provider].test(input.sessionId))
       return err('The agent session ID is invalid.')
-    const [terminal, agent] = await Promise.all([executable(terminalPath), executable(agentPaths[input.provider])])
+    const override = agentOverrides[input.provider]
+    const [terminal, agent] = await Promise.all([
+      executable(terminalPath),
+      override === undefined ? executableOnPath(agentCommands[input.provider]) : executable(override),
+    ])
     if (terminal._tag === 'Err')
       return terminal
     if (agent._tag === 'Err')

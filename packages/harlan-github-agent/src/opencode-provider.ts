@@ -2,8 +2,6 @@ import type { ChildProcessByStdio } from 'node:child_process'
 import type { Readable } from 'node:stream'
 import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import { spawn } from 'node:child_process'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { agentProviderFailureReason, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
@@ -15,6 +13,10 @@ const searchTools = new Set(['webfetch', 'websearch'])
 const maximumErrorCharacters = 600
 
 export type OpencodeProcess = ChildProcessByStdio<null, Readable, Readable>
+
+type OpencodeExit
+  = | { _tag: 'Exited', code: number | null, signal: NodeJS.Signals | null }
+    | { _tag: 'SpawnFailed', error: Error }
 
 export interface OpencodeProviderOptions {
   binaryPath?: string
@@ -164,7 +166,7 @@ export function opencodeArguments(request: AgentTurnRequest, prompt: string): st
 }
 
 export function createOpencodeProvider(options: OpencodeProviderOptions = {}): AgentProvider {
-  const binaryPath = options.binaryPath ?? join(homedir(), '.opencode', 'bin', 'opencode')
+  const binaryPath = options.binaryPath ?? 'opencode'
   const idleTimeoutMilliseconds = options.idleTimeoutMilliseconds ?? 10 * 60_000
   const cachedContextBudget = options.cachedContextBudget ?? DEFAULT_CACHED_CONTEXT_BUDGET
   const spawnOpencode = options.spawnOpencode ?? ((args, workspace) => spawn(binaryPath, args, {
@@ -182,9 +184,9 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     child.stderr.on('data', (chunk: string) => {
       standardError = `${standardError}${chunk}`.slice(-maximumErrorCharacters)
     })
-    const exited = new Promise<{ code: number | null, signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once('error', reject)
-      child.once('close', (code, signal) => resolve({ code, signal }))
+    const exited = new Promise<OpencodeExit>((resolve) => {
+      child.once('error', error => resolve({ _tag: 'SpawnFailed', error }))
+      child.once('close', (code, signal) => resolve({ _tag: 'Exited', code, signal }))
     })
 
     // A silent run means a wedged agent, and its Task holds its lease until the
@@ -255,6 +257,10 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         }
       }
       const exit = await exited
+      if (exit._tag === 'SpawnFailed') {
+        yield { _tag: 'Failed', reason: agentProviderFailureReason('opencode', exit.error.message) }
+        return
+      }
       if (overBudget) {
         yield { _tag: 'ContextBudgetExhausted', cachedTokensRead }
         return
