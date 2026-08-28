@@ -978,6 +978,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       getStats: store.getStats,
       listReviewRuns: store.listReviewRuns,
       pauseAgents: store.pauseAgents,
+      recordAgentFeedback: store.recordAgentFeedback,
       requestReviewRerun: store.requestReviewRerun,
       resumeAgents: store.resumeAgents,
       selectAgent: store.selectAgent,

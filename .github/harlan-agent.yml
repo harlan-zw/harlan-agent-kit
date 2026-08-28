@@ -1,0 +1,9 @@
+version: 1
+routines:
+  - name: agent-feedback
+    on:
+      schedule:
+        - cron: "0 9 * * 1"
+    timezone: Australia/Melbourne
+    mode: propose
+    enabled: true

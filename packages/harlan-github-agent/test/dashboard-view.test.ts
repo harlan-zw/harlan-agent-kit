@@ -155,6 +155,7 @@ function reviewAgent(overrides: Partial<ReviewAgent> = {}): ReviewAgent {
     outcome: { _tag: 'Ready', confidence: 90 },
     findings: [],
     usage: { _tag: 'Unavailable' },
+    feedback: null,
     publications: [],
     ...overrides,
   } as ReviewAgent

@@ -1257,6 +1257,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         gates,
         outcome: storedOutcome,
         findings,
+        feedback: null,
         publications: [],
       }, preflight, signal)
     },

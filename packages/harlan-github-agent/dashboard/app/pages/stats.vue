@@ -7,7 +7,6 @@ import StatsOutcomeChart from './_StatsOutcomeChart.vue'
 import StatsWorkTable from './_StatsWorkTable.vue'
 
 const route = useRoute()
-const router = useRouter()
 const from = ref('')
 const to = ref('')
 const timeZone = ref('UTC')
@@ -16,11 +15,14 @@ const pending = ref(false)
 const rangeMessage = ref<string>()
 const loadMessage = ref<string>()
 const mounted = ref(false)
+const currentDate = shallowRef<Date>()
 
 const presets = [7, 30, 90] as const
 
 const activePreset = computed(() => presets.find((days) => {
-  const range = statsDateRange(days, new Date())
+  if (currentDate.value === undefined)
+    return false
+  const range = statsDateRange(days, currentDate.value)
   return range.from === from.value && range.to === to.value
 }))
 
@@ -71,7 +73,7 @@ async function setRouteRange(nextFrom: string, nextTo: string): Promise<void> {
   if (route.query.from === nextFrom && route.query.to === nextTo)
     await loadStats()
   else
-    await router.push({ path: '/stats', query: nextQuery })
+    await navigateTo({ path: '/stats', query: nextQuery })
 }
 
 async function applyRange(): Promise<void> {
@@ -83,15 +85,16 @@ async function choosePreset(days: typeof presets[number]): Promise<void> {
   await setRouteRange(range.from, range.to)
 }
 
-onMounted(async () => {
+async function initializeStats(): Promise<void> {
   timeZone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  currentDate.value = new Date()
   const routeFrom = queryDate(route.query.from)
   const routeTo = queryDate(route.query.to)
   if (routeFrom === undefined || routeTo === undefined) {
     const range = statsDateRange(30, new Date())
     from.value = range.from
     to.value = range.to
-    await router.replace({ path: '/stats', query: { ...route.query, ...range } })
+    await navigateTo({ path: '/stats', query: { ...route.query, ...range }, replace: true })
   }
   else {
     from.value = routeFrom
@@ -99,6 +102,10 @@ onMounted(async () => {
   }
   await loadStats()
   mounted.value = true
+}
+
+onMounted(() => {
+  void initializeStats()
 })
 
 watch(() => [route.query.from, route.query.to], async ([nextFrom, nextTo]) => {

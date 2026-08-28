@@ -136,6 +136,10 @@ describe('filing the issues Candidates propose', () => {
 
       expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 101 } }])
       expect(calls[0]?.labels).toEqual(['routine:pr-triage'])
+      expect(store.getRoutineIssueSource('harlan-zw/example', 101)).toEqual({
+        routineName: 'pr-triage',
+        target: 'src/store.ts',
+      })
     }
     finally {
       store.close()

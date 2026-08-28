@@ -189,6 +189,7 @@ describe('review resilience', () => {
         outcome: { _tag: 'Ready', confidence: 91 },
         findings: [],
         usage: { _tag: 'Unavailable' },
+        feedback: null,
         publications: [{
           id: 'failed-publication',
           reviewRunId: 'stored-review',
@@ -238,6 +239,7 @@ describe('review resilience', () => {
       ...stored,
       usage: attempt.usage ?? { _tag: 'Unavailable' },
       outcome: { _tag: 'Ready', confidence },
+      feedback: null,
       publications: [],
     })
     const retry = reviewTask(pullRequest)

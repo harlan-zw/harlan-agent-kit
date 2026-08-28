@@ -80,7 +80,7 @@ routines:
         - cron: "* * * * *"
 `)
 
-    expect(parsed).toEqual({ _tag: 'Err', error: 'Name one Routine the service runs: sentry-checkin or pr-triage.' })
+    expect(parsed).toEqual({ _tag: 'Err', error: 'Name one Routine the service runs: sentry-checkin or pr-triage or agent-feedback.' })
   })
 
   it('refuses a key the repository may not set', () => {

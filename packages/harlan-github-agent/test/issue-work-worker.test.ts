@@ -8,6 +8,60 @@ import { ok } from '../src/result.ts'
 import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('issue work worker', () => {
+  it('refuses an Agent feedback patch outside its trusted skill target', async () => {
+    const repository = repositoryMapping()
+    const issue = issueItem()
+    let committed = false
+    const worker = createIssueWorkWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'implemented',
+        summary: 'Changed the controller.',
+        checks: ['pnpm test'],
+        commitMessage: 'fix: change the controller',
+        pullRequestTitle: 'fix: change the controller',
+        pullRequestBody: '### Description\n\nChanged it.\n\n### Linked Issues\n\nCloses #12.',
+      }))),
+      github: {
+        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Skill proposal', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getRoutineIssueSource: () => ({ routineName: 'agent-feedback', target: 'harlan-agent-kit/skills/adversarial-review/SKILL.md' }),
+        getWorkerSession: () => 'triage-session',
+        listOpenAgentPullRequests: () => [],
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(repository)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/issue-work', headSha: 'base-sha', baseSha: 'base-sha', defaultBranchSha: 'base-sha' })),
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 1, changedPaths: ['src/controller.ts'] })),
+        restack: () => Promise.reject(new Error('Issue work must not restack.')),
+        commit: () => {
+          committed = true
+          return Promise.resolve(ok({ commitSha: 'commit-sha', baseSha: 'base-sha', artifactRef: 'artifact-ref', digest: 'patch-digest', changedFiles: 1 }))
+        },
+      },
+    })
+
+    const result = await worker.run({
+      id: 'issue-work-task',
+      kind: 'issue_work',
+      repository: repository.github,
+      issueNumber: issue.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      issue,
+    }, new AbortController().signal)
+
+    expect(result).toEqual({ _tag: 'Err', error: 'Agent feedback issue work changed files outside its skill target.' })
+    expect(committed).toBe(false)
+  })
+
   it('resumes triage, implements the issue, and prepares repository metadata', async () => {
     const repository = repositoryMapping({ ownership: 'maintained', conflictResolution: false })
     const issue = issueItem()
