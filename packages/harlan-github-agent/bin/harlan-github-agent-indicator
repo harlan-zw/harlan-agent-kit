@@ -4,10 +4,12 @@ import base64
 import fcntl
 import json
 import os
+import re
+import shlex
 import subprocess
-import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from datetime import datetime
@@ -19,15 +21,20 @@ gi.require_version('AyatanaAppIndicator3', '0.1')
 gi.require_version('Gtk', '3.0')
 from gi.repository import AyatanaAppIndicator3, GLib, Gtk
 
-DASHBOARD_URL = 'https://harlan-github-agent.localhost/'
+DASHBOARD_URL = os.environ.get('HARLAN_GITHUB_AGENT_URL', 'https://hogwild.tailcad325.ts.net/').rstrip('/') + '/'
 DASHBOARD_ORIGIN = DASHBOARD_URL.rstrip('/')
-HOGWILD_DASHBOARD_URL = os.environ.get('HARLAN_GITHUB_AGENT_HOGWILD_URL', 'https://hogwild.tailcad325.ts.net/').rstrip('/') + '/'
+SSH_HOST = os.environ.get('HARLAN_GITHUB_AGENT_SSH_HOST', 'hogwild')
 PASSWORD_FILE = Path.home() / '.config/harlan-github-agent/dashboard-password'
 APP_ICON = Path(__file__).resolve().parent.parent / 'assets/github-app-icon.png'
-WATCHER = Path(__file__).resolve().parent / 'harlan-github-agent-watch'
+REMOTE_SERVICE = '/home/harlan/.local/share/harlan-github-agent/service/packages/harlan-github-agent'
+REMOTE_WATCHER = f'{REMOTE_SERVICE}/bin/harlan-github-agent-watch'
 PROVIDER_LABELS = {
     'codex': 'Codex',
     'opencode': 'opencode',
+}
+SESSION_PATTERNS = {
+    'codex': re.compile(r'^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$', re.IGNORECASE),
+    'opencode': re.compile(r'^ses_[a-z\d]{8,}$', re.IGNORECASE),
 }
 PROVIDER_DEFAULT_LABEL = 'Provider default'
 FOLLOW_CONFIGURATION_LABEL = 'Follow configuration'
@@ -96,41 +103,36 @@ def request_agent_eject(task_id):
             'Origin': DASHBOARD_ORIGIN,
         },
     )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as caught:
+        body = json.load(caught)
+        delayed = body.get('data') if isinstance(body, dict) else None
+        if caught.code == 503 and isinstance(delayed, dict) and delayed.get('_tag') == 'EjectDelayed':
+            raise RuntimeError(f"Saved session {delayed.get('sessionId')}. {delayed.get('nextAction')}") from None
+        raise
 
 
-def read_system_sources(fetch_dashboard, fetch_hogwild_dashboard=None):
+def read_system_sources(fetch_dashboard):
     try:
         harlan_github_agent = {'_tag': 'Available', 'dashboard': fetch_dashboard()}
     except Exception as caught:
         harlan_github_agent = {'_tag': 'Unavailable', 'message': str(caught)}
 
-    sources = {
+    return {
         'harlanGithubAgent': harlan_github_agent,
     }
-    if fetch_hogwild_dashboard is not None:
-        try:
-            sources['hogwildAgent'] = {'_tag': 'Available', 'dashboard': fetch_hogwild_dashboard()}
-        except Exception as caught:
-            sources['hogwildAgent'] = {'_tag': 'Unavailable', 'message': str(caught)}
-    return sources
 
 
 def loading_system_sources():
     return {
         'harlanGithubAgent': {'_tag': 'Loading'},
-        'hogwildAgent': {'_tag': 'Loading'},
     }
 
 
 def source_dashboard(sources):
     source = sources['harlanGithubAgent']
-    return source['dashboard'] if source['_tag'] == 'Available' else None
-
-
-def source_hogwild_dashboard(sources):
-    source = sources.get('hogwildAgent', {'_tag': 'Loading'})
     return source['dashboard'] if source['_tag'] == 'Available' else None
 
 
@@ -305,18 +307,65 @@ def open_url(url):
     return lambda *_args: webbrowser.open(url)
 
 
+def parse_agent_session(provider, session_id):
+    pattern = SESSION_PATTERNS.get(provider)
+    if pattern is None:
+        raise ValueError(f'Unsupported Agent provider: {provider}')
+    if not isinstance(session_id, str) or pattern.fullmatch(session_id) is None:
+        raise ValueError(f'Invalid {provider} session ID')
+    return session_id
+
+
+def ssh_remote_command(arguments):
+    return shlex.join(arguments)
+
+
 def open_agent_watch(agent):
     session = agent.get('session', {})
     if session.get('_tag') != 'Connected':
         return
+    session_id = parse_agent_session(agent['provider'], session.get('id'))
     subprocess.Popen([
         '/usr/bin/ghostty',
         f"--title=Watch logs · {agent['repository']} #{agent['itemNumber']}",
         '-e',
-        sys.executable,
-        str(WATCHER),
-        agent['provider'],
-        session['id'],
+        'ssh',
+        '-t',
+        SSH_HOST,
+        ssh_remote_command([
+            '/usr/bin/python3',
+            REMOTE_WATCHER,
+            agent['provider'],
+            session_id,
+        ]),
+    ], start_new_session=True)
+
+
+def agent_resume_command(provider, session_id):
+    session_id = parse_agent_session(provider, session_id)
+    if provider == 'codex':
+        return [
+            '/home/harlan/.local/bin/codex',
+            'resume',
+            session_id,
+            '-c',
+            'tui.resume_cwd="session"',
+        ]
+    if provider == 'opencode':
+        return ['/home/harlan/.local/bin/opencode', '--session', session_id]
+    raise ValueError(f'Unsupported Agent provider: {provider}')
+
+
+def open_ejected_session(ejected):
+    provider = ejected['provider']
+    subprocess.Popen([
+        '/usr/bin/ghostty',
+        f"--title={PROVIDER_LABELS[provider]} · {ejected['repository']} #{ejected['itemNumber']}",
+        '-e',
+        'ssh',
+        '-t',
+        SSH_HOST,
+        ssh_remote_command(agent_resume_command(provider, ejected['sessionId'])),
     ], start_new_session=True)
 
 
@@ -422,7 +471,7 @@ def confirm_agent_eject(agent, eject_agent):
         buttons=Gtk.ButtonsType.CANCEL,
         text=f"Eject {agent['repository']} #{agent['itemNumber']}?",
     )
-    dialog.format_secondary_text('Automation stops. Ghostty resumes the saved Codex session.')
+    dialog.format_secondary_text('Automation stops. Ghostty resumes the saved Agent session.')
     dialog.add_button('Eject', Gtk.ResponseType.OK)
     response = dialog.run()
     dialog.destroy()
@@ -578,16 +627,12 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
     dashboard = source_dashboard(sources)
     dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
     agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
-    hogwild_source = sources.get('hogwildAgent')
-    hogwild = source_hogwild_dashboard(sources)
-    routine_runs = [*active_routine_runs(dashboard), *active_routine_runs(hogwild)]
+    routine_runs = active_routine_runs(dashboard)
     queue = [] if dashboard is None else dashboard.get('queue', [])
     menu.append(section_item('Harlan GitHub Agent'))
     menu.append(menu_item(harlan_github_agent_status_label(dashboard, [*agents, *routine_runs], dashboard_error), enabled=False))
     if dashboard_error is not None:
         menu.append(menu_item(dashboard_error[:100], enabled=False))
-    if hogwild_source is not None and hogwild_source['_tag'] == 'Unavailable':
-        menu.append(menu_item(f"Hogwild unavailable · {hogwild_source['message'][:80]}", enabled=False))
     if action_error is not None:
         menu.append(menu_item(action_error[:100], enabled=False))
     menu.append(menu_item('Open dashboard', DASHBOARD_URL))
@@ -689,7 +734,7 @@ def main():
         refreshing['active'] = False
         dashboard = source_dashboard(sources)
         agents = [] if dashboard is None else [agent for agent in dashboard.get('agents', []) if agent.get('_tag') == 'ActiveAgent']
-        routine_runs = [*active_routine_runs(dashboard), *active_routine_runs(source_hogwild_dashboard(sources))]
+        routine_runs = active_routine_runs(dashboard)
         dashboard_source = sources['harlanGithubAgent']
         dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
         label, title = indicator_summary(dashboard, [*agents, *routine_runs], dashboard_error)
@@ -712,10 +757,10 @@ def main():
                 elif action['_tag'] == 'AgentSelect':
                     request_agent_select(action['selection'])
                 else:
-                    request_agent_eject(action['taskId'])
+                    open_ejected_session(request_agent_eject(action['taskId']))
             except Exception as caught:
                 control_error = f"{action['label']} failed: {caught}"
-        sources = read_system_sources(request_dashboard, lambda: request_dashboard(HOGWILD_DASHBOARD_URL))
+        sources = read_system_sources(request_dashboard)
         GLib.idle_add(apply_state, sources, control_error)
 
     def refresh(*_args):

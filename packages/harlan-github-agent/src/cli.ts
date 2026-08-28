@@ -8,6 +8,7 @@ import { loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateReposit
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
+import { combineServiceState } from './service-state.ts'
 import { startAgentService } from './service.ts'
 import { stopWithin } from './shutdown.ts'
 import { openJournalStore } from './store.ts'
@@ -85,6 +86,48 @@ const sweepWorktrees = defineCommand({
   },
 })
 
+const combineState = defineCommand({
+  meta: {
+    name: 'combine-service-state',
+    description: 'Build one service file from desktop GitHub state and Hogwild Routine state.',
+  },
+  args: {
+    'github-state': {
+      type: 'positional',
+      description: 'Desktop GitHub state file.',
+      required: true,
+    },
+    'routine-state': {
+      type: 'positional',
+      description: 'Hogwild Routine state file.',
+      required: true,
+    },
+    'output': {
+      type: 'string',
+      alias: 'o',
+      description: 'New combined service file.',
+      required: true,
+    },
+    'dry-run': {
+      type: 'boolean',
+      description: 'Check both sources and report totals. Write nothing.',
+      default: false,
+    },
+  },
+  async run({ args }) {
+    const result = await combineServiceState({
+      githubPath: args['github-state'],
+      routinePath: args['routine-state'],
+      outputPath: args.output,
+      dryRun: args['dry-run'],
+    })
+    if (result._tag === 'Err')
+      throw new Error(JSON.stringify(result.error))
+    const action = args['dry-run'] ? 'Checked' : 'Combined'
+    consola.success(`${action} ${result.value.routines} Routines, ${result.value.routineRuns} runs, and ${result.value.candidates} Candidates.`)
+  },
+})
+
 const command = defineCommand({
   meta: {
     name: 'harlan-github-agent',
@@ -95,12 +138,13 @@ const command = defineCommand({
     config: configArgument,
   },
   subCommands: {
+    'combine-service-state': combineState,
     'sweep-worktrees': sweepWorktrees,
   },
   async run({ args, rawArgs }) {
     // citty runs this after it ran the subcommand, so stop before the service
     // starts and binds the dashboard port.
-    if (invokesSubCommand(rawArgs, ['sweep-worktrees']))
+    if (invokesSubCommand(rawArgs, ['combine-service-state', 'sweep-worktrees']))
       return
     const configPath = resolve(args.config)
     const parsed = await loadConfig(configPath)
