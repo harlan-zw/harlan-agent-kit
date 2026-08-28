@@ -1,0 +1,51 @@
+{
+  "schema_version": 4,
+  "job_id": "stats-page-0828-1725",
+  "created": "2026-08-28T07:48:08Z",
+  "git_hash": "e9435ee5de3eb72d121a63aa6eb3764edc95d085",
+  "dev_port": 43247,
+  "pages_changed": [
+    "app/pages/stats.vue",
+    "app/pages/history.vue",
+    "app/layouts/default.vue"
+  ],
+  "components_created": [
+    "app/pages/_StatsDailyChart.vue",
+    "app/pages/_StatsOutcomeChart.vue",
+    "app/pages/_StatsWorkTable.vue"
+  ],
+  "routes_to_test": ["/stats", "/history"],
+  "design_system_changes": true,
+  "theme_name": "devtool",
+  "contract_path": ".claude/context/jobs/stats-page-0828-1725/build-contract.md",
+  "contract_criteria_status": {
+    "C1": "met",
+    "C2": "met",
+    "C3": "met",
+    "C4": "met",
+    "C5": "met",
+    "C6": "met",
+    "C7": "met",
+    "C8": "met",
+    "C9": "met",
+    "C10": "met",
+    "C11": "met",
+    "C12": "met",
+    "C13": "met",
+    "C14": "met",
+    "C15": "met",
+    "C16": "met",
+    "C17": "met"
+  },
+  "self_assessment": {
+    "confidence": "medium",
+    "weakest_area": "The local Nuxt server needs mocked service responses for visual review.",
+    "hardest_decision": "Counted delivered outcomes from published Journal commands and kept all scores out."
+  },
+  "has_client_animations": false,
+  "known_limitations": [
+    "Stats begin collecting pull request triage decisions after schema version 45."
+  ],
+  "next_steps": ["Run the contract based frontend review."],
+  "dark_mode_relevant": true
+}

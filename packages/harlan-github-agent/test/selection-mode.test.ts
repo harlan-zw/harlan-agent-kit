@@ -199,6 +199,7 @@ describe('selection mode route', () => {
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
+        getStats: () => { throw new Error('Unexpected Stats request.') },
         listReviewRuns: () => [],
         pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
         requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),

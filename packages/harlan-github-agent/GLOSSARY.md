@@ -26,6 +26,7 @@ did not cover it.
 | Routine run | `routine_runs` | Scheduler | N to 1 Routine | run |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
+| Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
 | Selection mode | `agent_control.selection_mode` | Controller | One per service | Selection mode |
 | Dismissal | `item_dismissals` | Controller | One per Item | Dismiss |
@@ -43,7 +44,7 @@ did not cover it.
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
 | Issue triage label | `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-spec`, `harlan-agent-needs-info`, or `harlan-agent-wait-to-implement` | GitHub | One per triaged issue Revision | triage route |
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
-| Pull request triage | Pull request title or `pull_request_triage` Agent role | Controller, Runner | One deterministic or low-cost decision per pull request head commit | pull request triage |
+| Pull request triage | Pull request title, `pull_request_triage` Agent role, or `pull_request_triage_runs` | Controller, Runner | One deterministic or low-cost decision per pull request head commit | pull request triage |
 | Take Ownership | `repositories.take_ownership` | Controller | One policy per Repository mapping | Take Ownership |
 | Publication command | `publication_commands` | Controller | One to one Task | none |
 | Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
@@ -247,6 +248,14 @@ The ordered dashboard view of active Tasks and actionable Items.
 GitHub ships a **merge queue**, which this is not. Always write "merge queue" in full when you mean GitHub's feature.
 
 Use `Queue` for this view. Do not use backlog or inbox.
+
+### Stats
+
+The dashboard view of completed work and its useful outcomes for one date range.
+
+Stats derives facts from the Journal. It never replaces the records that support them.
+
+Use Stats for the page and route. Do not use analytics, insights, value score, or impact score.
 
 ### Pause
 

@@ -549,10 +549,20 @@ export function taskProgressDetail(task: DashboardTask): string | undefined {
 export type HistoryRecord
   = | { _tag: 'Review', key: string, at: string, agent: ReviewAgent }
     | { _tag: 'Task', key: string, at: string, task: DashboardTask }
+    | { _tag: 'Routine', key: string, at: string, run: DashboardRoutineRun }
 
 export function historyCategory(record: HistoryRecord): HistoryCategory {
   if (record._tag === 'Task')
     return taskHistoryCategory(record.task)
+  if (record._tag === 'Routine') {
+    if (record.run.state._tag === 'Completed')
+      return 'ready'
+    if (record.run.state._tag === 'Failed')
+      return 'failed'
+    if (record.run.state._tag === 'Superseded')
+      return 'superseded'
+    return 'pending'
+  }
   if (record.agent.outcome._tag === 'Ready')
     return 'ready'
   return record.agent.outcome._tag === 'Blocked' ? 'issues' : 'pending'
@@ -561,6 +571,8 @@ export function historyCategory(record: HistoryRecord): HistoryCategory {
 export function historyOutcomeDetail(record: HistoryRecord): string | undefined {
   if (record._tag === 'Review')
     return reviewOutcomeDetail(record.agent)
+  if (record._tag === 'Routine')
+    return routineRunPresentation(record.run).detail
   if (record.task.state._tag === 'Completed')
     return 'Completed successfully.'
   return taskStateDetail(record.task)
@@ -571,14 +583,17 @@ export function historyOutcomeDetail(record: HistoryRecord): string | undefined 
  * Terminal tasks cover the work that produces no review, which would otherwise
  * finish and vanish without ever being recorded on screen.
  */
-export function buildHistory(reviewAgents: ReviewAgent[], tasks: DashboardTask[]): HistoryRecord[] {
+export function buildHistory(reviewAgents: ReviewAgent[], tasks: DashboardTask[], routineRuns: DashboardRoutineRun[] = []): HistoryRecord[] {
   const reviewed = new Set(reviewAgents.map(agent => `${agent.repository}#${agent.pullRequestNumber}@${agent.revisionId}`))
   const reviews = reviewAgents.map((agent): HistoryRecord => ({ _tag: 'Review', key: agent.id, at: agent.completedAt, agent }))
   const settled = tasks
     .filter(task => terminalTaskStates.has(task.state._tag))
     .filter(task => !(task.kind === 'adversarial_review' && reviewed.has(`${task.repository}#${taskNumber(task)}@${task.revisionId}`)))
     .map((task): HistoryRecord => ({ _tag: 'Task', key: task.id, at: task.updatedAt, task }))
-  return [...reviews, ...settled].sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
+  const routines = routineRuns
+    .filter(run => run.state._tag !== 'Queued' && run.state._tag !== 'Running')
+    .map((run): HistoryRecord => ({ _tag: 'Routine', key: run.id, at: run.updatedAt, run }))
+  return [...reviews, ...settled, ...routines].sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
 }
 
 /** The System pane keeps only enough finished work to confirm recent movement. */

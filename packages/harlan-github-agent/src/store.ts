@@ -1,6 +1,7 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { TransientKind } from './failure.ts'
 import type { IssueTriageState } from './issue-triage.ts'
+import type { RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
   AgentProfile,
@@ -86,6 +87,7 @@ import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSele
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
+import { buildStats } from './stats.ts'
 import { cleanLine } from './text.ts'
 
 export interface RecordIncidentInput {
@@ -571,6 +573,7 @@ export interface JournalStore {
   }) => PullRequestApprovalResult
   authorizePublication: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
   cancelTask: (input: { taskId: string, at: string }) => CancelTaskResult
+  recordPullRequestTriageRun: (input: RecordPullRequestTriageRunInput) => RecordPullRequestTriageRunResult
   claimNextAdversarialReviewTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedAdversarialReviewTask | null
   claimNextBaselineRepairTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedBaselineRepairTask | null
   claimNextConflictTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedConflictResolutionTask | null
@@ -648,6 +651,7 @@ export interface JournalStore {
   deferIssueTriageComment: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
+  getStats: (range: StatsRange, generatedAt: string) => StatsSnapshot
   getAgentControl: () => StoredAgentControl
   /** Never act on this Item again. Cancels live work and stops every planner. */
   dismissItem: (input: { repository: string, itemNumber: number, at: string }) => ItemDismissalResult
@@ -4010,6 +4014,40 @@ const routineProgressMigration = `
   PRAGMA user_version = 44;
 `
 
+/** Stores the one Pull request triage decision that was previously ephemeral. */
+const statsMigration = `
+  CREATE TABLE IF NOT EXISTS pull_request_triage_runs (
+    task_id TEXT PRIMARY KEY REFERENCES worker_tasks(id),
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    outcome_tag TEXT NOT NULL CHECK (outcome_tag IN ('ReviewRequired', 'ReviewSkipped', 'ReviewRequiredAfterFailure')),
+    reason TEXT NOT NULL CHECK (reason != ''),
+    content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+    UNIQUE (subject_id, revision_id),
+    FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id),
+    CHECK (completed_at >= started_at)
+  );
+
+  CREATE INDEX IF NOT EXISTS pull_request_triage_runs_completed ON pull_request_triage_runs(completed_at);
+  CREATE TABLE IF NOT EXISTS stats_coverage (
+    kind TEXT PRIMARY KEY CHECK (kind = 'pull_request_triage'),
+    started_at TEXT NOT NULL
+  );
+  INSERT OR IGNORE INTO stats_coverage (kind, started_at)
+  VALUES ('pull_request_triage', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+  CREATE INDEX IF NOT EXISTS review_runs_completed ON review_runs(completed_at);
+  CREATE INDEX IF NOT EXISTS publication_commands_published ON publication_commands(published_at) WHERE state_tag = 'Published';
+  CREATE INDEX IF NOT EXISTS task_transitions_created ON task_transitions(created_at);
+  CREATE INDEX IF NOT EXISTS worker_task_transitions_created ON worker_task_transitions(created_at);
+  CREATE INDEX IF NOT EXISTS routine_runs_updated ON routine_runs(updated_at);
+
+  PRAGMA user_version = 45;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4035,7 +4073,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 44)
+  if (version === 45)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4212,6 +4250,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 43) {
     applyMigration(database, routineProgressMigration)
+    version = 44
+  }
+  if (version === 44) {
+    applyMigration(database, statsMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -5247,6 +5289,67 @@ export function openJournalStore(
       recovery: failure._tag === 'Transient' ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: at } : { _tag: 'ActionRequired' },
       at,
     })
+  }
+
+  const recordPullRequestTriageRun: JournalStore['recordPullRequestTriageRun'] = (input) => {
+    const revision = database.prepare(`
+      SELECT worker_tasks.subject_id, revisions.payload
+      FROM worker_tasks
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = worker_tasks.revision_id
+      WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
+        AND repositories.github = ? AND subjects.github_number = ?
+        AND worker_tasks.revision_id = ? AND revisions.id = ?
+    `).get(
+      input.taskId,
+      input.repository,
+      input.pullRequestNumber,
+      input.revisionId,
+      input.revisionId,
+    ) as { subject_id: number, payload: string } | undefined
+    const subject = revision === undefined ? undefined : JSON.parse(revision.payload) as GitHubItem
+    if (revision === undefined || subject?.kind !== 'pull_request' || subject.headSha !== input.headSha)
+      return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
+
+    const contentDigest = digest(JSON.stringify(input))
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = database.prepare(`
+        SELECT content_digest FROM pull_request_triage_runs
+        WHERE task_id = ? OR (subject_id = ? AND revision_id = ?)
+      `).get(input.taskId, revision.subject_id, input.revisionId) as { content_digest: string } | undefined
+      if (existing !== undefined) {
+        database.exec('COMMIT')
+        return existing.content_digest === contentDigest ? { _tag: 'Duplicate' } : { _tag: 'Conflict' }
+      }
+      database.prepare(`
+        INSERT INTO pull_request_triage_runs (
+          task_id, subject_id, revision_id, head_sha, started_at, completed_at,
+          outcome_tag, reason, content_digest
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.taskId,
+        revision.subject_id,
+        input.revisionId,
+        input.headSha,
+        input.startedAt,
+        input.completedAt,
+        input.outcome._tag,
+        input.outcome.reason,
+        contentDigest,
+      )
+      database.prepare(`
+        UPDATE stats_coverage SET started_at = MIN(started_at, ?)
+        WHERE kind = 'pull_request_triage'
+      `).run(input.startedAt)
+      database.exec('COMMIT')
+      return { _tag: 'Inserted' }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   const recordReviewRun: JournalStore['recordReviewRun'] = (input) => {
@@ -7651,6 +7754,160 @@ export function openJournalStore(
     return row.busy === 0
   }
 
+  const getStats: JournalStore['getStats'] = (range, generatedAt) => {
+    const from = Date.parse(range.from)
+    const to = Date.parse(range.to)
+    const queryFrom = new Date(from - (to - from)).toISOString()
+    const facts: StatsFact[] = []
+
+    const triageRows = database.prepare(`
+      SELECT started_at, completed_at, outcome_tag
+      FROM pull_request_triage_runs
+      WHERE completed_at >= ? AND completed_at < ?
+    `).all(queryFrom, range.to) as unknown as Array<{
+      started_at: string
+      completed_at: string
+      outcome_tag: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure'
+    }>
+    facts.push(...triageRows.map(row => ({
+      _tag: 'PullRequestTriage' as const,
+      at: row.completed_at,
+      startedAt: row.started_at,
+      outcome: row.outcome_tag,
+    })))
+
+    const reviewRows = database.prepare(`
+      SELECT started_at, completed_at, outcome_tag, findings
+      FROM review_runs
+      WHERE completed_at >= ? AND completed_at < ?
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS settlement
+          WHERE settlement.supersedes_review_run_id = review_runs.id
+        )
+    `).all(queryFrom, range.to) as unknown as Array<{
+      started_at: string
+      completed_at: string
+      outcome_tag: 'Ready' | 'Pending' | 'Blocked'
+      findings: string
+    }>
+    facts.push(...reviewRows.map((row) => {
+      const findings = JSON.parse(row.findings) as ReviewFinding[]
+      return {
+        _tag: 'Review' as const,
+        at: row.completed_at,
+        startedAt: row.started_at,
+        outcome: row.outcome_tag,
+        findings: findings.filter(finding => finding._tag === 'Open').length,
+      }
+    }))
+
+    const taskRows = database.prepare(`
+      SELECT
+        tasks.kind,
+        terminal.to_tag,
+        terminal.created_at,
+        (
+          SELECT MAX(started.created_at) FROM task_transitions AS started
+          WHERE started.task_id = tasks.id AND started.to_tag = 'Running'
+            AND started.created_at <= terminal.created_at
+        ) AS started_at
+      FROM task_transitions AS terminal
+      JOIN tasks ON tasks.id = terminal.task_id
+      WHERE terminal.to_tag IN ('Completed', 'ActionRequired', 'Failed', 'Superseded')
+        AND terminal.created_at >= ? AND terminal.created_at < ?
+      UNION ALL
+      SELECT
+        worker_tasks.kind,
+        terminal.to_tag,
+        terminal.created_at,
+        (
+          SELECT MAX(started.created_at) FROM worker_task_transitions AS started
+          WHERE started.task_id = worker_tasks.id AND started.to_tag = 'Running'
+            AND started.created_at <= terminal.created_at
+        ) AS started_at
+      FROM worker_task_transitions AS terminal
+      JOIN worker_tasks ON worker_tasks.id = terminal.task_id
+      WHERE worker_tasks.kind = 'issue_triage'
+        AND terminal.to_tag IN ('Completed', 'ActionRequired', 'Failed', 'Superseded')
+        AND terminal.created_at >= ? AND terminal.created_at < ?
+    `).all(queryFrom, range.to, queryFrom, range.to) as unknown as Array<{
+      kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_triage' | 'issue_work'
+      to_tag: 'Completed' | 'ActionRequired' | 'Failed' | 'Superseded'
+      created_at: string
+      started_at: string | null
+    }>
+    const taskWork = (kind: typeof taskRows[number]['kind']): StatsTaskKind => kind === 'resolve_conflict' ? 'conflict_resolution' : kind
+    facts.push(...taskRows.map(row => ({
+      _tag: 'Task' as const,
+      at: row.created_at,
+      startedAt: row.started_at,
+      work: taskWork(row.kind),
+      outcome: row.to_tag,
+    })))
+
+    const publicationRows = database.prepare(`
+      SELECT
+        tasks.kind,
+        repositories.github AS repository,
+        subjects.github_number,
+        publication_commands.changed_files,
+        publication_commands.published_at
+      FROM publication_commands
+      JOIN tasks ON tasks.id = publication_commands.task_id
+      JOIN subjects ON subjects.id = tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE publication_commands.state_tag = 'Published'
+        AND publication_commands.published_at >= ? AND publication_commands.published_at < ?
+    `).all(queryFrom, range.to) as unknown as Array<{
+      kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work'
+      repository: string
+      github_number: number
+      changed_files: number
+      published_at: string
+    }>
+    facts.push(...publicationRows.map(row => ({
+      _tag: 'Publication' as const,
+      at: row.published_at,
+      repository: row.repository,
+      itemNumber: row.github_number,
+      work: row.kind === 'resolve_conflict' ? 'conflict_resolution' as const : row.kind,
+      changedFiles: row.changed_files,
+    })))
+
+    const routineRows = database.prepare(`
+      SELECT
+        routine_runs.state_tag,
+        routine_runs.updated_at,
+        COUNT(candidates.id) AS candidates
+      FROM routine_runs
+      LEFT JOIN candidates ON candidates.run_id = routine_runs.id
+      WHERE routine_runs.state_tag IN ('Completed', 'ActionRequired', 'Failed', 'Skipped', 'Superseded')
+        AND routine_runs.updated_at >= ? AND routine_runs.updated_at < ?
+      GROUP BY routine_runs.id
+    `).all(queryFrom, range.to) as unknown as Array<{
+      state_tag: 'Completed' | 'ActionRequired' | 'Failed' | 'Skipped' | 'Superseded'
+      updated_at: string
+      candidates: number
+    }>
+    facts.push(...routineRows.map(row => ({
+      _tag: 'Routine' as const,
+      at: row.updated_at,
+      startedAt: null,
+      outcome: row.state_tag,
+      candidates: row.candidates,
+    })))
+
+    const coverage = database.prepare(`
+      SELECT started_at FROM stats_coverage WHERE kind = 'pull_request_triage'
+    `).get() as { started_at: string }
+    return buildStats({
+      facts,
+      generatedAt,
+      range,
+      triageCoverageStartedAt: coverage.started_at,
+    })
+  }
+
   const getDashboardSnapshot = (generatedAt: string): DashboardSnapshot => {
     const repositoryRows = database.prepare(`
       SELECT
@@ -9202,6 +9459,7 @@ export function openJournalStore(
     approvePullRequest,
     authorizePublication,
     cancelTask,
+    recordPullRequestTriageRun,
     claimNextAdversarialReviewTask,
     claimNextBaselineRepairTask,
     claimNextConflictTask,
@@ -9231,6 +9489,7 @@ export function openJournalStore(
     getAgentControl,
     getAgentSelection,
     getDashboardSnapshot,
+    getStats,
     getWorkerSession,
     heartbeatPublication,
     hasPullRequestApproval,

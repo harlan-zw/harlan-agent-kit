@@ -2,7 +2,7 @@
 name: Harlan GitHub Agent
 description: A quiet neutral control room where weight, scale, and position carry the whole hierarchy.
 colors:
-  primary: "#059669"
+  primary: "#047857"
   neutral: "#171717"
   warning: "#d97706"
   error: "#dc2626"
