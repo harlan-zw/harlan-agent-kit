@@ -1,7 +1,10 @@
+import type { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
 import { approvalLabels } from '../src/approval-labels.ts'
 import { BASELINE_REPAIR_MARKER, pullRequestPurpose } from '../src/baseline-repair-state.ts'
-import { isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from '../src/github.ts'
+import { createGitHubSource, isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from '../src/github.ts'
+import { ok } from '../src/result.ts'
+import { repositoryMapping } from './fixtures.ts'
 
 describe('gitHub subjects', () => {
   it.each([
@@ -22,6 +25,41 @@ describe('gitHub subjects', () => {
       { login: 'harlan-github-agent[bot]', type: 'Bot' },
       ['harlan-github-agent[bot]'],
     )).toBe(false)
+  })
+
+  it('excludes a bot issue even when pull requests from it are allowed', async () => {
+    const listIssues = () => undefined
+    const listPulls = () => undefined
+    const client = {
+      paginate: (method: unknown) => Promise.resolve(method === listIssues
+        ? [{
+            number: 12,
+            state: 'open',
+            title: 'Routine report',
+            user: { login: 'harlan-github-agent[bot]', type: 'Bot' },
+            html_url: 'https://github.com/harlan-zw/example/issues/12',
+            created_at: '2026-08-01T00:00:00.000Z',
+            updated_at: '2026-08-13T00:00:00.000Z',
+            labels: [],
+          }]
+        : []),
+      rest: {
+        issues: { listForRepo: listIssues },
+        pulls: { list: listPulls },
+      },
+    } as unknown as Octokit
+    const source = createGitHubSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      issueCutoff: '2026-07-01',
+      tokens: {
+        getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T02:00:00.000Z' })),
+        invalidate: () => undefined,
+      },
+    })
+    const repository = repositoryMapping({ writablePullRequestAuthors: ['harlan-zw', 'harlan-github-agent[bot]'] })
+
+    expect(await source.listOpenItems(repository)).toEqual(ok([]))
   })
 
   it('uses one fixed inclusive issue cutoff', () => {

@@ -5,7 +5,7 @@ import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { createHash } from 'node:crypto'
-import { isAutomatedGitHubActor } from './github.ts'
+import { isEligibleGitHubSubjectAuthor } from './github.ts'
 import { err, ok } from './result.ts'
 
 export interface ReconciliationSummary {
@@ -57,14 +57,12 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     return err({ repository: repository.github, message: result.error.message })
   }
 
-  // The allowlist reaches issues as well as pull requests. Routines file their
-  // own issues, and an allowlist that stopped at pull requests dropped them
-  // before triage ever saw one, so an issue a Routine filed is exempt.
-  const eligibleItems = result.value.filter(subject =>
-    !isAutomatedGitHubActor(
-      { login: subject.author },
-      repository.writablePullRequestAuthors,
-    ) || (subject.kind === 'issue' && subject.routineFiled))
+  const eligibleItems = result.value.filter(subject => isEligibleGitHubSubjectAuthor(
+    { login: subject.author },
+    subject.kind === 'issue'
+      ? { kind: 'issue', routineFiled: subject.routineFiled }
+      : { kind: 'pull_request', allowedAuthors: repository.writablePullRequestAuthors },
+  ))
   const writes = eligibleItems.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
