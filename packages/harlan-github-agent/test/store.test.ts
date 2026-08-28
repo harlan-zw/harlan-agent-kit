@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { agentProfile, CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { routineReportCommand } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -87,6 +88,63 @@ describe('journal store', () => {
 
     expect(snapshot.routines).toEqual([expect.objectContaining({ id: routine.id, name: 'sentry-checkin' })])
     expect(snapshot.routineRuns).toEqual([expect.objectContaining({ id: run.id, state: { _tag: 'Queued' } })])
+  })
+
+  it('exposes each Routine run report state in the dashboard snapshot', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-28T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{
+        name: 'sentry-checkin',
+        crons: ['0 7 * * *'],
+        timeZone: 'Australia/Melbourne',
+        mode: 'report',
+        enabled: true,
+      }],
+      at: '2026-08-28T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    const run = store.openRoutineRun({
+      routineId: routine.id,
+      scheduledFor: '2026-08-28T21:00:00.000Z',
+      specSha: routine.specSha,
+      at: '2026-08-28T21:00:00.000Z',
+    })
+    if (run === null)
+      throw new Error('Expected a Routine run.')
+
+    expect(store.getDashboardSnapshot('2026-08-28T21:00:01.000Z').routineRuns[0]?.reportState).toBeNull()
+
+    store.stageRoutineReport({
+      command: routineReportCommand({
+        repository: routine.repository,
+        routineId: routine.id,
+        routineName: routine.name,
+        run: { id: run.id, scheduledFor: run.scheduledFor },
+        report: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
+      }),
+      at: '2026-08-28T21:00:02.000Z',
+    })
+    expect(store.getDashboardSnapshot('2026-08-28T21:00:03.000Z').routineRuns[0]?.reportState).toBe('Pending')
+
+    store.setRepositoryWritesEnabled(routine.repository, true)
+    const command = store.claimNextRoutineReport('reporter-1', '2026-08-28T21:00:04.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected a claimed Routine report.')
+    expect(store.getDashboardSnapshot('2026-08-28T21:00:05.000Z').routineRuns[0]?.reportState).toBe('Running')
+
+    store.completeRoutineReport({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-28T21:00:06.000Z',
+      commentId: 1234,
+      trackingIssueNumber: 42,
+    })
+    expect(store.getDashboardSnapshot('2026-08-28T21:00:07.000Z').routineRuns[0]?.reportState).toBe('Published')
   })
 
   it('persists Pause and reports when restart is safe', () => {
@@ -905,9 +963,11 @@ describe('journal store', () => {
     // Discovery admitted it. Nothing has trusted it to write yet.
     expect(store.mayWriteRepository('harlan-zw/example')).toBe(false)
     expect(store.mayWriteRepository('nuxt/nuxt')).toBe(false)
+    expect(store.getDashboardSnapshot('2026-08-13T00:01:00.000Z').repositories[0]?.writesEnabled).toBe(false)
 
     expect(store.setRepositoryWritesEnabled('harlan-zw/example', true)).toBe(true)
     expect(store.mayWriteRepository('harlan-zw/example')).toBe(true)
+    expect(store.getDashboardSnapshot('2026-08-13T00:02:00.000Z').repositories[0]?.writesEnabled).toBe(true)
 
     expect(store.setRepositoryWritesEnabled('harlan-zw/example', false)).toBe(true)
     expect(store.mayWriteRepository('harlan-zw/example')).toBe(false)

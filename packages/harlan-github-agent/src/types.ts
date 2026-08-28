@@ -578,6 +578,7 @@ export interface RoutineReportCommand {
 export interface ClaimedRoutineReportCommand extends RoutineReportCommand {
   repositoryMapping: RepositoryMapping
   trackingIssueNumber: number | null
+  candidates: Candidate[]
   fence: number
   workerId: string
 }
@@ -630,10 +631,16 @@ export interface RoutineRun {
   updatedAt: string
 }
 
-/** One Routine run as sent to the dashboard, with live process activity attached. */
+/** One Routine run as sent to the dashboard, with its results and live activity attached. */
 export interface DashboardRoutineRun extends RoutineRun {
+  candidates: Candidate[]
   activity: AgentActivityItem[]
+  /** State of this run's tracking-issue report command, or null when none was staged. */
+  reportState: RoutineReportCommandState | null
 }
+
+/** The lifecycle of one Routine run's tracking-issue report. */
+export type RoutineReportCommandState = 'Pending' | 'Running' | 'Published' | 'Failed'
 
 /**
  * What happened to one Candidate.
@@ -829,6 +836,8 @@ export type ClaimedPublicationCommand = PublicationCommand & {
 export interface RepositoryStatus {
   github: string
   enabled: boolean
+  /** Whether the controller may write to this repository. */
+  writesEnabled: boolean
   ownership: RepositoryOwnership
   lastAttemptAt: string | null
   lastSuccessAt: string | null

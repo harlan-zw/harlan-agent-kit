@@ -1,4 +1,5 @@
 import type { GitHubIssuePublisher } from '../src/github.ts'
+import type { Candidate } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { createRoutineReportController, routineReportBody, routineReportCommand, trackingIssueTitle } from '../src/routine-report-controller.ts'
@@ -79,6 +80,31 @@ describe('writing what one run did', () => {
     expect(body).toContain('more than 6 hours ago')
   })
 
+  it('includes every saved result so a report does not hide what was found', () => {
+    const found: Candidate[] = [{
+      id: `${runId}:src/store.ts#openRoutineRun`,
+      routineId,
+      runId,
+      fingerprint: 'src/store.ts#openRoutineRun',
+      target: 'src/store.ts',
+      claim: 'The scheduler can open the same run twice.',
+      verification: 'pnpm vitest run test/routine-controller.test.ts',
+      estimatedChangedFiles: 2,
+      result: { _tag: 'Proposed', pullRequest: null },
+      createdAt: now().toISOString(),
+      updatedAt: now().toISOString(),
+    }]
+    const body = routineReportBody(
+      { scheduledFor: '2026-08-27T07:00:00.000Z' },
+      { _tag: 'Completed', evidence: 'pr-triage | 1 found | 1 new' },
+      found,
+    )
+
+    expect(body).toContain('The scheduler can open the same run twice.')
+    expect(body).toContain('src/store.ts')
+    expect(body).toContain('pnpm vitest run test/routine-controller.test.ts')
+  })
+
   it('names the tracking issue after the routine and its repository', () => {
     expect(trackingIssueTitle('sentry-checkin', 'harlan-zw/example'))
       .toBe('sentry-checkin: run log for harlan-zw/example')
@@ -90,6 +116,18 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
+      store.recordCandidates({
+        routineId,
+        runId,
+        candidates: [{
+          fingerprint: 'src/store.ts#openRoutineRun',
+          target: 'src/store.ts',
+          claim: 'The scheduler can open the same run twice.',
+          verification: 'pnpm vitest run test/routine-controller.test.ts',
+          estimatedChangedFiles: 2,
+        }],
+        at: now().toISOString(),
+      })
       stage(store, { _tag: 'Completed', evidence: 'pr-triage | 2 found' })
       const calls: Calls = { issues: [], comments: [] }
 
@@ -99,6 +137,7 @@ describe('publishing the run log', () => {
       expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } }])
       expect(calls.issues).toEqual(['pr-triage: run log for harlan-zw/example'])
       expect(calls.comments[0]?.body).toContain('2 found')
+      expect(calls.comments[0]?.body).toContain('The scheduler can open the same run twice.')
     }
     finally {
       store.close()
@@ -189,6 +228,21 @@ describe('publishing the run log', () => {
 
       expect(results).toEqual([])
       expect(calls.comments).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps restart unsafe while a report write holds its lease', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      expect(store.claimNextRoutineReport('reporter', now().toISOString(), 60_000)).not.toBeNull()
+      store.pauseAgents(now().toISOString())
+
+      expect(store.getDashboardSnapshot(now().toISOString()).agentControl).toMatchObject({ safeToRestart: false })
     }
     finally {
       store.close()

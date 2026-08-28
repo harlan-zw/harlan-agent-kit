@@ -1,7 +1,7 @@
 import type { GitHubIssuePublisher } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
+import type { Candidate, RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
 import { routineIssueLabel } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
 
@@ -30,13 +30,25 @@ export type RoutineRunReport
  * A run that found nothing says so. That is the whole point: without it a quiet
  * morning and a broken scheduler read exactly the same, which is nothing at all.
  */
-export function routineReportBody(run: Pick<RoutineRun, 'scheduledFor'>, report: RoutineRunReport): string {
+function candidateDetails(candidates: readonly Candidate[]): string {
+  if (candidates.length === 0)
+    return ''
+  return `\n\n${candidates.map(candidate => `${candidate.claim}
+
+**Target:** \`${candidate.target}\`
+
+**Verify with:** \`${candidate.verification}\`
+
+Estimated to change ${candidate.estimatedChangedFiles} ${candidate.estimatedChangedFiles === 1 ? 'file' : 'files'}.`).join('\n\n---\n\n')}`
+}
+
+export function routineReportBody(run: Pick<RoutineRun, 'scheduledFor'>, report: RoutineRunReport, candidates: readonly Candidate[] = []): string {
   const headline = report._tag === 'Completed'
     ? report.evidence
     : report._tag === 'Skipped'
       ? `Skipped. ${report.reason}`
       : `Failed. ${report.reason}`
-  return `**${run.scheduledFor}** — ${headline}`
+  return `**${run.scheduledFor}** — ${headline}${candidateDetails(candidates)}`
 }
 
 /** One report request for one finished run. */
@@ -125,7 +137,7 @@ export function createRoutineReportController(options: RoutineReportControllerOp
         const commented = await options.github.createComment({
           repository: command.repositoryMapping,
           issueNumber,
-          body: command.body,
+          body: `${command.body}${candidateDetails(command.candidates)}`,
         }, signal)
         if (commented._tag === 'Err') {
           fail(commented.error.message)

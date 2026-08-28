@@ -94,6 +94,35 @@ export function routineTrackingUrl(routine: Routine): string | undefined {
     : `https://github.com/${routine.repository}/issues/${routine.trackingIssueNumber}`
 }
 
+/**
+ * Whether a finished Routine run still owes its tracking-issue report.
+ *
+ * The report command, not the writes flag alone, says what happened: a run
+ * whose report already published must not read as pending, whatever the
+ * repository writes do now.
+ */
+export function routineReportPending(latestRun: RoutineRun, writesEnabled: boolean, reportPublished: boolean): boolean {
+  if (reportPublished || writesEnabled)
+    return false
+  return latestRun.state._tag === 'Completed' || latestRun.state._tag === 'Skipped'
+}
+
+/**
+ * What the Watching page may offer in the Writes cell for one repository.
+ *
+ * External watches have no row in the repositories table, so an enable action
+ * for them could only ever answer 404. They render no control at all.
+ */
+export type RepositoryWritesControl
+  = | { _tag: 'External' }
+    | { _tag: 'Adjustable', writesEnabled: boolean }
+
+export function repositoryWritesControl(repository: RepositoryStatus): RepositoryWritesControl {
+  return repository.ownership === 'external'
+    ? { _tag: 'External' }
+    : { _tag: 'Adjustable', writesEnabled: repository.writesEnabled }
+}
+
 /** Human-readable live limit state for the System pane. */
 export function providerCapacityPresentation(entry: ProviderCapacityStatus): ProviderCapacityPresentation {
   const label = entry.provider === 'codex' ? 'Weekly Codex limit' : 'opencode'

@@ -22,9 +22,11 @@ import {
   queueWork,
   recentlyFinished,
   repositoryState,
+  repositoryWritesControl,
   reviewOutcomeDetail,
   reviewOutcomeLabel,
   reviewUsageLabel,
+  routineReportPending,
   routineRunPresentation,
   routineTrackingUrl,
   scheduledRoutineRecords,
@@ -94,7 +96,9 @@ function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRout
     fence: 1,
     attempts: 1,
     progress: { percent: 85, label: 'Preparing the Routine result' },
+    candidates: [],
     activity: [],
+    reportState: null,
     createdAt: '2026-08-27T21:00:00.000Z',
     updatedAt: '2026-08-27T21:01:00.000Z',
     ...overrides,
@@ -561,9 +565,9 @@ describe('task presentation', () => {
 
 describe('repositoryState', () => {
   it('ranks an error above a missing first poll', () => {
-    expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: 'boom', subjectCount: 0 }).tone).toBe('error')
-    expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null, subjectCount: 0 }).tone).toBe('warning')
-    expect(repositoryState({ github: 'a/b', enabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: null, subjectCount: 0 }).tone).toBe('success')
+    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: 'boom', subjectCount: 0 }).tone).toBe('error')
+    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null, subjectCount: 0 }).tone).toBe('warning')
+    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: null, subjectCount: 0 }).tone).toBe('success')
   })
 })
 
@@ -705,5 +709,60 @@ describe('system pane', () => {
   it('links a Routine to its tracking issue', () => {
     expect(routineTrackingUrl(routine())).toBe('https://github.com/harlan-zw/example/issues/42')
     expect(routineTrackingUrl(routine({ trackingIssueNumber: null }))).toBeUndefined()
+  })
+})
+
+describe('routineReportPending', () => {
+  it('stays quiet once the report is published, even with writes off', () => {
+    expect(routineReportPending(routineRun(), false, true)).toBe(false)
+    expect(routineReportPending(routineRun({ state: { _tag: 'Skipped', reason: 'Outside the catch-up window.' } }), false, true)).toBe(false)
+  })
+
+  it('reports a finished run whose report never published while writes are off', () => {
+    expect(routineReportPending(routineRun(), false, false)).toBe(true)
+    expect(routineReportPending(routineRun({ state: { _tag: 'Skipped', reason: 'Outside the catch-up window.' } }), false, false)).toBe(true)
+  })
+
+  it('stays quiet while writes are on, because the controller can still claim the report', () => {
+    expect(routineReportPending(routineRun(), true, false)).toBe(false)
+  })
+
+  it('never reports a run that produces no report', () => {
+    expect(routineReportPending(routineRun({ state: { _tag: 'Failed', reason: 'Sentry timed out.' } }), false, false)).toBe(false)
+    expect(routineReportPending(routineRun({ state: { _tag: 'Queued' } }), false, false)).toBe(false)
+    expect(routineReportPending(routineRun({ state: { _tag: 'Running', workerId: 'worker-1', leaseExpiresAt: '2026-08-28T22:00:00.000Z' } }), false, false)).toBe(false)
+  })
+})
+
+describe('repositoryWritesControl', () => {
+  it('offers no writes control for an external repository', () => {
+    expect(repositoryWritesControl({
+      github: 'someone/else',
+      enabled: true,
+      writesEnabled: false,
+      ownership: 'external',
+      lastAttemptAt: null,
+      lastSuccessAt: '2026-08-14T11:00:00.000Z',
+      lastError: null,
+      paused: false,
+      subjectCount: 3,
+    })).toEqual({ _tag: 'External' })
+  })
+
+  it('keeps the writes control adjustable for mapped repositories', () => {
+    const repository = {
+      github: 'harlan-zw/example',
+      enabled: true,
+      writesEnabled: true,
+      ownership: 'owned' as const,
+      lastAttemptAt: null,
+      lastSuccessAt: '2026-08-14T11:00:00.000Z',
+      lastError: null,
+      paused: false,
+      subjectCount: 0,
+    }
+    expect(repositoryWritesControl(repository)).toEqual({ _tag: 'Adjustable', writesEnabled: true })
+    expect(repositoryWritesControl({ ...repository, ownership: 'maintained', writesEnabled: false }))
+      .toEqual({ _tag: 'Adjustable', writesEnabled: false })
   })
 })

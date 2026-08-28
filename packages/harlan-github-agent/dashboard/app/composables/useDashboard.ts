@@ -181,6 +181,19 @@ function createDashboard() {
       })
   }
 
+  async function setRepositoryWritesEnabled(repository: string, writesEnabled: boolean): Promise<void> {
+    repositoryPending.value = repository
+    controlError.value = undefined
+    return $fetch(`/api/repositories/writes/${writesEnabled ? 'enable' : 'disable'}`, { method: 'POST', body: { repository } })
+      .then(() => loadState())
+      .catch((error: unknown) => {
+        controlError.value = failed(error)
+      })
+      .finally(() => {
+        repositoryPending.value = undefined
+      })
+  }
+
   function itemKey(repository: string, number: number, revisionId: string): string {
     return `${repository}:${number}:${revisionId}`
   }
@@ -398,6 +411,7 @@ function createDashboard() {
     setSelectionMode,
     switchAgent,
     setRepositoryPaused,
+    setRepositoryWritesEnabled,
     rerunReview,
     cancelAgentTask,
     ejectAgent,

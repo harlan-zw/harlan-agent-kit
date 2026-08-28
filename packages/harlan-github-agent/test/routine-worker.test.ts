@@ -182,6 +182,9 @@ describe('running one scan', () => {
 
       expect(result).toMatchObject({ _tag: 'Ok' })
       expect(store.listCandidates('harlan-zw/example:pr-triage')).toMatchObject([{ fingerprint: candidate.fingerprint }])
+      expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]).toMatchObject({
+        candidates: [{ fingerprint: candidate.fingerprint }],
+      })
     }
     finally {
       store.close()
@@ -276,6 +279,20 @@ describe('running one scan', () => {
 })
 
 describe('claiming a Routine run', () => {
+  it('keeps restart unsafe while a Routine run holds its lease', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      expect(claimStoredRun(store)).not.toBeNull()
+      store.pauseAgents(now().toISOString())
+
+      expect(store.getDashboardSnapshot(now().toISOString()).agentControl).toMatchObject({ safeToRestart: false })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('leases one queued run and never the same one twice', () => {
     const store = openJournalStore(':memory:')
     try {
