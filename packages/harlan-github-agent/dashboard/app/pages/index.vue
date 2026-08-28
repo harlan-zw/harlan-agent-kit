@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ActiveAgent, AgentRole, QueueEntry } from '../../../src/types.ts'
 import { useEventListener } from '@vueuse/core'
+import HogwildSparkline from '../_components/HogwildSparkline.vue'
 import {
   activeAgentActivity,
   activeAgentProgress,
