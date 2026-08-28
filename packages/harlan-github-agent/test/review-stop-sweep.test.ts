@@ -258,6 +258,30 @@ describe('publishStoppedReviews', () => {
     expect(recorded).toBe(0)
     expect(retired).toEqual([42])
   })
+
+  it('retires a stale publication after another Task replaces its comment', async () => {
+    const retired: number[] = []
+    const { results } = await publishStoppedReviews({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        recordDeletedReviewComment: (input) => {
+          retired.push(input.commentId)
+          return true
+        },
+        listStoppedReviews: () => [stopped],
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({ _tag: 'Superseded', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+    expect(retired).toEqual([42])
+  })
+
   it('leaves the comment alone once the pull request moves on', async () => {
     let writes = 0
     const { results } = await publishStoppedReviews({

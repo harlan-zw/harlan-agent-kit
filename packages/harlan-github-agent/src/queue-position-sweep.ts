@@ -129,6 +129,7 @@ export async function publishQueuePositions(
         taskId: status.taskId,
         commentId: status.commentId,
         at,
+        reason: 'A person deleted the comment.',
       })
       return ok({ _tag: 'CommentGone', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
     }

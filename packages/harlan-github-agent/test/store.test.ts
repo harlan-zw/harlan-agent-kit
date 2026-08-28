@@ -1655,6 +1655,7 @@ describe('journal store', () => {
       taskId: review.id,
       commentId: 42,
       at: '2026-08-13T01:03:00.000Z',
+      reason: 'A person deleted the comment.',
     })).toBe(true)
     expect(store.listStoppedReviews()).toEqual([])
   })
