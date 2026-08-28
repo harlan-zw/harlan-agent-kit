@@ -736,11 +736,23 @@ class IndicatorDisplayTest(unittest.TestCase):
             'ssh',
             '-t',
             'hogwild',
-            '/usr/bin/python3',
-            '/home/harlan/.local/share/harlan-github-agent/service/packages/harlan-github-agent/bin/harlan-github-agent-watch',
-            'opencode',
-            'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
+            '/usr/bin/python3 /home/harlan/.local/share/harlan-github-agent/service/packages/harlan-github-agent/bin/harlan-github-agent-watch opencode ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
         ], start_new_session=True)
+
+    def test_does_not_open_a_watch_terminal_for_an_invalid_session(self):
+        agent = {
+            'id': 'task-123',
+            'provider': 'opencode',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+            'session': {'_tag': 'Connected', 'id': 'ses_abc12345;touch_/tmp/pwned'},
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(ValueError, 'Invalid opencode session ID'):
+                indicator.open_agent_watch(agent)
+
+        spawn.assert_not_called()
 
     def test_opens_the_ejected_session_on_hogwild(self):
         ejected = {
@@ -761,10 +773,45 @@ class IndicatorDisplayTest(unittest.TestCase):
             'ssh',
             '-t',
             'hogwild',
-            '/home/harlan/.local/bin/opencode',
-            '--session',
-            'ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
+            '/home/harlan/.local/bin/opencode --session ses_fc1f02fd3ffeCm7SwBkWsH6YGb',
         ], start_new_session=True)
+
+    def test_opens_a_valid_codex_session_on_hogwild(self):
+        ejected = {
+            '_tag': 'Ejected',
+            'provider': 'codex',
+            'sessionId': '0f0e0d0c-0b0a-4968-8956-2631d0c871f9',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            indicator.open_ejected_session(ejected)
+
+        spawn.assert_called_once_with([
+            '/usr/bin/ghostty',
+            '--title=Codex · harlan-zw/example #24',
+            '-e',
+            'ssh',
+            '-t',
+            'hogwild',
+            "/home/harlan/.local/bin/codex resume 0f0e0d0c-0b0a-4968-8956-2631d0c871f9 -c 'tui.resume_cwd=\"session\"'",
+        ], start_new_session=True)
+
+    def test_does_not_open_an_ejected_terminal_for_an_invalid_session(self):
+        ejected = {
+            '_tag': 'Ejected',
+            'provider': 'opencode',
+            'sessionId': 'ses_abc12345;touch_/tmp/pwned',
+            'repository': 'harlan-zw/example',
+            'itemNumber': 24,
+        }
+
+        with patch.object(indicator.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(ValueError, 'Invalid opencode session ID'):
+                indicator.open_ejected_session(ejected)
+
+        spawn.assert_not_called()
 
 
 class AgentControlRequestTest(unittest.TestCase):

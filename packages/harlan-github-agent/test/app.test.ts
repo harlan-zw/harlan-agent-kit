@@ -413,6 +413,7 @@ describe('dashboard HTTP app', () => {
       dashboardPassword,
       dashboardRoot,
       now,
+      settleTask: async () => true,
       store: {
         ...agentControls,
         approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
@@ -442,6 +443,131 @@ describe('dashboard HTTP app', () => {
       itemNumber: 24,
     })
     expect(cancellations).toEqual([{ taskId, at: now().toISOString() }])
+  })
+
+  it('waits for the running Agent to settle before transferring its session', async () => {
+    const taskId = 'a'.repeat(64)
+    let finishSettlement!: () => void
+    const settlement = new Promise<void>((resolve) => {
+      finishSettlement = resolve
+    })
+    const cancellations: unknown[] = []
+    const snapshot = dashboardSnapshot({
+      agents: [{
+        _tag: 'ActiveAgent',
+        id: taskId,
+        provider: 'opencode',
+        role: 'adversarial_review',
+        author: 'harlan-zw',
+        session: { _tag: 'Connected', id: 'ses_abc12345' },
+        repository: 'harlan-zw/example',
+        repositoryUrl: 'https://github.com/harlan-zw/example',
+        subjectKind: 'pull_request',
+        itemNumber: 24,
+        title: 'Fix parser',
+        subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
+        headSha: 'abc123',
+        commitUrl: 'https://github.com/harlan-zw/example/commit/abc123',
+        startedAt: now().toISOString(),
+        updatedAt: now().toISOString(),
+        progress: { percent: 40, label: 'Reviewing' },
+        activity: [],
+        state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      }],
+    })
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      settleTask: async () => {
+        await settlement
+        return true
+      },
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask(input) {
+          cancellations.push(input)
+          return { _tag: 'Cancelled' }
+        },
+        getDashboardSnapshot: () => snapshot,
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    let response: Response | undefined
+
+    const request = Promise.resolve(app.request(`http://${allowedHost}/api/agents/eject`, {
+      method: 'POST',
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
+      body: JSON.stringify({ taskId }),
+    })).then((value) => {
+      response = value
+      return value
+    })
+    await vi.waitFor(() => expect(cancellations).toHaveLength(1))
+
+    expect(response).toBeUndefined()
+    finishSettlement()
+    expect((await request).status).toBe(200)
+  })
+
+  it('rejects an invalid provider session before cancelling its Task', async () => {
+    const taskId = 'a'.repeat(64)
+    const cancellations: unknown[] = []
+    const snapshot = dashboardSnapshot({
+      agents: [{
+        _tag: 'ActiveAgent',
+        id: taskId,
+        provider: 'opencode',
+        role: 'adversarial_review',
+        author: 'harlan-zw',
+        session: { _tag: 'Connected', id: 'ses_abc12345;touch_/tmp/pwned' },
+        repository: 'harlan-zw/example',
+        repositoryUrl: 'https://github.com/harlan-zw/example',
+        subjectKind: 'pull_request',
+        itemNumber: 24,
+        title: 'Fix parser',
+        subjectUrl: 'https://github.com/harlan-zw/example/pull/24',
+        headSha: 'abc123',
+        commitUrl: 'https://github.com/harlan-zw/example/commit/abc123',
+        startedAt: now().toISOString(),
+        updatedAt: now().toISOString(),
+        progress: { percent: 40, label: 'Reviewing' },
+        activity: [],
+        state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      }],
+    })
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      settleTask: async () => true,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask(input) {
+          cancellations.push(input)
+          return { _tag: 'Cancelled' }
+        },
+        getDashboardSnapshot: () => snapshot,
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/agents/eject`, {
+      method: 'POST',
+      headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
+      body: JSON.stringify({ taskId }),
+    })
+
+    expect(response.status).toBe(409)
+    expect(cancellations).toEqual([])
   })
 
   it('queues one review rerun from the dashboard', async () => {

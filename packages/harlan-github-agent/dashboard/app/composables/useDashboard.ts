@@ -239,11 +239,15 @@ function createDashboard() {
     }>('/api/agents/eject', { method: 'POST', body: { taskId } })
       .then((ejected) => {
         const host = browserLocation.value.hostname ?? 'hogwild'
+        const shellQuote = '\''
+        const escapedShellQuote = '\'\\\'\''
+        const quote = (value: string): string => `${shellQuote}${value.replaceAll(shellQuote, escapedShellQuote)}${shellQuote}`
         const agent = ejected.provider === 'codex'
-          ? `/home/harlan/.local/bin/codex resume ${ejected.sessionId} -c 'tui.resume_cwd="session"'`
-          : `/home/harlan/.local/bin/opencode --session ${ejected.sessionId}`
+          ? ['/home/harlan/.local/bin/codex', 'resume', ejected.sessionId, '-c', 'tui.resume_cwd="session"']
+          : ['/home/harlan/.local/bin/opencode', '--session', ejected.sessionId]
+        const remoteCommand = agent.map(quote).join(' ')
         ejectedSession.value = {
-          command: `ssh -t ${host} ${agent}`,
+          command: `ssh -t ${quote(host)} ${quote(remoteCommand)}`,
           itemNumber: ejected.itemNumber,
           repository: ejected.repository,
         }

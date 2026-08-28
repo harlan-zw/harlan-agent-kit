@@ -13,6 +13,7 @@ import { parseAgentSelection } from './agent-profile.ts'
 
 export interface AgentAppOptions {
   store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'listReviewRuns' | 'pauseAgents' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  settleTask?: (taskId: string) => Promise<boolean>
   allowedOrigin: string
   dashboardPassword: string
   dashboardRoot?: string
@@ -157,6 +158,16 @@ interface IssueApprovalRequest {
 
 interface CancelTaskRequest {
   taskId: string
+}
+
+type ParsedAgentSession
+  = | { _tag: 'Codex', id: string, provider: 'codex' }
+    | { _tag: 'Opencode', id: string, provider: 'opencode' }
+
+function parseAgentSession(provider: 'codex' | 'opencode', id: string): ParsedAgentSession | undefined {
+  if (provider === 'codex')
+    return /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id) ? { _tag: 'Codex', id, provider } : undefined
+  return /^ses_[a-z\d]{8,}$/i.test(id) ? { _tag: 'Opencode', id, provider } : undefined
 }
 
 interface ReviewRerunRequest {
@@ -317,13 +328,21 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       throw createError({ status: 404, statusText: 'Not Found', message: 'The running agent was not found.' })
     if (agent.session._tag !== 'Connected')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The agent session is still starting.' })
+    const session = parseAgentSession(agent.provider, agent.session.id)
+    if (session === undefined)
+      throw createError({ status: 409, statusText: 'Conflict', message: 'The saved agent session is invalid.' })
+    if (options.settleTask === undefined)
+      throw createError({ status: 503, statusText: 'Service Unavailable', message: 'The agent session cannot be transferred safely.' })
     const cancelled = options.store.cancelTask({ taskId: body.taskId, at: options.now().toISOString() })
     if (cancelled._tag === 'Rejected')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The agent already finished. Refresh before ejecting.' })
+    const settled = await options.settleTask(body.taskId)
+    if (!settled)
+      throw createError({ status: 503, statusText: 'Service Unavailable', message: 'The agent stopped, but its session transfer could not be confirmed.' })
     return {
       _tag: 'Ejected',
-      provider: agent.provider,
-      sessionId: agent.session.id,
+      provider: session.provider,
+      sessionId: session.id,
       repository: agent.repository,
       itemNumber: agent.itemNumber,
     }

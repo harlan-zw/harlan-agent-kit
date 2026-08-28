@@ -921,6 +921,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     onError: error => options.logger.error(error),
   })
   const dashboardShutdown = new AbortController()
+  const settleAgentTask = async (taskId: string): Promise<boolean> => {
+    if (mutationSchedulers === undefined)
+      return false
+    const schedulers = [
+      mutationSchedulers.tasks,
+      mutationSchedulers.baselineRepairs,
+      mutationSchedulers.issueWork,
+      mutationSchedulers.issues,
+      ...mutationSchedulers.repairs,
+      ...mutationSchedulers.reviews,
+    ]
+    const settled = await Promise.all(schedulers.map(scheduler => scheduler.settle(taskId)))
+    return settled.includes(true)
+  }
   const app = createAgentApp({
     activityLog,
     store: {
@@ -958,6 +972,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     allowedOrigin: config.server.allowedOrigin,
     dashboardPassword: options.dashboardPassword,
     now,
+    settleTask: settleAgentTask,
     shutdownSignal: dashboardShutdown.signal,
   })
   const server = await startAgentServer({

@@ -4,6 +4,8 @@ import base64
 import fcntl
 import json
 import os
+import re
+import shlex
 import subprocess
 import threading
 import time
@@ -28,6 +30,10 @@ REMOTE_WATCHER = f'{REMOTE_SERVICE}/bin/harlan-github-agent-watch'
 PROVIDER_LABELS = {
     'codex': 'Codex',
     'opencode': 'opencode',
+}
+SESSION_PATTERNS = {
+    'codex': re.compile(r'^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$', re.IGNORECASE),
+    'opencode': re.compile(r'^ses_[a-z\d]{8,}$', re.IGNORECASE),
 }
 PROVIDER_DEFAULT_LABEL = 'Provider default'
 FOLLOW_CONFIGURATION_LABEL = 'Follow configuration'
@@ -293,10 +299,24 @@ def open_url(url):
     return lambda *_args: webbrowser.open(url)
 
 
+def parse_agent_session(provider, session_id):
+    pattern = SESSION_PATTERNS.get(provider)
+    if pattern is None:
+        raise ValueError(f'Unsupported Agent provider: {provider}')
+    if not isinstance(session_id, str) or pattern.fullmatch(session_id) is None:
+        raise ValueError(f'Invalid {provider} session ID')
+    return session_id
+
+
+def ssh_remote_command(arguments):
+    return shlex.join(arguments)
+
+
 def open_agent_watch(agent):
     session = agent.get('session', {})
     if session.get('_tag') != 'Connected':
         return
+    session_id = parse_agent_session(agent['provider'], session.get('id'))
     subprocess.Popen([
         '/usr/bin/ghostty',
         f"--title=Watch logs · {agent['repository']} #{agent['itemNumber']}",
@@ -304,14 +324,17 @@ def open_agent_watch(agent):
         'ssh',
         '-t',
         SSH_HOST,
-        '/usr/bin/python3',
-        REMOTE_WATCHER,
-        agent['provider'],
-        session['id'],
+        ssh_remote_command([
+            '/usr/bin/python3',
+            REMOTE_WATCHER,
+            agent['provider'],
+            session_id,
+        ]),
     ], start_new_session=True)
 
 
 def agent_resume_command(provider, session_id):
+    session_id = parse_agent_session(provider, session_id)
     if provider == 'codex':
         return [
             '/home/harlan/.local/bin/codex',
@@ -334,7 +357,7 @@ def open_ejected_session(ejected):
         'ssh',
         '-t',
         SSH_HOST,
-        *agent_resume_command(provider, ejected['sessionId']),
+        ssh_remote_command(agent_resume_command(provider, ejected['sessionId'])),
     ], start_new_session=True)
 
 
