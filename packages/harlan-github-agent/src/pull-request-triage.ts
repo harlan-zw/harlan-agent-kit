@@ -80,9 +80,21 @@ ${JSON.stringify({
 })}`
 }
 
+function deterministicRoute(title: string): PullRequestTriageResult | null {
+  return /^chore(?:\([^)]+\))?:\s/.test(title)
+    ? {
+        _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
+        reason: 'The pull request uses the conventional non-breaking chore type.',
+      }
+    : null
+}
+
 export function createPullRequestTriageAgent(options: PullRequestTriageAgentOptions): PullRequestTriageAgent {
   return {
     async run(task, input, signal) {
+      const routed = deterministicRoute(task.pullRequest.title)
+      if (routed !== null)
+        return ok(routed)
       const scopeDigest = createHash('sha256')
         .update(JSON.stringify({ headSha: task.pullRequest.headSha, ...input }))
         .digest('hex')
