@@ -37,7 +37,7 @@ wait_for_health() {
   local attempt
   for attempt in $(seq 1 60); do
     if systemctl --user is-active --quiet "$SERVICE_UNIT" \
-      && curl -sf -m 5 -o /dev/null \
+      && curl --silent --show-error --max-time 5 --output /dev/null \
         -u "agent:$(cat "$PASSWORD_FILE")" \
         -H "Host: $HEALTH_HOST" \
         "$HEALTH_URL"; then
@@ -61,6 +61,29 @@ require_checkout() {
   fi
 }
 
+resolve_pnpm() {
+  if [ -n "${HARLAN_GITHUB_AGENT_PNPM:-}" ]; then
+    if [ ! -x "$HARLAN_GITHUB_AGENT_PNPM" ]; then
+      echo "The configured pnpm executable does not exist: $HARLAN_GITHUB_AGENT_PNPM" >&2
+      exit 1
+    fi
+    printf '%s\n' "$HARLAN_GITHUB_AGENT_PNPM"
+    return
+  fi
+  if command -v pnpm >/dev/null 2>&1; then
+    command -v pnpm
+    return
+  fi
+  for candidate in "$HOME/.local/bin/pnpm" "$HOME"/.local/share/corepack-*/shims/pnpm; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  echo "pnpm is not installed. Install it or set HARLAN_GITHUB_AGENT_PNPM." >&2
+  exit 1
+}
+
 restart_and_verify() {
   echo "Restarting"
   systemctl --user restart "$SERVICE_UNIT"
@@ -76,6 +99,7 @@ command="${1:-update}"
 case "$command" in
   update)
     require_checkout
+    pnpm_bin=$(resolve_pnpm)
     ref="${2:-origin/main}"
     # The checkout is a deployment. Anything local in it is a mistake worth
     # seeing rather than silently overwriting.
@@ -94,9 +118,9 @@ case "$command" in
       echo "Moved to $(deployed)"
     fi
     echo "Installing dependencies"
-    (cd "$SERVICE_CHECKOUT" && pnpm install --frozen-lockfile >/dev/null)
+    (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
     echo "Building the dashboard"
-    (cd "$SERVICE_CHECKOUT/packages/harlan-github-agent" && pnpm dashboard:build >/dev/null 2>&1)
+    (cd "$SERVICE_CHECKOUT/packages/harlan-github-agent" && "$pnpm_bin" dashboard:build >/dev/null 2>&1)
     restart_and_verify
     ;;
   restart)
