@@ -5306,12 +5306,20 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       const existing = database.prepare(`
-        SELECT content_digest FROM pull_request_triage_runs
+        SELECT head_sha, outcome_tag FROM pull_request_triage_runs
         WHERE task_id = ? OR (subject_id = ? AND revision_id = ?)
-      `).get(input.taskId, revision.subject_id, input.revisionId) as { content_digest: string } | undefined
+      `).get(input.taskId, revision.subject_id, input.revisionId) as {
+        head_sha: string
+        outcome_tag: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure'
+      } | undefined
       if (existing !== undefined) {
         database.exec('COMMIT')
-        return existing.content_digest === contentDigest ? { _tag: 'Duplicate' } : { _tag: 'Conflict' }
+        // The reason is Agent-authored prose, so a retry rewords it. Only the
+        // head commit and the outcome tag define the decision; the first
+        // stored reason stays authoritative for stats.
+        const sameDecision = existing.head_sha === input.headSha
+          && existing.outcome_tag === input.outcome._tag
+        return sameDecision ? { _tag: 'Duplicate' } : { _tag: 'Conflict' }
       }
       database.prepare(`
         INSERT INTO pull_request_triage_runs (
