@@ -66,7 +66,10 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   const seenPullRequests = new Set(eligibleItems.flatMap(subject => subject.kind === 'pull_request' ? [subject.number] : []))
   const missingPullRequestNumbers = dependencies.store.listOpenPullRequestNumbers(repository.github)
     .filter(number => !seenPullRequests.has(number))
-  const finalPullRequestReads = await Promise.all(missingPullRequestNumbers.map(number =>
+  const unverifiedClosedPullRequestNumbers = dependencies.store.listUnverifiedClosedPullRequestNumbers(repository.github)
+    .filter(number => !seenPullRequests.has(number))
+  const finalPullRequestNumbers = [...new Set([...missingPullRequestNumbers, ...unverifiedClosedPullRequestNumbers])]
+  const finalPullRequestReads = await Promise.all(finalPullRequestNumbers.map(number =>
     dependencies.github.getPullRequest(repository, number, dependencies.signal)))
   const failedFinalRead = finalPullRequestReads.find(read => read._tag === 'Err')
   if (failedFinalRead?._tag === 'Err') {
@@ -113,7 +116,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     )))
   }
 
-  const closed = finalPullRequests.filter(pullRequest => pullRequest.state === 'closed').length + dependencies.store.closeMissingItems(
+  const missingPullRequests = new Set(missingPullRequestNumbers)
+  const closed = finalPullRequests.filter(pullRequest => missingPullRequests.has(pullRequest.number) && pullRequest.state === 'closed').length + dependencies.store.closeMissingItems(
     repository.github,
     observedItems.map(subject => ({ kind: subject.kind, number: subject.number })),
     observedAt,

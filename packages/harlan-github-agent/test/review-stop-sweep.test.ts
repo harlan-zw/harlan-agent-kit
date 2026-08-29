@@ -1,4 +1,4 @@
-import type { StoppedReview } from '../src/store.ts'
+import type { JournalStore, StoppedReview } from '../src/store.ts'
 import { describe, expect, it } from 'vitest'
 import { err, ok } from '../src/result.ts'
 import { publishStoppedReviews, stoppedReviewComment } from '../src/review-stop-sweep.ts'
@@ -8,6 +8,10 @@ const githubStatus = {
   clearAgentLabels: () => Promise.resolve(ok(undefined)),
 }
 
+const reviewClosureStore = {
+  recordReviewClosure: () => true,
+}
+
 const stopped: StoppedReview = {
   taskId: 'review-task',
   taskKind: 'adversarial_review',
@@ -15,6 +19,9 @@ const stopped: StoppedReview = {
   pullRequestNumber: 24,
   revisionId: 'revision-1',
   headSha: 'abc123',
+  closureRevisionId: 'revision-1',
+  currentHeadSha: 'abc123',
+  currentBaseSha: 'base123',
   reason: 'The pull request is not ready for review.',
   disposition: { _tag: 'Stopped' },
   commentId: 42,
@@ -92,6 +99,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => reviews,
         recordStoppedReviewStatus: () => true,
@@ -116,6 +124,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => {
@@ -142,6 +151,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => {
@@ -177,6 +187,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => true,
@@ -191,6 +202,7 @@ describe('publishStoppedReviews', () => {
 
   it('closes the comment on a merged pull request whose head branch GitHub deleted', async () => {
     let body = ''
+    let closure: Parameters<JournalStore['recordReviewClosure']>[0] | undefined
     const { results } = await publishStoppedReviews({
       github: {
         ...githubStatus,
@@ -203,6 +215,10 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        recordReviewClosure: (input) => {
+          closure = input
+          return true
+        },
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [{ ...stopped, disposition: { _tag: 'Merged' } }],
         recordStoppedReviewStatus: () => true,
@@ -211,6 +227,45 @@ describe('publishStoppedReviews', () => {
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
     expect(body).toContain('### 🤖 MERGED')
+    expect(closure).toEqual(expect.objectContaining({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: 'revision-1',
+      headSha: 'abc123',
+      baseSha: 'base123',
+      disposition: { _tag: 'Merged' },
+      result: expect.objectContaining({ _tag: 'Published', body }),
+    }))
+  })
+
+  it('keeps a missing closed comment eligible when label cleanup fails', async () => {
+    let closures = 0
+    let retired = 0
+    const { results } = await publishStoppedReviews({
+      github: {
+        clearAgentLabels: () => Promise.resolve(err('GitHub did not clear the labels.')),
+        getPullRequestReviewSnapshot: () => Promise.reject(new Error('A merged pull request needs no snapshot.')),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        recordReviewClosure: () => {
+          closures += 1
+          return true
+        },
+        recordDeletedReviewComment: () => {
+          retired += 1
+          return true
+        },
+        listStoppedReviews: () => [{ ...stopped, disposition: { _tag: 'Merged' } }],
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([err('harlan-zw/example#24: GitHub did not clear the labels.')])
+    expect(closures).toBe(0)
+    expect(retired).toBe(0)
   })
 
   it('stops on its own budget and leaves the rest for the next pass', async () => {
@@ -237,6 +292,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date(clock),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => backlog,
         recordStoppedReviewStatus: () => true,
@@ -259,6 +315,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped, stopped],
         recordStoppedReviewStatus: () => true,
@@ -282,6 +339,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: (input) => {
           retired.push(input.commentId)
           return true
@@ -310,6 +368,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: (input) => {
           retired.push(input.commentId)
           return true
@@ -337,6 +396,7 @@ describe('publishStoppedReviews', () => {
       now: () => new Date('2026-08-15T04:00:00.000Z'),
       repositories: [repositoryMapping()],
       store: {
+        ...reviewClosureStore,
         recordDeletedReviewComment: () => true,
         listStoppedReviews: () => [stopped],
         recordStoppedReviewStatus: () => true,
