@@ -199,7 +199,11 @@ When a pull request review starts, create its single marked bot comment. Edit it
 
 Treat GitHub as the durable workflow record. Publish each Review gate, the next action, and the exact head and base commits.
 
+Treat the latest confirmed write to the canonical comment as its current state. This applies across every controller Publication path.
+
 If GitHub closes a pull request, publish `MERGED` or `CLOSED`. Clear every Agent status label.
+
+Before trusting a locally inferred close, read that exact pull request from GitHub. Store comment and label cleanup separately from the Task that last owned the comment. Resume incomplete cleanup after restart.
 
 Before dispatch, detect trusted marked comments for the current head commit. A terminal comment completes the queued review unless Harlan explicitly requests a rerun. An active comment is status only. Use local Task ownership to decide whether an Agent still runs.
 

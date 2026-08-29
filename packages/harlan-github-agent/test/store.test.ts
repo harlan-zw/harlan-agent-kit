@@ -1821,7 +1821,8 @@ describe('journal store', () => {
       },
     })
 
-    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
+    const stopped = store.listStoppedReviews()
+    expect(stopped).toEqual([expect.objectContaining({
       taskId: review.id,
       revisionId: observed.revisionId,
       headSha: pullRequest.headSha,
@@ -1836,7 +1837,125 @@ describe('journal store', () => {
       commentId: 42,
       url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
     })).toBe(true)
+    expect(store.recordReviewClosure({
+      repository: stopped[0]!.repository,
+      pullRequestNumber: stopped[0]!.pullRequestNumber,
+      revisionId: stopped[0]!.closureRevisionId,
+      headSha: stopped[0]!.currentHeadSha,
+      baseSha: stopped[0]!.currentBaseSha,
+      disposition: { _tag: 'Merged' },
+      result: {
+        _tag: 'Published',
+        body: '### 🤖 MERGED',
+        commentId: 42,
+        url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+      },
+      at: '2026-08-13T01:04:00.000Z',
+    })).toBe(true)
     expect(store.listStoppedReviews()).toEqual([])
+  })
+
+  it('closes the READY status that replaced a PENDING Review', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'pending-review-before-gate-refresh',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the open pull request Revision.')
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const pendingBody = '### 🤖 PENDING\n\n- **CI gate:** PENDING. Base branch CI is still running.'
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: pendingBody,
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the Review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    const pendingGates = passedReviewGates()
+    pendingGates.ci = { _tag: 'Pending', reason: 'Base branch CI is still running.', evidence: [] }
+    expect(store.recordReviewRun({
+      id: 'pending-review-run',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: review.revisionId,
+      headSha: pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'pending-review-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:03.000Z',
+      gates: pendingGates,
+      confidence: 93,
+      findings: [],
+    })._tag).toBe('Inserted')
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:04.000Z',
+      evidence: 'pending-review-run',
+    })).toBe(true)
+    expect(store.supersedeReviewRun({
+      id: 'ready-review-run',
+      supersedesReviewRunId: 'pending-review-run',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: review.revisionId,
+      headSha: pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'pending-review-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:03:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 93,
+      findings: [],
+      publication: settlementPublication('ready-after-pending'),
+    })._tag).toBe('Inserted')
+    store.recordObservation({
+      externalId: 'ready-review-merged',
+      observedAt: '2026-08-13T01:04:00.000Z',
+      source: 'poll',
+      subject: {
+        ...pullRequest,
+        state: 'closed',
+        mergedAt: '2026-08-13T01:04:00.000Z',
+        updatedAt: '2026-08-13T01:04:00.000Z',
+      },
+    })
+
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
+      disposition: { _tag: 'Merged' },
+      publishedBody: '### 🤖 READY',
+    })])
   })
 
   it('keeps a stopped Review eligible when the merge carried a head its Review never saw', () => {
@@ -1907,21 +2026,36 @@ describe('journal store', () => {
       },
     })
 
-    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
-      taskId: review.id,
-      revisionId: observed.revisionId,
-      headSha: pullRequest.headSha,
+    const stopped = store.listStoppedReviews()
+    expect(stopped).toEqual([expect.objectContaining({
+      headSha: 'repaired24',
+      currentHeadSha: 'repaired24',
       commentId: 42,
     })])
     expect(store.recordStoppedReviewStatus({
-      taskId: review.id,
-      taskKind: 'adversarial_review',
-      revisionId: observed.revisionId,
-      expectedHeadSha: pullRequest.headSha,
+      taskId: stopped[0]!.taskId,
+      taskKind: stopped[0]!.taskKind,
+      revisionId: stopped[0]!.revisionId,
+      expectedHeadSha: stopped[0]!.headSha,
       body: '### 🤖 MERGED',
       at: '2026-08-13T01:05:00.000Z',
       commentId: 42,
       url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.recordReviewClosure({
+      repository: stopped[0]!.repository,
+      pullRequestNumber: stopped[0]!.pullRequestNumber,
+      revisionId: stopped[0]!.closureRevisionId,
+      headSha: stopped[0]!.currentHeadSha,
+      baseSha: stopped[0]!.currentBaseSha,
+      disposition: { _tag: 'Merged' },
+      result: {
+        _tag: 'Published',
+        body: '### 🤖 MERGED',
+        commentId: 42,
+        url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+      },
+      at: '2026-08-13T01:05:00.000Z',
     })).toBe(true)
     expect(store.listStoppedReviews()).toEqual([])
   })

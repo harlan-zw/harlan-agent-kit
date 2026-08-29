@@ -111,6 +111,8 @@ Deliveries within three seconds of each other cost one pass, so a busy repositor
 
 Keep polling on. It is the safety net for a delivery GitHub never sent.
 
+GitHub is the durable Review workflow record. The newest confirmed canonical comment state wins across Review and gate updates. Before finalizing `CLOSED`, the service reads the exact pull request. It then publishes `MERGED` or `CLOSED`, clears Agent labels, and stores completion for restart Recovery.
+
 Select `Automatic` in the Agent provider control to pick the provider by remaining capacity. It walks `agent.order` and takes the first provider whose window has more than its `agent.reserve_percent` left.
 
 Codex publishes a seven-day window, read from `codex app-server`. opencode publishes the GLM Coding Plan windows, read from `https://api.z.ai/api/monitor/usage/quota/limit` with the key in `~/.config/opencode/opencode.json`. The plan publishes a five-hour window and a weekly one, and the fuller of the two decides, because a spent five-hour window stalls the fleet for hours whatever the week has left.

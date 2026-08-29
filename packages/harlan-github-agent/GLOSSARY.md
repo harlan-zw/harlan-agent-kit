@@ -475,6 +475,8 @@ One immutable record of a GitHub write: an automated review comment or a pushed 
 
 Store the exact Markdown and remote acknowledgement. Store failures with their reason.
 
+Several controller paths can update one canonical comment. Its newest confirmed Publication is the current GitHub workflow state.
+
 ### Approval
 
 One local decision for one exact issue or pull request Revision.

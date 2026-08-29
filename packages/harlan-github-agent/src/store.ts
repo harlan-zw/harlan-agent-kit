@@ -393,6 +393,9 @@ interface StoppedReviewRow {
   github_number: number
   revision_id: string
   head_sha: string
+  closure_revision_id: string
+  current_head_sha: string
+  current_base_sha: string
   reason: string
   current_state: string
   current_merged_at: string | null
@@ -413,6 +416,13 @@ export type StoppedReviewDisposition
     | { _tag: 'Merged' }
     | { _tag: 'Closed' }
 
+export type ReviewClosureDisposition = Exclude<StoppedReviewDisposition, { _tag: 'Stopped' }>
+
+export type ReviewClosureResult
+  = | { _tag: 'Published', body: string, commentId: number, url: string }
+    | { _tag: 'CommentGone' }
+    | { _tag: 'Superseded' }
+
 export interface StoppedReview {
   taskId: string
   taskKind: 'adversarial_review' | 'review_fix'
@@ -420,6 +430,9 @@ export interface StoppedReview {
   pullRequestNumber: number
   revisionId: string
   headSha: string
+  closureRevisionId: string
+  currentHeadSha: string
+  currentBaseSha: string
   reason: string
   /**
    * Lets the sweep skip its GitHub read on a closed pull request.
@@ -654,6 +667,8 @@ export interface JournalStore {
   failRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
   listOpenPullRequestNumbers: (github: string) => number[]
+  /** Old inferred closures need one exact read before GitHub becomes final truth. */
+  listUnverifiedClosedPullRequestNumbers: (github: string, limit?: number) => number[]
   closeMissingItems: (github: string, seen: Array<{ kind: GitHubItem['kind'], number: number }>, observedAt: string) => number
   completeTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -767,6 +782,17 @@ export interface JournalStore {
     at: string
     commentId: number
     url: string
+  }) => boolean
+  /** Records that GitHub comment and label cleanup finished for one exact closure Revision. */
+  recordReviewClosure: (input: {
+    repository: string
+    pullRequestNumber: number
+    revisionId: string
+    headSha: string
+    baseSha: string
+    disposition: ReviewClosureDisposition
+    result: ReviewClosureResult
+    at: string
   }) => boolean
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
   /** Replaces one person's explicit judgment about one Review run. */
@@ -4127,6 +4153,31 @@ const restartRequestMigration = `
   PRAGMA user_version = 47;
 `
 
+/** Separates final pull request cleanup from the Task that last owned its comment. */
+const reviewClosureMigration = `
+  CREATE TABLE review_closure_resolutions (
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    disposition_tag TEXT NOT NULL CHECK (disposition_tag IN ('Merged', 'Closed')),
+    result_tag TEXT NOT NULL CHECK (result_tag IN ('Published', 'CommentGone', 'Superseded')),
+    body TEXT,
+    github_comment_id INTEGER,
+    github_url TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, revision_id),
+    FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id),
+    CHECK (
+      (result_tag = 'Published' AND body IS NOT NULL AND github_comment_id IS NOT NULL AND github_url IS NOT NULL)
+      OR (result_tag != 'Published' AND body IS NULL AND github_comment_id IS NULL AND github_url IS NULL)
+    )
+  );
+
+  CREATE INDEX review_closure_resolutions_created ON review_closure_resolutions(created_at);
+  PRAGMA user_version = 48;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4152,7 +4203,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 47)
+  if (version === 48)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4341,6 +4392,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 46) {
     applyMigration(database, restartRequestMigration)
+    version = 47
+  }
+  if (version === 47) {
+    applyMigration(database, reviewClosureMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -5179,6 +5234,49 @@ export function openJournalStore(
       AND json_extract(revisions.payload, '$.state') = 'open'
     ORDER BY subjects.github_number
   `).all(github) as unknown as Array<{ github_number: number }>).map(row => row.github_number)
+
+  const listUnverifiedClosedPullRequestNumbers: JournalStore['listUnverifiedClosedPullRequestNumbers'] = (github, limit = 5) => {
+    const safeLimit = Math.max(0, Math.min(20, Math.trunc(limit)))
+    return (database.prepare(`
+      SELECT subjects.github_number
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ?
+        AND subjects.kind = 'pull_request'
+        AND json_extract(revisions.payload, '$.state') = 'closed'
+        AND NOT EXISTS (
+          SELECT 1 FROM review_closure_resolutions AS closure
+          WHERE closure.subject_id = subjects.id AND closure.revision_id = revisions.id
+        )
+        AND (
+          EXISTS (
+            SELECT 1 FROM review_status_commands AS status
+            JOIN revisions AS status_revision ON status_revision.id = status.revision_id
+            WHERE status_revision.subject_id = subjects.id AND status.state_tag = 'Published'
+          )
+          OR EXISTS (
+            SELECT 1 FROM review_publications AS publication
+            JOIN review_runs ON review_runs.id = publication.review_run_id
+            WHERE review_runs.subject_id = subjects.id AND publication.result_tag = 'Published'
+          )
+        )
+        AND (
+          EXISTS (
+            SELECT 1 FROM worker_tasks
+            WHERE worker_tasks.subject_id = subjects.id AND worker_tasks.kind = 'adversarial_review'
+              AND worker_tasks.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
+          )
+          OR EXISTS (
+            SELECT 1 FROM tasks
+            WHERE tasks.subject_id = subjects.id AND tasks.kind = 'review_fix'
+              AND tasks.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
+          )
+        )
+      ORDER BY revisions.observed_at DESC, subjects.github_number DESC
+      LIMIT ?
+    `).all(github, safeLimit) as unknown as Array<{ github_number: number }>).map(row => row.github_number)
+  }
 
   const closeMissingItems: JournalStore['closeMissingItems'] = (github, seen, observedAt) => {
     const seenKeys = new Set(seen.map(subject => `${subject.kind}:${subject.number}`))
@@ -8709,12 +8807,68 @@ export function openJournalStore(
   }))
 
   const listStoppedReviews: JournalStore['listStoppedReviews'] = () => (database.prepare(`
-    WITH stopped AS (
-      SELECT id, subject_id, revision_id, kind AS task_kind, state_tag, reason
-      FROM worker_tasks WHERE kind = 'adversarial_review'
+    WITH stopped_candidates AS (
+      SELECT worker_tasks.id, worker_tasks.subject_id, worker_tasks.revision_id,
+        worker_tasks.kind AS task_kind, worker_tasks.state_tag, worker_tasks.reason,
+        worker_tasks.updated_at, revisions.observed_at AS revision_observed_at
+      FROM worker_tasks
+      JOIN revisions ON revisions.id = worker_tasks.revision_id
+      WHERE worker_tasks.kind = 'adversarial_review'
       UNION ALL
-      SELECT id, subject_id, revision_id, kind AS task_kind, state_tag, reason
-      FROM tasks WHERE kind = 'review_fix'
+      SELECT tasks.id, tasks.subject_id, tasks.revision_id, tasks.kind AS task_kind,
+        tasks.state_tag, tasks.reason, tasks.updated_at,
+        revisions.observed_at AS revision_observed_at
+      FROM tasks
+      JOIN revisions ON revisions.id = tasks.revision_id
+      WHERE tasks.kind = 'review_fix'
+    ), stopped AS (
+      SELECT stopped_candidates.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY stopped_candidates.subject_id
+          ORDER BY stopped_candidates.revision_observed_at DESC,
+            CASE stopped_candidates.task_kind WHEN 'review_fix' THEN 1 ELSE 0 END DESC,
+            stopped_candidates.updated_at DESC,
+            stopped_candidates.id DESC
+        ) AS task_rank
+      FROM stopped_candidates
+      WHERE stopped_candidates.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
+    ), canonical_publications AS (
+      SELECT
+        'status:' || status.id AS publication_id,
+        status_revision.subject_id,
+        status.revision_id,
+        status.expected_head_sha,
+        status.phase,
+        status.body,
+        status.github_comment_id,
+        status.updated_at AS published_at,
+        0 AS source_rank
+      FROM review_status_commands AS status
+      JOIN revisions AS status_revision ON status_revision.id = status.revision_id
+      WHERE status.state_tag = 'Published'
+      UNION ALL
+      SELECT
+        'review:' || publication.id AS publication_id,
+        review_runs.subject_id,
+        review_runs.revision_id,
+        review_runs.head_sha AS expected_head_sha,
+        'terminal' AS phase,
+        publication.body,
+        publication.github_comment_id,
+        publication.created_at AS published_at,
+        1 AS source_rank
+      FROM review_publications AS publication
+      JOIN review_runs ON review_runs.id = publication.review_run_id
+      WHERE publication.result_tag = 'Published'
+    ), published AS (
+      SELECT canonical_publications.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY canonical_publications.subject_id
+          ORDER BY canonical_publications.published_at DESC,
+            canonical_publications.source_rank DESC,
+            canonical_publications.publication_id DESC
+        ) AS publication_rank
+      FROM canonical_publications
     )
     SELECT
       stopped.id AS task_id,
@@ -8722,12 +8876,21 @@ export function openJournalStore(
       repositories.github AS repository,
       subjects.github_number,
       stopped.revision_id,
-      json_extract(revisions.payload, '$.headSha') AS head_sha,
+      json_extract(task_revisions.payload, '$.headSha') AS head_sha,
+      current_revisions.id AS closure_revision_id,
+      json_extract(current_revisions.payload, '$.headSha') AS current_head_sha,
+      json_extract(current_revisions.payload, '$.baseSha') AS current_base_sha,
       COALESCE(stopped.reason, 'The automated review stopped.') AS reason,
       json_extract(current_revisions.payload, '$.state') AS current_state,
       json_extract(current_revisions.payload, '$.mergedAt') AS current_merged_at,
-      published.github_comment_id,
-      published.body AS published_body,
+      CASE
+        WHEN json_extract(current_revisions.payload, '$.state') = 'closed' THEN published.github_comment_id
+        ELSE owned.github_comment_id
+      END AS github_comment_id,
+      CASE
+        WHEN json_extract(current_revisions.payload, '$.state') = 'closed' THEN published.body
+        ELSE owned.body
+      END AS published_body,
       COALESCE((
         SELECT review_runs.findings FROM review_runs
         WHERE review_runs.subject_id = stopped.subject_id
@@ -8738,9 +8901,10 @@ export function openJournalStore(
     FROM stopped
     JOIN subjects ON subjects.id = stopped.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
-    JOIN revisions ON revisions.id = stopped.revision_id
+    JOIN revisions AS task_revisions ON task_revisions.id = stopped.revision_id
     JOIN revisions AS current_revisions ON current_revisions.id = subjects.current_revision_id
-    JOIN review_status_commands AS published ON published.id = COALESCE(
+    JOIN published ON published.subject_id = stopped.subject_id AND published.publication_rank = 1
+    LEFT JOIN review_status_commands AS owned ON owned.id = COALESCE(
       (
         SELECT candidate.id FROM review_status_commands AS candidate
         WHERE candidate.task_kind = stopped.task_kind AND candidate.task_id = stopped.id
@@ -8748,38 +8912,34 @@ export function openJournalStore(
         ORDER BY candidate.updated_at DESC, candidate.id DESC
         LIMIT 1
       ),
-      -- A Repair that stops before publishing any progress inherits the
-      -- canonical comment of its sibling Review for the same revision.
+      -- A Repair that stops before publishing progress inherits the canonical
+      -- status of its sibling Review for the same Revision.
       (
         SELECT candidate.id FROM review_status_commands AS candidate
         JOIN worker_tasks AS sibling ON sibling.id = candidate.task_id
-        WHERE candidate.task_kind = 'adversarial_review' AND candidate.state_tag = 'Published'
+        WHERE stopped.task_kind = 'review_fix'
+          AND candidate.task_kind = 'adversarial_review'
+          AND candidate.state_tag = 'Published'
           AND sibling.subject_id = stopped.subject_id
           AND candidate.revision_id = stopped.revision_id
         ORDER BY candidate.updated_at DESC, candidate.id DESC
         LIMIT 1
       )
     )
-    -- PENDING and WAITING end one Agent Task, but GitHub still owes the pull
-    -- request a final answer. A close or merge ends that remote state too.
-    WHERE stopped.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
+    LEFT JOIN review_closure_resolutions AS closure
+      ON closure.subject_id = subjects.id AND closure.revision_id = current_revisions.id
+    WHERE stopped.task_rank = 1
       AND (
-        published.phase != 'terminal'
+        (
+          json_extract(current_revisions.payload, '$.state') = 'open'
+          AND owned.phase != 'terminal'
+          AND owned.expected_head_sha = json_extract(task_revisions.payload, '$.headSha')
+          AND json_extract(current_revisions.payload, '$.headSha') = json_extract(task_revisions.payload, '$.headSha')
+        )
         OR (
           json_extract(current_revisions.payload, '$.state') = 'closed'
-          AND (
-            instr(published.body, '### 🤖 PENDING') > 0
-            OR instr(published.body, '### 🤖 WAITING') > 0
-          )
+          AND closure.revision_id IS NULL
         )
-      )
-      AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
-      -- A closed pull request takes no more work, so its last Task still owns
-      -- the canonical comment however far the head moved first. An open one
-      -- hands the comment to the Task queued for its current head instead.
-      AND (
-        json_extract(current_revisions.payload, '$.headSha') = json_extract(revisions.payload, '$.headSha')
-        OR json_extract(current_revisions.payload, '$.state') = 'closed'
       )
       AND repositories.enabled = 1
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
@@ -8799,16 +8959,6 @@ export function openJournalStore(
         WHERE live.subject_id = stopped.subject_id AND live.kind = 'adversarial_review'
           AND live.state_tag IN ('Queued', 'Running')
       )
-      -- READY and BLOCKED are final Review outcomes. PENDING and WAITING are
-      -- terminal Task publications that still need a pull request outcome.
-      AND NOT EXISTS (
-        SELECT 1 FROM review_status_commands AS final
-        WHERE final.phase = 'terminal' AND final.state_tag = 'Published'
-          AND final.revision_id = stopped.revision_id
-          AND final.expected_head_sha = json_extract(revisions.payload, '$.headSha')
-          AND instr(final.body, '### 🤖 PENDING') = 0
-          AND instr(final.body, '### 🤖 WAITING') = 0
-      )
   `).all() as unknown as StoppedReviewRow[]).map(row => ({
     taskId: row.task_id,
     taskKind: row.task_kind,
@@ -8816,6 +8966,9 @@ export function openJournalStore(
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,
     headSha: row.head_sha,
+    closureRevisionId: row.closure_revision_id,
+    currentHeadSha: row.current_head_sha,
+    currentBaseSha: row.current_base_sha,
     reason: row.reason,
     disposition: row.current_state !== 'closed'
       ? { _tag: 'Stopped' as const }
@@ -8899,6 +9052,73 @@ export function openJournalStore(
       database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  const recordReviewClosure: JournalStore['recordReviewClosure'] = (input) => {
+    const row = database.prepare(`
+      SELECT subjects.id AS subject_id, revisions.payload
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND subjects.kind = 'pull_request'
+        AND subjects.github_number = ? AND subjects.current_revision_id = ?
+    `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
+      subject_id: number
+      payload: string
+    } | undefined
+    const pullRequest = row === undefined ? undefined : JSON.parse(row.payload) as GitHubItem
+    if (
+      row === undefined
+      || pullRequest?.kind !== 'pull_request'
+      || pullRequest.state !== 'closed'
+      || pullRequest.headSha !== input.headSha
+      || pullRequest.baseSha !== input.baseSha
+      || (pullRequest.mergedAt === null ? 'Closed' : 'Merged') !== input.disposition._tag
+    ) {
+      return false
+    }
+    const published = input.result._tag === 'Published'
+      ? { body: input.result.body, commentId: input.result.commentId, url: input.result.url }
+      : { body: null, commentId: null, url: null }
+    const inserted = database.prepare(`
+      INSERT OR IGNORE INTO review_closure_resolutions (
+        subject_id, revision_id, head_sha, base_sha, disposition_tag, result_tag,
+        body, github_comment_id, github_url, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      row.subject_id,
+      input.revisionId,
+      input.headSha,
+      input.baseSha,
+      input.disposition._tag,
+      input.result._tag,
+      published.body,
+      published.commentId,
+      published.url,
+      input.at,
+    )
+    if (inserted.changes === 1)
+      return true
+    const existing = database.prepare(`
+      SELECT head_sha, base_sha, disposition_tag, result_tag, body, github_comment_id, github_url
+      FROM review_closure_resolutions
+      WHERE subject_id = ? AND revision_id = ?
+    `).get(row.subject_id, input.revisionId) as {
+      head_sha: string
+      base_sha: string
+      disposition_tag: ReviewClosureDisposition['_tag']
+      result_tag: ReviewClosureResult['_tag']
+      body: string | null
+      github_comment_id: number | null
+      github_url: string | null
+    }
+    return existing.head_sha === input.headSha
+      && existing.base_sha === input.baseSha
+      && existing.disposition_tag === input.disposition._tag
+      && existing.result_tag === input.result._tag
+      && existing.body === published.body
+      && existing.github_comment_id === published.commentId
+      && existing.github_url === published.url
   }
 
   const listOpenAgentPullRequests: JournalStore['listOpenAgentPullRequests'] = repository => (database.prepare(`
@@ -9788,6 +10008,7 @@ export function openJournalStore(
     failRoutineRun,
     isIssueWorkApprovalReady,
     listOpenPullRequestNumbers,
+    listUnverifiedClosedPullRequestNumbers,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
     listRunningTaskItems,
@@ -9799,6 +10020,7 @@ export function openJournalStore(
     isQueuedReviewStatus,
     recordDeletedReviewComment,
     recordStoppedReviewStatus,
+    recordReviewClosure,
     approvePullRequest,
     authorizePublication,
     cancelTask,

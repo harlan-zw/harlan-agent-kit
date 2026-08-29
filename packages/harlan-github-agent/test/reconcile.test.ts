@@ -285,6 +285,89 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
+  it('rechecks a legacy CLOSED status before trusting its final state', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'legacy-closure-open',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the open pull request.')
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'review',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 REVIEWING',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-agent', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the Review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: 'Review stopped before a final outcome.',
+    })
+    store.closeMissingItems(repository.github, [], '2026-08-13T01:03:00.000Z')
+    expect(store.recordStoppedReviewStatus({
+      taskId: review.id,
+      taskKind: 'adversarial_review',
+      revisionId: observed.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '<!-- workflow-state: {"_tag":"PullRequestClosed","headSha":"abc123"} -->\n### 🤖 CLOSED',
+      at: '2026-08-13T01:03:01.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({ disposition: { _tag: 'Closed' } })])
+    let exactReads = 0
+
+    await reconcileRepository(repository, {
+      github: {
+        listOpenItems: () => Promise.resolve(ok([])),
+        getPullRequest: () => {
+          exactReads += 1
+          return Promise.resolve(ok({
+            ...pullRequest,
+            state: 'closed',
+            mergedAt: '2026-08-13T01:04:00.000Z',
+            updatedAt: '2026-08-13T01:04:00.000Z',
+          }))
+        },
+      },
+      store,
+      now: () => new Date('2026-08-13T01:05:00.000Z'),
+    })
+
+    expect(exactReads).toBe(1)
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({ disposition: { _tag: 'Merged' } })])
+    store.close()
+  })
+
   it('records a pull request from an explicitly allowed GitHub App', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping({ writablePullRequestAuthors: ['harlan-zw', 'harlan-github-agent[bot]'] })

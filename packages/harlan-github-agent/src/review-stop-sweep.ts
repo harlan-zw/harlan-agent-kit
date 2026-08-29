@@ -28,7 +28,7 @@ export interface ReviewStopSweepOptions {
   github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listStoppedReviews' | 'recordDeletedReviewComment' | 'recordStoppedReviewStatus'>
+  store: Pick<JournalStore, 'listStoppedReviews' | 'recordDeletedReviewComment' | 'recordReviewClosure' | 'recordStoppedReviewStatus'>
   /**
    * How long one pass may spend closing comments.
    *
@@ -49,11 +49,13 @@ export function stoppedReviewComment(
   if (disposition._tag !== 'Stopped') {
     const workflow = JSON.stringify({
       _tag: disposition._tag === 'Merged' ? 'PullRequestMerged' : 'PullRequestClosed',
-      headSha: review.headSha,
+      workflowVersion: 2,
+      headSha: review.currentHeadSha,
+      baseSha: review.currentBaseSha,
     })
     const action = disposition._tag === 'Merged' ? 'merged' : 'closed'
     return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${review.headSha} -->
+<!-- reviewed-sha: ${review.currentHeadSha} -->
 <!-- workflow-state: ${workflow} -->
 ### 🤖 ${disposition._tag.toUpperCase()}
 
@@ -125,13 +127,38 @@ export async function publishStoppedReviews(
         : live.value.pullRequest.mergedAt === null
           ? { _tag: 'Closed' }
           : { _tag: 'Merged' }
-    const body = stoppedReviewComment(review, at, disposition)
+    const statusReview = live !== null && live.value.pullRequest.state === 'closed'
+      ? {
+          ...review,
+          currentHeadSha: live.value.pullRequest.headSha,
+          currentBaseSha: live.value.pullRequest.baseSha,
+        }
+      : review
+    const body = stoppedReviewComment(statusReview, at, disposition)
     const edited = await options.github.editReviewStatus(mapping, review.pullRequestNumber, review.commentId, review.publishedBody, body, signal)
     if (edited._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${edited.error}`)
+    const closure = disposition._tag === 'Stopped' ? null : disposition
     if (edited.value._tag === 'Missing') {
-      // Deleting the comment is how a person answers it. Retiring the
-      // publication is what stops this sweep asking again on every pass.
+      if (closure !== null) {
+        const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
+        if (labels._tag === 'Err')
+          return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)
+        const recorded = options.store.recordReviewClosure({
+          repository: review.repository,
+          pullRequestNumber: review.pullRequestNumber,
+          revisionId: review.closureRevisionId,
+          headSha: review.currentHeadSha,
+          baseSha: review.currentBaseSha,
+          disposition: closure,
+          result: { _tag: 'CommentGone' },
+          at,
+        })
+        if (!recorded)
+          return err(`${review.repository}#${review.pullRequestNumber}: the final pull request state could not be saved.`)
+      }
+      // Retire the publication after closure succeeds. If label cleanup fails,
+      // the row stays eligible and the next sweep can try again.
       options.store.recordDeletedReviewComment({
         taskKind: review.taskKind,
         taskId: review.taskId,
@@ -142,6 +169,23 @@ export async function publishStoppedReviews(
       return ok({ _tag: 'CommentGone', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
     }
     if (edited.value._tag === 'Changed') {
+      if (closure !== null) {
+        const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
+        if (labels._tag === 'Err')
+          return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)
+        const recorded = options.store.recordReviewClosure({
+          repository: review.repository,
+          pullRequestNumber: review.pullRequestNumber,
+          revisionId: review.closureRevisionId,
+          headSha: review.currentHeadSha,
+          baseSha: review.currentBaseSha,
+          disposition: closure,
+          result: { _tag: 'Superseded' },
+          at,
+        })
+        if (!recorded)
+          return err(`${review.repository}#${review.pullRequestNumber}: the final pull request state could not be saved.`)
+      }
       options.store.recordDeletedReviewComment({
         taskKind: review.taskKind,
         taskId: review.taskId,
@@ -164,9 +208,23 @@ export async function publishStoppedReviews(
       commentId: edited.value.commentId,
       url: edited.value.url,
     })
-    return recorded
-      ? ok({ _tag: 'Published', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
-      : err(`${review.repository}#${review.pullRequestNumber}: the final review comment could not be saved.`)
+    if (!recorded)
+      return err(`${review.repository}#${review.pullRequestNumber}: the final review comment could not be saved.`)
+    if (closure !== null) {
+      const closureRecorded = options.store.recordReviewClosure({
+        repository: review.repository,
+        pullRequestNumber: review.pullRequestNumber,
+        revisionId: review.closureRevisionId,
+        headSha: review.currentHeadSha,
+        baseSha: review.currentBaseSha,
+        disposition: closure,
+        result: { _tag: 'Published', body, commentId: edited.value.commentId, url: edited.value.url },
+        at,
+      })
+      if (!closureRecorded)
+        return err(`${review.repository}#${review.pullRequestNumber}: the final pull request state could not be saved.`)
+    }
+    return ok({ _tag: 'Published', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
   }
 
   const budgetMilliseconds = options.budgetMilliseconds ?? 30_000
