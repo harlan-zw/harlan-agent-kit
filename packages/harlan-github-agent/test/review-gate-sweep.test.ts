@@ -226,7 +226,7 @@ describe('refreshReviewGates', () => {
       pullRequestNumber: 24,
       outcome: 'BLOCKED',
     })])
-    expect(recorded.edited?.body).toContain('Blocked: The pull request has merge conflicts.')
+    expect(recorded.edited?.body).toContain('**Merge gate:** BLOCKED. The pull request has merge conflicts.')
     expect(recorded.runs).toHaveLength(1)
     expect(recorded.stamped).toEqual(['BLOCKED'])
   })

@@ -4,6 +4,10 @@ import { err, ok } from '../src/result.ts'
 import { publishStoppedReviews, stoppedReviewComment } from '../src/review-stop-sweep.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
+const githubStatus = {
+  clearAgentLabels: () => Promise.resolve(ok(undefined)),
+}
+
 const stopped: StoppedReview = {
   taskId: 'review-task',
   taskKind: 'adversarial_review',
@@ -75,6 +79,7 @@ describe('publishStoppedReviews', () => {
 
     await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: async () => {
           active += 1
           maximumActive = Math.max(maximumActive, active)
@@ -101,6 +106,7 @@ describe('publishStoppedReviews', () => {
     let recorded = 0
     const { results } = await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
           edited = { commentId, body }
@@ -125,10 +131,39 @@ describe('publishStoppedReviews', () => {
     expect(recorded).toBe(1)
   })
 
-  it('closes a stale progress comment after GitHub merges the pull request', async () => {
-    let body = ''
+  it('does not finish while stale Agent labels remain', async () => {
+    let recorded = 0
     const { results } = await publishStoppedReviews({
       github: {
+        clearAgentLabels: () => Promise.resolve(err('GitHub did not clear the labels.')),
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        recordDeletedReviewComment: () => true,
+        listStoppedReviews: () => [stopped],
+        recordStoppedReviewStatus: () => {
+          recorded += 1
+          return true
+        },
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([err('harlan-zw/example#24: GitHub did not clear the labels.')])
+    expect(recorded).toBe(0)
+  })
+
+  it('closes a stale progress comment after GitHub merges the pull request', async () => {
+    let body = ''
+    let labelsCleared = 0
+    const { results } = await publishStoppedReviews({
+      github: {
+        clearAgentLabels: () => {
+          labelsCleared += 1
+          return Promise.resolve(ok(undefined))
+        },
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({
           state: 'closed',
           mergedAt: '2026-08-15T03:00:00.000Z',
@@ -151,12 +186,14 @@ describe('publishStoppedReviews', () => {
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
     expect(body).toContain('### 🤖 MERGED')
     expect(body).not.toContain('REVIEWING')
+    expect(labelsCleared).toBe(1)
   })
 
   it('closes the comment on a merged pull request whose head branch GitHub deleted', async () => {
     let body = ''
     const { results } = await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.resolve(err('Branch not found - https://docs.github.com/rest/branches/branches#get-a-branch')),
         editReviewStatus: (_repository, _number, _commentId, _expectedBody, value) => {
           body = value
@@ -189,6 +226,7 @@ describe('publishStoppedReviews', () => {
     let clock = Date.parse('2026-08-15T04:00:00.000Z')
     const { results, remaining } = await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.reject(new Error('A merged pull request needs no snapshot.')),
         editReviewStatus: () => {
           edits += 1
@@ -214,6 +252,7 @@ describe('publishStoppedReviews', () => {
   it('reports a backlog it never started, so a spent pass is never silent', async () => {
     const { results, remaining } = await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.reject(new Error('The budget was spent before any row ran.')),
         editReviewStatus: () => Promise.reject(new Error('The budget was spent before any row ran.')),
       },
@@ -236,6 +275,7 @@ describe('publishStoppedReviews', () => {
     let recorded = 0
     const { results } = await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
       },
@@ -263,6 +303,7 @@ describe('publishStoppedReviews', () => {
     const retired: number[] = []
     const { results } = await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
       },
@@ -286,6 +327,7 @@ describe('publishStoppedReviews', () => {
     let writes = 0
     const { results } = await publishStoppedReviews({
       github: {
+        ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot({ headSha: 'def456' })),
         editReviewStatus: () => {
           writes += 1

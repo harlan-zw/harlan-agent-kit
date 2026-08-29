@@ -697,7 +697,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                   authorLogin: comment.user.login,
                   body: comment.body,
                   url: comment.html_url,
-                }]), pull.data.head.sha, options.actorLogin(repository)),
+                }]), pull.data.head.sha, options.actorLogin(repository), liveBaseSha),
           pullRequest: pullRequestItem(repository, pull.data, liveBaseSha, options.actorLogin(repository)),
           requiredChecks,
           reviews: chronologicalPullRequestComments(reviews.flatMap(review => review.body === undefined || review.body === null
@@ -793,7 +793,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
               && comment.body?.includes(AUTOMATED_REVIEW_MARKER)
               && automatedReviewHead(comment.body)?.toLowerCase() === headSha.toLowerCase())
           : undefined
-        if (priorReview._tag === 'Found' && adoptablePrior === undefined && !replacePriorReview)
+        if (priorReview._tag === 'Found' && priorReview.authorLogin.toLowerCase() !== actor && adoptablePrior === undefined && !replacePriorReview)
           return err(`The current head commit already has an automated review by @${priorReview.authorLogin}: ${priorReview.url}`)
         const existing = commentId === null
           ? adoptablePrior ?? comments

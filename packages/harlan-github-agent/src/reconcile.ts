@@ -25,7 +25,7 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
-  github: Pick<GitHubSource, 'listOpenItems'>
+  github: Pick<GitHubSource, 'getPullRequest' | 'listOpenItems'>
   store: JournalStore
   now: () => Date
   signal?: AbortSignal
@@ -63,7 +63,20 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       ? { kind: 'issue', routineFiled: subject.routineFiled }
       : { kind: 'pull_request', allowedAuthors: repository.writablePullRequestAuthors },
   ))
-  const writes = eligibleItems.map(subject => dependencies.store.recordObservation({
+  const seenPullRequests = new Set(eligibleItems.flatMap(subject => subject.kind === 'pull_request' ? [subject.number] : []))
+  const missingPullRequestNumbers = dependencies.store.listOpenPullRequestNumbers(repository.github)
+    .filter(number => !seenPullRequests.has(number))
+  const finalPullRequestReads = await Promise.all(missingPullRequestNumbers.map(number =>
+    dependencies.github.getPullRequest(repository, number, dependencies.signal)))
+  const failedFinalRead = finalPullRequestReads.find(read => read._tag === 'Err')
+  if (failedFinalRead?._tag === 'Err') {
+    if (dependencies.signal?.aborted !== true)
+      dependencies.store.recordPollFailure(repository.github, observedAt, failedFinalRead.error.message, failedFinalRead.error.status)
+    return err({ repository: repository.github, message: failedFinalRead.error.message })
+  }
+  const finalPullRequests = finalPullRequestReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
+  const observedItems = [...eligibleItems, ...finalPullRequests]
+  const writes = observedItems.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
     source: 'poll',
@@ -100,9 +113,9 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     )))
   }
 
-  const closed = dependencies.store.closeMissingItems(
+  const closed = finalPullRequests.filter(pullRequest => pullRequest.state === 'closed').length + dependencies.store.closeMissingItems(
     repository.github,
-    eligibleItems.map(subject => ({ kind: subject.kind, number: subject.number })),
+    observedItems.map(subject => ({ kind: subject.kind, number: subject.number })),
     observedAt,
   )
   dependencies.store.recordPollSuccess(repository.github, observedAt)
@@ -110,7 +123,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     repository: repository.github,
     subjects: eligibleItems.length,
     closed,
-    ...countResults(writes),
+    ...countResults(writes.slice(0, eligibleItems.length)),
   })
 }
 

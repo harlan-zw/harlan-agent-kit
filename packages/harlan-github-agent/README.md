@@ -70,6 +70,11 @@ Review decides the pull request premise once. A sound premise permits Repair. A 
 
 GitHub status, comments, and labels hold durable workflow truth. The local journal coordinates leases, Agent sessions, Recovery, and Review usage.
 
+Pull request triage uses `harlan-agent-review-required` or `harlan-agent-review-skipped`.
+The final Review replaces that route with one outcome label: `ready`, `pending`, or `blocked`.
+The canonical comment lists every Review gate and the next action.
+After GitHub merges or closes the pull request, the comment records that state and Agent labels clear.
+
 Every published Repair head SHA gets a fresh Review. A repeated finding stops with Action required.
 
 If Repair stops, the canonical review comment changes to `BLOCKED`. It lists every finding and next action.

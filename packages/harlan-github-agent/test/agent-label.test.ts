@@ -39,6 +39,13 @@ describe('planAgentLabels', () => {
     })
   })
 
+  it('takes the temporary Review route off when an outcome lands', () => {
+    expect(planAgentLabels('READY', ['harlan-agent-review-required'])).toEqual({
+      add: AGENT_LABELS.READY,
+      remove: ['harlan-agent-review-required'],
+    })
+  })
+
   it('takes a stale verdict off the moment an agent starts working', () => {
     expect(planAgentLabels('RUNNING', ['harlan-agent-blocked'])).toEqual({
       add: AGENT_LABELS.RUNNING,
@@ -69,14 +76,16 @@ describe('planAgentLabels', () => {
     })
   })
 
-  it('uses the existing Review label as the pull request triage override', () => {
+  it('keeps the pull request triage result separate from the manual Review override', () => {
     expect(planAgentLabels('ADVERSARIAL_REVIEW_REQUIRED', [
       'harlan-agent-review-skipped',
+      'harlan-agent-review',
       'bug',
     ])).toEqual({
       add: AGENT_LABELS.ADVERSARIAL_REVIEW_REQUIRED,
       remove: ['harlan-agent-review-skipped'],
     })
+    expect(AGENT_LABELS.ADVERSARIAL_REVIEW_REQUIRED.name).toBe('harlan-agent-review-required')
   })
 
   it('never replaces a manual Review override with Review skipped', () => {
@@ -89,9 +98,10 @@ describe('planAgentLabels', () => {
 
 describe('staleAgentLabels', () => {
   it('names every verdict on a pull request no Review has answered for', () => {
-    expect(staleAgentLabels(['harlan-agent-ready', 'harlan-agent-blocked'])).toEqual([
+    expect(staleAgentLabels(['harlan-agent-ready', 'harlan-agent-blocked', 'harlan-agent-review-required'])).toEqual([
       'harlan-agent-ready',
       'harlan-agent-blocked',
+      'harlan-agent-review-required',
     ])
   })
 

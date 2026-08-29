@@ -391,7 +391,11 @@ A conventional non-breaking `chore:` title skips Review without starting an Agen
 
 Every other pull request uses a low-cost Agent decision. It requires or skips an adversarial Review. Any uncertainty requires Review.
 
-`harlan-agent-review` requires Review and is the manual override. `harlan-agent-review-skipped` records a skipped Review.
+`harlan-agent-review-required` records the automatic route to Review. `harlan-agent-review-skipped` records a skipped Review.
+
+`harlan-agent-review` is the manual override. The service consumes it after it records Approval.
+
+The final Review outcome replaces the route label. The canonical comment records every Review gate and the next action.
 
 ### Take Ownership
 
