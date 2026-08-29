@@ -343,7 +343,7 @@ describe('gitHub reconciliation', () => {
       commentId: 42,
       url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
     })).toBe(true)
-    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({ disposition: { _tag: 'Closed' } })])
+    expect(store.listStoppedReviews()).toEqual([])
     let exactReads = 0
 
     await reconcileRepository(repository, {

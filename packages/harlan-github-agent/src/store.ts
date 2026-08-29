@@ -669,6 +669,16 @@ export interface JournalStore {
   listOpenPullRequestNumbers: (github: string) => number[]
   /** Old inferred closures need one exact read before GitHub becomes final truth. */
   listUnverifiedClosedPullRequestNumbers: (github: string, limit?: number) => number[]
+  /** Records one exact closed pull request read from GitHub. */
+  recordVerifiedPullRequestClosure: (input: {
+    repository: string
+    pullRequestNumber: number
+    revisionId: string
+    headSha: string
+    baseSha: string
+    disposition: ReviewClosureDisposition
+    at: string
+  }) => boolean
   closeMissingItems: (github: string, seen: Array<{ kind: GitHubItem['kind'], number: number }>, observedAt: string) => number
   completeTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -4178,6 +4188,24 @@ const reviewClosureMigration = `
   PRAGMA user_version = 48;
 `
 
+/** Proves GitHub, rather than an omitted open-list row, supplied a closure. */
+const verifiedPullRequestClosureMigration = `
+  CREATE TABLE pull_request_closure_verifications (
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    disposition_tag TEXT NOT NULL CHECK (disposition_tag IN ('Merged', 'Closed')),
+    verified_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, revision_id),
+    FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
+  );
+
+  CREATE INDEX pull_request_closure_verifications_verified
+    ON pull_request_closure_verifications(verified_at);
+  PRAGMA user_version = 49;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4203,7 +4231,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 48)
+  if (version === 49)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4396,6 +4424,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 47) {
     applyMigration(database, reviewClosureMigration)
+    version = 48
+  }
+  if (version === 48) {
+    applyMigration(database, verifiedPullRequestClosureMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -5246,8 +5278,8 @@ export function openJournalStore(
         AND subjects.kind = 'pull_request'
         AND json_extract(revisions.payload, '$.state') = 'closed'
         AND NOT EXISTS (
-          SELECT 1 FROM review_closure_resolutions AS closure
-          WHERE closure.subject_id = subjects.id AND closure.revision_id = revisions.id
+          SELECT 1 FROM pull_request_closure_verifications AS verification
+          WHERE verification.subject_id = subjects.id AND verification.revision_id = revisions.id
         )
         AND (
           EXISTS (
@@ -8928,6 +8960,8 @@ export function openJournalStore(
     )
     LEFT JOIN review_closure_resolutions AS closure
       ON closure.subject_id = subjects.id AND closure.revision_id = current_revisions.id
+    LEFT JOIN pull_request_closure_verifications AS verification
+      ON verification.subject_id = subjects.id AND verification.revision_id = current_revisions.id
     WHERE stopped.task_rank = 1
       AND (
         (
@@ -8938,6 +8972,7 @@ export function openJournalStore(
         )
         OR (
           json_extract(current_revisions.payload, '$.state') = 'closed'
+          AND verification.revision_id IS NOT NULL
           AND closure.revision_id IS NULL
         )
       )
@@ -9054,7 +9089,7 @@ export function openJournalStore(
     }
   }
 
-  const recordReviewClosure: JournalStore['recordReviewClosure'] = (input) => {
+  const recordVerifiedPullRequestClosure: JournalStore['recordVerifiedPullRequestClosure'] = (input) => {
     const row = database.prepare(`
       SELECT subjects.id AS subject_id, revisions.payload
       FROM subjects
@@ -9063,6 +9098,56 @@ export function openJournalStore(
       WHERE repositories.github = ? AND subjects.kind = 'pull_request'
         AND subjects.github_number = ? AND subjects.current_revision_id = ?
     `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
+      subject_id: number
+      payload: string
+    } | undefined
+    const pullRequest = row === undefined ? undefined : JSON.parse(row.payload) as GitHubItem
+    if (
+      row === undefined
+      || pullRequest?.kind !== 'pull_request'
+      || pullRequest.state !== 'closed'
+      || pullRequest.headSha !== input.headSha
+      || pullRequest.baseSha !== input.baseSha
+      || (pullRequest.mergedAt === null ? 'Closed' : 'Merged') !== input.disposition._tag
+    ) {
+      return false
+    }
+    database.prepare(`
+      INSERT INTO pull_request_closure_verifications (
+        subject_id, revision_id, head_sha, base_sha, disposition_tag, verified_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (subject_id, revision_id) DO UPDATE SET verified_at = excluded.verified_at
+    `).run(
+      row.subject_id,
+      input.revisionId,
+      input.headSha,
+      input.baseSha,
+      input.disposition._tag,
+      input.at,
+    )
+    return true
+  }
+
+  const recordReviewClosure: JournalStore['recordReviewClosure'] = (input) => {
+    const row = database.prepare(`
+      SELECT subjects.id AS subject_id, revisions.payload
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      JOIN pull_request_closure_verifications AS verification
+        ON verification.subject_id = subjects.id AND verification.revision_id = revisions.id
+        AND verification.head_sha = ? AND verification.base_sha = ?
+        AND verification.disposition_tag = ?
+      WHERE repositories.github = ? AND subjects.kind = 'pull_request'
+        AND subjects.github_number = ? AND subjects.current_revision_id = ?
+    `).get(
+      input.headSha,
+      input.baseSha,
+      input.disposition._tag,
+      input.repository,
+      input.pullRequestNumber,
+      input.revisionId,
+    ) as {
       subject_id: number
       payload: string
     } | undefined
@@ -10009,6 +10094,7 @@ export function openJournalStore(
     isIssueWorkApprovalReady,
     listOpenPullRequestNumbers,
     listUnverifiedClosedPullRequestNumbers,
+    recordVerifiedPullRequestClosure,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
     listRunningTaskItems,

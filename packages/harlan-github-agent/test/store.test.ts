@@ -1809,7 +1809,7 @@ describe('journal store', () => {
     })).toBe(true)
     expect(store.listStoppedReviews()).toEqual([])
 
-    store.recordObservation({
+    const merged = store.recordObservation({
       externalId: 'review-merged',
       observedAt: '2026-08-13T01:03:00.000Z',
       source: 'poll',
@@ -1820,6 +1820,17 @@ describe('journal store', () => {
         updatedAt: '2026-08-13T01:03:00.000Z',
       },
     })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: pullRequest.repository,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:03:00.000Z',
+    })).toBe(true)
 
     const stopped = store.listStoppedReviews()
     expect(stopped).toEqual([expect.objectContaining({
@@ -1940,7 +1951,7 @@ describe('journal store', () => {
       findings: [],
       publication: settlementPublication('ready-after-pending'),
     })._tag).toBe('Inserted')
-    store.recordObservation({
+    const merged = store.recordObservation({
       externalId: 'ready-review-merged',
       observedAt: '2026-08-13T01:04:00.000Z',
       source: 'poll',
@@ -1951,6 +1962,17 @@ describe('journal store', () => {
         updatedAt: '2026-08-13T01:04:00.000Z',
       },
     })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: pullRequest.repository,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:04:00.000Z',
+    })).toBe(true)
 
     expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
       disposition: { _tag: 'Merged' },
@@ -2013,7 +2035,7 @@ describe('journal store', () => {
       source: 'poll',
       subject: { ...pullRequest, headSha: 'repaired24', updatedAt: '2026-08-13T01:03:00.000Z' },
     })
-    store.recordObservation({
+    const merged = store.recordObservation({
       externalId: 'repaired-merged',
       observedAt: '2026-08-13T01:04:00.000Z',
       source: 'poll',
@@ -2025,6 +2047,17 @@ describe('journal store', () => {
         updatedAt: '2026-08-13T01:04:00.000Z',
       },
     })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the repaired merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: pullRequest.repository,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: 'repaired24',
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:04:00.000Z',
+    })).toBe(true)
 
     const stopped = store.listStoppedReviews()
     expect(stopped).toEqual([expect.objectContaining({

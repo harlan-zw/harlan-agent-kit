@@ -19,6 +19,7 @@ afterEach(() => {
 
 /** Rewinds past the Routine tables, which every version below 38 predates. */
 function dropRoutines(database: DatabaseSync): void {
+  database.exec('DROP TABLE IF EXISTS pull_request_closure_verifications')
   database.exec('DROP TABLE IF EXISTS review_closure_resolutions')
   database.exec('DROP TABLE IF EXISTS restart_requests')
   database.exec('DROP TABLE IF EXISTS agent_feedback')
@@ -250,6 +251,103 @@ describe('review usage migration', () => {
   })
 })
 
+describe('pull request closure verification migration', () => {
+  it('rechecks closure resolutions written before exact verification existed', () => {
+    const path = join(directory, 'state.sqlite')
+    const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    const repository = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.syncRepositories([repository], '2026-08-18T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'review-before-legacy-closure',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the open pull request Revision.')
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-18T00:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-18T00:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 READY',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-agent', '2026-08-18T00:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the Review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-18T00:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-18T00:02:03.000Z',
+      evidence: 'Review finished.',
+    })
+    const merged = store.recordObservation({
+      externalId: 'legacy-closure-resolution',
+      observedAt: '2026-08-18T00:03:00.000Z',
+      source: 'poll',
+      subject: {
+        ...pullRequest,
+        state: 'closed',
+        mergedAt: '2026-08-18T00:03:00.000Z',
+        updatedAt: '2026-08-18T00:03:00.000Z',
+      },
+    })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-18T00:03:00.000Z',
+    })).toBe(true)
+    expect(store.recordReviewClosure({
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      result: { _tag: 'Superseded' },
+      at: '2026-08-18T00:04:00.000Z',
+    })).toBe(true)
+    store.close()
+
+    const oldJournal = new DatabaseSync(path)
+    oldJournal.exec('DROP TABLE pull_request_closure_verifications; PRAGMA user_version = 48;')
+    oldJournal.close()
+
+    const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    try {
+      expect(migrated.listUnverifiedClosedPullRequestNumbers(repository.github)).toEqual([pullRequest.number])
+    }
+    finally {
+      migrated.close()
+    }
+  })
+})
+
 describe('installation permission recovery migration', () => {
   it('gives Tasks blocked by the old Workflow permission request one bounded recovery', () => {
     const path = join(directory, 'state.sqlite')
@@ -373,7 +471,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(48)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(49)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

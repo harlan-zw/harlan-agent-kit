@@ -91,6 +91,26 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     dependencies.store.recordPollFailure(repository.github, observedAt, message)
     return err({ repository: repository.github, message })
   }
+  const finalWrites = writes.slice(eligibleItems.length)
+  const closureVerificationFailed = finalPullRequests.some((pullRequest, index) => {
+    const write = finalWrites[index]
+    if (pullRequest.state !== 'closed' || write === undefined || write._tag === 'Stale' || write._tag === 'Conflict')
+      return false
+    return !dependencies.store.recordVerifiedPullRequestClosure({
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: write.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: pullRequest.mergedAt === null ? { _tag: 'Closed' } : { _tag: 'Merged' },
+      at: observedAt,
+    })
+  })
+  if (closureVerificationFailed) {
+    const message = 'The final pull request state could not be saved.'
+    dependencies.store.recordPollFailure(repository.github, observedAt, message)
+    return err({ repository: repository.github, message })
+  }
 
   if (dependencies.approvals !== undefined) {
     const approvals = await Promise.all(eligibleItems.map((subject, index) => {
