@@ -60,7 +60,7 @@ Every tracked pull request is reviewed. The `harlan-agent-auto-merge` label deci
 
 No new issue work starts above `max_open_pull_requests` open pull requests. Review, repair, and conflict fixes continue, because they shorten that queue.
 
-Owned repositories selected in the GitHub App enable Issue triage by default. A maintained repository needs an explicit mapping with `issue_work: true` and its own GitHub App installation. Harlan's valid issues continue into Issue work automatically. An outside contributor's valid issue waits for `harlan-agent-review` or `Approve`. The service removes the label before saving Approval for that exact issue state.
+Owned repositories selected in the GitHub App enable Issue triage by default. A maintained repository needs an explicit mapping with `issue_work: true`. Without an installation, the controller uses Harlan's authenticated GitHub account. Harlan's valid issues continue into Issue work automatically. An outside contributor's valid issue waits for `harlan-agent-review` or `Approve`. The service removes the label before saving Approval for that exact issue state.
 
 The triage agent resumes its own session, selects the matching installed skills, implements the change, and runs focused checks. The agent chooses the commit message and pull request metadata. The controller commits and pushes the verified result before it opens one pull request ready for review. Conflict fixes also run by default on owned repositories. They remain disabled on maintained repositories.
 
