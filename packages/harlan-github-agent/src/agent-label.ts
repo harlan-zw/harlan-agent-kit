@@ -1,6 +1,7 @@
 import type { IssueTriageState } from './issue-triage.ts'
 import type { PullRequestTriageState } from './pull-request-triage.ts'
 import type { RepositoryMapping, ReviewOutcomeName } from './types.ts'
+import { APPROVAL_LABELS } from './approval-labels.ts'
 
 /**
  * What one Agent label says about an Item right now.
@@ -49,9 +50,9 @@ export const AGENT_LABELS = {
     description: 'The automated Review found a material defect in this head commit.',
   },
   ADVERSARIAL_REVIEW_REQUIRED: {
-    name: 'harlan-agent-review',
+    name: 'harlan-agent-review-required',
     color: 'd73a4a',
-    description: 'Pull request triage requires an adversarial Review. Adding this label manually always forces one.',
+    description: 'Pull request triage requires an adversarial Review for this head commit.',
   },
   ADVERSARIAL_REVIEW_SKIPPED: {
     name: 'harlan-agent-review-skipped',
@@ -95,16 +96,16 @@ export interface AgentLabelPlan {
 const reviewStates = ['RUNNING', 'READY', 'PENDING', 'BLOCKED'] as const satisfies readonly AgentLabelState[]
 const issueTriageStates = ['READY_TO_IMPLEMENT', 'READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] as const satisfies readonly AgentLabelState[]
 const pullRequestTriageStates = ['ADVERSARIAL_REVIEW_REQUIRED', 'ADVERSARIAL_REVIEW_SKIPPED'] as const satisfies readonly AgentLabelState[]
-const ownedLabels = new Set(Object.entries(AGENT_LABELS)
-  .filter(([state]) => state !== 'ADVERSARIAL_REVIEW_REQUIRED')
-  .map(([, label]) => label.name.toLowerCase()))
+const ownedLabels = new Set(Object.values(AGENT_LABELS).map(label => label.name.toLowerCase()))
 
 function mutuallyExclusiveLabels(state: AgentLabelState): Set<string> {
   const states = (issueTriageStates as readonly AgentLabelState[]).includes(state)
     ? issueTriageStates
-    : (pullRequestTriageStates as readonly AgentLabelState[]).includes(state)
-        ? pullRequestTriageStates
-        : reviewStates
+    : (['READY', 'PENDING', 'BLOCKED'] as readonly AgentLabelState[]).includes(state)
+        ? [...reviewStates, ...pullRequestTriageStates]
+        : (pullRequestTriageStates as readonly AgentLabelState[]).includes(state)
+            ? pullRequestTriageStates
+            : reviewStates
   return new Set(states.map(value => AGENT_LABELS[value].name.toLowerCase()))
 }
 
@@ -112,7 +113,7 @@ export function planAgentLabels(state: AgentLabelState, current: string[]): Agen
   const wanted = AGENT_LABELS[state]
   const present = current.map(label => label.toLowerCase())
   const exclusive = mutuallyExclusiveLabels(state)
-  if (state === 'ADVERSARIAL_REVIEW_SKIPPED' && present.includes(AGENT_LABELS.ADVERSARIAL_REVIEW_REQUIRED.name)) {
+  if (state === 'ADVERSARIAL_REVIEW_SKIPPED' && present.includes(APPROVAL_LABELS.review)) {
     return {
       add: null,
       remove: current.filter(label => label.toLowerCase() === wanted.name.toLowerCase()),
@@ -120,8 +121,8 @@ export function planAgentLabels(state: AgentLabelState, current: string[]): Agen
   }
   return {
     add: present.includes(wanted.name.toLowerCase()) ? null : wanted,
-    // Review progress and issue triage answer different questions. Each axis
-    // keeps one label, and the two labels may coexist while Issue work runs.
+    // Review progress and Issue triage answer different questions. A final
+    // Review outcome replaces its temporary Pull request triage route.
     remove: current.filter(label =>
       exclusive.has(label.toLowerCase()) && label.toLowerCase() !== wanted.name.toLowerCase()),
   }

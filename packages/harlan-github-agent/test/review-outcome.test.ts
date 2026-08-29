@@ -28,10 +28,28 @@ describe('reviewOutcome', () => {
     const failedCi = gates({ ci: failed('test failed.') })
 
     expect(reviewOutcome(failedCi)).toBe('BLOCKED')
-    expect(terminalComment('abc123', failedCi, [], undefined, [])).toContain('Blocked: test failed.')
+    expect(terminalComment('abc123', 'base123', failedCi, [], undefined, [])).toContain('**CI gate:** BLOCKED. test failed.')
   })
 
   it('reports READY when every gate passed', () => {
     expect(reviewOutcome(gates())).toBe('READY')
+  })
+
+  it('shows every Review gate while CI is pending', () => {
+    const body = terminalComment(
+      'abc123',
+      'base123',
+      gates({ ci: pending('Base branch CI: deploy is still running.') }),
+      [],
+      undefined,
+      [],
+    )
+
+    expect(body).toContain('### 🤖 PENDING')
+    expect(body).toContain('<!-- workflow-state: {"_tag":"Review","headSha":"abc123","baseSha":"base123","outcome":"PENDING"')
+    expect(body).toContain('**Merge gate:** Passed.')
+    expect(body).toContain('**Review gate:** Passed. No material issues.')
+    expect(body).toContain('**CI gate:** PENDING. Base branch CI: deploy is still running.')
+    expect(body).toContain('Next: The controller updates this comment when a Review gate changes.')
   })
 })

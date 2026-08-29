@@ -64,7 +64,7 @@ export async function refreshReviewGates(
     }
 
     const confidence = outcome === 'READY' ? review.confidence : undefined
-    const body = terminalComment(review.headSha, gates, review.findings, confidence, reportedChecks)
+    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, review.findings, confidence, reportedChecks)
     const at = options.now().toISOString()
     const reviewRunId = randomUUID()
     // Write GitHub first. The compare and swap is idempotent when this body

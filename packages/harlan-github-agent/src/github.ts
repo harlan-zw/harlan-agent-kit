@@ -411,7 +411,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
                     authorLogin: comment.user.login,
                     body: comment.body,
                     url: comment.html_url,
-                  }]), detail.head.sha, options.actorLogin(repository)),
+                  }]), detail.head.sha, options.actorLogin(repository), baseSha),
           }
         })
 

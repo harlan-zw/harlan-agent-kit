@@ -25,7 +25,7 @@ export interface StoppedReviewSweep {
 }
 
 export interface ReviewStopSweepOptions {
-  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
+  github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
   now: () => Date
   repositories: RepositoryMapping[]
   store: Pick<JournalStore, 'listStoppedReviews' | 'recordDeletedReviewComment' | 'recordStoppedReviewStatus'>
@@ -59,7 +59,7 @@ export function stoppedReviewComment(
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, updatedAt: updatedAtLabel(at) })}
 
-GitHub ${action} this pull request. The unfinished automated review stopped.`
+GitHub ${action} this pull request. No further automated Review will run.`
   }
   if (review.taskKind === 'review_fix') {
     const findings = review.findings.map(finding => finding._tag === 'Fixed'
@@ -151,6 +151,9 @@ export async function publishStoppedReviews(
       })
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
     }
+    const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
+    if (labels._tag === 'Err')
+      return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)
     const recorded = options.store.recordStoppedReviewStatus({
       taskId: review.taskId,
       taskKind: review.taskKind,

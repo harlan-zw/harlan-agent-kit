@@ -6,6 +6,10 @@ import { AGENT_ACTOR_LOGIN } from '../src/review-comment.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
+const noPullRequestRead = {
+  getPullRequest: () => Promise.reject(new Error('No pull request should need a final read.')),
+}
+
 describe('gitHub reconciliation', () => {
   it('ignores issues authored by automated accounts', async () => {
     const store = openJournalStore(':memory:')
@@ -13,7 +17,7 @@ describe('gitHub reconciliation', () => {
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
 
     const result = await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(ok([issueItem({ author: 'github-actions[bot]' })])) },
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([issueItem({ author: 'github-actions[bot]' })])) },
       store,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
     })
@@ -54,7 +58,7 @@ describe('gitHub reconciliation', () => {
     expect(store.listIncidents()).toHaveLength(1)
 
     const result = await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(ok([botIssue])) },
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([botIssue])) },
       store,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
     })
@@ -74,7 +78,7 @@ describe('gitHub reconciliation', () => {
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
 
     const result = await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(ok([
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([
         issueItem({ number: 41, author: AGENT_ACTOR_LOGIN, routineFiled: true, url: 'https://github.com/harlan-zw/example/issues/41' }),
       ])) },
       store,
@@ -121,7 +125,7 @@ describe('gitHub reconciliation', () => {
     expect(store.listIncidents()).toHaveLength(1)
 
     const result = await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(ok([
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([
         { ...trackingIssue, routineTracking: true },
       ])) },
       store,
@@ -144,6 +148,7 @@ describe('gitHub reconciliation', () => {
     expect(store.countOpenPullRequests()).toBe(0)
 
     const github = {
+      ...noPullRequestRead,
       listOpenItems: () => Promise.resolve(ok([
         pullRequestItem({ number: 24 }),
         pullRequestItem({ number: 25 }),
@@ -155,7 +160,14 @@ describe('gitHub reconciliation', () => {
 
     // A pull request that disappears from the open list closes, so it stops counting.
     await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(ok([pullRequestItem({ number: 24 })])) },
+      github: {
+        getPullRequest: () => Promise.resolve(ok({
+          ...pullRequestItem({ number: 25 }),
+          state: 'closed' as const,
+          mergedAt: null,
+        })),
+        listOpenItems: () => Promise.resolve(ok([pullRequestItem({ number: 24 })])),
+      },
       store,
       now: () => new Date('2026-08-13T02:00:00.000Z'),
     })
@@ -166,13 +178,120 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
+  it('reads a missing pull request before recording its final GitHub state', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'pull-request-before-merge',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the open pull request.')
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 PENDING',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-agent', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: 'Review completed with a PENDING CI gate.',
+    })
+
+    const result = await reconcileRepository(repository, {
+      github: {
+        listOpenItems: () => Promise.resolve(ok([])),
+        getPullRequest: () => Promise.resolve(ok({
+          ...pullRequest,
+          state: 'closed',
+          mergedAt: '2026-08-13T01:03:00.000Z',
+          updatedAt: '2026-08-13T01:03:00.000Z',
+        })),
+      },
+      store,
+      now: () => new Date('2026-08-13T01:04:00.000Z'),
+    })
+
+    expect(result).toEqual({
+      _tag: 'Ok',
+      value: { repository: repository.github, subjects: 0, inserted: 0, duplicates: 0, stale: 0, closed: 1 },
+    })
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
+      disposition: { _tag: 'Merged' },
+      pullRequestNumber: 24,
+    })])
+    store.close()
+  })
+
+  it('keeps a pull request open when its exact final read fails', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'pull-request-before-read-failure',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+
+    const result = await reconcileRepository(repository, {
+      github: {
+        listOpenItems: () => Promise.resolve(ok([])),
+        getPullRequest: () => Promise.resolve(err({
+          repository: repository.github,
+          message: 'GitHub did not return the pull request.',
+          status: 503,
+        })),
+      },
+      store,
+      now: () => new Date('2026-08-13T01:04:00.000Z'),
+    })
+
+    expect(result).toEqual({
+      _tag: 'Err',
+      error: { repository: repository.github, message: 'GitHub did not return the pull request.' },
+    })
+    expect(store.countOpenPullRequests()).toBe(1)
+    expect(store.getDashboardSnapshot('2026-08-13T01:04:00.000Z').repositories[0]?.lastError)
+      .toBe('GitHub did not return the pull request.')
+    store.close()
+  })
+
   it('records a pull request from an explicitly allowed GitHub App', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping({ writablePullRequestAuthors: ['harlan-zw', 'harlan-github-agent[bot]'] })
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
 
     const result = await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(ok([pullRequestItem({ author: 'harlan-github-agent[bot]' })])) },
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([pullRequestItem({ author: 'harlan-github-agent[bot]' })])) },
       store,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
     })
@@ -188,7 +307,7 @@ describe('gitHub reconciliation', () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
-    const github = { listOpenItems: () => Promise.resolve(ok([issueItem()])) }
+    const github = { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([issueItem()])) }
     const now = () => new Date('2026-08-13T01:00:00.000Z')
 
     const first = await reconcileRepository(repository, { github, store, now })
@@ -220,7 +339,7 @@ describe('gitHub reconciliation', () => {
           return Promise.resolve(ok(undefined))
         },
       },
-      github: { listOpenItems: () => Promise.resolve(ok([issue])) },
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([issue])) },
       store,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
     })
@@ -234,7 +353,7 @@ describe('gitHub reconciliation', () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
-    const github = { listOpenItems: () => Promise.resolve(err({ repository: repository.github, message: 'Rate limited' })) }
+    const github = { ...noPullRequestRead, listOpenItems: () => Promise.resolve(err({ repository: repository.github, message: 'Rate limited' })) }
     const now = () => new Date('2026-08-13T01:00:00.000Z')
 
     const result = await reconcileRepository(repository, { github, store, now })
@@ -252,7 +371,7 @@ describe('gitHub reconciliation', () => {
     controller.abort()
 
     const result = await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(err({ repository: repository.github, message: 'This operation was aborted' })) },
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(err({ repository: repository.github, message: 'This operation was aborted' })) },
       store,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       signal: controller.signal,
@@ -280,7 +399,7 @@ describe('gitHub reconciliation', () => {
     })
 
     const result = await reconcileRepository(repository, {
-      github: { listOpenItems: () => Promise.resolve(ok([incoming])) },
+      github: { ...noPullRequestRead, listOpenItems: () => Promise.resolve(ok([incoming])) },
       store,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
     })

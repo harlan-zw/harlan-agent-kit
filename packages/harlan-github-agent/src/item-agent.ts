@@ -79,9 +79,11 @@ export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
-function reviewSkippedComment(headSha: string, result: PullRequestTriageResult, at: string): string {
+function reviewSkippedComment(headSha: string, baseSha: string, result: PullRequestTriageResult, at: string): string {
+  const workflow = JSON.stringify({ _tag: 'ReviewSkipped', headSha, baseSha })
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->
+<!-- workflow-state: ${workflow} -->
 ### 🤖 REVIEW SKIPPED
 
 ${automatedDisclosure({ kind: 'triage', updatedAt: at })}
@@ -638,9 +640,11 @@ export function reviewOutcome(gates: ReviewGates): ReviewOutcomeName {
   return states.includes('Failed') ? 'BLOCKED' : states.includes('Pending') ? 'PENDING' : 'READY'
 }
 
-function progressComment(headSha: string, progress: AgentProgress, at: string): string {
+function progressComment(headSha: string, baseSha: string, progress: AgentProgress, at: string): string {
+  const workflow = JSON.stringify({ _tag: 'Reviewing', headSha, baseSha, progress: progress.percent })
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->
+<!-- workflow-state: ${workflow} -->
 ### 🤖 REVIEWING · ${progress.percent}% · ${progress.label}${formatPhaseDuration(progress.since, at)}
 
 ${automatedDisclosure({ kind: 'review', updatedAt: updatedAtLabel(at) })}
@@ -662,31 +666,56 @@ Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
 Next: merge or repair the marked Baseline repair pull request.`
 }
 
-export function terminalComment(headSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
+function gateSummary(name: 'Merge' | 'Review' | 'CI', gate: ReviewGateState, findings: ReviewFinding[]): string {
+  if (gate._tag === 'Passed')
+    return `- **${name} gate:** Passed.${name === 'Review' && findings.length === 0 ? ' No material issues.' : ''}`
+  const outcome = gate._tag === 'Pending' ? 'PENDING' : 'BLOCKED'
+  return `- **${name} gate:** ${outcome}. ${cleanLine(gate.reason)}`
+}
+
+export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
-  const reason = result === 'PENDING'
-    ? Object.values(gates).find(gate => gate._tag === 'Pending')
-    : undefined
-  const blocked = result === 'BLOCKED'
-    ? [gates.merge, gates.ci].find(gate => gate._tag === 'Failed')
-    : undefined
+  const workflow = JSON.stringify({
+    _tag: 'Review',
+    headSha,
+    baseSha,
+    outcome: result,
+    gates: {
+      merge: gates.merge._tag,
+      review: gates.review._tag,
+      ci: gates.ci._tag,
+    },
+  })
   const disclosure = automatedDisclosure({
     kind: 'review',
     disclaimer: `It is not Harlan's personal review or approval.`,
-    notes: [
-      'A person still decides the merge.',
-      ...(reason?._tag === 'Pending' ? [`Waiting: ${cleanLine(reason.reason)}`] : []),
-      ...(blocked?._tag === 'Failed' ? [`Blocked: ${cleanLine(blocked.reason)}`] : []),
-    ],
+    notes: ['A person still decides the merge.'],
   })
+  const gateLines = [
+    gateSummary('Merge', gates.merge, findings),
+    gateSummary('Review', gates.review, findings),
+    gateSummary('CI', gates.ci, findings),
+  ]
   const findingLines = findings.map(finding => finding._tag === 'Fixed'
     ? `- **Fixed:** ${cleanLine(finding.summary)}`
     : finding.resolution === 'Dismissal'
       ? `- **Dismissal recommended:** ${cleanLine(finding.summary)}. Next: ${cleanLine(finding.nextAction)}`
       : `- **Open:** ${cleanLine(finding.summary)}. Next: ${cleanLine(finding.nextAction)}`)
   const checkLines = reportedChecks.map(line => `- **Reported:** ${cleanLine(line)}`)
-  return [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, `### 🤖 ${heading}`, '', disclosure, ...[...findingLines, ...checkLines].flatMap(line => ['', line])].join('\n')
+  const next = result === 'PENDING' ? ['', 'Next: The controller updates this comment when a Review gate changes.'] : []
+  return [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${headSha} -->`,
+    `<!-- workflow-state: ${workflow} -->`,
+    `### 🤖 ${heading}`,
+    '',
+    disclosure,
+    '',
+    ...gateLines,
+    ...[...findingLines, ...checkLines].flatMap(line => ['', line]),
+    ...next,
+  ].join('\n')
 }
 
 function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, progress: AgentProgress): Result<void, string> {
@@ -721,7 +750,7 @@ async function reportReviewProgress(
   const saved = saveAgentProgress(options, task, progress)
   if (saved._tag === 'Err')
     return saved
-  const posted = await options.status.publish(task, phase, progressComment(task.pullRequest.headSha, progress, options.now().toISOString()), signal)
+  const posted = await options.status.publish(task, phase, progressComment(task.pullRequest.headSha, task.pullRequest.baseSha, progress, options.now().toISOString()), signal)
   if (posted._tag === 'Err' && !signal.aborted)
     options.onProgressPublishFailure?.(task, posted.error)
   else
@@ -903,7 +932,7 @@ async function projectReviewRun(
 
   const outcome = reviewOutcome(gates)
   const confidence = outcome === 'READY' ? run.outcome.confidence : undefined
-  const body = terminalComment(task.pullRequest.headSha, gates, findings, confidence, refreshed.reportedChecks)
+  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks)
   const published = await options.status.publish(task, 'terminal', body, signal)
   const at = options.now().toISOString()
   if (published._tag === 'Err') {
@@ -1040,7 +1069,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
               const published = await options.status.publish(
                 task,
                 'terminal',
-                reviewSkippedComment(task.pullRequest.headSha, triage.value, options.now().toISOString()),
+                reviewSkippedComment(task.pullRequest.headSha, task.pullRequest.baseSha, triage.value, options.now().toISOString()),
                 signal,
               )
               if (published._tag === 'Ok') {

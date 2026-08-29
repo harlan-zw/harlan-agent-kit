@@ -51,6 +51,49 @@ export interface AutomatedReviewComment {
 
 const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 
+interface ReviewWorkflowState {
+  _tag: 'Review'
+  headSha: string
+  baseSha: string
+  outcome: 'READY' | 'PENDING' | 'BLOCKED'
+}
+
+interface ReviewSkippedWorkflowState {
+  _tag: 'ReviewSkipped'
+  headSha: string
+  baseSha: string
+}
+
+type AutomatedReviewWorkflowState = ReviewWorkflowState | ReviewSkippedWorkflowState
+
+function automatedReviewWorkflowState(body: string): AutomatedReviewWorkflowState | undefined {
+  const encoded = body.match(/<!-- workflow-state: (\{[^\n]+\}) -->/)?.[1]
+  if (encoded === undefined)
+    return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(encoded)
+  }
+  catch {
+    // GitHub comment text is untrusted. A malformed marker carries no state.
+    return undefined
+  }
+  if (typeof value !== 'object' || value === null || !('_tag' in value) || !('headSha' in value) || !('baseSha' in value))
+    return undefined
+  if (typeof value.headSha !== 'string' || typeof value.baseSha !== 'string')
+    return undefined
+  if (value._tag === 'ReviewSkipped')
+    return { _tag: value._tag, headSha: value.headSha, baseSha: value.baseSha }
+  if (value._tag !== 'Review' || !('outcome' in value) || !['READY', 'PENDING', 'BLOCKED'].includes(String(value.outcome)))
+    return undefined
+  return {
+    _tag: value._tag,
+    headSha: value.headSha,
+    baseSha: value.baseSha,
+    outcome: value.outcome as ReviewWorkflowState['outcome'],
+  }
+}
+
 export function automatedReviewHead(body: string): string | undefined {
   const current = body.match(/<!-- reviewed-sha: ([a-f\d]{40,64}) -->/i)?.[1]
   if (current !== undefined)
@@ -59,7 +102,7 @@ export function automatedReviewHead(body: string): string | undefined {
 }
 
 function reviewState(body: string): 'active' | 'complete' {
-  return /^### 🤖 (?:READY|WAITING|BLOCKED)\b/m.test(body)
+  return /^### 🤖 (?:READY|BLOCKED|REVIEW SKIPPED)\b/m.test(body)
     || /^\*\*(?:PASS|PENDING|BLOCKED)\b/m.test(body)
     ? 'complete'
     : 'active'
@@ -69,12 +112,19 @@ export function priorAutomatedReviewForHead(
   comments: AutomatedReviewComment[],
   headSha: string,
   currentAgentLogin: string,
+  baseSha?: string,
 ): PriorAutomatedReview {
-  const found = comments.findLast(comment =>
-    comment.authorLogin.toLowerCase() !== currentAgentLogin.toLowerCase()
-    && trustedAssociations.has(comment.authorAssociation.toUpperCase())
-    && comment.body.includes(AUTOMATED_REVIEW_MARKER)
-    && automatedReviewHead(comment.body)?.toLowerCase() === headSha.toLowerCase())
+  const currentAgent = currentAgentLogin.toLowerCase()
+  const found = comments.findLast((comment) => {
+    if (!comment.body.includes(AUTOMATED_REVIEW_MARKER) || automatedReviewHead(comment.body)?.toLowerCase() !== headSha.toLowerCase())
+      return false
+    if (comment.authorLogin.toLowerCase() !== currentAgent)
+      return trustedAssociations.has(comment.authorAssociation.toUpperCase())
+    const workflow = automatedReviewWorkflowState(comment.body)
+    if (workflow === undefined || workflow.headSha.toLowerCase() !== headSha.toLowerCase() || (baseSha !== undefined && workflow.baseSha.toLowerCase() !== baseSha.toLowerCase()))
+      return false
+    return workflow._tag === 'ReviewSkipped' || workflow.outcome !== 'PENDING'
+  })
 
   return found === undefined
     ? { _tag: 'None' }

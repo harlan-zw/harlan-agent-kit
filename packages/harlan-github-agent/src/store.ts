@@ -639,6 +639,8 @@ export interface JournalStore {
   updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
   completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   failRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
+  /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
+  listOpenPullRequestNumbers: (github: string) => number[]
   closeMissingItems: (github: string, seen: Array<{ kind: GitHubItem['kind'], number: number }>, observedAt: string) => number
   completeTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
@@ -5109,6 +5111,17 @@ export function openJournalStore(
       AND json_extract(revisions.payload, '$.state') = 'open'
   `).get(repository, pullRequestNumber, revisionId, revisionId, kind) !== undefined
 
+  const listOpenPullRequestNumbers: JournalStore['listOpenPullRequestNumbers'] = github => (database.prepare(`
+    SELECT subjects.github_number
+    FROM subjects
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = subjects.current_revision_id
+    WHERE repositories.github = ?
+      AND subjects.kind = 'pull_request'
+      AND json_extract(revisions.payload, '$.state') = 'open'
+    ORDER BY subjects.github_number
+  `).all(github) as unknown as Array<{ github_number: number }>).map(row => row.github_number)
+
   const closeMissingItems: JournalStore['closeMissingItems'] = (github, seen, observedAt) => {
     const seenKeys = new Set(seen.map(subject => `${subject.kind}:${subject.number}`))
     const rows = database.prepare(`
@@ -8588,11 +8601,19 @@ export function openJournalStore(
         LIMIT 1
       )
     )
-    -- The GitHub comment is nonterminal while its Task is terminal. Task
-    -- outcome does not change that contradiction, including legacy Tasks that
-    -- completed while waiting for separate work.
+    -- PENDING and WAITING end one Agent Task, but GitHub still owes the pull
+    -- request a final answer. A close or merge ends that remote state too.
     WHERE stopped.state_tag IN ('Completed', 'Failed', 'ActionRequired', 'Superseded')
-      AND published.phase != 'terminal'
+      AND (
+        published.phase != 'terminal'
+        OR (
+          json_extract(current_revisions.payload, '$.state') = 'closed'
+          AND (
+            instr(published.body, '### 🤖 PENDING') > 0
+            OR instr(published.body, '### 🤖 WAITING') > 0
+          )
+        )
+      )
       AND published.expected_head_sha = json_extract(revisions.payload, '$.headSha')
       -- A closed pull request takes no more work, so its last Task still owns
       -- the canonical comment however far the head moved first. An open one
@@ -8619,12 +8640,15 @@ export function openJournalStore(
         WHERE live.subject_id = stopped.subject_id AND live.kind = 'adversarial_review'
           AND live.state_tag IN ('Queued', 'Running')
       )
-      -- Any final status for this exact head already closed the canonical comment.
+      -- READY and BLOCKED are final Review outcomes. PENDING and WAITING are
+      -- terminal Task publications that still need a pull request outcome.
       AND NOT EXISTS (
         SELECT 1 FROM review_status_commands AS final
         WHERE final.phase = 'terminal' AND final.state_tag = 'Published'
           AND final.revision_id = stopped.revision_id
           AND final.expected_head_sha = json_extract(revisions.payload, '$.headSha')
+          AND instr(final.body, '### 🤖 PENDING') = 0
+          AND instr(final.body, '### 🤖 WAITING') = 0
       )
   `).all() as unknown as StoppedReviewRow[]).map(row => ({
     taskId: row.task_id,
@@ -9604,6 +9628,7 @@ export function openJournalStore(
     completeRoutineRun,
     failRoutineRun,
     isIssueWorkApprovalReady,
+    listOpenPullRequestNumbers,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
     listRunningTaskItems,

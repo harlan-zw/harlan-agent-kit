@@ -1761,7 +1761,7 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
-  it('keeps a stopped Review eligible after GitHub closes its pull request Revision', () => {
+  it('finalizes a completed PENDING Review after GitHub closes its pull request', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -1778,14 +1778,14 @@ describe('journal store', () => {
       throw new Error('Expected the Review Task.')
     const staged = store.stageReviewStatus({
       taskKind: 'adversarial_review',
-      phase: 'review',
+      phase: 'terminal',
       taskId: review.id,
       workerId: review.state.workerId,
       fence: review.state.fence,
       at: '2026-08-13T01:02:00.000Z',
       revisionId: review.revisionId,
       expectedHeadSha: pullRequest.headSha,
-      body: '### 🤖 REVIEWING · Git worktree ready',
+      body: '### 🤖 PENDING\n\n- **CI gate:** PENDING. Base branch CI is still running.',
     })
     if (staged._tag === 'Rejected')
       throw new Error(staged.reason)
@@ -1807,6 +1807,7 @@ describe('journal store', () => {
       at: '2026-08-13T01:02:03.000Z',
       evidence: 'Waiting for Baseline repair baseline-task.',
     })).toBe(true)
+    expect(store.listStoppedReviews()).toEqual([])
 
     store.recordObservation({
       externalId: 'review-merged',

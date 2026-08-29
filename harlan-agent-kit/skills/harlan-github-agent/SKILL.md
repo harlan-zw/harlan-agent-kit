@@ -24,6 +24,8 @@ For every other tracked pull request authored by `harlan-zw`, run low-cost Pull 
 Require an adversarial Review for code, tests, configuration, dependencies, workflows, schemas, generated runtime output, security boundaries, public APIs, performance-sensitive files, behavior claims, or uncertainty.
 Skip only clearly judgment-free prose, formatting, or comment-only changes.
 Stamp `harlan-agent-review-skipped` when Review is skipped.
+Stamp `harlan-agent-review-required` when Pull request triage requires Review.
+Replace that route label with exactly one Review outcome label when Review finishes.
 
 Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Bind Approval to the exact head commit; never let the label approve a head commit twice.
 
@@ -190,6 +192,10 @@ Record duration and Agent provider token usage for every completed Review run. S
 Carry Approval to the exact commit published by that approved repair. Do not carry it to any other new head commit.
 
 When a pull request review starts, create its single marked bot comment. Edit it in place as phases change. Never add separate progress comments.
+
+Treat GitHub as the durable workflow record. Publish each Review gate, the next action, and the exact head and base commits.
+
+If GitHub closes a pull request, publish `MERGED` or `CLOSED`. Clear every Agent status label.
 
 Before dispatch, detect trusted marked comments for the current head commit. A terminal comment completes the queued review unless Harlan explicitly requests a rerun. An active comment is status only. Use local Task ownership to decide whether an Agent still runs.
 
