@@ -203,6 +203,7 @@ describe('selection mode route', () => {
         listReviewRuns: () => [],
         pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
         recordAgentFeedback: () => ({ _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }),
+        requestRestart: input => ({ _tag: 'Requested', id: input.id, source: input.source, requestedAt: input.at }),
         requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
         resumeAgents: () => ({ _tag: 'Running' as const }),
         selectAgent: selection => selection,

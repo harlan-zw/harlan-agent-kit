@@ -9,13 +9,13 @@ import { readFile } from 'node:fs/promises'
 import { dirname, extname, join, relative } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { createError, createEventStream, H3 } from 'h3'
+import { createError, createEventStream, H3, setResponseStatus } from 'h3'
 import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'pauseAgents' | 'recordAgentFeedback' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -331,6 +331,22 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   app.post('/api/agents/pause', () => options.store.pauseAgents(options.now().toISOString()))
 
   app.post('/api/agents/resume', () => options.store.resumeAgents(options.now().toISOString()))
+
+  app.post('/api/service/restart', async (event) => {
+    const body = await event.req.json().catch(() => {
+      // Parsing below reports malformed JSON as a bad request.
+      return undefined
+    }) as { source?: unknown } | undefined
+    if (body?.source !== 'dashboard' && body?.source !== 'tray' && body?.source !== 'helper')
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Restart source must be dashboard, tray, or helper.' })
+    const request = options.store.requestRestart({
+      id: randomUUID(),
+      source: body.source,
+      at: options.now().toISOString(),
+    })
+    setResponseStatus(event, 202)
+    return request
+  })
 
   app.post('/api/agents/selection-mode', async (event) => {
     const body = await event.req.json().catch(() => {

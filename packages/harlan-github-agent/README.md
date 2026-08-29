@@ -114,8 +114,8 @@ A provider that publishes no limit always passes. When no provider may spend, th
 
 Use the Agent provider control in the header to switch the Agent provider, model, or reasoning effort. A switch starts the next agent turn. An agent already running keeps the model it started with. Switching the provider returns the model and the reasoning effort to that provider's defaults.
 
-Select `Pause` before restarting the service. Poll `/api/state` until `agentControl.safeToRestart` is `true`.
-Pause persists across restarts. Select `Resume` after the service returns.
+Select `Restart after current work` to restart the service. The Restart request stops new Task claims and lets active Agents finish.
+The service owns the request after acceptance. Manual Pause stays unchanged.
 
 Read one pull request's local review history from:
 

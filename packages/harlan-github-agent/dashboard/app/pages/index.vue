@@ -155,6 +155,8 @@ const nothingQueuedReason = computed(() => {
     return undefined
   if (queueContext.value.agentStart._tag === 'Paused')
     return { text: 'Agents are paused, so nothing will start.', resume: true }
+  if (queueContext.value.agentStart._tag === 'RestartRequested')
+    return { text: 'A Restart request is finishing active work.', resume: false }
   if (queueContext.value.agentStart._tag === 'WritesDisabled')
     return { text: 'GitHub writes are off, so no agent will start.', resume: false }
   if (queueContext.value.agentStart._tag === 'ReserveReached')

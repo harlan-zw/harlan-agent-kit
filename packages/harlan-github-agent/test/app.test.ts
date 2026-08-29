@@ -35,6 +35,12 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
 const agentControls = {
   getStats: (range: StatsRange, generatedAt: string) => statsSnapshot(range, generatedAt),
   pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
+  requestRestart: (input: { id: string, source: 'dashboard' | 'tray' | 'helper', at: string }) => ({
+    _tag: 'Requested' as const,
+    id: input.id,
+    source: input.source,
+    requestedAt: input.at,
+  }),
   resumeAgents: (_at: string) => ({ _tag: 'Running' as const }),
   selectAgent: (selection: AgentSelection, _at: string) => selection,
   setRepositoryPaused: (_github: string, _paused: boolean) => true,
@@ -273,6 +279,39 @@ describe('dashboard HTTP app', () => {
     expect(await paused.json()).toEqual({ _tag: 'Paused', pausedAt: now().toISOString() })
     expect(await resumed.json()).toEqual({ _tag: 'Running' })
     expect(controls).toEqual([{ _tag: 'Pause', at: now().toISOString() }, { _tag: 'Resume', at: now().toISOString() }])
+  })
+
+  it('stores a dashboard Restart request', async () => {
+    const requests: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestRestart(input) {
+          requests.push(input)
+          return { _tag: 'Requested', id: input.id, source: input.source, requestedAt: input.at }
+        },
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/service/restart`, {
+      method: 'POST',
+      headers: { 'authorization': authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'dashboard' }),
+    })
+
+    expect(response.status).toBe(202)
+    expect(await response.json()).toEqual(expect.objectContaining({ _tag: 'Requested', source: 'dashboard' }))
+    expect(requests).toEqual([expect.objectContaining({ source: 'dashboard', at: now().toISOString() })])
   })
 
   it('reports read-only health', async () => {

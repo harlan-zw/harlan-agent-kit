@@ -124,15 +124,19 @@ Dismiss an Item to stop every planner for it. A Dismissal is durable and belongs
 
 Treat the SQLite journal as service-owned state. Do not edit it manually.
 
-Before restarting, pause new agent work through the authenticated controller API. Keep polling active. Let active agents and controller writes finish. Restart only when `/api/state` reports `agentControl.safeToRestart: true`. Pause persists across restart, so resume explicitly afterward.
+Restart through a durable Restart request. The service stops new Task claims, lets active Agents and controller writes finish, then exits. Systemd starts the next process. The new process completes the request after its health listener starts. The requesting client may disconnect after the API accepts the request. Never use Pause to coordinate a restart.
 
 ```bash
 agent_config=/absolute/path/to/harlan-github-agent.yml
 agent_password=$(< "$(dirname "$agent_config")/dashboard-password")
-curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://harlan-github-agent.localhost' --request POST https://harlan-github-agent.localhost/api/agents/pause
-curl --fail --silent --user "agent:$agent_password" https://harlan-github-agent.localhost/api/state | jq '.agentControl'
-systemctl --user restart harlan-github-agent
-curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://harlan-github-agent.localhost' --request POST https://harlan-github-agent.localhost/api/agents/resume
+curl --fail --silent --user "agent:$agent_password" \
+  --header 'Origin: https://harlan-github-agent.localhost' \
+  --header 'Content-Type: application/json' \
+  --request POST \
+  --data '{"source":"helper"}' \
+  https://harlan-github-agent.localhost/api/service/restart
+curl --fail --silent --user "agent:$agent_password" \
+  https://harlan-github-agent.localhost/api/state | jq '.restartRequest'
 ```
 
 `conflict_resolution: true` permits a repository to queue conflict work. `mutations_enabled: true` lets the controller run and publish it.

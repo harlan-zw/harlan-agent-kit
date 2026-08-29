@@ -183,7 +183,7 @@ const command = defineCommand({
     consola.success(`Dashboard: ${validated.value.server.allowedOrigin}`)
     if (webhook._tag === 'Enabled')
       consola.success(`Webhooks: http://${webhook.host}:${webhook.port}/webhook`)
-    await waitForShutdown()
+    await Promise.race([waitForShutdown(), service.waitForRestart()])
     const stopped = await stopWithin(service.stop, 10_000)
     if (!stopped) {
       consola.warn('An agent ignored shutdown for 10 seconds. The next start will recover its task.')

@@ -77,6 +77,21 @@ def request_agent_control(action):
         return json.load(response)
 
 
+def request_service_restart():
+    request = urllib.request.Request(
+        f'{DASHBOARD_URL}api/service/restart',
+        data=b'{"source":"tray"}',
+        method='POST',
+        headers={
+            'Authorization': dashboard_authorization(),
+            'Content-Type': 'application/json',
+            'Origin': DASHBOARD_ORIGIN,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.load(response)
+
+
 def request_agent_select(selection):
     request = urllib.request.Request(
         f'{DASHBOARD_URL}api/agents/select',
@@ -552,6 +567,10 @@ def indicator_summary(dashboard, agents, error):
     attention = dashboard_attention(dashboard)
     if attention['_tag'] == 'ActionRequired':
         return ('🔴', 'Harlan GitHub Agent · Action required')
+    restart = dashboard.get('restartRequest')
+    if restart is not None and restart.get('_tag') in ('Requested', 'Restarting'):
+        status = 'Restarting' if restart.get('_tag') == 'Restarting' else 'Restart requested'
+        return ('🟡', f'{status} · {queue_label}')
     if dashboard.get('agentControl', {}).get('_tag') == 'Paused':
         parts = ['Agents paused']
         if agents:
@@ -582,6 +601,10 @@ def harlan_github_agent_status_label(dashboard, agents, error):
     agent_control = dashboard.get('agentControl', {'_tag': 'Running'})
     if attention['_tag'] == 'ActionRequired':
         return f'🔴 Action required · {queue_label}'
+    restart = dashboard.get('restartRequest')
+    if restart is not None and restart.get('_tag') in ('Requested', 'Restarting'):
+        status = 'Restarting' if restart.get('_tag') == 'Restarting' else 'Restart requested'
+        return f'🟡 {status} · {queue_label}'
     if agent_control.get('_tag') == 'Paused':
         finishing = counted(len(agents), 'agent finishing', 'agents finishing')
         return f'🟡 Paused · {finishing} · {queue_label}'
@@ -630,7 +653,7 @@ def incident_url(incident):
     return None if repository is None else f'https://github.com/{repository}'
 
 
-def build_menu(indicator, sources, action_error, refresh, set_agent_control, eject_agent, select_agent):
+def build_menu(indicator, sources, action_error, refresh, set_agent_control, eject_agent, select_agent, restart_service=None):
     menu = Gtk.Menu()
     dashboard_source = sources['harlanGithubAgent']
     dashboard = source_dashboard(sources)
@@ -710,6 +733,15 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
         control_item = menu_item(control_label)
         control_item.connect('activate', lambda *_args: set_agent_control(action))
         menu.append(control_item)
+        restart = dashboard.get('restartRequest')
+        restart_active = restart is not None and restart.get('_tag') in ('Requested', 'Restarting')
+        restart_item = menu_item(
+            '↻ Restart requested' if restart_active else '↻ Restart after current work',
+            enabled=not restart_active and restart_service is not None,
+        )
+        if restart_service is not None:
+            restart_item.connect('activate', lambda *_args: restart_service())
+        menu.append(restart_item)
 
     menu.append(separator())
     refresh_item = menu_item('Refresh')
@@ -750,7 +782,7 @@ def main():
         indicator.set_label(label, '🟢 99')
         indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
         indicator.set_title(title)
-        build_menu(indicator, sources, control_error, refresh, set_agent_control, eject_agent, select_agent)
+        build_menu(indicator, sources, control_error, refresh, set_agent_control, eject_agent, select_agent, restart_service)
         if pending_action['value'] is not None:
             refresh()
         return False
@@ -765,6 +797,8 @@ def main():
                     request_agent_control(action['action'])
                 elif action['_tag'] == 'AgentSelect':
                     request_agent_select(action['selection'])
+                elif action['_tag'] == 'ServiceRestart':
+                    request_service_restart()
                 else:
                     open_ejected_session(request_agent_eject(action['taskId']))
             except Exception as caught:
@@ -803,7 +837,14 @@ def main():
         }
         return refresh()
 
-    build_menu(indicator, loading_system_sources(), None, refresh, set_agent_control, eject_agent, select_agent)
+    def restart_service():
+        pending_action['value'] = {
+            '_tag': 'ServiceRestart',
+            'label': 'Restart request',
+        }
+        return refresh()
+
+    build_menu(indicator, loading_system_sources(), None, refresh, set_agent_control, eject_agent, select_agent, restart_service)
     refresh()
     GLib.timeout_add_seconds(5, refresh)
     Gtk.main()

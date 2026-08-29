@@ -28,6 +28,7 @@ did not cover it.
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
+| Restart request | `restart_requests` | Controller | N per service, one active | Restart after current work |
 | Selection mode | `agent_control.selection_mode` | Controller | One per service | Selection mode |
 | Dismissal | `item_dismissals` | Controller | One per Item | Dismiss |
 | Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
@@ -263,6 +264,18 @@ Use Stats for the page and route. Do not use analytics, insights, value score, o
 A durable service control that stops new agent Tasks from starting. Active agents and controller Publications finish.
 
 Use `Pause` in controls and procedures. Never use drain or maintenance mode for this control.
+
+### Restart request
+
+One durable request to finish active work, restart the service, and verify the new process.
+
+The service owns an accepted Restart request. It survives the requesting client and a process exit.
+
+A Restart request stops new agent Tasks from starting. Active agents and controller Publications finish.
+
+Pause remains unchanged. A service that was Paused stays Paused after the restart.
+
+Use Restart request for the record and `Restart after current work` for the control. Do not use restart queue or drain mode.
 
 ### Selection mode
 
@@ -550,6 +563,7 @@ Evidence that a skill, policy, or workflow should change.
 | reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |
 | risk level, skip review, review waiver, review exemption | Auto merge | Auto merge never affects whether review runs |
+| restart queue, drain mode | Restart request | Queue and Pause already name different service concepts |
 | journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | rewrite the sentence | Internal machinery, never user-visible |
 
 ## Open questions

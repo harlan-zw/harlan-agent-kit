@@ -44,6 +44,7 @@ import { createPullRequestTriageAgent } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
+import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
 import { err, ok } from './result.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
@@ -65,6 +66,7 @@ import { agentWorktreeLeaseKey, createAgentWorkspaceManager, createBaselineRepai
 export interface RunningAgentService {
   server: Server
   stop: () => Promise<void>
+  waitForRestart: () => Promise<void>
 }
 
 export interface StartAgentServiceOptions {
@@ -245,6 +247,25 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
 
   const configuredProfile = agentProfile(config.agent.provider)
   const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests)
+  const processId = randomUUID()
+  const restartController = createRestartController({
+    store,
+    processId,
+    now,
+    onActionRequired: (reason) => {
+      const at = now().toISOString()
+      const failure = classifyFailure({ message: reason })
+      store.recordIncident({
+        scope: { _tag: 'Service' },
+        kind: failure.kind,
+        severity: 'warning',
+        operation: 'restart',
+        message: reason,
+        recovery: { _tag: 'ActionRequired' },
+        at,
+      })
+    },
+  })
   // Capacity is normal System state now. Clear the legacy Incident once, so a
   // service upgraded while every provider was at its Reserve does not keep it.
   store.resolveIncidents({ _tag: 'Service' }, now().toISOString(), 'agent_capacity')
@@ -368,6 +389,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
      */
     const canClaim = (): boolean => {
       if (store.getAgentControl()._tag !== 'Running')
+        return false
+      if (!restartAllowsTaskClaims(store.getRestartRequest()))
         return false
       const selection = store.getAgentSelection()
       if (selection._tag !== 'Automatic')
@@ -973,6 +996,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       listReviewRuns: store.listReviewRuns,
       pauseAgents: store.pauseAgents,
       recordAgentFeedback: store.recordAgentFeedback,
+      requestRestart: store.requestRestart,
       requestReviewRerun: store.requestReviewRerun,
       resumeAgents: store.resumeAgents,
       selectAgent: store.selectAgent,
@@ -996,6 +1020,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.close()
     throw error
   })
+  const completedRestart = store.completeRestart(now().toISOString())
+  if (completedRestart?._tag === 'Completed') {
+    store.resolveIncidents({ _tag: 'Service' }, completedRestart.completedAt, 'restart')
+    options.logger.info(`Completed Restart request ${completedRestart.id}.`)
+  }
+  restartController.start()
   capacity.start()
   // A delivery says "read GitHub again", never what changed. Reconciliation
   // stays the only writer, so a missed, duplicated, or forged delivery can at
@@ -1069,7 +1099,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
 
   return {
     server,
+    waitForRestart: restartController.waitForRestart,
     stop: async () => {
+      restartController.stop()
       await Promise.all([
         capacity.stop(),
         reconcileHint.stop(),

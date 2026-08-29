@@ -22,6 +22,7 @@ const {
   loadState,
   start,
   setAgentControl,
+  requestRestart,
   setSelectionMode,
   switchAgent,
 } = useDashboard()
@@ -53,6 +54,19 @@ const agentControlLabel = computed(() => {
   if (snapshot.value.agentControl._tag === 'Running')
     return undefined
   return snapshot.value.agentControl.safeToRestart ? 'paused, safe to restart' : 'paused, finishing active work'
+})
+
+const restartActive = computed(() => snapshot.value.restartRequest?._tag === 'Requested'
+  || snapshot.value.restartRequest?._tag === 'Restarting')
+
+const restartLabel = computed(() => {
+  if (snapshot.value.restartRequest?._tag === 'Requested')
+    return 'restart requested, finishing active work'
+  if (snapshot.value.restartRequest?._tag === 'Restarting')
+    return 'restarting'
+  if (snapshot.value.restartRequest?._tag === 'ActionRequired')
+    return 'restart: Action required'
+  return undefined
 })
 
 const selectionModeHint = computed(() => snapshot.value.selectionMode === 'auto'
@@ -311,6 +325,19 @@ useHead({
             {{ snapshot.agentControl._tag === 'Running' ? 'Pause' : 'Resume' }}
           </UButton>
           <UButton
+            v-if="snapshot.mutationsEnabled"
+            icon="i-lucide-refresh-cw"
+            color="neutral"
+            variant="ghost"
+            :loading="controlPending || snapshot.restartRequest?._tag === 'Restarting'"
+            :disabled="controlPending || restartActive"
+            :aria-label="restartActive ? 'Restart requested' : 'Restart after current work'"
+            title="Finish active work, restart the service, then continue queued Tasks."
+            @click="requestRestart"
+          >
+            <span class="hidden xl:inline">{{ restartActive ? 'Restart requested' : 'Restart after current work' }}</span>
+          </UButton>
+          <UButton
             v-if="notificationsSupported"
             :icon="notificationsOn ? 'i-lucide-bell' : 'i-lucide-bell-off'"
             color="neutral"
@@ -348,6 +375,10 @@ useHead({
         <template v-if="agentControlLabel">
           <span aria-hidden="true" class="text-dimmed">·</span>
           <span :class="statusClass('warning')">{{ agentControlLabel }}</span>
+        </template>
+        <template v-if="restartLabel">
+          <span aria-hidden="true" class="text-dimmed">·</span>
+          <span :class="statusClass(snapshot.restartRequest?._tag === 'ActionRequired' ? 'error' : 'warning')">{{ restartLabel }}</span>
         </template>
         <template v-if="snapshot.selectionMode === 'auto' && snapshot.openPullRequests >= snapshot.maxOpenPullRequests">
           <span aria-hidden="true" class="text-dimmed">·</span>

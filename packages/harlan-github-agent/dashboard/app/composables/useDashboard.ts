@@ -26,6 +26,7 @@ function emptySnapshot(): DashboardSnapshot {
     status: 'starting',
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
+    restartRequest: null,
     selectionMode: 'auto',
     openPullRequests: 0,
     maxOpenPullRequests: 8,
@@ -170,6 +171,9 @@ function createDashboard() {
 
   const setSelectionMode = (mode: SelectionMode): Promise<void> =>
     control(() => $fetch('/api/agents/selection-mode', { method: 'POST', body: { mode } }))
+
+  const requestRestart = (): Promise<void> =>
+    control(() => $fetch('/api/service/restart', { method: 'POST', body: { source: 'dashboard' } }))
 
   /** A switch starts the next agent turn. Work already running keeps its model. */
   const switchAgent = (selection: AgentSelection): Promise<void> =>
@@ -456,6 +460,7 @@ function createDashboard() {
     loadState,
     start,
     setAgentControl,
+    requestRestart,
     setSelectionMode,
     switchAgent,
     setRepositoryPaused,

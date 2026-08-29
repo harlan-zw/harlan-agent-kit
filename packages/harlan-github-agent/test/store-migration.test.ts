@@ -19,6 +19,7 @@ afterEach(() => {
 
 /** Rewinds past the Routine tables, which every version below 38 predates. */
 function dropRoutines(database: DatabaseSync): void {
+  database.exec('DROP TABLE IF EXISTS restart_requests')
   database.exec('DROP TABLE IF EXISTS agent_feedback')
   database.exec('DROP TABLE IF EXISTS routine_report_commands')
   database.exec('DROP TABLE IF EXISTS candidate_issue_commands')
@@ -371,7 +372,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(46)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(47)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
