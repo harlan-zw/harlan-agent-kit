@@ -669,6 +669,12 @@ export interface JournalStore {
   listOpenPullRequestNumbers: (github: string) => number[]
   /** Old inferred closures need one exact read before GitHub becomes final truth. */
   listUnverifiedClosedPullRequestNumbers: (github: string, limit?: number) => number[]
+  /** Records one exact pull request read without trusting a local closure timestamp. */
+  recordExactPullRequestObservation: (input: {
+    externalId: string
+    observedAt: string
+    subject: GitHubPullRequestItem
+  }) => RecordObservationResult
   /** Records one exact closed pull request read from GitHub. */
   recordVerifiedPullRequestClosure: (input: {
     repository: string
@@ -2248,6 +2254,10 @@ function canonicalPayload(subject: GitHubItem): string {
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function inferredClosureObservationId(subject: Pick<GitHubItem, 'repository' | 'kind' | 'number'>, observedAt: string): string {
+  return digest(`poll-closure:${subject.repository}:${subject.kind}:${subject.number}:${observedAt}`)
 }
 
 function issueTriageState(evidence: string | null): IssueTriageState | undefined {
@@ -4935,7 +4945,10 @@ export function openJournalStore(
     }
   }
 
-  const recordObservation: JournalStore['recordObservation'] = (input) => {
+  const writeObservation = (
+    input: Parameters<JournalStore['recordObservation']>[0],
+    exactPullRequest: boolean,
+  ): RecordObservationResult => {
     const payload = canonicalPayload(input.subject)
     const revisionId = revisionIdFor(input.subject)
     database.exec('BEGIN IMMEDIATE')
@@ -5036,15 +5049,40 @@ export function openJournalStore(
         )
         planIssueTriage(database, input.subject, subject.id, revisionId, input.observedAt, mapping)
       }
+      const isStaleAgainstCurrent = (current: GitHubItem, currentRevisionId: string): boolean => {
+        const older = input.subject.updatedAt < current.updatedAt
+        const weakerAtSameVersion = input.subject.updatedAt === current.updatedAt
+          && input.source === 'webhook'
+          && subject.current_source === 'poll'
+        if (!older && !weakerAtSameVersion)
+          return false
+        if (
+          !exactPullRequest
+          || input.subject.kind !== 'pull_request'
+          || current.kind !== 'pull_request'
+          || current.state !== 'closed'
+          || subject.current_source !== 'poll'
+          || input.subject.headSha !== current.headSha
+          || input.subject.baseSha !== current.baseSha
+        ) {
+          return true
+        }
+        const inferredClosure = database.prepare(`
+          SELECT 1 FROM observations
+          WHERE subject_id = ? AND revision_id = ? AND external_id = ?
+        `).get(subject.id, currentRevisionId, inferredClosureObservationId(current, current.updatedAt)) !== undefined
+        if (!inferredClosure)
+          return true
+        return database.prepare(`
+          SELECT 1 FROM pull_request_closure_verifications
+          WHERE subject_id = ? AND revision_id = ?
+        `).get(subject.id, currentRevisionId) !== undefined
+      }
 
       if (external !== undefined) {
         if (subject.current_payload !== null && subject.current_revision_id !== null) {
           const current = JSON.parse(subject.current_payload) as GitHubItem
-          const older = input.subject.updatedAt < current.updatedAt
-          const weakerAtSameVersion = input.subject.updatedAt === current.updatedAt
-            && input.source === 'webhook'
-            && subject.current_source === 'poll'
-          if (older || weakerAtSameVersion) {
+          if (isStaleAgainstCurrent(current, subject.current_revision_id)) {
             database.exec('COMMIT')
             return { _tag: 'Stale', revisionId, currentRevisionId: subject.current_revision_id }
           }
@@ -5069,11 +5107,7 @@ export function openJournalStore(
 
       if (subject.current_payload !== null && subject.current_revision_id !== null) {
         const current = JSON.parse(subject.current_payload) as GitHubItem
-        const older = input.subject.updatedAt < current.updatedAt
-        const weakerAtSameVersion = input.subject.updatedAt === current.updatedAt
-          && input.source === 'webhook'
-          && subject.current_source === 'poll'
-        if (older || weakerAtSameVersion) {
+        if (isStaleAgainstCurrent(current, subject.current_revision_id)) {
           database.exec('COMMIT')
           return { _tag: 'Stale', revisionId, currentRevisionId: subject.current_revision_id }
         }
@@ -5096,6 +5130,13 @@ export function openJournalStore(
       throw error
     }
   }
+
+  const recordObservation: JournalStore['recordObservation'] = input => writeObservation(input, false)
+
+  const recordExactPullRequestObservation: JournalStore['recordExactPullRequestObservation'] = input => writeObservation({
+    ...input,
+    source: 'poll',
+  }, true)
 
   const storedApprovalState = (input: {
     subjectId: number
@@ -5382,7 +5423,7 @@ export function openJournalStore(
             priorAutomatedReview: { _tag: 'None' },
           }
       recordObservation({
-        externalId: digest(`poll-closure:${github}:${subject.kind}:${subject.number}:${observedAt}`),
+        externalId: inferredClosureObservationId(subject, observedAt),
         observedAt,
         source: 'poll',
         subject,
@@ -10094,6 +10135,7 @@ export function openJournalStore(
     isIssueWorkApprovalReady,
     listOpenPullRequestNumbers,
     listUnverifiedClosedPullRequestNumbers,
+    recordExactPullRequestObservation,
     recordVerifiedPullRequestClosure,
     listOpenAgentPullRequests,
     listActiveTaskLeases,

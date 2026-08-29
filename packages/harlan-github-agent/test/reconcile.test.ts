@@ -354,8 +354,8 @@ describe('gitHub reconciliation', () => {
           return Promise.resolve(ok({
             ...pullRequest,
             state: 'closed',
-            mergedAt: '2026-08-13T01:04:00.000Z',
-            updatedAt: '2026-08-13T01:04:00.000Z',
+            mergedAt: '2026-08-13T01:02:30.000Z',
+            updatedAt: '2026-08-13T01:02:30.000Z',
           }))
         },
       },
@@ -365,6 +365,51 @@ describe('gitHub reconciliation', () => {
 
     expect(exactReads).toBe(1)
     expect(store.listStoppedReviews()).toEqual([expect.objectContaining({ disposition: { _tag: 'Merged' } })])
+    store.close()
+  })
+
+  it('keeps a newer open head when a delayed exact closure returns', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = repositoryMapping()
+    const pullRequest = pullRequestItem({ updatedAt: '2026-08-13T01:00:00.000Z' })
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'open-before-delayed-closure',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+
+    const result = await reconcileRepository(repository, {
+      github: {
+        listOpenItems: () => Promise.resolve(ok([])),
+        getPullRequest: () => {
+          store.recordObservation({
+            externalId: 'new-head-before-delayed-closure',
+            observedAt: '2026-08-13T04:00:00.000Z',
+            source: 'webhook',
+            subject: {
+              ...pullRequest,
+              headSha: 'new-head',
+              updatedAt: '2026-08-13T04:00:00.000Z',
+            },
+          })
+          return Promise.resolve(ok({
+            ...pullRequest,
+            state: 'closed',
+            updatedAt: '2026-08-13T01:30:00.000Z',
+          }))
+        },
+      },
+      store,
+      now: () => new Date('2026-08-13T05:00:00.000Z'),
+    })
+
+    expect(result).toEqual({
+      _tag: 'Ok',
+      value: { repository: repository.github, subjects: 0, inserted: 0, duplicates: 0, stale: 0, closed: 0 },
+    })
+    expect(store.listOpenPullRequestNumbers(repository.github)).toEqual([pullRequest.number])
     store.close()
   })
 
