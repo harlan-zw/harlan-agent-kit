@@ -730,18 +730,18 @@ export interface JournalStore {
    */
   isQueuedReviewStatus: (input: { taskId: string, taskKind: 'adversarial_review' | 'review_fix' }) => boolean
   /**
-   * Retires the canonical comment a person deleted.
+   * Retires a publication after its canonical comment disappeared or moved on.
    *
-   * A sweep refuses to open a deleted comment again, which is right: deleting
-   * it is how a person answers it. Refusing was the whole response though, so
-   * the row stayed in the sweep's list and asked GitHub again every pass,
-   * forever. Retiring the publication takes the row out of every sweep.
+   * The match is the comment identity alone. A stopped Repair inherits the
+   * sibling Review's canonical comment, so the Task pair on the sweep row does
+   * not name the row that carried the comment; the comment id does.
    */
   recordDeletedReviewComment: (input: {
     taskKind: 'adversarial_review' | 'review_fix'
     taskId: string
     commentId: number
     at: string
+    reason: 'A person deleted the comment.' | 'Another Task replaced the canonical comment.'
   }) => boolean
   recordStoppedReviewStatus: (input: {
     taskId: string
@@ -4839,6 +4839,16 @@ export function openJournalStore(
           )
           return
         }
+        if (input.subject.kind === 'pull_request') {
+          supersedeTasks(
+            database,
+            subject.id,
+            input.observedAt,
+            'A newer pull request Revision replaced this Repair.',
+            revisionId,
+            'review_fix',
+          )
+        }
         if (input.subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, input.subject.author)) {
           const approvedRepair = database.prepare(`
             SELECT 1
@@ -8644,9 +8654,9 @@ export function openJournalStore(
 
   const recordDeletedReviewComment: JournalStore['recordDeletedReviewComment'] = input => database.prepare(`
     UPDATE review_status_commands
-    SET state_tag = 'Superseded', reason = 'A person deleted the comment.', updated_at = ?
-    WHERE task_kind = ? AND task_id = ? AND state_tag = 'Published' AND github_comment_id = ?
-  `).run(input.at, input.taskKind, input.taskId, input.commentId).changes > 0
+    SET state_tag = 'Superseded', reason = ?, updated_at = ?
+    WHERE state_tag = 'Published' AND github_comment_id = ?
+  `).run(input.reason, input.at, input.commentId).changes > 0
 
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)

@@ -137,11 +137,20 @@ export async function publishStoppedReviews(
         taskId: review.taskId,
         commentId: review.commentId,
         at,
+        reason: 'A person deleted the comment.',
       })
       return ok({ _tag: 'CommentGone', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
     }
-    if (edited.value._tag === 'Changed')
+    if (edited.value._tag === 'Changed') {
+      options.store.recordDeletedReviewComment({
+        taskKind: review.taskKind,
+        taskId: review.taskId,
+        commentId: review.commentId,
+        at,
+        reason: 'Another Task replaced the canonical comment.',
+      })
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
+    }
     const recorded = options.store.recordStoppedReviewStatus({
       taskId: review.taskId,
       taskKind: review.taskKind,
