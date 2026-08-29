@@ -1809,7 +1809,7 @@ describe('journal store', () => {
     })).toBe(true)
     expect(store.listStoppedReviews()).toEqual([])
 
-    store.recordObservation({
+    const merged = store.recordObservation({
       externalId: 'review-merged',
       observedAt: '2026-08-13T01:03:00.000Z',
       source: 'poll',
@@ -1820,6 +1820,17 @@ describe('journal store', () => {
         updatedAt: '2026-08-13T01:03:00.000Z',
       },
     })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: pullRequest.repository,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:03:00.000Z',
+    })).toBe(true)
 
     const stopped = store.listStoppedReviews()
     expect(stopped).toEqual([expect.objectContaining({
@@ -1940,7 +1951,7 @@ describe('journal store', () => {
       findings: [],
       publication: settlementPublication('ready-after-pending'),
     })._tag).toBe('Inserted')
-    store.recordObservation({
+    const merged = store.recordObservation({
       externalId: 'ready-review-merged',
       observedAt: '2026-08-13T01:04:00.000Z',
       source: 'poll',
@@ -1951,6 +1962,17 @@ describe('journal store', () => {
         updatedAt: '2026-08-13T01:04:00.000Z',
       },
     })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: pullRequest.repository,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:04:00.000Z',
+    })).toBe(true)
 
     expect(store.listStoppedReviews()).toEqual([expect.objectContaining({
       disposition: { _tag: 'Merged' },
@@ -2013,7 +2035,7 @@ describe('journal store', () => {
       source: 'poll',
       subject: { ...pullRequest, headSha: 'repaired24', updatedAt: '2026-08-13T01:03:00.000Z' },
     })
-    store.recordObservation({
+    const merged = store.recordObservation({
       externalId: 'repaired-merged',
       observedAt: '2026-08-13T01:04:00.000Z',
       source: 'poll',
@@ -2025,6 +2047,17 @@ describe('journal store', () => {
         updatedAt: '2026-08-13T01:04:00.000Z',
       },
     })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the repaired merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: pullRequest.repository,
+      pullRequestNumber: pullRequest.number,
+      revisionId: merged.revisionId,
+      headSha: 'repaired24',
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:04:00.000Z',
+    })).toBe(true)
 
     const stopped = store.listStoppedReviews()
     expect(stopped).toEqual([expect.objectContaining({
@@ -2783,6 +2816,113 @@ describe('journal store', () => {
 
     expect(result._tag).toBe('Stale')
     expect(store.getDashboardSnapshot('2026-08-13T03:00:00.000Z').items[0]?.title).toBe('New title')
+  })
+
+  it('restores an exact open pull request over its inferred closure', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ updatedAt: '2026-08-13T01:00:00.000Z' })
+    const open = store.recordObservation({
+      externalId: 'open-before-inferred-closure',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (open._tag !== 'Inserted')
+      throw new Error('Expected the open pull request Revision.')
+    store.closeMissingItems(pullRequest.repository, [], '2026-08-13T02:00:00.000Z')
+
+    const exact = store.recordExactPullRequestObservation({
+      externalId: 'exact-open-after-inferred-closure',
+      observedAt: '2026-08-13T03:00:00.000Z',
+      subject: pullRequest,
+    })
+
+    expect(exact).toEqual({ _tag: 'Duplicate', revisionId: open.revisionId })
+    expect(store.listOpenPullRequestNumbers(pullRequest.repository)).toEqual([pullRequest.number])
+  })
+
+  it.each([
+    {
+      name: 'a newer open head from a poll',
+      source: 'poll' as const,
+      subject: pullRequestItem({ headSha: 'new-head', updatedAt: '2026-08-13T04:00:00.000Z' }),
+    },
+    {
+      name: 'a newer closed Revision from a webhook',
+      source: 'webhook' as const,
+      subject: pullRequestItem({ state: 'closed', title: 'Closed on GitHub', updatedAt: '2026-08-13T04:00:00.000Z' }),
+    },
+  ])('keeps $name ahead of a delayed exact read', ({ source, subject }) => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ updatedAt: '2026-08-13T01:00:00.000Z' })
+    store.recordObservation({
+      externalId: 'open-before-delayed-exact-read',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    store.closeMissingItems(pullRequest.repository, [], '2026-08-13T02:00:00.000Z')
+    store.recordObservation({
+      externalId: `newer-before-delayed-exact-read-${source}`,
+      observedAt: '2026-08-13T04:00:00.000Z',
+      source,
+      subject,
+    })
+
+    const exact = store.recordExactPullRequestObservation({
+      externalId: `delayed-exact-read-${source}`,
+      observedAt: '2026-08-13T05:00:00.000Z',
+      subject: {
+        ...pullRequest,
+        state: 'closed',
+        updatedAt: '2026-08-13T01:30:00.000Z',
+      },
+    })
+
+    expect(exact._tag).toBe('Stale')
+  })
+
+  it('keeps a verified closure ahead of an older exact read', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ updatedAt: '2026-08-13T01:00:00.000Z' })
+    store.recordObservation({
+      externalId: 'open-before-verified-closure',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    store.closeMissingItems(pullRequest.repository, [], '2026-08-13T02:00:00.000Z')
+    const closed = store.recordExactPullRequestObservation({
+      externalId: 'exact-verified-closure',
+      observedAt: '2026-08-13T03:00:00.000Z',
+      subject: {
+        ...pullRequest,
+        state: 'closed',
+        updatedAt: '2026-08-13T01:30:00.000Z',
+      },
+    })
+    if (closed._tag !== 'Inserted')
+      throw new Error('Expected the exact closed pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: pullRequest.repository,
+      pullRequestNumber: pullRequest.number,
+      revisionId: closed.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Closed' },
+      at: '2026-08-13T03:00:00.000Z',
+    })).toBe(true)
+
+    const exact = store.recordExactPullRequestObservation({
+      externalId: 'older-exact-after-verified-closure',
+      observedAt: '2026-08-13T04:00:00.000Z',
+      subject: pullRequest,
+    })
+
+    expect(exact._tag).toBe('Stale')
   })
 
   it('supersedes conflict work when the pull request becomes clean', () => {

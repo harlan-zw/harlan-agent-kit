@@ -79,15 +79,40 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   }
   const finalPullRequests = finalPullRequestReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const observedItems = [...eligibleItems, ...finalPullRequests]
-  const writes = observedItems.map(subject => dependencies.store.recordObservation({
+  const eligibleWrites = eligibleItems.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
     source: 'poll',
     subject,
   }))
+  const finalWrites = finalPullRequests.map(subject => dependencies.store.recordExactPullRequestObservation({
+    externalId: observationId(repository.github, subject),
+    observedAt,
+    subject,
+  }))
+  const writes = [...eligibleWrites, ...finalWrites]
   const conflict = writes.find(write => write._tag === 'Conflict')
   if (conflict?._tag === 'Conflict') {
     const message = `GitHub state hash collision: ${conflict.existingRevisionId} and ${conflict.receivedRevisionId}.`
+    dependencies.store.recordPollFailure(repository.github, observedAt, message)
+    return err({ repository: repository.github, message })
+  }
+  const closureVerificationFailed = finalPullRequests.some((pullRequest, index) => {
+    const write = finalWrites[index]
+    if (pullRequest.state !== 'closed' || write === undefined || write._tag === 'Stale' || write._tag === 'Conflict')
+      return false
+    return !dependencies.store.recordVerifiedPullRequestClosure({
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: write.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: pullRequest.mergedAt === null ? { _tag: 'Closed' } : { _tag: 'Merged' },
+      at: observedAt,
+    })
+  })
+  if (closureVerificationFailed) {
+    const message = 'The final pull request state could not be saved.'
     dependencies.store.recordPollFailure(repository.github, observedAt, message)
     return err({ repository: repository.github, message })
   }
@@ -117,7 +142,12 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   }
 
   const missingPullRequests = new Set(missingPullRequestNumbers)
-  const closed = finalPullRequests.filter(pullRequest => missingPullRequests.has(pullRequest.number) && pullRequest.state === 'closed').length + dependencies.store.closeMissingItems(
+  const closed = finalPullRequests.filter((pullRequest, index) => {
+    const write = finalWrites[index]
+    return missingPullRequests.has(pullRequest.number)
+      && pullRequest.state === 'closed'
+      && (write?._tag === 'Inserted' || write?._tag === 'Duplicate')
+  }).length + dependencies.store.closeMissingItems(
     repository.github,
     observedItems.map(subject => ({ kind: subject.kind, number: subject.number })),
     observedAt,
