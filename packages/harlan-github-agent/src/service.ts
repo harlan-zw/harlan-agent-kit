@@ -160,22 +160,6 @@ export function replaceServiceIncidents(
   store.resolveIncidents({ _tag: 'Service' }, at, operation, currentMessages)
 }
 
-/** Shows configured Issue work that cannot run with a person's GitHub token. */
-export function replaceUnavailableIssueWorkIncidents(
-  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
-  repositories: readonly RepositoryMapping[],
-  at: string,
-): void {
-  replaceServiceIncidents(
-    store,
-    at,
-    'issue_work_access',
-    repositories
-      .filter(repository => repository.enabled && repository.issueWork && repository.authentication === 'user')
-      .map(repository => `${repository.github}: Issue work needs the GitHub App. Install the App for this repository, then restart the service.`),
-  )
-}
-
 /**
  * Reads Harlan's GitHub login, retrying a failure that describes the API and
  * not the account.
@@ -264,6 +248,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // Capacity is normal System state now. Clear the legacy Incident once, so a
   // service upgraded while every provider was at its Reserve does not keep it.
   store.resolveIncidents({ _tag: 'Service' }, now().toISOString(), 'agent_capacity')
+  // Explicit Repository policy now permits personal-account Issue work.
+  store.resolveIncidents({ _tag: 'Service' }, now().toISOString(), 'issue_work_access')
   // A weekly window moves over hours, so a reading minutes old still decides
   // correctly. Refreshing on its own interval keeps a subprocess out of the
   // path of every agent turn.
@@ -291,7 +277,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   options.logger.info(`Agent provider: ${profile.provider} with ${profile.roles.adversarial_review.model}.`)
   const startedAt = now().toISOString()
   store.syncRepositories(config.repositories, startedAt)
-  replaceUnavailableIssueWorkIncidents(store, config.repositories, startedAt)
   if (config.mutationsEnabled) {
     const recovered = store.recoverInterruptedAgentTasks(startedAt)
     if (recovered > 0)

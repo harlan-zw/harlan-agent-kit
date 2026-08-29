@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { contextBudgetExhaustedReason } from '../src/failure.ts'
-import { replaceServiceIncidents, replaceUnavailableIssueWorkIncidents } from '../src/service.ts'
+import { replaceServiceIncidents } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -10,27 +10,6 @@ function createStore() {
 }
 
 describe('incident log', () => {
-  it('shows when Issue work needs a GitHub App installation', () => {
-    const store = createStore()
-    const repository = repositoryMapping({ authentication: 'user' })
-    store.syncRepositories([repository], '2026-08-18T00:00:00.000Z')
-
-    replaceUnavailableIssueWorkIncidents(store, [repository], '2026-08-18T00:01:00.000Z')
-
-    expect(store.listIncidents()).toMatchObject([{
-      scope: { _tag: 'Service' },
-      kind: 'policy',
-      severity: 'error',
-      operation: 'issue_work_access',
-      message: 'harlan-zw/example: Issue work needs the GitHub App. Install the App for this repository, then restart the service.',
-      recovery: { _tag: 'ActionRequired' },
-    }])
-
-    replaceUnavailableIssueWorkIncidents(store, [{ ...repository, authentication: 'app' }], '2026-08-18T00:02:00.000Z')
-
-    expect(store.listIncidents()).toEqual([])
-  })
-
   it('clears a worktree sweep incident after the next clean sweep', () => {
     const store = createStore()
 

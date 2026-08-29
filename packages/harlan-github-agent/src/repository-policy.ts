@@ -54,12 +54,11 @@ export function canRepairPullRequestHead(mapping: RepositoryMapping, pullRequest
 /**
  * True when the controller may open a pull request for an issue here.
  *
- * A maintained repository must opt in. The GitHub App keeps every write under
- * the repository-scoped identity instead of Harlan's own account.
+ * A maintained repository must opt in. Authentication decides which trusted
+ * controller credential publishes the branch and pull request.
  */
 export function canWorkIssues(mapping: RepositoryMapping): boolean {
   return mapping.enabled
-    && mapping.authentication === 'app'
     && canPushBranch(mapping)
     && mapping.issueWork
     && mapping.writablePullRequestHeadPrefixes.length > 0

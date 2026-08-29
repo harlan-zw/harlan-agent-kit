@@ -1278,7 +1278,7 @@ describe('journal store', () => {
     )
   })
 
-  it('does not plan issue work through Harlan user authentication', () => {
+  it('plans explicitly enabled Issue work through personal authentication', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({
       github: 'nuxt/scripts',
@@ -1293,7 +1293,9 @@ describe('journal store', () => {
       subject: issueItem({ repository: 'nuxt/scripts' }),
     })
 
-    expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)).toBeNull()
+    expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)).toEqual(
+      expect.objectContaining({ kind: 'issue_triage', issueNumber: 12 }),
+    )
   })
 
   it.each(['READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] as const)('does not queue issue work for the %s route', (route) => {

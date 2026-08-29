@@ -62,8 +62,8 @@ describe('issue work worker', () => {
     expect(committed).toBe(false)
   })
 
-  it('resumes triage, implements the issue, and prepares repository metadata', async () => {
-    const repository = repositoryMapping({ ownership: 'maintained', conflictResolution: false })
+  it('resumes triage through personal authentication and prepares repository metadata', async () => {
+    const repository = repositoryMapping({ authentication: 'user', ownership: 'maintained', conflictResolution: false })
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
     const worker = createIssueWorkWorker({

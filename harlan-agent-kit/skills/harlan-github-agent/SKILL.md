@@ -17,7 +17,7 @@ Resolve the package from this skill directory:
 
 Require an explicit configuration file. Start from `config.example.yml` only when creating one.
 
-Use `github.allowed_owners` before GitHub App installation access. Ignore installations from every other GitHub owner. Scan only immediate directories under `~/pkg` and `~/sites` to find trusted local checkouts. Treat configured repositories as policy overrides. Never act on a checkout without matching its GitHub origin and App installation.
+Use `github.allowed_owners` before GitHub access. Ignore installations and personal-account repositories from every other GitHub owner. Scan only immediate directories under `~/pkg` and `~/sites` to find trusted local checkouts. Treat configured repositories as policy overrides. Never act on a checkout without matching its GitHub origin and discovered authentication.
 
 Skip a tracked pull request with a conventional non-breaking `chore:` title before starting an Agent.
 For every other tracked pull request authored by `harlan-zw`, run low-cost Pull request triage.
@@ -137,7 +137,7 @@ curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://ha
 
 `conflict_resolution: true` permits a repository to queue conflict work. `mutations_enabled: true` lets the controller run and publish it.
 
-Require a GitHub App installation for selected repositories. Use App tokens for controller reads and writes. Workers may use Harlan's authenticated `gh` client for research.
+Prefer a GitHub App installation for selected repositories. If a maintained repository has no installation, require an explicit Repository mapping before Issue work. Use Harlan's authenticated GitHub account for that repository. Workers may use the authenticated `gh` client for research.
 
 Enable the global mutation switch only after repository mappings and publication checks pass.
 
@@ -221,7 +221,9 @@ After the push, invalidate old evidence and run `adversarial-review` again again
 
 Use fenced leases and durable Publication commands for every GitHub write.
 
-Use repository-scoped GitHub App tokens. Mint read and write tokens separately.
+Route controller credentials by Repository mapping. Use repository-scoped GitHub App tokens when installed. Use Harlan's authenticated GitHub account only for an explicitly configured maintained repository.
+
+Mint read and write App tokens separately.
 
 Publish only pinned controller artifacts. Recheck pull request state, branch protection, artifact integrity, and the database lease before each push.
 
