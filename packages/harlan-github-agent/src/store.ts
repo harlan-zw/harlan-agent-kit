@@ -59,6 +59,8 @@ import type {
   RecordReviewRunResult,
   RepositoryMapping,
   RepositoryStatus,
+  RestartRequest,
+  RestartRequestSource,
   ReviewFinding,
   ReviewFixQueueResult,
   ReviewFixTask,
@@ -120,6 +122,17 @@ interface IncidentRow {
   occurrences: number
   first_seen_at: string
   last_seen_at: string
+}
+
+interface RestartRequestRow {
+  id: string
+  source_tag: RestartRequestSource
+  state_tag: RestartRequest['_tag']
+  requested_at: string
+  restarting_at: string | null
+  completed_at: string | null
+  action_required_at: string | null
+  reason: string | null
 }
 
 function incidentScope(row: IncidentRow): IncidentScope {
@@ -770,6 +783,12 @@ export interface JournalStore {
   /** Open pull requests across enabled repositories, which is the work waiting on Harlan. */
   countOpenPullRequests: () => number
   needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string }) => boolean
+  requestRestart: (input: { id: string, source: RestartRequestSource, at: string }) => RestartRequest
+  getRestartRequest: () => RestartRequest | null
+  beginRestart: (input: { id: string, processId: string, at: string }) => RestartRequest | null
+  completeRestart: (at: string) => RestartRequest | null
+  requireRestartAction: (input: { id: string, at: string, reason: string }) => RestartRequest | null
+  isSafeToRestart: () => boolean
   pauseAgents: (at: string) => StoredAgentControl
   setRepositoryPaused: (github: string, paused: boolean) => boolean
   /** True when a person has trusted the controller to write to this repository. */
@@ -4071,6 +4090,41 @@ const agentFeedbackMigration = `
   PRAGMA user_version = 46;
 `
 
+/** Stores a restart independently from manual Pause, so the service owns completion. */
+const restartRequestMigration = `
+  CREATE TABLE restart_requests (
+    id TEXT PRIMARY KEY,
+    source_tag TEXT NOT NULL CHECK (source_tag IN ('dashboard', 'tray', 'helper')),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Requested', 'Restarting', 'Completed', 'ActionRequired')),
+    requested_at TEXT NOT NULL,
+    restarting_at TEXT,
+    completed_at TEXT,
+    action_required_at TEXT,
+    reason TEXT,
+    process_id TEXT,
+    CHECK (
+      (state_tag = 'Requested'
+        AND restarting_at IS NULL AND completed_at IS NULL
+        AND action_required_at IS NULL AND reason IS NULL AND process_id IS NULL)
+      OR (state_tag = 'Restarting'
+        AND restarting_at IS NOT NULL AND completed_at IS NULL
+        AND action_required_at IS NULL AND reason IS NULL AND process_id IS NOT NULL)
+      OR (state_tag = 'Completed'
+        AND restarting_at IS NOT NULL AND completed_at IS NOT NULL
+        AND action_required_at IS NULL AND reason IS NULL AND process_id IS NOT NULL)
+      OR (state_tag = 'ActionRequired'
+        AND restarting_at IS NULL AND completed_at IS NULL
+        AND action_required_at IS NOT NULL AND reason IS NOT NULL AND process_id IS NULL)
+    )
+  );
+
+  CREATE UNIQUE INDEX restart_requests_active
+  ON restart_requests ((1))
+  WHERE state_tag IN ('Requested', 'Restarting');
+
+  PRAGMA user_version = 47;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4096,7 +4150,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 46)
+  if (version === 47)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4281,6 +4335,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 45) {
     applyMigration(database, agentFeedbackMigration)
+    version = 46
+  }
+  if (version === 46) {
+    applyMigration(database, restartRequestMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -7781,6 +7839,103 @@ export function openJournalStore(
     return row.state_tag === 'Running' ? { _tag: 'Running' } : { _tag: 'Paused', pausedAt: row.updated_at }
   }
 
+  const restartRequestFromRow = (row: RestartRequestRow): RestartRequest => {
+    const base = { id: row.id, source: row.source_tag, requestedAt: row.requested_at }
+    switch (row.state_tag) {
+      case 'Requested':
+        return { _tag: 'Requested', ...base }
+      case 'Restarting':
+        if (row.restarting_at === null)
+          throw new Error('A Restarting request needs its restart time.')
+        return { _tag: 'Restarting', ...base, restartingAt: row.restarting_at }
+      case 'Completed':
+        if (row.restarting_at === null || row.completed_at === null)
+          throw new Error('A Completed Restart request needs restart and completion times.')
+        return { _tag: 'Completed', ...base, restartingAt: row.restarting_at, completedAt: row.completed_at }
+      case 'ActionRequired':
+        if (row.action_required_at === null || row.reason === null)
+          throw new Error('An Action required Restart request needs its time and reason.')
+        return { _tag: 'ActionRequired', ...base, actionRequiredAt: row.action_required_at, reason: row.reason }
+    }
+  }
+
+  const restartRequestById = (id: string): RestartRequest | null => {
+    const row = database.prepare(`
+      SELECT id, source_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      FROM restart_requests WHERE id = ?
+    `).get(id) as RestartRequestRow | undefined
+    return row === undefined ? null : restartRequestFromRow(row)
+  }
+
+  const getRestartRequest = (): RestartRequest | null => {
+    const row = database.prepare(`
+      SELECT id, source_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      FROM restart_requests ORDER BY rowid DESC LIMIT 1
+    `).get() as RestartRequestRow | undefined
+    return row === undefined ? null : restartRequestFromRow(row)
+  }
+
+  const activeRestartRequest = (): RestartRequest | null => {
+    const row = database.prepare(`
+      SELECT id, source_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      FROM restart_requests WHERE state_tag IN ('Requested', 'Restarting') LIMIT 1
+    `).get() as RestartRequestRow | undefined
+    return row === undefined ? null : restartRequestFromRow(row)
+  }
+
+  const requestRestart: JournalStore['requestRestart'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const active = activeRestartRequest()
+      if (active !== null) {
+        database.exec('COMMIT')
+        return active
+      }
+      database.prepare(`
+        INSERT INTO restart_requests (id, source_tag, state_tag, requested_at)
+        VALUES (?, ?, 'Requested', ?)
+      `).run(input.id, input.source, input.at)
+      const created = restartRequestById(input.id)
+      if (created === null)
+        throw new Error('The Restart request was not stored.')
+      database.exec('COMMIT')
+      return created
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const beginRestart: JournalStore['beginRestart'] = (input) => {
+    const result = database.prepare(`
+      UPDATE restart_requests
+      SET state_tag = 'Restarting', restarting_at = ?, process_id = ?
+      WHERE id = ? AND state_tag = 'Requested'
+    `).run(input.at, input.processId, input.id)
+    return result.changes === 0 ? null : restartRequestById(input.id)
+  }
+
+  const completeRestart: JournalStore['completeRestart'] = (at) => {
+    const restarting = activeRestartRequest()
+    if (restarting?._tag !== 'Restarting')
+      return null
+    database.prepare(`
+      UPDATE restart_requests SET state_tag = 'Completed', completed_at = ?
+      WHERE id = ? AND state_tag = 'Restarting'
+    `).run(at, restarting.id)
+    return restartRequestById(restarting.id)
+  }
+
+  const requireRestartAction: JournalStore['requireRestartAction'] = (input) => {
+    const result = database.prepare(`
+      UPDATE restart_requests
+      SET state_tag = 'ActionRequired', action_required_at = ?, reason = ?
+      WHERE id = ? AND state_tag = 'Requested'
+    `).run(input.at, input.reason, input.id)
+    return result.changes === 0 ? null : restartRequestById(input.id)
+  }
+
   /**
    * A Dismissal is a decision about the Item, not about one head commit.
    *
@@ -7891,7 +8046,7 @@ export function openJournalStore(
     return getAgentControl()
   }
 
-  const isSafeToRestart = (): boolean => {
+  const isSafeToRestart: JournalStore['isSafeToRestart'] = () => {
     const row = database.prepare(`
       SELECT (
         EXISTS (SELECT 1 FROM tasks WHERE state_tag IN ('Running', 'Publishing'))
@@ -8185,12 +8340,14 @@ export function openJournalStore(
     const agentControl = storedAgentControl._tag === 'Running'
       ? storedAgentControl
       : { ...storedAgentControl, safeToRestart: isSafeToRestart() }
+    const restartRequest = getRestartRequest()
 
     return {
       generatedAt,
       status,
       mutationsEnabled,
       agentControl,
+      restartRequest,
       selectionMode: currentSelectionMode,
       openPullRequests: countOpenPullRequests(),
       maxOpenPullRequests,
@@ -8200,7 +8357,9 @@ export function openJournalStore(
         ? { _tag: 'WritesDisabled' }
         : agentControl._tag === 'Paused'
           ? { _tag: 'Paused' }
-          : { _tag: 'Available' },
+          : restartRequest?._tag === 'Requested' || restartRequest?._tag === 'Restarting'
+            ? { _tag: 'RestartRequested' }
+            : { _tag: 'Available' },
       agentProviderOrder: AGENT_PROVIDER_NAMES,
       agentModels: AGENT_MODELS,
       reasoningEfforts: REASONING_EFFORTS,
@@ -9661,6 +9820,12 @@ export function openJournalStore(
     listReviewRuns,
     recordAgentFeedback,
     needsAttentionTask,
+    requestRestart,
+    getRestartRequest,
+    beginRestart,
+    completeRestart,
+    requireRestartAction,
+    isSafeToRestart,
     dismissItem,
     restoreItem,
     getSelectionMode,

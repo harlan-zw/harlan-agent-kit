@@ -136,6 +136,7 @@ describe('resolving Agent start state', () => {
   const input = {
     mutationsEnabled: true,
     agentControl: { _tag: 'Running' as const },
+    restartRequest: null,
     agentSelection: { _tag: 'Automatic' as const, order: ['codex'] as const },
   }
 

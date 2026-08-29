@@ -1043,6 +1043,7 @@ export interface ProviderCapacityStatus {
 export type AgentStartState
   = | { _tag: 'Available' }
     | { _tag: 'Paused' }
+    | { _tag: 'RestartRequested' }
     | { _tag: 'WritesDisabled' }
     | { _tag: 'ReserveReached' }
     | { _tag: 'CapacityUnavailable' }
@@ -1167,6 +1168,7 @@ export interface DashboardSnapshot {
   status: 'starting' | 'ready' | 'degraded'
   mutationsEnabled: boolean
   agentControl: AgentControl
+  restartRequest: RestartRequest | null
   selectionMode: SelectionMode
   /** Open pull requests across every enabled repository. */
   openPullRequests: number
@@ -1203,3 +1205,17 @@ export type SelectionMode = 'auto' | 'manual'
 export type AgentControl
   = | { _tag: 'Running' }
     | { _tag: 'Paused', pausedAt: string, safeToRestart: boolean }
+
+export type RestartRequestSource = 'dashboard' | 'tray' | 'helper'
+
+interface RestartRequestBase {
+  id: string
+  source: RestartRequestSource
+  requestedAt: string
+}
+
+export type RestartRequest
+  = | RestartRequestBase & { _tag: 'Requested' }
+    | RestartRequestBase & { _tag: 'Restarting', restartingAt: string }
+    | RestartRequestBase & { _tag: 'Completed', restartingAt: string, completedAt: string }
+    | RestartRequestBase & { _tag: 'ActionRequired', actionRequiredAt: string, reason: string }

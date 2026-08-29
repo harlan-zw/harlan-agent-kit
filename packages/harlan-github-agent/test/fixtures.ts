@@ -79,6 +79,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     status: 'ready',
     mutationsEnabled: false,
     agentControl: { _tag: 'Running' },
+    restartRequest: null,
     selectionMode: 'auto',
     openPullRequests: 0,
     maxOpenPullRequests: 8,

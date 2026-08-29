@@ -2,6 +2,7 @@
 # Controls the harlan-github-agent systemd service.
 #
 #   service.sh update [REF]   move to REF (default origin/main), rebuild, restart
+#   service.sh prepare-update [REF]   move to REF and rebuild without restarting
 #   service.sh restart        restart the revision already deployed
 #   service.sh status         report what is deployed and whether it answers
 #
@@ -95,33 +96,41 @@ restart_and_verify() {
   report
 }
 
+prepare_update() {
+  require_checkout
+  local pnpm_bin ref before
+  pnpm_bin=$(resolve_pnpm)
+  ref="${1:-origin/main}"
+  # The checkout is a deployment. Anything local in it is a mistake worth
+  # seeing rather than silently overwriting.
+  if [ -n "$(git -C "$SERVICE_CHECKOUT" status --porcelain)" ]; then
+    echo "The service checkout has local changes. Inspect it before updating:" >&2
+    git -C "$SERVICE_CHECKOUT" status --short >&2
+    exit 1
+  fi
+  echo "Fetching $ref"
+  git -C "$SERVICE_CHECKOUT" fetch --quiet origin
+  before="$(git -C "$SERVICE_CHECKOUT" rev-parse HEAD)"
+  git -C "$SERVICE_CHECKOUT" reset --hard --quiet "$ref"
+  if [ "$before" = "$(git -C "$SERVICE_CHECKOUT" rev-parse HEAD)" ]; then
+    echo "Already on $(deployed)"
+  else
+    echo "Moved to $(deployed)"
+  fi
+  echo "Installing dependencies"
+  (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
+  echo "Building the dashboard"
+  (cd "$SERVICE_CHECKOUT/packages/harlan-github-agent" && "$pnpm_bin" dashboard:build >/dev/null 2>&1)
+}
+
 command="${1:-update}"
 case "$command" in
   update)
-    require_checkout
-    pnpm_bin=$(resolve_pnpm)
-    ref="${2:-origin/main}"
-    # The checkout is a deployment. Anything local in it is a mistake worth
-    # seeing rather than silently overwriting.
-    if [ -n "$(git -C "$SERVICE_CHECKOUT" status --porcelain)" ]; then
-      echo "The service checkout has local changes. Inspect it before updating:" >&2
-      git -C "$SERVICE_CHECKOUT" status --short >&2
-      exit 1
-    fi
-    echo "Fetching $ref"
-    git -C "$SERVICE_CHECKOUT" fetch --quiet origin
-    before="$(git -C "$SERVICE_CHECKOUT" rev-parse HEAD)"
-    git -C "$SERVICE_CHECKOUT" reset --hard --quiet "$ref"
-    if [ "$before" = "$(git -C "$SERVICE_CHECKOUT" rev-parse HEAD)" ]; then
-      echo "Already on $(deployed)"
-    else
-      echo "Moved to $(deployed)"
-    fi
-    echo "Installing dependencies"
-    (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
-    echo "Building the dashboard"
-    (cd "$SERVICE_CHECKOUT/packages/harlan-github-agent" && "$pnpm_bin" dashboard:build >/dev/null 2>&1)
+    prepare_update "${2:-origin/main}"
     restart_and_verify
+    ;;
+  prepare-update)
+    prepare_update "${2:-origin/main}"
     ;;
   restart)
     require_checkout
@@ -139,7 +148,7 @@ case "$command" in
     ;;
   *)
     echo "Unknown command: $command" >&2
-    echo "Use update, restart, or status." >&2
+    echo "Use update, prepare-update, restart, or status." >&2
     exit 1
     ;;
 esac

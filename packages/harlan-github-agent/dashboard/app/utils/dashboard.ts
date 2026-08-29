@@ -329,6 +329,8 @@ export function queueStateLabel(entry: QueueEntry, context: QueueContext): strin
         return 'Queued'
       if (context.agentStart._tag === 'Paused')
         return 'Agents paused'
+      if (context.agentStart._tag === 'RestartRequested')
+        return 'Restart requested'
       if (context.agentStart._tag === 'ReserveReached')
         return 'Reserve reached'
       return context.agentStart._tag === 'CapacityUnavailable' ? 'Agent provider unavailable' : 'Agents disabled'
@@ -361,6 +363,8 @@ export function queueDetail(entry: QueueEntry, context: QueueContext): string {
         return `${workLabel(entry.state.work)} will start when an agent is free.`
       if (context.agentStart._tag === 'Paused')
         return 'Pause is on. Select Resume to start this Task.'
+      if (context.agentStart._tag === 'RestartRequested')
+        return 'The Restart request will finish current work before this Task starts.'
       if (context.agentStart._tag === 'ReserveReached')
         return 'Every automatic Agent provider reached its Reserve. Work starts after a limit resets.'
       if (context.agentStart._tag === 'CapacityUnavailable')

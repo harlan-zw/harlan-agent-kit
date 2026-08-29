@@ -876,6 +876,41 @@ class AgentControlRequestTest(unittest.TestCase):
         self.assertEqual(request.get_header('Authorization'), 'Basic YWdlbnQ6c2VjcmV0')
         self.assertEqual(timeout, 3)
 
+    def test_sends_a_durable_tray_restart_request(self):
+        requests = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"_tag":"Requested","id":"restart-1","source":"tray","requestedAt":"2026-08-14T00:00:00.000Z"}'
+
+        def open_request(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            password_file = Path(directory) / 'dashboard-password'
+            password_file.write_text('secret\n')
+            with patch.object(indicator, 'PASSWORD_FILE', password_file), patch.object(
+                indicator.urllib.request,
+                'urlopen',
+                side_effect=open_request,
+            ):
+                result = indicator.request_service_restart()
+
+        request, timeout = requests[0]
+        self.assertEqual(result['_tag'], 'Requested')
+        self.assertEqual(request.full_url, 'https://hogwild.tailcad325.ts.net/api/service/restart')
+        self.assertEqual(request.data, b'{"source":"tray"}')
+        self.assertEqual(request.get_header('Content-type'), 'application/json')
+        self.assertEqual(request.get_header('Origin'), 'https://hogwild.tailcad325.ts.net')
+        self.assertEqual(timeout, 3)
+
     def test_sends_authenticated_eject_request_for_the_exact_agent(self):
         requests = []
 

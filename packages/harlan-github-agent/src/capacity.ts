@@ -1,5 +1,6 @@
 import type { AgentProviderName } from './agent-provider.ts'
-import type { AgentControl, AgentSelection, AgentStartState, ProviderCapacity, ProviderCapacityStatus } from './types.ts'
+import type { AgentControl, AgentSelection, AgentStartState, ProviderCapacity, ProviderCapacityStatus, RestartRequest } from './types.ts'
+import { restartAllowsTaskClaims } from './restart-request.ts'
 
 /** Whether unattended work may spend this provider's limit right now. */
 export function hasSpendableCapacity(capacity: ProviderCapacity, reservePercent: number): boolean {
@@ -25,6 +26,7 @@ export function chooseAgentProvider(input: {
 export function resolveAgentStartState(input: {
   mutationsEnabled: boolean
   agentControl: AgentControl
+  restartRequest: RestartRequest | null
   agentSelection: AgentSelection
   providerCapacities: readonly ProviderCapacityStatus[]
 }): AgentStartState {
@@ -32,6 +34,8 @@ export function resolveAgentStartState(input: {
     return { _tag: 'WritesDisabled' }
   if (input.agentControl._tag === 'Paused')
     return { _tag: 'Paused' }
+  if (!restartAllowsTaskClaims(input.restartRequest))
+    return { _tag: 'RestartRequested' }
   if (input.agentSelection._tag !== 'Automatic')
     return { _tag: 'Available' }
 

@@ -8,8 +8,8 @@ HOGWILD_ORIGIN="${HARLAN_GITHUB_AGENT_HOGWILD_ORIGIN:-https://hogwild.tailcad325
 REMOTE_HOME="${HARLAN_GITHUB_AGENT_HOGWILD_HOME:-/home/harlan}"
 CONTEXT_FILE="${HARLAN_GITHUB_AGENT_CONTEXT_FILE:-$HOME/.codex/AGENTS.md}"
 PASSWORD_FILE="${HARLAN_GITHUB_AGENT_PASSWORD_FILE:-$HOME/.config/harlan-github-agent/dashboard-password}"
-readonly DRAIN_POLL_SECONDS=2
-readonly MAXIMUM_DRAIN_SECONDS=$((50 * 60))
+readonly RESTART_POLL_SECONDS=2
+readonly MAXIMUM_RESTART_SECONDS=$((55 * 60))
 REMOTE_CHECKOUT="$REMOTE_HOME/.local/share/harlan-github-agent/service"
 REMOTE_CONTEXT="$REMOTE_HOME/.codex/AGENTS.md"
 REMOTE_CONTEXT_NEXT="$REMOTE_CONTEXT.next"
@@ -17,8 +17,6 @@ SERVICE_OVERRIDE_FILE="$SCRIPT_DIR/hogwild-service.conf"
 REMOTE_OVERRIDE_DIR="$REMOTE_HOME/.config/systemd/user/harlan-github-agent.service.d"
 REMOTE_OVERRIDE="$REMOTE_OVERRIDE_DIR/hogwild.conf"
 REMOTE_OVERRIDE_NEXT="$REMOTE_OVERRIDE.next"
-
-resume_required=false
 
 require_inputs() {
   if [[ ! "$HOGWILD_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
@@ -50,47 +48,138 @@ controller_request() {
     "$@"
 }
 
-prepare_restart() {
-  local control
-  control=$(controller_request "$HOGWILD_ORIGIN/api/state" | jq --raw-output '.agentControl._tag')
-  case "$control" in
+request_restart() {
+  controller_request \
+    --header 'Content-Type: application/json' \
+    --request POST \
+    --data '{"source":"helper"}' \
+    "$HOGWILD_ORIGIN/api/service/restart" \
+    | jq --exit-status --raw-output '.id'
+}
+
+controller_supports_restart() {
+  local state
+  if ! state=$(controller_request "$HOGWILD_ORIGIN/api/state"); then
+    echo "Hogwild did not answer while checking Restart request support." >&2
+    return 1
+  fi
+  if jq --exit-status 'has("restartRequest")' <<< "$state" >/dev/null; then
+    return 0
+  fi
+  return 2
+}
+
+wait_for_restart() {
+  local restart_id=$1
+  local attempt state tag reason
+  for attempt in $(seq 1 $((MAXIMUM_RESTART_SECONDS / RESTART_POLL_SECONDS))); do
+    state=$(controller_request "$HOGWILD_ORIGIN/api/state" 2>/dev/null || true)
+    if [ -z "$state" ]; then
+      sleep "$RESTART_POLL_SECONDS"
+      continue
+    fi
+    tag=$(jq --exit-status --raw-output --arg id "$restart_id" \
+      'if .restartRequest.id == $id then .restartRequest._tag else "Unknown" end' <<< "$state")
+    case "$tag" in
+      Completed) return ;;
+      Requested|Restarting) ;;
+      ActionRequired)
+        reason=$(jq --raw-output '.restartRequest.reason' <<< "$state")
+        echo "Hogwild requires action before restart: $reason" >&2
+        exit 1
+        ;;
+      *)
+        echo "Hogwild lost Restart request $restart_id." >&2
+        exit 1
+        ;;
+    esac
+    sleep "$RESTART_POLL_SECONDS"
+  done
+  echo "Hogwild did not complete Restart request $restart_id." >&2
+  exit 1
+}
+
+restore_legacy_agent_control() {
+  local resume_required=$1
+  if [ "$resume_required" != true ]; then
+    return
+  fi
+  if ! controller_request --request POST "$HOGWILD_ORIGIN/api/agents/resume" >/dev/null; then
+    echo "Hogwild restarted, but could not restore Running Agent control." >&2
+    return 1
+  fi
+}
+
+# The deployed service before schema 47 has no Restart request endpoint.
+# Drain it once, preserve manual Pause, then let the new service own restarts.
+legacy_safe_restart() {
+  local state tag safe attempt
+  local resume_required=false
+  if ! state=$(controller_request "$HOGWILD_ORIGIN/api/state"); then
+    echo "Hogwild did not answer before its compatibility restart." >&2
+    return 1
+  fi
+  if ! tag=$(jq --exit-status --raw-output '.agentControl._tag' <<< "$state"); then
+    echo "Hogwild returned invalid Agent control state." >&2
+    return 1
+  fi
+  case "$tag" in
     Running)
-      controller_request --request POST "$HOGWILD_ORIGIN/api/agents/pause" >/dev/null
+      if ! controller_request --request POST "$HOGWILD_ORIGIN/api/agents/pause" >/dev/null; then
+        echo "Hogwild could not stop new Agent claims." >&2
+        return 1
+      fi
       resume_required=true
       ;;
     Paused) ;;
     *)
-      echo "Hogwild returned an unknown Agent control: $control" >&2
-      exit 1
+      echo "Hogwild returned unknown Agent control state: $tag" >&2
+      return 1
       ;;
   esac
-  # Agent leases last up to 45 minutes. Keep five minutes for publication.
-  local attempt
-  for attempt in $(seq 1 $((MAXIMUM_DRAIN_SECONDS / DRAIN_POLL_SECONDS))); do
-    if controller_request "$HOGWILD_ORIGIN/api/state" | jq --exit-status '.agentControl.safeToRestart == true' >/dev/null; then
+
+  for attempt in $(seq 1 $((MAXIMUM_RESTART_SECONDS / RESTART_POLL_SECONDS))); do
+    if ! state=$(controller_request "$HOGWILD_ORIGIN/api/state"); then
+      restore_legacy_agent_control "$resume_required" || true
+      echo "Hogwild stopped answering before its compatibility restart." >&2
+      return 1
+    fi
+    if ! safe=$(jq --raw-output \
+      'if .agentControl._tag == "Paused" then .agentControl.safeToRestart else false end' <<< "$state"); then
+      restore_legacy_agent_control "$resume_required" || true
+      echo "Hogwild returned invalid Agent restart state." >&2
+      return 1
+    fi
+    if [ "$safe" = true ]; then
+      if ! remote_service restart; then
+        restore_legacy_agent_control "$resume_required" || true
+        return 1
+      fi
+      restore_legacy_agent_control "$resume_required"
       return
     fi
-    sleep "$DRAIN_POLL_SECONDS"
+    sleep "$RESTART_POLL_SECONDS"
   done
-  echo "Hogwild did not become safe to restart." >&2
-  exit 1
+
+  restore_legacy_agent_control "$resume_required" || true
+  echo "Hogwild did not finish active work before its compatibility restart." >&2
+  return 1
 }
 
-resume_agents() {
-  if $resume_required; then
-    controller_request --request POST "$HOGWILD_ORIGIN/api/agents/resume" >/dev/null
-    resume_required=false
+safe_restart() {
+  local support_status restart_id
+  if controller_supports_restart; then
+    restart_id=$(request_restart)
+    wait_for_restart "$restart_id"
+    return
+  else
+    support_status=$?
   fi
-}
-
-resume_after_failure() {
-  local status=$?
-  trap - EXIT
-  if $resume_required && ! resume_agents; then
-    echo "Hogwild could not resume after the failed operation." >&2
-    status=1
+  if [ "$support_status" -ne 2 ]; then
+    return 1
   fi
-  exit "$status"
+  echo "Hogwild uses the compatibility restart for this update."
+  legacy_safe_restart
 }
 
 sync_context() {
@@ -131,7 +220,6 @@ remote_service() {
 }
 
 require_inputs
-trap resume_after_failure EXIT
 
 command="${1:-update}"
 case "$command" in
@@ -141,18 +229,17 @@ case "$command" in
       echo "The Git ref contains unsupported characters." >&2
       exit 1
     fi
-    prepare_restart
     sync_context
     sync_service_override
-    remote_service update "$ref"
-    resume_agents
+    remote_service prepare-update "$ref"
+    safe_restart
+    remote_service status
     ;;
   restart)
-    prepare_restart
     sync_context
     sync_service_override
-    remote_service restart
-    resume_agents
+    safe_restart
+    remote_service status
     ;;
   status)
     remote_service status
@@ -166,5 +253,3 @@ case "$command" in
     exit 1
     ;;
 esac
-
-trap - EXIT
