@@ -28,7 +28,7 @@ The controller records `Passed`, `Pending`, or `Failed` for three gates:
 | --- | --- | --- | --- |
 | Merge | GitHub reports conflict-free | Mergeability unknown | Conflicts present |
 | Review | The Agent report has zero material findings | Never, a valid Agent report completes this gate | One or more material findings remain |
-| CI | Every required check passed | Required CI unavailable, running, or blocked by a confirmed base failure with repair active | The PR caused required CI failure, or baseline repair exhausted its attempts |
+| CI | Every required check passed | Required CI unavailable, running, or blocked by a confirmed head or base failure with repair active | The PR caused required CI failure, or repair exhausted its attempts |
 
 No declared checks, plus available empty base and head check snapshots, passes CI.
 An unavailable snapshot or a declared check with no result stays `Pending`.

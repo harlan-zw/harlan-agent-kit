@@ -8,8 +8,9 @@ Allow PR branch, metadata, and bot status mutations only when the base repositor
 
 1. A non-archived repository whose owner exactly matches the authenticated GitHub login.
 2. `unjs/unhead`.
+3. `skilld-dev/skilld.dev`.
 
-Always exclude `nuxt/nuxt`, every other `unjs/*` repository, and every other organization repository.
+Always exclude `nuxt/nuxt`, every other `unjs/*` repository, and every organization repository not named above.
 
 GitHub write access does not prove ownership. Broaden this list only after an explicit user instruction names the repository and action.
 
