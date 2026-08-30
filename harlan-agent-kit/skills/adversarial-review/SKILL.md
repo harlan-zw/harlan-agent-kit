@@ -127,6 +127,8 @@ When a required check fails on the head commit and the same check passes on the 
 
 Never publish `BLOCKED` for a head CI failure while a permitted repair has not been attempted.
 
+When GitHub reports merge conflicts and the premise is sound, treat them as one material finding with resolution `Repair`. Queue it in the same handoff. The Repair Agent merges the current base into the head branch, resolves every conflict, runs focused checks, and pushes one merge commit. Never rebase, amend, or force push. Leave the conflicts untouched when the premise is wrong.
+
 After every push, discard prior Review evidence. Start a fresh Review session against the new remote head SHA.
 
 If the fresh Review records the same finding fingerprint, stop Repair and use `BLOCKED`. Do not rewrite root architecture to rescue a wrong premise.

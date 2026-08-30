@@ -26,7 +26,7 @@ The controller records `Passed`, `Pending`, or `Failed` for three gates:
 
 | Gate | Passed | Pending | Failed |
 | --- | --- | --- | --- |
-| Merge | GitHub reports conflict-free | Mergeability unknown | Conflicts present |
+| Merge | GitHub reports conflict-free | Mergeability unknown, or conflicts with repair active | Conflicts present |
 | Review | The Agent report has zero material findings | Never, a valid Agent report completes this gate | One or more material findings remain |
 | CI | Every required check passed | Required CI unavailable, running, or blocked by a confirmed head or base failure with repair active | The PR caused required CI failure, or repair exhausted its attempts |
 
