@@ -2,7 +2,7 @@ import type { RecordReviewRunInput } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { createIssueTriageWorker, createReviewWorker, reviewSnapshotDigest } from '../src/item-agent.ts'
+import { createIssueTriageWorker, createReviewWorker, issueMovedUnderTriage, reviewSnapshotDigest } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { agentRuntime, issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
@@ -1015,7 +1015,9 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
-        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: issue.updatedAt })),
+        // A later updatedAt than the Task observed: the Running label write
+        // moves it, and triage must still run.
+        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:01:30.000Z' })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.reject(new Error('Unexpected pull request request.')),
@@ -1078,5 +1080,18 @@ describe('subject Workers', () => {
       summary: 'The parser drops valid input.',
       nextAction: 'Write a regression test and repair the parser.',
     })
+  })
+})
+
+describe('issue triage snapshot guard', () => {
+  const issue = { title: 'Broken thing' }
+
+  it('keeps triage running when only the Running label moved updatedAt', () => {
+    expect(issueMovedUnderTriage(issue, { state: 'open', title: 'Broken thing' })).toBe(false)
+  })
+
+  it('stops triage when the issue closed or the title changed', () => {
+    expect(issueMovedUnderTriage(issue, { state: 'closed', title: 'Broken thing' })).toBe(true)
+    expect(issueMovedUnderTriage(issue, { state: 'open', title: 'Renamed by a person' })).toBe(true)
   })
 })

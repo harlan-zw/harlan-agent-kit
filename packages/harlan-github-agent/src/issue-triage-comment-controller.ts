@@ -29,7 +29,6 @@ export function createIssueTriageCommentController(options: IssueTriageCommentCo
         fence: task.state.fence,
         at,
         revisionId: task.revisionId,
-        expectedUpdatedAt: task.issue.updatedAt,
         body,
       })
       if (staged._tag === 'Rejected')
@@ -49,7 +48,9 @@ export function createIssueTriageCommentController(options: IssueTriageCommentCo
         })
         return current
       }
-      if (current.value.state !== 'open' || current.value.updatedAt !== command.expectedUpdatedAt) {
+      // updatedAt moves every time this service writes its own labels, so only
+      // the issue being closed says the comment no longer belongs.
+      if (current.value.state !== 'open') {
         const reason = 'The issue changed before the triage comment was posted.'
         options.store.deferIssueTriageComment({
           commandId: command.id,

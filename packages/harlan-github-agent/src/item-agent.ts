@@ -1,6 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
-import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
+import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
 import type { PullRequestTriageAgent, PullRequestTriageResult } from './pull-request-triage.ts'
@@ -12,6 +12,7 @@ import type {
   ClaimedAdversarialReviewTask,
   ClaimedAgentTask,
   ClaimedIssueTriageTask,
+  GitHubIssueItem,
   GitHubPullRequestItem,
   RepositoryMapping,
   ReviewFinding,
@@ -1293,13 +1294,28 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
   }
 }
 
+/**
+ * Whether the issue moved under a claimed triage Task.
+ *
+ * `updatedAt` answers labels, and the Running label this service writes at
+ * claim time moves it, so a timestamp can never say whether the work changed.
+ * State and title are Revision content, and the stage gate pins the Revision
+ * itself, so that is all this check needs to repeat.
+ */
+export function issueMovedUnderTriage(
+  issue: Pick<GitHubIssueItem, 'title'>,
+  snapshot: Pick<IssueTriageSnapshot, 'state' | 'title'>,
+): boolean {
+  return snapshot.state !== 'open' || snapshot.title !== issue.title
+}
+
 export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageWorker {
   return {
     async run(task, signal) {
       const snapshot = await options.github.getIssueTriageSnapshot(task.repositoryMapping, task.issueNumber, signal)
       if (snapshot._tag === 'Err')
         return snapshot
-      if (snapshot.value.state !== 'open' || snapshot.value.updatedAt !== task.issue.updatedAt)
+      if (issueMovedUnderTriage(task.issue, snapshot.value))
         return err('The issue changed before triage started.')
       const workspace = await options.workspaces.prepareIssue(
         task,

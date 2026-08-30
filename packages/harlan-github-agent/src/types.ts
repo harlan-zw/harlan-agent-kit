@@ -759,7 +759,6 @@ export interface IssueTriageCommentCommand {
   repository: string
   issueNumber: number
   revisionId: string
-  expectedUpdatedAt: string
   body: string
   outcomeUnknown: boolean
   commentId: number | null
