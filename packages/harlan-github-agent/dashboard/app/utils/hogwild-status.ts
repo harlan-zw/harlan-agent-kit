@@ -11,6 +11,27 @@ export type HogwildServiceState
     | { _tag: 'Inactive' }
     | { _tag: 'Unavailable' }
 
+export type HogwildRunnerStatus
+  = | { _tag: 'Unavailable' }
+    | {
+      _tag: 'Available'
+      budgets: {
+        cpu: number
+        memoryBytes: number
+        memoryHeadroomBytes: number
+      }
+      pools: Array<{
+        cpuPerRunner: number
+        live: number
+        maximum: number
+        memoryLimitBytes: number
+        memoryReservationBytes: number
+        queue: { _tag: 'Available', jobs: number } | { _tag: 'Unavailable' }
+        running: number
+      }>
+      updatedAt: number
+    }
+
 export interface HogwildStatus {
   host: {
     cpu: string
@@ -19,6 +40,7 @@ export interface HogwildStatus {
     operatingSystem: string
   }
   load: [number, number, number]
+  runners: HogwildRunnerStatus
   services: Array<{
     name: 'AdGuard Home' | 'Cloudflare Tunnel' | 'GitHub runner' | 'Jellyfin'
     state: HogwildServiceState
@@ -175,6 +197,32 @@ export function formatHogwildHost(host: HogwildStatus['host']): string {
   return `${host.cpu} · ${host.logicalCores} logical cores · ${host.operatingSystem} ${host.kernel}`
 }
 
+export function formatHogwildRunnerCapacity(status: HogwildRunnerStatus): string {
+  if (status._tag === 'Unavailable')
+    return 'Unavailable'
+
+  const running = sum(status.pools, pool => pool.running)
+  const queued = status.pools.every(pool => pool.queue._tag === 'Available')
+    ? String(sum(status.pools, pool => pool.queue._tag === 'Available' ? pool.queue.jobs : 0))
+    : 'Unavailable'
+  const live = sum(status.pools, pool => pool.live)
+  const maximum = sum(status.pools, pool => pool.maximum)
+  const cpuReserved = sum(status.pools, pool => pool.live * pool.cpuPerRunner)
+  const memoryReserved = sum(status.pools, pool => pool.live * pool.memoryReservationBytes)
+  const largestHardLimit = Math.max(0, ...status.pools.map(pool => pool.memoryLimitBytes))
+
+  return `${running} running · ${queued} queued · ${live} / ${maximum} live · ${cpuReserved} / ${status.budgets.cpu} CPU reserved · ${formatGibibytes(memoryReserved)} / ${formatGibibytes(status.budgets.memoryBytes)} memory reserved · ${formatGibibytes(largestHardLimit)} largest hard limit · keeps ${formatGibibytes(status.budgets.memoryHeadroomBytes)} available`
+}
+
+function formatGibibytes(bytes: number): string {
+  const gibibytes = bytes / 1024 ** 3
+  return `${Number.isInteger(gibibytes) ? gibibytes : gibibytes.toFixed(1)} GiB`
+}
+
+function sum<Value>(values: Value[], select: (value: Value) => number): number {
+  return values.reduce((total, value) => total + select(value), 0)
+}
+
 function formatDuration(seconds: number): string {
   if (seconds >= 86_400)
     return `${Math.floor(seconds / 86_400)}d ${Math.floor(seconds % 86_400 / 3_600)}h`
@@ -197,17 +245,94 @@ function parseJson(input: string): { _tag: 'Ok', value: unknown } | { _tag: 'Err
 function parseStatus(value: Record<string, unknown>): HogwildStatus | undefined {
   const host = parseHost(value.host)
   const load = parseLoad(value.load)
+  const runners = parseRunners(value.runners)
   const services = parseServices(value.services)
   const temperatures = parseTemperatures(value.temperatures)
   const updatedAt = count(value.updatedAt)
   if (host === undefined
     || load === undefined
+    || runners === undefined
     || services === undefined
     || temperatures === undefined
     || updatedAt === undefined) {
     return undefined
   }
-  return { host, load, services, temperatures, updatedAt }
+  return { host, load, runners, services, temperatures, updatedAt }
+}
+
+function parseRunners(value: unknown): HogwildRunnerStatus | undefined {
+  if (!isRecord(value))
+    return undefined
+  if (value._tag === 'Unavailable')
+    return { _tag: 'Unavailable' }
+  if (value._tag !== 'Available' || !isRecord(value.budgets) || !Array.isArray(value.pools))
+    return undefined
+  const cpu = count(value.budgets.cpu)
+  const memoryBytes = count(value.budgets.memoryBytes)
+  const memoryHeadroomBytes = count(value.budgets.memoryHeadroomBytes)
+  const updatedAt = count(value.updatedAt)
+  if (cpu === undefined
+    || memoryBytes === undefined
+    || memoryHeadroomBytes === undefined
+    || updatedAt === undefined) {
+    return undefined
+  }
+  const pools = value.pools.map(parseRunnerPool)
+  if (pools.includes(undefined))
+    return undefined
+  return {
+    _tag: 'Available',
+    budgets: {
+      cpu,
+      memoryBytes,
+      memoryHeadroomBytes,
+    },
+    pools: pools as Extract<HogwildRunnerStatus, { _tag: 'Available' }>['pools'],
+    updatedAt,
+  }
+}
+
+function parseRunnerPool(value: unknown): Extract<HogwildRunnerStatus, { _tag: 'Available' }>['pools'][number] | undefined {
+  if (!isRecord(value))
+    return undefined
+  const cpuPerRunner = count(value.cpuPerRunner)
+  const live = count(value.live)
+  const maximum = count(value.maximum)
+  const memoryLimitBytes = count(value.memoryLimitBytes)
+  const memoryReservationBytes = count(value.memoryReservationBytes)
+  const running = count(value.running)
+  if (cpuPerRunner === undefined
+    || live === undefined
+    || maximum === undefined
+    || memoryLimitBytes === undefined
+    || memoryReservationBytes === undefined
+    || memoryReservationBytes > memoryLimitBytes
+    || running === undefined) {
+    return undefined
+  }
+  const queue = parseRunnerQueue(value.queue)
+  return queue === undefined
+    ? undefined
+    : {
+        cpuPerRunner,
+        live,
+        maximum,
+        memoryLimitBytes,
+        memoryReservationBytes,
+        queue,
+        running,
+      }
+}
+
+function parseRunnerQueue(value: unknown): Extract<HogwildRunnerStatus, { _tag: 'Available' }>['pools'][number]['queue'] | undefined {
+  if (!isRecord(value))
+    return undefined
+  if (value._tag === 'Unavailable')
+    return { _tag: 'Unavailable' }
+  const jobs = count(value.jobs)
+  return value._tag === 'Available' && jobs !== undefined
+    ? { _tag: 'Available', jobs }
+    : undefined
 }
 
 function parseHost(value: unknown): HogwildStatus['host'] | undefined {

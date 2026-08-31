@@ -45,6 +45,7 @@ import {
 import {
   formatHogwildHost,
   formatHogwildLoad,
+  formatHogwildRunnerCapacity,
   formatHogwildServiceMetrics,
   formatHogwildTemperature,
 } from '../utils/hogwild-status.ts'
@@ -394,6 +395,14 @@ useHead({
               </dt>
               <dd class="break-words font-mono text-xs text-muted">
                 {{ formatHogwildHost(hogwildStatus.host) }}
+              </dd>
+            </div>
+            <div class="grid gap-1 py-2 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-baseline sm:gap-4">
+              <dt class="field-label">
+                Self-hosted runners
+              </dt>
+              <dd class="break-words font-mono text-xs text-muted">
+                {{ formatHogwildRunnerCapacity(hogwildStatus.runners) }}
               </dd>
             </div>
           </dl>
