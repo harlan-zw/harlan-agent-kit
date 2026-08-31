@@ -2636,6 +2636,7 @@ function failedQueueState(reason: string, recoveryAttempts?: number): QueueState
 
 function isProviderCircuitPause(reason: string): boolean {
   return reason.includes('The Agent provider circuit is open.')
+    || reason.includes('Another Agent Task owns the provider health canary.')
 }
 
 function reviewDesiredOutcomeFromBody(body: string): ReviewDesiredOutcome | null {

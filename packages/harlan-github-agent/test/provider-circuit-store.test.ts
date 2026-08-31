@@ -2,8 +2,9 @@ import { closeSync, mkdtempSync, openSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { agentProviderFailureReason } from '../src/agent-provider.ts'
 import { openJournalStore } from '../src/store.ts'
-import { issueItem, repositoryMapping } from './fixtures.ts'
+import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 const temporaryDirectories: string[] = []
@@ -52,6 +53,75 @@ describe('persistent Agent provider circuits', () => {
     }
     expect(journal.listWorkflowEvents({ stream: 'worker_task', limit: 30 })
       .filter(event => event.event === 'Claimed')
+      .map(event => event.attempt)).toEqual([1, 1, 1, 1, 1])
+  })
+
+  it('does not spend Task attempts while another Task owns the provider canary', () => {
+    const journal = store()
+    journal.syncRepositories([repositoryMapping()], '2026-08-13T01:00:00.000Z')
+    journal.recordObservation({
+      externalId: 'provider-canary-worker-task',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem(),
+    })
+    journal.recordObservation({
+      externalId: 'provider-canary-mutation-task',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    for (const at of ['2026-08-13T01:00:00.000Z', '2026-08-13T01:00:01.000Z', '2026-08-13T01:00:02.000Z'])
+      journal.recordProviderFailure({ ...circuit, detail: 'Network error.', at })
+    journal.reserveProviderStart({
+      provider: circuit.provider,
+      credential: circuit.credential,
+      model: circuit.model,
+      workerId: 'task-canary',
+      at: '2026-08-13T01:05:02.000Z',
+      leaseMilliseconds: 60_000,
+    })
+    const denial = journal.reserveProviderStart({
+      provider: circuit.provider,
+      credential: circuit.credential,
+      model: circuit.model,
+      workerId: 'task-racing',
+      at: '2026-08-13T01:05:03.000Z',
+      leaseMilliseconds: 60_000,
+    })
+    if (denial._tag !== 'Paused')
+      throw new Error('Expected the active provider canary to pause another Task.')
+    const reason = agentProviderFailureReason(
+      circuit.provider,
+      `${denial.reason} Retry after ${denial.retryAt}.`,
+    )
+
+    for (let index = 0; index < 5; index += 1) {
+      const second = 10 + index
+      const workerTask = journal.claimNextIssueTriageTask(`worker-${index}`, `2026-08-13T01:05:${second}.000Z`, 30_000)
+      const mutationTask = journal.claimNextConflictTask(`mutation-${index}`, `2026-08-13T01:05:${second}.000Z`, 30_000)
+      if (workerTask === null || mutationTask === null)
+        throw new Error('Expected provider-gated Tasks to remain queued.')
+      expect(journal.failWorkerTask({
+        taskId: workerTask.id,
+        workerId: workerTask.state.workerId,
+        fence: workerTask.state.fence,
+        at: `2026-08-13T01:05:${second + 1}.000Z`,
+        reason,
+      })).toBe('Retrying')
+      expect(journal.failTask({
+        taskId: mutationTask.id,
+        workerId: mutationTask.state.workerId,
+        fence: mutationTask.state.fence,
+        at: `2026-08-13T01:05:${second + 1}.000Z`,
+        reason,
+      })).toBe('Retrying')
+    }
+    expect(journal.listWorkflowEvents({ stream: 'worker_task', limit: 30 })
+      .filter(event => event.event === 'Claimed' && event.itemNumber === 12)
+      .map(event => event.attempt)).toEqual([1, 1, 1, 1, 1])
+    expect(journal.listWorkflowEvents({ stream: 'task', limit: 30 })
+      .filter(event => event.event === 'Claimed' && event.itemNumber === 24)
       .map(event => event.attempt)).toEqual([1, 1, 1, 1, 1])
   })
 
