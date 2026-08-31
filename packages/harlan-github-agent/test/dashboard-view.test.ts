@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   activeAgentActivity,
   activeEntries,
+  activeProviderCircuits,
   agentProfileState,
   agentStartState,
   approvalConsequence,
@@ -92,10 +93,12 @@ function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRout
     name: 'sentry-checkin',
     scheduledFor: '2026-08-27T21:00:00.000Z',
     specSha: 'abc123',
+    mode: 'report',
     state: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
     fence: 1,
     attempts: 1,
     progress: { percent: 85, label: 'Preparing the Routine result' },
+    usage: { _tag: 'Unavailable' },
     candidates: [],
     activity: [],
     reportState: null,
@@ -694,6 +697,28 @@ describe('system pane', () => {
     })
 
     expect(systemState(snapshot)).toEqual({ label: 'Agent provider unavailable', tone: 'warning' })
+  })
+
+  it('shows a durable Agent provider pause separately from capacity', () => {
+    const open = {
+      id: 'provider-circuit-1',
+      provider: 'opencode' as const,
+      credential: 'opencode-go',
+      model: 'zai-coding-plan/glm-5.3-flash',
+      failureClass: 'network' as const,
+      failures: 3,
+      state: { _tag: 'Open' as const, retryAt: '2026-08-14T12:05:00.000Z' },
+      lastDetail: 'The connection failed.',
+      updatedAt: '2026-08-14T12:00:00.000Z',
+    }
+    const snapshot = dashboardSnapshot({
+      mutationsEnabled: true,
+      agentStart: { _tag: 'Available' },
+      providerCircuits: [open, { ...open, id: 'closed', state: { _tag: 'Closed' as const } }],
+    })
+
+    expect(activeProviderCircuits(snapshot.providerCircuits)).toEqual([open])
+    expect(systemState(snapshot)).toEqual({ label: 'Agent provider paused', tone: 'warning' })
   })
 
   it('puts an Incident needing a person above capacity status', () => {

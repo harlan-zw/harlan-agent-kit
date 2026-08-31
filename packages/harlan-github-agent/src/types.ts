@@ -132,6 +132,8 @@ interface GitHubItemBase {
 export interface GitHubIssueItem extends GitHubItemBase {
   kind: 'issue'
   approvalLabels: PullRequestApprovalKind[]
+  /** Title, body, non-controller comments, and human labels at observation time. */
+  contentDigest: string
   /**
    * True when a Routine filed this issue as one Candidate's proposal.
    *
@@ -344,8 +346,20 @@ export interface ReviewRun {
   publications: ReviewPublication[]
 }
 
+/** One explicit answer for every successfully completed Review Task. */
+export type ReviewResolution
+  = | { _tag: 'Reviewed', reviewRunId: string }
+    | { _tag: 'ReviewSkipped', reason: string }
+    | { _tag: 'WaitingForBaselineRepair', taskId: string }
+    | { _tag: 'ExistingReview', url: string }
+    | { _tag: 'UnknownNeedsReconciliation', reason: string }
+
+export type ReviewDesiredOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'WAITING' | 'EXISTING' | 'SKIPPED'
+
 export interface RecordReviewRunInput extends Omit<ReviewRun, 'feedback' | 'outcome' | 'publications' | 'usage'> {
   confidence?: number
+  /** Trusted repository policy used by this Review. */
+  policyDigest?: string
   /** Omitted callers are stored explicitly as unavailable. */
   usage?: AgentTokenUsage
 }
@@ -656,10 +670,14 @@ export interface RoutineRun {
   /** The exact cron instant this run answers. One run per instant, ever. */
   scheduledFor: string
   specSha: string
+  /** The Publication authority stored when this Run opened. */
+  mode: RoutineMode
   state: RoutineRunState
   fence: number
   attempts: number
   progress: AgentProgress
+  /** Agent usage for this run. Unavailable means the Agent provider reported none. */
+  usage: AgentTokenUsage
   createdAt: string
   updatedAt: string
 }
@@ -736,6 +754,8 @@ interface ReviewStatusCommandBase {
   revisionId: string
   expectedHeadSha: string
   body: string
+  reviewRunId: string | null
+  desiredOutcome: ReviewDesiredOutcome | null
   outcomeUnknown: boolean
   commentId: number | null
 }
@@ -752,6 +772,72 @@ export type ClaimedReviewStatusCommand = ReviewStatusCommand & {
   leaseExpiresAt: string
   repositoryMapping: RepositoryMapping
 }
+
+/** One append-only workflow event used to measure reliability and latency. */
+export type WorkflowEventStream
+  = | 'task'
+    | 'worker_task'
+    | 'publication'
+    | 'review_run'
+    | 'review_gate'
+    | 'review_resolution'
+    | 'review_status'
+    | 'issue_triage_status'
+    | 'routine_run'
+    | 'candidate_issue'
+    | 'routine_report'
+    | 'provider_circuit'
+
+export interface WorkflowEvent {
+  id: number
+  stream: WorkflowEventStream
+  event: string
+  entityId: string
+  repository: string | null
+  itemNumber: number | null
+  revisionId: string | null
+  taskId: string | null
+  from: string | null
+  to: string
+  /** Redacted failure or decision cause. Never a prompt or response body. */
+  reason: string | null
+  attempt: number
+  fence: number
+  /** Time spent in `from`, or null for the first event. */
+  durationMilliseconds: number | null
+  usage: AgentTokenUsage | null
+  occurredAt: string
+}
+
+export type ProviderFailureClass
+  = | 'network'
+    | 'overloaded'
+    | 'stalled'
+    | 'process_exit'
+    | 'authentication'
+    | 'unknown'
+
+export type ProviderCircuitState
+  = | { _tag: 'Closed' }
+    | { _tag: 'Open', retryAt: string }
+    | { _tag: 'HalfOpen', workerId: string, fence: number, leaseExpiresAt: string }
+
+/** Persistent health state for one Agent provider failure scope. */
+export interface ProviderCircuit {
+  id: string
+  provider: AgentProviderName
+  credential: string
+  model: string
+  failureClass: ProviderFailureClass
+  failures: number
+  state: ProviderCircuitState
+  lastDetail: string
+  updatedAt: string
+}
+
+export type ProviderStartReservation
+  = | { _tag: 'Allowed', canary: null | { circuitId: string, workerId: string, fence: number } }
+    | { _tag: 'Paused', retryAt: string, reason: string }
 
 export interface IssueTriageCommentCommand {
   id: string
@@ -848,15 +934,15 @@ export type PreparedPublication = PublicationCommand extends infer Command
   : never
 
 export type MutationWorkerOutcome
-  = | { _tag: 'Publish', publication: PreparedPublication }
-    | { _tag: 'ActionRequired', reason: string, evidence: string }
+  = | { _tag: 'Publish', publication: PreparedPublication, usage?: AgentTokenUsage }
+    | { _tag: 'ActionRequired', reason: string, evidence: string, usage?: AgentTokenUsage }
     /**
      * The world fixed the problem this Task existed for.
      *
      * Retrying cannot help and nobody needs to act, so the Task completes
      * instead of failing. A failure here used to sit in the dashboard forever.
      */
-    | { _tag: 'Superseded', reason: string }
+    | { _tag: 'Superseded', reason: string, usage?: AgentTokenUsage }
 
 export type ClaimedPublicationCommand = PublicationCommand & {
   workerId: string
@@ -1181,6 +1267,8 @@ export interface DashboardSnapshot {
   agentModels: Record<AgentProviderName, readonly AgentModel[]>
   reasoningEfforts: readonly CodexReasoningEffort[]
   providerCapacities: ProviderCapacityStatus[]
+  /** Durable Agent provider health, separate from subscription capacity. */
+  providerCircuits: ProviderCircuit[]
   agents: DashboardAgent[]
   incidents: Incident[]
   queue: QueueEntry[]

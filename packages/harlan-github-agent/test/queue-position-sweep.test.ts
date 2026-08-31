@@ -34,31 +34,32 @@ function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
 }
 
 describe('queuePositionComment', () => {
-  it('states the exact position and how many Tasks come first', () => {
+  it('keeps exact position in the Dashboard', () => {
     const body = queuePositionComment(queuedRepair())
 
-    expect(body).toContain('### 🤖 QUEUED · 3rd')
-    expect(body).toContain('Next: Repair starts after the 2 Tasks ahead of it finish.')
+    expect(body).toContain('### 🤖 QUEUED')
+    expect(body).toContain('The Dashboard shows the exact Queue position.')
+    expect(body).not.toContain('3rd')
     expect(body).not.toMatch(/[▓░]|\b\d+%/)
   })
 
   it('says an agent is the only thing left to wait for at the head of the Queue', () => {
     expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 1, total: 4 } })))
-      .toContain('Next: Repair starts as soon as an agent is free.')
+      .toContain('Next: Repair starts when an Agent is free.')
   })
 
   it('names the work the Queue is holding', () => {
     expect(queuePositionComment(queuedRepair({ taskKind: 'adversarial_review', queue: { _tag: 'Waiting', position: 2, total: 2 } })))
-      .toContain('Next: Review starts after the 1 Task ahead of it finishes.')
+      .toContain('Next: Review starts when an Agent is free.')
   })
 
   it('renders the same body for the same position, so an idle Queue writes nothing', () => {
     expect(queuePositionComment(queuedRepair())).toBe(queuePositionComment(queuedRepair()))
   })
 
-  it('ignores the Queue length, so a Task joining behind rewrites nothing', () => {
+  it('ignores Queue movement, so a Task finishing rewrites nothing', () => {
     const before = queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 3, total: 7 } }))
-    const after = queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 3, total: 40 } }))
+    const after = queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 1, total: 40 } }))
 
     expect(after).toBe(before)
   })
@@ -68,11 +69,6 @@ describe('queuePositionComment', () => {
 
     expect(body).toContain('### 🤖 PAUSED')
     expect(body).toContain('Next: Repair starts when this repository resumes.')
-  })
-
-  it('writes an ordinal a person reads, not a number with a wrong suffix', () => {
-    expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 11, total: 20 } }))).toContain('QUEUED · 11th')
-    expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 22, total: 30 } }))).toContain('QUEUED · 22nd')
   })
 })
 
@@ -137,7 +133,7 @@ describe('publishQueuePositions', () => {
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24, queue: { _tag: 'Waiting', position: 3, total: 7 } })])
     expect(edited?.commentId).toBe(42)
-    expect(edited?.body).toContain('### 🤖 QUEUED · 3rd')
+    expect(edited?.body).toContain('### 🤖 QUEUED')
     expect(recorded?.taskId).toBe('repair-task')
     expect(recorded?.body).toBe(edited?.body)
   })

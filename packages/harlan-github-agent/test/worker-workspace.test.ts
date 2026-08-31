@@ -17,6 +17,47 @@ function git(directory: string, ...args: string[]): string {
 }
 
 describe('worker workspace', () => {
+  it('runs a Routine from its pinned source commit after the default branch advances', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'harlan-routine-workspace-'))
+    temporaryDirectories.push(root)
+    const remote = join(root, 'remote.git')
+    const checkout = join(root, 'checkout')
+    execFileSync('git', ['init', '--bare', remote])
+    execFileSync('git', ['clone', remote, checkout])
+    git(checkout, 'config', 'user.email', 'agent@example.com')
+    git(checkout, 'config', 'user.name', 'Agent Test')
+    execFileSync('touch', [join(checkout, 'routine-source')])
+    git(checkout, 'add', 'routine-source')
+    git(checkout, 'commit', '-m', 'routine source')
+    git(checkout, 'branch', '-M', 'main')
+    const sourceSha = git(checkout, 'rev-parse', 'HEAD')
+    git(checkout, 'push', 'origin', 'main')
+    execFileSync('touch', [join(checkout, 'new-source')])
+    git(checkout, 'add', 'new-source')
+    git(checkout, 'commit', '-m', 'advance main')
+    git(checkout, 'push', 'origin', 'main')
+
+    const manager = createAgentWorkspaceManager({
+      remoteUrl: () => remote,
+      root: join(root, 'worktrees'),
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'test', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await manager.prepareRoutine({
+      id: 'routine-run',
+      routineId: 'harlan-zw/example:pr-triage',
+      repository: 'harlan-zw/example',
+      repositoryMapping: repositoryMapping({ checkout }),
+      name: 'pr-triage',
+      mode: 'report',
+      scheduledFor: '2026-08-13T09:00:00.000Z',
+      specSha: sourceSha,
+      attempts: 1,
+      state: { _tag: 'Running', fence: 1, workerId: 'routine-1', leaseExpiresAt: '2026-08-13T10:00:00.000Z' },
+    }, AbortSignal.timeout(10_000))
+
+    expect(prepared).toMatchObject({ _tag: 'Ok', value: { baseSha: sourceSha, headSha: sourceSha } })
+  })
+
   it('reviews the exact pull request base commit after the default branch advances', async () => {
     const root = mkdtempSync(join(tmpdir(), 'harlan-review-workspace-'))
     temporaryDirectories.push(root)

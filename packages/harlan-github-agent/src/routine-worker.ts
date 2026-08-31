@@ -1,5 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentTokenUsage } from './agent-provider.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentFeedbackSignal, Candidate, ClaimedRoutineRun } from './types.ts'
@@ -144,7 +145,7 @@ export interface RoutineScanWorkerOptions {
 }
 
 export interface RoutineScanWorker {
-  run: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<{ evidence: string }, string>>
+  run: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<{ evidence: string, usage: AgentTokenUsage }, string>>
 }
 
 /**
@@ -192,7 +193,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           at: options.now().toISOString(),
         })
         options.logger.info(evidence)
-        return ok({ evidence })
+        return ok({ evidence, usage: { _tag: 'Unavailable' } })
       }
       const workspace = await options.workspaces.prepareRoutine(task, signal)
       if (workspace._tag === 'Err')
@@ -274,9 +275,14 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       // A proposing Routine asks for one issue per new Candidate. The pipeline
       // that already turns an issue into a reviewed pull request does the rest,
       // so a Routine needs no publication path of its own.
-      const requested = task.mode === 'propose' && fresh.length > 0
+      // A process may stop after the Candidate write and before the Publication
+      // command. Restage every Candidate owned by this Run. The command ledger
+      // removes duplicates and closes that crash gap on retry.
+      const runCandidates = options.store.listCandidates(task.routineId)
+        .filter(candidate => candidate.runId === task.id)
+      const requested = task.mode === 'propose' && runCandidates.length > 0
         ? options.store.stageCandidateIssues({
-            commands: candidateIssueCommands(fresh, task),
+            commands: candidateIssueCommands(runCandidates, task),
             at: options.now().toISOString(),
           })
         : 0
@@ -303,7 +309,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         at: options.now().toISOString(),
       })
       options.logger.info(evidence)
-      return ok({ evidence })
+      return ok({ evidence, usage: turn.value.usage })
     },
   }
 }

@@ -140,16 +140,24 @@ describe('subject Workers', () => {
     expect(capture.requests[0]?.prompt).toContain('Limit local commands to changed files, their direct dependants, and focused behavior')
   })
 
-  it('skips the costly Review when pull request triage finds judgment-free work', async () => {
-    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+  it('runs Review directly without pull request triage', async () => {
+    const pullRequest = pullRequestItem({
+      mergeState: 'clean',
+      title: 'chore: update workspace dependencies',
+    })
     const comments: string[] = []
     const stamped: string[] = []
-    const triageRuns: unknown[] = []
+    let triageCalls = 0
+    let fileReads = 0
     const capture: ProviderCapture = { requests: [] }
     const worker = createReviewWorker({
-      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        premise: { verdict: 'sound', reason: 'The dependency update remains valid.' },
+        findings: [],
+        confidence: 94,
+      }), capture)),
       github: {
-        consumeApprovalLabel: () => Promise.reject(new Error('A skipped Review must not consume the manual override.')),
+        consumeApprovalLabel: () => Promise.reject(new Error('A direct Review must not consume a missing manual override.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
@@ -161,10 +169,13 @@ describe('subject Workers', () => {
         },
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
-        listPullRequestFiles: () => Promise.resolve(ok(['docs/guide.md'])),
+        listPullRequestFiles: () => {
+          fileReads += 1
+          return Promise.resolve(ok(['package.json', 'pnpm-lock.yaml']))
+        },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
-          body: 'Correct a typo in the guide.',
+          body: 'Update workspace dependencies.',
           checks: { _tag: 'Available', checks: [] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
@@ -176,30 +187,30 @@ describe('subject Workers', () => {
         upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
       },
       now: () => new Date('2026-08-28T01:00:00.000Z'),
-      preflightRepair: () => Promise.reject(new Error('A skipped Review must not run repair preflight.')),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       pullRequestTriage: {
-        run: () => Promise.resolve(ok({
-          _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-          reason: 'Only prose documentation changed.',
-        })),
+        run: () => {
+          triageCalls += 1
+          return Promise.resolve(ok({
+            _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
+            reason: 'The old triage Agent waived this Review.',
+          }))
+        },
       },
       store: {
-        queueReviewFixTaskForReview: () => { throw new Error('A skipped Review must not queue Repair work.') },
+        queueReviewFixTaskForReview: () => { throw new Error('A clean Review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
         listReviewRuns: () => [],
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: (input) => {
-          triageRuns.push(input)
-          return { _tag: 'Inserted' }
-        },
-        queueBaselineRepairForReview: () => { throw new Error('A skipped Review must not queue Baseline repair.') },
+        recordPullRequestTriageRun: () => { throw new Error('A direct Review must not record pull request triage.') },
+        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
         updateAgentProgress: () => true,
-        recordReviewRun: () => { throw new Error('A skipped Review must not record a Review run.') },
-        recordReviewPublication: () => { throw new Error('A skipped Review must not record a Review publication.') },
+        recordReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
+        recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
       },
       status: {
         publish: (_task, _phase, body) => {
@@ -210,8 +221,8 @@ describe('subject Workers', () => {
       triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
       workspaces: {
         prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
-        prepareReview: () => Promise.reject(new Error('A skipped Review must not prepare a worktree.')),
-        verifyReview: () => Promise.reject(new Error('A skipped Review must not verify a worktree.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verifyReview: () => Promise.resolve(ok(undefined)),
       },
     })
 
@@ -228,17 +239,14 @@ describe('subject Workers', () => {
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: JSON.stringify({
-      _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-      reason: 'Only prose documentation changed.',
-    }) }))
-    expect(stamped).toEqual(['ADVERSARIAL_REVIEW_SKIPPED'])
-    expect(comments[0]).toContain('REVIEW SKIPPED')
-    expect(comments[0]).toContain('harlan-agent-review')
-    expect(capture.requests).toEqual([])
-    expect(triageRuns).toEqual([expect.objectContaining({
-      taskId: 'review-task',
-      outcome: { _tag: 'ReviewSkipped', reason: 'Only prose documentation changed.' },
+    expect(result._tag).toBe('Ok')
+    expect(triageCalls).toBe(0)
+    expect(fileReads).toBe(0)
+    expect(stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(comments.at(-1)).toContain('READY · 94/100')
+    expect(capture.requests).toEqual([expect.objectContaining({
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
     })])
   })
 
@@ -323,7 +331,10 @@ describe('subject Workers', () => {
 
     expect(result).toEqual({
       _tag: 'Ok',
-      value: { evidence: 'Existing automated review by @harlan-zw: https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+      value: {
+        evidence: 'Existing automated review by @harlan-zw: https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+        resolution: { _tag: 'ExistingReview', url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+      },
     })
     expect(capture.requests).toEqual([])
     expect(workspaceCreated).toBe(false)
@@ -423,7 +434,7 @@ describe('subject Workers', () => {
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(attempt?.findings).toEqual([expect.objectContaining({
       _tag: 'Open',
       resolution: 'Repair',
@@ -530,7 +541,7 @@ describe('subject Workers', () => {
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(attempt?.findings).toEqual([expect.objectContaining({
       _tag: 'Open',
       resolution: 'Dismissal',
@@ -642,7 +653,7 @@ describe('subject Workers', () => {
       rerun: { _tag: 'Requested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(askedForHeadSha).toBe(pullRequest.headSha)
     const prompt = capture.requests[0]?.prompt ?? ''
     expect(prompt).toContain('buffered-byte-loss')
@@ -728,7 +739,10 @@ describe('subject Workers', () => {
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: 'Waiting for Baseline repair baseline-task.' }))
+    expect(result).toEqual(ok({
+      evidence: 'Waiting for Baseline repair baseline-task.',
+      resolution: { _tag: 'WaitingForBaselineRepair', taskId: 'baseline-task' },
+    }))
     expect(baselineQueued).toBe(true)
     expect(published).toContain('### 🤖 WAITING')
     expect(published).toContain('WaitingForBaselineRepair')
@@ -817,7 +831,7 @@ describe('subject Workers', () => {
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(capture.requests).toHaveLength(1)
     expect(published).toContain('PENDING')
     expect(published).toContain('Base branch CI')
@@ -903,7 +917,7 @@ describe('subject Workers', () => {
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(capture.requests).toHaveLength(1)
     expect(published).toContain('Base branch CI')
   })
@@ -988,7 +1002,7 @@ describe('subject Workers', () => {
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
 
-    expect(result).toEqual(ok({ evidence: expect.any(String) }))
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(capture.requests).toHaveLength(1)
     expect(published).toContain('READY · 88/100')
   })
@@ -1068,6 +1082,7 @@ describe('subject Workers', () => {
           summary: 'The parser drops valid input.',
           nextAction: 'Write a regression test and repair the parser.',
         }),
+        usage: { _tag: 'Unavailable' },
       },
     })
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium', sessionId: null })])

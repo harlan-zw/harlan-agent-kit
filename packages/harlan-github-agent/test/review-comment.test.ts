@@ -70,7 +70,7 @@ describe('automated review comments', () => {
     })
   })
 
-  it('does not treat PENDING or another base SHA as a completed Review', () => {
+  it('keeps PENDING incomplete and reuses a completed Review for the same head', () => {
     const comment = (outcome: 'READY' | 'PENDING', commentBaseSha: string) => ({
       authorAssociation: 'NONE',
       authorLogin: 'harlan-github-agent[bot]',
@@ -81,6 +81,11 @@ describe('automated review comments', () => {
     expect(priorAutomatedReviewForHead([comment('PENDING', baseSha)], headSha, 'harlan-github-agent[bot]', baseSha))
       .toEqual({ _tag: 'None' })
     expect(priorAutomatedReviewForHead([comment('READY', 'other-base')], headSha, 'harlan-github-agent[bot]', baseSha))
-      .toEqual({ _tag: 'None' })
+      .toEqual({
+        _tag: 'Found',
+        authorLogin: 'harlan-github-agent[bot]',
+        state: 'complete',
+        url: 'https://example.com/current-agent-ready',
+      })
   })
 })

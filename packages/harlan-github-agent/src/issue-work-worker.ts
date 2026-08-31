@@ -329,8 +329,14 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         response = controllerIssueMetadata(task, template.value)
       }
       else {
-        if (parsed.value.outcome === 'blocked')
-          return ok({ _tag: 'ActionRequired', reason: cleanLine(parsed.value.summary), evidence: JSON.stringify(parsed.value) })
+        if (parsed.value.outcome === 'blocked') {
+          return ok({
+            _tag: 'ActionRequired',
+            reason: cleanLine(parsed.value.summary),
+            evidence: JSON.stringify(parsed.value),
+            usage: turn.value.usage,
+          })
+        }
         response = parsed.value
       }
 
@@ -365,6 +371,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         return committed
       return ok({
         _tag: 'Publish',
+        usage: turn.value.usage,
         publication: {
           _tag: 'OpenPullRequest',
           taskKind: 'issue_work',

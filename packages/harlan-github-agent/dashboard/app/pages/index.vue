@@ -7,6 +7,7 @@ import {
   activeAgentProgress,
   activeAgentRole,
   activeEntries,
+  activeProviderCircuits,
   approvalConsequence,
   buildHistory,
   historyCategory,
@@ -98,6 +99,7 @@ const providerCapacities = computed(() => snapshot.value.providerCapacities.map(
   ...entry,
   presentation: providerCapacityPresentation(entry),
 })))
+const providerCircuits = computed(() => activeProviderCircuits(snapshot.value.providerCircuits))
 const recentlyFinishedRecords = computed(() => recentlyFinished(reviewAgents.value, snapshot.value.tasks))
 const hogwildStatus = computed(() => hogwild.value._tag === 'Connected' ? hogwild.value.status : undefined)
 const hogwildUpdatedAt = computed(() => hogwildStatus.value === undefined
@@ -298,6 +300,24 @@ useHead({
           </dd>
         </div>
       </dl>
+
+      <ul v-if="providerCircuits.length > 0" class="mb-2 grid gap-2 sm:grid-cols-2" role="list">
+        <li
+          v-for="circuit in providerCircuits"
+          :key="circuit.id"
+          class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-sm"
+        >
+          <span class="field-label">{{ circuit.provider }} Agent provider paused</span>
+          <span class="font-mono text-xs text-warning">{{ circuit.failureClass }}</span>
+          <span class="min-w-0 flex-1 text-right text-xs text-muted">
+            {{ circuit.model }} · {{ circuit.failures }} failures<template v-if="circuit.state._tag === 'Open'">
+              · retries {{ relativeTime(circuit.state.retryAt) }}
+            </template><template v-else>
+              · testing one canary
+            </template>
+          </span>
+        </li>
+      </ul>
 
       <ul v-if="incidents.length > 0" class="grid gap-2" role="list">
         <li

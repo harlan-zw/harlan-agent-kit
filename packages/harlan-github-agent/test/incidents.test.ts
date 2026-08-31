@@ -586,7 +586,7 @@ describe('recovery budget after a GitHub outage', () => {
     ])
   })
 
-  it('frees backed-off provider failures after another Agent completes', () => {
+  it('keeps provider failures isolated from an unrelated Agent success', () => {
     const store = storeWithProviderFailureAtRecoveryLimit()
     expect(store.listIncidents()[0]?.recovery).toEqual(expect.objectContaining({ _tag: 'Retrying' }))
 
@@ -607,8 +607,8 @@ describe('recovery budget after a GitHub outage', () => {
       evidence: 'The Agent provider completed a Review.',
     })).toBe(true)
 
-    expect(store.listIncidents()).toEqual([])
-    expect(store.retryRecoverableWorkerFailures('2026-08-18T10:00:04.000Z')).toBe(1)
+    expect(store.listIncidents()).toHaveLength(1)
+    expect(store.retryRecoverableWorkerFailures('2026-08-18T10:00:04.000Z')).toBe(0)
   })
 })
 

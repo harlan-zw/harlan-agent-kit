@@ -82,6 +82,7 @@ describe('review fix Worker', () => {
 
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({ taskKind: 'review_fix', expectedHeadSha: pullRequest.headSha }),
     }))
     expect(committedMessage).toBe('fix(parser): preserve buffered bytes')
@@ -160,6 +161,7 @@ describe('review fix Worker', () => {
 
     expect(result).toEqual(ok({
       _tag: 'ActionRequired',
+      usage: { _tag: 'Unavailable' },
       reason: 'Repair disputed the finding. One fresh Review was queued: The false branch already adds LIMIT 100.',
       evidence: JSON.stringify({ findings, checks: ['pnpm vitest run test/dashboard-history-limit.test.ts'] }),
     }))
@@ -314,6 +316,7 @@ describe('review fix Worker', () => {
 
     expect(result).toEqual(ok({
       _tag: 'ActionRequired',
+      usage: { _tag: 'Unavailable' },
       reason: 'Repair and the fresh Review still disagree: The false branch already adds LIMIT 100.',
       evidence: JSON.stringify({ findings, checks: [] }),
     }))

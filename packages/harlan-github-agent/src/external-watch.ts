@@ -87,6 +87,9 @@ function issueItem(repository: string, issue: PublicIssueSnapshot): GitHubIssueI
   return {
     kind: 'issue',
     approvalLabels: [],
+    contentDigest: createHash('sha256')
+      .update(JSON.stringify({ title: issue.title, updatedAt: issue.updatedAt }))
+      .digest('hex'),
     routineFiled: false,
     routineTracking: false,
     repository,

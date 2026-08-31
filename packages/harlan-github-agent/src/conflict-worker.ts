@@ -141,8 +141,14 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       const parsed = parseAgentResponse(turn.value.response)
       if (parsed._tag === 'Err')
         return parsed
-      if (parsed.value.outcome === 'blocked')
-        return err(cleanLine(parsed.value.summary))
+      if (parsed.value.outcome === 'blocked') {
+        return ok({
+          _tag: 'ActionRequired',
+          reason: cleanLine(parsed.value.summary),
+          evidence: JSON.stringify(parsed.value),
+          usage: turn.value.usage,
+        })
+      }
 
       const verified = await options.worktrees.verify(currentTask, prepared.value, signal)
       if (verified._tag === 'Err')
@@ -179,6 +185,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         return commitReady
       return ok({
         _tag: 'Publish',
+        usage: turn.value.usage,
         publication: {
           _tag: 'UpdatePullRequest',
           taskKind: 'resolve_conflict',

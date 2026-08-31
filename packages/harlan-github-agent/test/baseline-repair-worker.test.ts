@@ -76,6 +76,7 @@ describe('baseline repair worker', () => {
     }
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         _tag: 'OpenPullRequest',
         taskKind: 'baseline_repair',
@@ -159,6 +160,7 @@ describe('baseline repair worker', () => {
     expect(JSON.stringify(recorded)).not.toContain('ghp_Abcdefghijklmnopqrstuvwx')
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         pullRequestTitle: 'fix: repair default branch CI',
         pullRequestBody: expect.stringMatching(/### Description[\s\S]*### Linked Issues[\s\S]*Repairs failing default branch CI\./),
@@ -225,6 +227,7 @@ describe('baseline repair worker', () => {
 
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         pullRequestBody: expect.stringContaining('Repairs failing default branch CI.'),
       }),
@@ -282,6 +285,7 @@ describe('baseline repair worker', () => {
 
     expect(result).toEqual(ok({
       _tag: 'ActionRequired',
+      usage: { _tag: 'Unavailable' },
       reason: 'The Agent reported that it could not safely repair Baseline CI.',
       evidence: expect.stringContaining('"outcome":"blocked"'),
     }))

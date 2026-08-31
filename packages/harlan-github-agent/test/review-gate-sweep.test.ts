@@ -2,6 +2,7 @@ import type { GitHubCheck } from '../src/github-agent-source.ts'
 import type { ReviewGateRefresh } from '../src/store.ts'
 import type { ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { refreshControllerGates } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -76,7 +77,7 @@ function snapshot(baseChecks: GitHubCheck[], headChecks: GitHubCheck[] = [check(
 
 interface Recorded {
   edited?: { commentId: number, expectedBody: string, body: string }
-  runs: Array<{ id: string, confidence: number | undefined, ci: string, supersedesReviewRunId: string }>
+  staged: Array<{ reviewRunId: string, outcome: string, ci: string, reconciliationId?: string, body: string }>
   stamped: string[]
 }
 
@@ -85,7 +86,7 @@ function harness(options: {
   live?: ReturnType<typeof snapshot>
   edit?: () => Promise<any>
 }) {
-  const recorded: Recorded = { runs: [], stamped: [] }
+  const recorded: Recorded = { staged: [], stamped: [] }
   const run = async () => refreshReviewGates({
     github: {
       getPullRequestReviewSnapshot: () => Promise.resolve(options.live ?? snapshot([check()])),
@@ -106,16 +107,16 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
-      supersedeReviewRun: (input) => {
-        recorded.runs.push({
-          id: input.id,
-          confidence: input.confidence,
+      stageReviewGateStatus: (input) => {
+        recorded.staged.push({
+          reviewRunId: input.reviewRunId,
+          outcome: input.desiredOutcome,
           ci: input.gates.ci._tag,
-          supersedesReviewRunId: input.supersedesReviewRunId,
+          ...(input.reconciliationId === undefined ? {} : { reconciliationId: input.reconciliationId }),
+          body: input.body,
         })
-        return { _tag: 'Inserted', reviewRunId: input.id }
+        return { _tag: 'Staged', commandId: 'status-1' }
       },
-      recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
     },
   }, new AbortController().signal)
   return { recorded, run }
@@ -128,35 +129,39 @@ describe('refreshReviewGates', () => {
     const results = await run()
 
     expect(results).toEqual([ok({
-      _tag: 'Republished',
+      _tag: 'PublicationQueued',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
       outcome: 'READY',
     })])
-    expect(recorded.edited?.commentId).toBe(42)
-    expect(recorded.edited?.expectedBody).toBe('### 🤖 PENDING')
-    expect(recorded.edited?.body).toContain('### 🤖 READY · 88/100')
-    expect(recorded.edited?.body).not.toContain('Waiting:')
-    expect(recorded.stamped).toEqual(['READY'])
+    expect(recorded.edited).toBeUndefined()
+    expect(recorded.staged[0]?.body).toContain('### 🤖 READY · 88/100')
+    expect(recorded.staged[0]?.body).not.toContain('Waiting:')
+    expect(recorded.stamped).toEqual([])
   })
 
-  it('settles the stored run itself, not a second row for it', async () => {
+  it('stages one projection for the existing Agent run', async () => {
     const { recorded, run } = harness({})
 
     await run()
 
-    expect(recorded.runs).toEqual([{
-      id: expect.any(String),
-      confidence: 88,
+    expect(recorded.staged).toEqual([{
+      reviewRunId: 'run-1',
+      outcome: 'READY',
       ci: 'Passed',
-      supersedesReviewRunId: 'run-1',
+      body: expect.stringContaining('### 🤖 READY'),
     }])
-    expect(recorded.runs[0]?.id).not.toBe('run-1')
   })
 
   it('leaves the comment alone while base branch CI is still running', async () => {
+    const live = snapshot([check({ status: 'in_progress', conclusion: null })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
     const { recorded, run } = harness({
-      live: snapshot([check({ status: 'in_progress', conclusion: null })]),
+      live,
+      review: gateRefresh({
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+      }),
     })
 
     const results = await run()
@@ -168,8 +173,13 @@ describe('refreshReviewGates', () => {
       outcome: 'PENDING',
       reason: 'Base branch CI: deploy (pro-admin) is still running.',
     })])
-    expect(recorded.edited).toBeUndefined()
-    expect(recorded.runs).toEqual([])
+    expect(recorded.edited).toEqual({
+      commentId: 42,
+      expectedBody: '### 🤖 PENDING',
+      body: '### 🤖 PENDING',
+    })
+    expect(recorded.staged).toEqual([])
+    expect(recorded.stamped).toEqual(['PENDING'])
   })
 
   it('reports BLOCKED when the fresh CI read fails', async () => {
@@ -180,15 +190,15 @@ describe('refreshReviewGates', () => {
     const results = await run()
 
     expect(results).toEqual([ok({
-      _tag: 'Republished',
+      _tag: 'PublicationQueued',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
       outcome: 'BLOCKED',
     })])
-    expect(recorded.edited?.body).toContain('### 🤖 BLOCKED')
+    expect(recorded.staged[0]?.body).toContain('### 🤖 BLOCKED')
     // The score belongs to a passing verdict, so a blocked one never names it.
-    expect(recorded.edited?.body).not.toContain('88/100')
-    expect(recorded.stamped).toEqual(['BLOCKED'])
+    expect(recorded.staged[0]?.body).not.toContain('88/100')
+    expect(recorded.stamped).toEqual([])
   })
 
   it('leaves a pull request whose head commit moved to its own review', async () => {
@@ -207,7 +217,7 @@ describe('refreshReviewGates', () => {
       pullRequestNumber: 24,
     })])
     expect(recorded.edited).toBeUndefined()
-    expect(recorded.runs).toEqual([])
+    expect(recorded.staged).toEqual([])
   })
 
   it('publishes BLOCKED when the merge gate becomes conflicting', async () => {
@@ -221,29 +231,38 @@ describe('refreshReviewGates', () => {
     const results = await run()
 
     expect(results).toEqual([ok({
-      _tag: 'Republished',
+      _tag: 'PublicationQueued',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
       outcome: 'BLOCKED',
     })])
-    expect(recorded.edited?.body).toContain('**Merge gate:** BLOCKED. The pull request has merge conflicts.')
-    expect(recorded.runs).toHaveLength(1)
-    expect(recorded.stamped).toEqual(['BLOCKED'])
+    expect(recorded.staged[0]?.body).toContain('**Merge gate:** BLOCKED. The pull request has merge conflicts.')
+    expect(recorded.staged).toHaveLength(1)
+    expect(recorded.stamped).toEqual([])
   })
 
-  it('writes nothing when a person deleted the canonical comment', async () => {
+  it('queues reconciliation when the canonical comment is missing', async () => {
+    const live = snapshot([check({ status: 'in_progress', conclusion: null })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
     const { recorded, run } = harness({
+      live,
+      review: gateRefresh({
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+      }),
       edit: () => Promise.resolve(ok({ _tag: 'Missing' })),
     })
 
     const results = await run()
 
     expect(results).toEqual([ok({
-      _tag: 'CommentGone',
+      _tag: 'PublicationQueued',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
+      outcome: 'PENDING',
     })])
     expect(recorded.stamped).toEqual([])
+    expect(recorded.staged[0]?.reconciliationId).toContain('Missing:42:')
   })
 })
 
@@ -260,10 +279,20 @@ describe('refreshReviewGates against the journal store', () => {
       externalId: 'merge-pending-pr',
       observedAt: '2026-08-27T08:01:00.000Z',
       source: 'poll',
-      subject: pullRequestItem({ mergeState: 'unknown' }),
+      subject: pullRequestItem({ mergeState: 'clean' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new pull request revision.')
+    const reviewTask = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-27T08:02:00.000Z', 60_000)
+    if (reviewTask === null)
+      throw new Error('Expected a Review Task.')
+    store.completeWorkerTask({
+      taskId: reviewTask.id,
+      workerId: reviewTask.state.workerId,
+      fence: reviewTask.state.fence,
+      at: '2026-08-27T08:02:30.000Z',
+      evidence: 'run-pending',
+    })
 
     const gates = pendingControllerGates()
     gates.merge = { _tag: 'Pending', reason: 'GitHub has not resolved mergeability.', evidence: [{ label: 'mergeability', sha256: 'd'.repeat(64) }] }
@@ -309,12 +338,12 @@ describe('refreshReviewGates against the journal store', () => {
     }, new AbortController().signal)
 
     expect(results).toEqual([ok({
-      _tag: 'Republished',
+      _tag: 'PublicationQueued',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
       outcome: 'READY',
     })])
-    expect(stamped).toEqual(['READY'])
+    expect(stamped).toEqual([])
     expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({
       reviewRunId: expect.any(String),
       confidence: 88,
@@ -324,8 +353,30 @@ describe('refreshReviewGates against the journal store', () => {
       .find(agent => agent._tag === 'ReviewAgent')
     if (settledRun?._tag !== 'ReviewAgent')
       throw new Error('Expected the settled Review run on the dashboard.')
+    expect(settledRun.id).toBe('run-pending')
+    expect(settledRun.startedAt).toBe('2026-08-27T08:11:00.000Z')
+    expect(settledRun.completedAt).toBe('2026-08-27T08:20:00.000Z')
     expect(settledRun.outcome).toEqual({ _tag: 'Ready', confidence: 88 })
     expect(settledRun.gates.merge._tag).toBe('Passed')
+    expect(store.listWorkflowEvents({ stream: 'review_gate', limit: 10 })).toMatchObject([
+      {
+        event: 'Projected',
+        entityId: 'run-pending',
+        from: 'Pending',
+        to: 'Ready',
+        usage: null,
+      },
+    ])
+    const publication = store.claimNextTerminalReviewStatus(
+      'status-publisher-1',
+      '2026-08-27T11:16:00.000Z',
+      60_000,
+    )
+    expect(publication).toMatchObject({
+      reviewRunId: 'run-pending',
+      desiredOutcome: 'READY',
+      body: expect.stringContaining('### 🤖 READY'),
+    })
   })
 
   it('keeps one journal entry when controller gates refresh', async () => {
@@ -383,11 +434,12 @@ describe('refreshReviewGates against the journal store', () => {
     }, new AbortController().signal)
 
     expect(results).toEqual([ok({
-      _tag: 'Superseded',
+      _tag: 'PublicationQueued',
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
+      outcome: 'READY',
     })])
-    expect(store.listReviewGateRefreshes()).toEqual([])
+    expect(store.listReviewGateRefreshes()).toHaveLength(1)
 
     const reviewAgents = store.getDashboardSnapshot('2026-08-27T11:16:00.000Z')
       .agents
@@ -397,8 +449,8 @@ describe('refreshReviewGates against the journal store', () => {
     const settledRun = reviewAgents[0]
     if (settledRun?._tag !== 'ReviewAgent')
       throw new Error('Expected the settled Review run on the dashboard.')
-    expect(settledRun.outcome).toEqual({ _tag: 'Pending', confidence: 88 })
-    expect(settledRun.gates.ci._tag).toBe('Pending')
+    expect(settledRun.outcome).toEqual({ _tag: 'Ready', confidence: 88 })
+    expect(settledRun.gates.ci._tag).toBe('Passed')
     expect(settledRun.usage).toEqual({ _tag: 'Available', input: 10, cachedInput: 0, cacheWrite: 0, output: 5, reasoning: 0 })
   })
 })

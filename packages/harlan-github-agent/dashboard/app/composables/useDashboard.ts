@@ -37,6 +37,7 @@ function emptySnapshot(): DashboardSnapshot {
     agentModels: { codex: [], opencode: [] },
     reasoningEfforts: [],
     providerCapacities: [],
+    providerCircuits: [],
     agents: [],
     incidents: [],
     queue: [],

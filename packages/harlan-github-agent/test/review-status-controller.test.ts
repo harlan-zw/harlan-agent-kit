@@ -39,6 +39,7 @@ describe('review status controller', () => {
           replaced = replacePriorReview
           return Promise.resolve(ok({ commentId: 29, url: pullRequest.url }))
         },
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
       },
       leaseMilliseconds: 60_000,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
@@ -57,6 +58,8 @@ describe('review status controller', () => {
           expectedHeadSha: pullRequest.headSha,
           phase: 'repair',
           body: stagedBody,
+          reviewRunId: null,
+          desiredOutcome: null,
           outcomeUnknown: false,
           commentId: null,
           workerId: 'status-worker',
@@ -65,6 +68,7 @@ describe('review status controller', () => {
           repositoryMapping: repository,
         }),
         completeReviewStatus: () => true,
+        recordReviewStatusReceipt: () => true,
         deferReviewStatus: () => { throw new Error('Unexpected defer.') },
       },
       workerId: 'status-worker',

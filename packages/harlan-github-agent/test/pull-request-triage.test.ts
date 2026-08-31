@@ -5,11 +5,14 @@ import { createPullRequestTriageAgent } from '../src/pull-request-triage.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('pull request triage Agent', () => {
-  it('skips a conventional chore without starting an Agent', async () => {
+  it('does not waive Review from a conventional chore title', async () => {
     const capture: ProviderCapture = { requests: [] }
     const agent = createPullRequestTriageAgent({
       now: () => new Date('2026-08-28T01:00:00.000Z'),
-      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        _tag: 'ADVERSARIAL_REVIEW_REQUIRED',
+        reason: 'The pull request changes dependencies and executable tests.',
+      }), capture)),
       store: {
         getWorkerSession: () => null,
         saveWorkerSession: () => undefined,
@@ -45,11 +48,11 @@ describe('pull request triage Agent', () => {
     expect(result).toEqual({
       _tag: 'Ok',
       value: {
-        _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-        reason: 'The pull request uses the conventional non-breaking chore type.',
+        _tag: 'ADVERSARIAL_REVIEW_REQUIRED',
+        reason: 'The pull request changes dependencies and executable tests.',
       },
     })
-    expect(capture.requests).toEqual([])
+    expect(capture.requests).toHaveLength(1)
   })
 
   it('uses the cheap profile and returns one conservative route', async () => {

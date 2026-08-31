@@ -151,6 +151,26 @@ describe('agent worktree sweep', () => {
 })
 
 describe('active task leases', () => {
+  it('keeps a Running Routine worktree live', () => {
+    const store = openJournalStore(':memory:')
+    stores.push(store)
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'pr-triage', crons: ['0 9 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }],
+      at: '2026-08-13T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    store.openRoutineRun({ routineId: routine.id, scheduledFor: '2026-08-13T09:00:00.000Z', specSha: routine.specSha, at: '2026-08-13T09:00:01.000Z' })
+    const claimed = store.claimNextRoutineRun('routine-1', '2026-08-13T09:00:02.000Z', 60_000)
+    if (claimed === null)
+      throw new Error('Expected a claimed Routine run.')
+
+    expect(store.listActiveTaskLeases()).toContainEqual({ taskId: claimed.id, fence: claimed.state.fence })
+  })
+
   it('keeps a queued task live, so a sweep never takes the worktree it will claim', () => {
     const store = openJournalStore(':memory:')
     stores.push(store)

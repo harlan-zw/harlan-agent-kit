@@ -56,6 +56,8 @@ function publisher(calls: Calls, issueNumber = 42): GitHubIssuePublisher {
       return ok({ id: 900 + calls.comments.length })
     },
     findOpenIssueByFingerprint: async () => ok(null),
+    findRoutineTrackingIssue: async () => ok(null),
+    findIssueCommentByMarker: async () => ok(null),
   }
 }
 
@@ -218,6 +220,8 @@ describe('publishing the run log', () => {
         createIssue: async () => ok({ number: 42, url: 'https://github.com/harlan-zw/example/issues/42' }),
         createComment: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
         findOpenIssueByFingerprint: async () => ok(null),
+        findRoutineTrackingIssue: async () => ok(null),
+        findIssueCommentByMarker: async () => ok(null),
       }
 
       const failed = await createRoutineReportController({ github: refusing, now, store, workerId: 'reporter' })
@@ -226,6 +230,44 @@ describe('publishing the run log', () => {
       expect(failed).toHaveLength(1)
       expect(failed[0]?._tag).toBe('Err')
       expect(store.listRoutines('harlan-zw/example')[0]?.trackingIssueNumber).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('adopts unknown issue and comment writes without creating duplicates', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      let issue: { number: number, url: string } | null = null
+      let comment: { id: number } | null = null
+      let issueWrites = 0
+      let commentWrites = 0
+      const github: GitHubIssuePublisher = {
+        findOpenIssueByFingerprint: async () => ok(null),
+        findRoutineTrackingIssue: async () => ok(issue),
+        findIssueCommentByMarker: async () => ok(comment),
+        createIssue: async () => {
+          issueWrites += 1
+          issue = { number: 42, url: 'https://github.com/harlan-zw/example/issues/42' }
+          return { _tag: 'Err', error: { repository: 'harlan-zw/example', message: 'The issue response was lost.' } }
+        },
+        createComment: async () => {
+          commentWrites += 1
+          comment = { id: 900 }
+          return { _tag: 'Err', error: { repository: 'harlan-zw/example', message: 'The comment response was lost.' } }
+        },
+      }
+      const controller = createRoutineReportController({ github, now, store, workerId: 'reporter' })
+
+      await controller.publishPending(new AbortController().signal)
+      await controller.publishPending(new AbortController().signal)
+      const recovered = await controller.publishPending(new AbortController().signal)
+
+      expect({ issueWrites, commentWrites }).toEqual({ issueWrites: 1, commentWrites: 1 })
+      expect(recovered).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } }])
     }
     finally {
       store.close()
@@ -275,6 +317,8 @@ describe('publishing the run log', () => {
           return ok({ id: 900 + comments.length })
         },
         findOpenIssueByFingerprint: async () => ok(null),
+        findRoutineTrackingIssue: async () => ok(null),
+        findIssueCommentByMarker: async () => ok(null),
       }
 
       const results = await createRoutineReportController({ github, now, store, workerId: 'reporter' })

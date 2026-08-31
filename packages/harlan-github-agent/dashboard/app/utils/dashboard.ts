@@ -10,6 +10,7 @@ import type {
   Incident,
   IncidentKind,
   ProviderCapacityStatus,
+  ProviderCircuit,
   QueueEntry,
   RepositoryStatus,
   ReviewAgent,
@@ -150,6 +151,8 @@ export function systemState(snapshot: DashboardSnapshot): { label: string, tone:
     return { label: 'Retrying', tone: 'warning' }
   if (snapshot.status === 'starting')
     return { label: 'Starting', tone: 'warning' }
+  if (snapshot.providerCircuits.some(circuit => circuit.state._tag !== 'Closed'))
+    return { label: 'Agent provider paused', tone: 'warning' }
   const start = agentStartState(snapshot)
   if (start._tag === 'CapacityUnavailable')
     return { label: 'Retrying', tone: 'warning' }
@@ -158,6 +161,10 @@ export function systemState(snapshot: DashboardSnapshot): { label: string, tone:
   if (snapshot.providerCapacities.some(entry => entry.capacity._tag === 'Unavailable'))
     return { label: 'Agent provider unavailable', tone: 'warning' }
   return { label: 'Healthy', tone: 'success' }
+}
+
+export function activeProviderCircuits(circuits: ProviderCircuit[]): ProviderCircuit[] {
+  return circuits.filter(circuit => circuit.state._tag !== 'Closed')
 }
 
 export const agentRoleLabels: Array<[AgentRole, string]> = [

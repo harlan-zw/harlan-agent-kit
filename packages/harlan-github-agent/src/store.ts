@@ -46,6 +46,9 @@ import type {
   OpenAgentPullRequest,
   PinnedAgentSelection,
   PreparedPublication,
+  ProviderCircuit,
+  ProviderFailureClass,
+  ProviderStartReservation,
   PullRequestApprovalKind,
   PullRequestApprovalResult,
   PullRequestApprovalState,
@@ -61,6 +64,7 @@ import type {
   RepositoryStatus,
   RestartRequest,
   RestartRequestSource,
+  ReviewDesiredOutcome,
   ReviewFinding,
   ReviewFixQueueResult,
   ReviewFixTask,
@@ -70,6 +74,7 @@ import type {
   ReviewPublicationResult,
   ReviewRerunResult,
   ReviewRerunSource,
+  ReviewResolution,
   ReviewRun,
   ReviewStatusTaskPhase,
   Routine,
@@ -84,12 +89,15 @@ import type {
   SupersedeReviewRunInput,
   SupersedeReviewRunResult,
   TaskState,
+  WorkflowEvent,
+  WorkflowEventStream,
 } from './types.ts'
 import type { AgentWorktreeLease } from './worktree.ts'
 import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isIssueTriageState } from './issue-triage.ts'
@@ -304,41 +312,6 @@ function restoreRecoveryBudget(database: DatabaseSync, github: string, at: strin
       restored += 1
       // The Task is recoverable again, so its Incident stops saying otherwise.
       // `retryRecoverableWorkerFailures` requeues it on the next pass.
-      resolveTaskIncidents(database, row.id, at)
-    }
-  }
-  return restored
-}
-
-/**
- * Gives exhausted provider failures another budget after one Agent succeeds.
- *
- * A completed Agent turn is the provider health signal. Only exhausted Tasks
- * need help; Tasks still inside their budget already have a scheduled retry.
- */
-function restoreAgentProviderRecoveryBudget(database: DatabaseSync, at: string): number {
-  // One completed Agent proves the shared provider is answering again.
-  database.prepare(`
-    UPDATE incidents SET resolved_at = ?
-    WHERE resolved_at IS NULL AND scope_tag = 'Service' AND kind = 'agent_provider'
-  `).run(at)
-  let restored = 0
-  for (const table of ['tasks', 'worker_tasks'] as const) {
-    const rows = database.prepare(`
-      SELECT id, reason FROM ${table}
-      WHERE state_tag = 'Failed' AND recovery_attempts >= ? AND reason IS NOT NULL
-    `).all(MAXIMUM_RECOVERY_ATTEMPTS) as unknown as Array<{ id: string, reason: string }>
-    const reset = database.prepare(`
-      UPDATE ${table} SET recovery_attempts = 0, updated_at = ?
-      WHERE id = ? AND state_tag = 'Failed' AND recovery_attempts >= ?
-    `)
-    for (const row of rows) {
-      const failure = classifyFailure({ message: row.reason })
-      if (failure._tag !== 'Transient' || failure.kind !== 'agent_provider')
-        continue
-      if (reset.run(at, row.id, MAXIMUM_RECOVERY_ATTEMPTS).changes !== 1)
-        continue
-      restored += 1
       resolveTaskIncidents(database, row.id, at)
     }
   }
@@ -575,7 +548,23 @@ type StageReviewStatusInput = {
   revisionId: string
   expectedHeadSha: string
   body: string
+  reviewRunId?: string
+  desiredOutcome?: ReviewDesiredOutcome
 } & ReviewStatusTaskPhase
+
+interface StageReviewGateStatusInput {
+  reviewRunId: string
+  repository: string
+  pullRequestNumber: number
+  revisionId: string
+  expectedHeadSha: string
+  gates: ReviewGates
+  body: string
+  desiredOutcome: ReviewDesiredOutcome
+  /** Adds a fresh repair command when GitHub drifted from an unchanged projection. */
+  reconciliationId?: string
+  at: string
+}
 
 type UnpositionedQueueEntry = QueueEntry extends infer Entry
   ? Entry extends QueueEntry ? Omit<Entry, 'position'> : never
@@ -636,6 +625,8 @@ export interface JournalStore {
   claimNextPublication: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedPublicationCommand | null
   claimIssueTriageComment: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueTriageCommentCommand | null
   claimReviewStatus: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
+  /** Claims one terminal Publication whose Agent Task no longer runs. */
+  claimNextTerminalReviewStatus: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
   close: () => void
   /** Replaces one repository's Routines with the spec its default branch declares. */
   syncRoutines: (input: { repository: string, specSha: string, entries: readonly RoutineSpecEntry[], at: string }) => Routine[]
@@ -659,11 +650,12 @@ export interface JournalStore {
   stageRoutineReport: (input: { command: RoutineReportCommand, at: string }) => boolean
   claimNextRoutineReport: (workerId: string, now: string, leaseMilliseconds: number, excludedCommandIds?: readonly string[]) => ClaimedRoutineReportCommand | null
   completeRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, trackingIssueNumber: number }) => boolean
+  recordRoutineReportReceipt: (input: { commandId: string, workerId: string, fence: number, at: string, sink: 'tracking_issue' | 'run_comment' }) => boolean
   failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
-  completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
+  completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string, usage?: AgentTokenUsage }) => boolean
   failRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
   listOpenPullRequestNumbers: (github: string) => number[]
@@ -687,9 +679,19 @@ export interface JournalStore {
   }) => boolean
   closeMissingItems: (github: string, seen: Array<{ kind: GitHubItem['kind'], number: number }>, observedAt: string) => number
   completeTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
-  completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
+  completeReviewTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string, resolution: ReviewResolution }) => boolean
+  completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string, usage?: AgentTokenUsage }) => boolean
   completeIssueTriageComment: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, url: string }) => boolean
   completeReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, url: string }) => boolean
+  recordReviewStatusReceipt: (input: {
+    commandId: string
+    workerId: string
+    fence: number
+    at: string
+    sink: 'comment' | 'outcome_label'
+    commentId?: number
+    url?: string
+  }) => boolean
   completePublication: (input: { commandId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
   deferPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   failTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
@@ -699,6 +701,40 @@ export interface JournalStore {
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getStats: (range: StatsRange, generatedAt: string) => StatsSnapshot
+  /** Newest append-only workflow events. Reasons are redacted before storage. */
+  listWorkflowEvents: (input?: { stream?: WorkflowEventStream, limit?: number }) => WorkflowEvent[]
+  /** Whether one provider may accept a normal turn or one half-open canary. */
+  providerCanStart: (input: { provider: AgentProviderName, credential: string, model?: string, at: string }) => boolean
+  /** Atomically reserves the only half-open canary when one is due. */
+  reserveProviderStart: (input: {
+    provider: AgentProviderName
+    credential: string
+    model: string
+    workerId: string
+    at: string
+    leaseMilliseconds: number
+  }) => ProviderStartReservation
+  recordProviderFailure: (input: {
+    provider: AgentProviderName
+    credential: string
+    model: string
+    failureClass: ProviderFailureClass
+    detail: string
+    workerId?: string
+    canaryCircuitId?: string
+    canaryFence?: number
+    at: string
+  }) => ProviderCircuit
+  recordProviderSuccess: (input: {
+    provider: AgentProviderName
+    credential: string
+    model: string
+    workerId: string
+    canaryCircuitId?: string
+    canaryFence?: number
+    at: string
+  }) => number
+  listProviderCircuits: () => ProviderCircuit[]
   getAgentControl: () => StoredAgentControl
   /** Never act on this Item again. Cancels live work and stops every planner. */
   dismissItem: (input: { repository: string, itemNumber: number, at: string }) => ItemDismissalResult
@@ -826,7 +862,7 @@ export interface JournalStore {
   getRepairedHeadFindings: (repository: string, pullRequestNumber: number, commitSha: string) => ReviewFinding[]
   /** Open pull requests across enabled repositories, which is the work waiting on Harlan. */
   countOpenPullRequests: () => number
-  needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string }) => boolean
+  needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string, usage?: AgentTokenUsage }) => boolean
   requestRestart: (input: { id: string, source: RestartRequestSource, at: string }) => RestartRequest
   getRestartRequest: () => RestartRequest | null
   beginRestart: (input: { id: string, processId: string, at: string }) => RestartRequest | null
@@ -879,6 +915,7 @@ export interface JournalStore {
   saveWorkerSession: (repository: string, itemNumber: number, role: AgentRole, sessionId: string, at: string, scopeDigest?: string) => void
   updateAgentProgress: (input: { taskId: string, taskKind: AgentTask['kind'], workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
   stageReviewStatus: (input: StageReviewStatusInput) => { _tag: 'Staged' | 'Duplicate', commandId: string } | { _tag: 'Rejected', reason: string }
+  stageReviewGateStatus: (input: StageReviewGateStatusInput) => { _tag: 'Staged' | 'Duplicate', commandId: string } | { _tag: 'Rejected', reason: string }
   stageIssueTriageComment: (input: {
     taskId: string
     workerId: string
@@ -893,8 +930,9 @@ export interface JournalStore {
     fence: number
     at: string
     publication: PreparedPublication
+    usage?: AgentTokenUsage
   }) => StagePublicationResult
-  supersedeTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
+  supersedeTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, usage?: AgentTokenUsage }) => boolean
   supersedePublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   syncRepositories: (repositories: RepositoryMapping[], at: string) => void
 }
@@ -921,6 +959,7 @@ interface SubjectRow {
   url: string
   github_created_at: string
   github_updated_at: string
+  content_digest: string | null
   draft: number | null
   base_sha: string | null
   head_sha: string | null
@@ -2434,8 +2473,16 @@ function githubSubjectFromRow(row: SubjectRow): GitHubItem {
     updatedAt: row.github_updated_at,
   }
 
-  if (row.kind === 'issue')
-    return { ...base, kind: 'issue', approvalLabels: [], routineFiled: false, routineTracking: false }
+  if (row.kind === 'issue') {
+    return {
+      ...base,
+      kind: 'issue',
+      approvalLabels: [],
+      contentDigest: row.content_digest ?? row.revision_id,
+      routineFiled: false,
+      routineTracking: false,
+    }
+  }
 
   if (row.draft === null || row.base_sha === null || row.head_sha === null || row.head_repository === null || row.head_ref === null || row.merge_state === null)
     throw new Error(`Pull request ${row.repository}#${row.github_number} has incomplete state.`)
@@ -2587,16 +2634,36 @@ function failedQueueState(reason: string, recoveryAttempts?: number): QueueState
     : { _tag: 'ActionRequired', reason }
 }
 
+function isProviderCircuitPause(reason: string): boolean {
+  return reason.includes('The Agent provider circuit is open.')
+}
+
+function reviewDesiredOutcomeFromBody(body: string): ReviewDesiredOutcome | null {
+  if (body.includes('### 🤖 READY'))
+    return 'READY'
+  if (body.includes('### 🤖 BLOCKED'))
+    return 'BLOCKED'
+  if (body.includes('### 🤖 WAITING'))
+    return 'WAITING'
+  if (body.includes('### 🤖 REVIEW SKIPPED'))
+    return 'SKIPPED'
+  if (body.includes('### 🤖 PENDING'))
+    return 'PENDING'
+  return null
+}
+
 function dashboardQueue(
   items: ItemSummary[],
-  tasks: AgentTask[],
+  tasks: DashboardTask[],
   reviewAgents: Array<Extract<DashboardAgent, { _tag: 'ReviewAgent' }>>,
   mappings: Map<string, RepositoryMapping>,
   rejectedIssueWorkResults: Map<string, number>,
   openPullRequestsByRepository: Map<string, number>,
   currentSelectionMode: SelectionMode,
+  reviewResolutions: Map<string, ReviewResolution>,
+  desiredReviewOutcomes: Map<string, ReviewDesiredOutcome>,
 ): QueueEntry[] {
-  const currentTasks = new Map<string, AgentTask>()
+  const currentTasks = new Map<string, DashboardTask>()
   tasks.forEach((task) => {
     const itemNumber = task.kind === 'issue_triage' || task.kind === 'issue_work' ? task.issueNumber : task.pullRequestNumber
     const key = `${task.repository}:${itemNumber}:${task.revisionId}:${task.kind}`
@@ -2740,17 +2807,34 @@ function dashboardQueue(
     }
 
     const review = currentReviews.get(key)
-    if (reviewTask?.kind === 'adversarial_review' && (review === undefined || reviewTask.updatedAt > review.completedAt)) {
+    if (
+      reviewTask?.kind === 'adversarial_review'
+      && (review === undefined || (reviewTask.updatedAt > review.completedAt && reviewTask.progress.percent < 90))
+    ) {
       if (reviewTask.state._tag === 'Running')
         return [{ ...pullRequest, state: { _tag: 'Active', work: 'adversarial_review' } }]
       if (reviewTask.state._tag === 'Queued')
         return [{ ...pullRequest, state: { _tag: 'Queued', work: 'adversarial_review' } }]
     }
 
+    const desiredOutcome = desiredReviewOutcomes.get(key)
+    if (desiredOutcome === 'READY' || desiredOutcome === 'EXISTING' || desiredOutcome === 'SKIPPED')
+      return []
+    if (desiredOutcome === 'PENDING' || desiredOutcome === 'WAITING')
+      return [{ ...pullRequest, state: { _tag: 'Pending', reason: desiredOutcome === 'WAITING' ? 'Waiting for Baseline repair.' : 'Review gates are waiting.' } }]
+
+    const resolution = reviewResolutions.get(key)
+    if (resolution?._tag === 'ExistingReview' || resolution?._tag === 'ReviewSkipped')
+      return []
+    if (resolution?._tag === 'WaitingForBaselineRepair')
+      return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for Baseline repair.' } }]
+    if (resolution?._tag === 'UnknownNeedsReconciliation')
+      return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: resolution.reason } }]
+
     if (review?.outcome._tag === 'Ready')
       return []
-    if (review?.outcome._tag === 'Blocked') {
-      const findings = review.findings.filter(candidate => candidate._tag === 'Open')
+    if (desiredOutcome === 'BLOCKED' || review?.outcome._tag === 'Blocked') {
+      const findings = (review?.findings ?? []).filter(candidate => candidate._tag === 'Open')
       const finding = findings[0]
       const count = findings.length
       const prefix = count === 1
@@ -2787,18 +2871,364 @@ function dashboardQueue(
     .map((entry, index) => ({ ...entry, position: index + 1 }))
 }
 
+interface WorkflowEventInput {
+  stream: WorkflowEventStream
+  event: string
+  entityId: string
+  repository?: string | null
+  itemNumber?: number | null
+  revisionId?: string | null
+  taskId?: string | null
+  from: string | null
+  to: string
+  reason?: string | null
+  attempt?: number
+  fence?: number
+  usage?: AgentTokenUsage | null
+  durationMilliseconds?: number | null
+  at: string
+}
+
+interface WorkflowScope {
+  repository: string | null
+  item_number: number | null
+  revision_id: string | null
+  task_id: string | null
+  attempts: number
+}
+
+interface ProviderCircuitRow {
+  id: string
+  provider: AgentProviderName
+  credential: string
+  model: string
+  failure_class: ProviderFailureClass
+  state_tag: 'Closed' | 'Open' | 'HalfOpen'
+  failures: number
+  retry_at: string | null
+  canary_worker_id: string | null
+  canary_fence: number
+  canary_lease_expires_at: string | null
+  last_detail: string
+  updated_at: string
+}
+
+function providerCircuitFromRow(row: ProviderCircuitRow): ProviderCircuit {
+  const state = row.state_tag === 'Open'
+    ? { _tag: 'Open' as const, retryAt: row.retry_at ?? row.updated_at }
+    : row.state_tag === 'HalfOpen'
+      ? {
+          _tag: 'HalfOpen' as const,
+          workerId: row.canary_worker_id ?? '',
+          fence: row.canary_fence,
+          leaseExpiresAt: row.canary_lease_expires_at ?? row.updated_at,
+        }
+      : { _tag: 'Closed' as const }
+  return {
+    id: row.id,
+    provider: row.provider,
+    credential: row.credential,
+    model: row.model,
+    failureClass: row.failure_class,
+    failures: row.failures,
+    state,
+    lastDetail: row.last_detail,
+    updatedAt: row.updated_at,
+  }
+}
+
+function recordProviderCircuitEvent(database: DatabaseSync, row: ProviderCircuitRow, event: string, from: string | null, to: string, at: string, reason?: string): void {
+  recordWorkflowEvent(database, {
+    stream: 'provider_circuit',
+    event,
+    entityId: row.id,
+    taskId: row.canary_worker_id,
+    from,
+    to,
+    ...(reason === undefined ? {} : { reason }),
+    attempt: row.failures,
+    fence: row.canary_fence,
+    at,
+  })
+}
+
+function telemetryReason(reason: string | null | undefined): string | null {
+  if (reason === null || reason === undefined)
+    return null
+  return truncateOutput(redactSecrets(reason)).replace(/\s+/g, ' ').trim()
+}
+
+function recordWorkflowEvent(database: DatabaseSync, input: WorkflowEventInput): void {
+  const previous = database.prepare(`
+    SELECT occurred_at FROM workflow_events
+    WHERE stream = ? AND entity_id = ?
+    ORDER BY occurred_at DESC, id DESC LIMIT 1
+  `).get(input.stream, input.entityId) as { occurred_at: string } | undefined
+  const elapsed = previous === undefined ? null : Date.parse(input.at) - Date.parse(previous.occurred_at)
+  const measuredDuration = elapsed === null || !Number.isFinite(elapsed) ? null : Math.max(0, elapsed)
+  const duration = input.durationMilliseconds === undefined ? measuredDuration : input.durationMilliseconds
+  database.prepare(`
+    INSERT INTO workflow_events (
+      stream, event, entity_id, repository, item_number, revision_id, task_id,
+      from_state, to_state, reason, attempt, fence, duration_ms, usage, occurred_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.stream,
+    input.event,
+    input.entityId,
+    input.repository ?? null,
+    input.itemNumber ?? null,
+    input.revisionId ?? null,
+    input.taskId ?? null,
+    input.from,
+    input.to,
+    telemetryReason(input.reason),
+    input.attempt ?? 0,
+    input.fence ?? 0,
+    duration,
+    input.usage === undefined || input.usage === null ? null : JSON.stringify(input.usage),
+    input.at,
+  )
+}
+
+function workflowTransitionEvent(from: string | null, to: string): string {
+  if (from === null)
+    return 'Opened'
+  if (to === 'Running')
+    return 'Claimed'
+  if ((to === 'Queued' || to === 'Pending') && from === 'Running')
+    return 'Retrying'
+  return to
+}
+
+function taskWorkflowScope(database: DatabaseSync, table: 'tasks' | 'worker_tasks', taskId: string): WorkflowScope {
+  return database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number AS item_number,
+      ${table}.revision_id, ${table}.id AS task_id,
+      ${table}.attempts AS attempts
+    FROM ${table}
+    JOIN subjects ON subjects.id = ${table}.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE ${table}.id = ?
+  `).get(taskId) as unknown as WorkflowScope
+}
+
+function publicationWorkflowScope(database: DatabaseSync, commandId: string): WorkflowScope {
+  return database.prepare(`
+    SELECT COALESCE(item_repositories.github, routines.repository) AS repository,
+      subjects.github_number AS item_number, tasks.revision_id,
+      publication_commands.task_id, publication_commands.attempts
+    FROM publication_commands
+    LEFT JOIN tasks ON tasks.id = publication_commands.task_id
+    LEFT JOIN subjects ON subjects.id = tasks.subject_id
+    LEFT JOIN repositories AS item_repositories ON item_repositories.id = subjects.repository_id
+    LEFT JOIN routine_runs ON routine_runs.id = publication_commands.routine_run_id
+    LEFT JOIN routines ON routines.id = routine_runs.routine_id
+    WHERE publication_commands.id = ?
+  `).get(commandId) as unknown as WorkflowScope
+}
+
+function issueTriageStatusWorkflowScope(database: DatabaseSync, commandId: string): WorkflowScope {
+  return database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number AS item_number,
+      issue_triage_comment_commands.revision_id, issue_triage_comment_commands.task_id,
+      issue_triage_comment_commands.fence AS attempts
+    FROM issue_triage_comment_commands
+    JOIN worker_tasks ON worker_tasks.id = issue_triage_comment_commands.task_id
+    JOIN subjects ON subjects.id = worker_tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE issue_triage_comment_commands.id = ?
+  `).get(commandId) as unknown as WorkflowScope
+}
+
+function recordIssueTriageStatusEvent(database: DatabaseSync, input: {
+  commandId: string
+  event: string
+  from: string | null
+  to: string
+  at: string
+  reason?: string | null
+  fence?: number
+}): void {
+  const scope = issueTriageStatusWorkflowScope(database, input.commandId)
+  recordWorkflowEvent(database, {
+    stream: 'issue_triage_status',
+    event: input.event,
+    entityId: input.commandId,
+    repository: scope.repository,
+    itemNumber: scope.item_number,
+    revisionId: scope.revision_id,
+    taskId: scope.task_id,
+    from: input.from,
+    to: input.to,
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
+    attempt: input.fence ?? scope.attempts,
+    fence: input.fence ?? scope.attempts,
+    at: input.at,
+  })
+}
+
+function reviewStatusWorkflowScope(database: DatabaseSync, commandId: string): WorkflowScope {
+  return database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number AS item_number,
+      review_status_commands.revision_id, review_status_commands.task_id,
+      review_status_commands.fence AS attempts
+    FROM review_status_commands
+    LEFT JOIN worker_tasks
+      ON review_status_commands.task_kind = 'adversarial_review'
+      AND worker_tasks.id = review_status_commands.task_id
+    LEFT JOIN tasks
+      ON review_status_commands.task_kind = 'review_fix'
+      AND tasks.id = review_status_commands.task_id
+    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE review_status_commands.id = ?
+  `).get(commandId) as unknown as WorkflowScope
+}
+
+function recordReviewStatusEvent(database: DatabaseSync, input: {
+  commandId: string
+  event: string
+  from: string | null
+  to: string
+  at: string
+  reason?: string | null
+  fence?: number
+}): void {
+  const scope = reviewStatusWorkflowScope(database, input.commandId)
+  recordWorkflowEvent(database, {
+    stream: 'review_status',
+    event: input.event,
+    entityId: input.commandId,
+    repository: scope.repository,
+    itemNumber: scope.item_number,
+    revisionId: scope.revision_id,
+    taskId: scope.task_id,
+    from: input.from,
+    to: input.to,
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
+    attempt: input.fence ?? scope.attempts,
+    fence: input.fence ?? scope.attempts,
+    at: input.at,
+  })
+}
+
+function routineWorkflowScope(database: DatabaseSync, runId: string): WorkflowScope {
+  return database.prepare(`
+    SELECT routines.repository, NULL AS item_number, NULL AS revision_id,
+      routine_runs.id AS task_id, routine_runs.attempts
+    FROM routine_runs
+    JOIN routines ON routines.id = routine_runs.routine_id
+    WHERE routine_runs.id = ?
+  `).get(runId) as unknown as WorkflowScope
+}
+
+function recordRoutineRunEvent(database: DatabaseSync, input: {
+  runId: string
+  event: string
+  from: string | null
+  to: string
+  at: string
+  reason?: string | null
+  fence?: number
+  usage?: AgentTokenUsage | null
+}): void {
+  const scope = routineWorkflowScope(database, input.runId)
+  recordWorkflowEvent(database, {
+    stream: 'routine_run',
+    event: input.event,
+    entityId: input.runId,
+    repository: scope.repository,
+    taskId: input.runId,
+    from: input.from,
+    to: input.to,
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
+    attempt: scope.attempts,
+    fence: input.fence ?? 0,
+    ...(input.usage === undefined ? {} : { usage: input.usage }),
+    at: input.at,
+  })
+}
+
+function durableCommandScope(
+  database: DatabaseSync,
+  stream: 'candidate_issue' | 'routine_report',
+  commandId: string,
+): WorkflowScope {
+  if (stream === 'candidate_issue') {
+    return database.prepare(`
+      SELECT repository, github_issue_number AS item_number, NULL AS revision_id,
+        candidate_id AS task_id, attempts
+      FROM candidate_issue_commands WHERE id = ?
+    `).get(commandId) as unknown as WorkflowScope
+  }
+  return database.prepare(`
+    SELECT routine_report_commands.repository,
+      routines.tracking_issue_number AS item_number, NULL AS revision_id,
+      routine_report_commands.run_id AS task_id, routine_report_commands.attempts
+    FROM routine_report_commands
+    LEFT JOIN routines ON routines.id = routine_report_commands.routine_id
+    WHERE routine_report_commands.id = ?
+  `).get(commandId) as unknown as WorkflowScope
+}
+
+function recordDurableCommandEvent(database: DatabaseSync, input: {
+  stream: 'candidate_issue' | 'routine_report'
+  commandId: string
+  event: string
+  from: string | null
+  to: string
+  at: string
+  reason?: string | null
+  fence?: number
+}): void {
+  const scope = durableCommandScope(database, input.stream, input.commandId)
+  recordWorkflowEvent(database, {
+    stream: input.stream,
+    event: input.event,
+    entityId: input.commandId,
+    repository: scope.repository,
+    itemNumber: scope.item_number,
+    taskId: scope.task_id,
+    from: input.from,
+    to: input.to,
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
+    attempt: scope.attempts,
+    fence: input.fence ?? 0,
+    at: input.at,
+  })
+}
+
 function recordTransition(database: DatabaseSync, input: {
   taskId: string
   from: TaskRow['state_tag'] | null
   to: TaskRow['state_tag']
   reason: string | null
   fence: number
+  usage?: AgentTokenUsage | null
   at: string
 }): void {
   database.prepare(`
     INSERT INTO task_transitions (task_id, from_tag, to_tag, reason, fence, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(input.taskId, input.from, input.to, input.reason, input.fence, input.at)
+  const scope = taskWorkflowScope(database, 'tasks', input.taskId)
+  recordWorkflowEvent(database, {
+    stream: 'task',
+    event: workflowTransitionEvent(input.from, input.to),
+    entityId: input.taskId,
+    repository: scope.repository,
+    itemNumber: scope.item_number,
+    revisionId: scope.revision_id,
+    taskId: input.taskId,
+    from: input.from,
+    to: input.to,
+    reason: input.reason,
+    attempt: scope.attempts,
+    fence: input.fence,
+    ...(input.usage === undefined ? {} : { usage: input.usage }),
+    at: input.at,
+  })
 }
 
 function recordWorkerTransition(database: DatabaseSync, input: {
@@ -2807,12 +3237,30 @@ function recordWorkerTransition(database: DatabaseSync, input: {
   to: 'Queued' | 'ActionRequired' | 'Running' | 'Completed' | 'Failed' | 'Superseded'
   reason: string | null
   fence: number
+  usage?: AgentTokenUsage | null
   at: string
 }): void {
   database.prepare(`
     INSERT INTO worker_task_transitions (task_id, from_tag, to_tag, reason, fence, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(input.taskId, input.from, input.to, input.reason, input.fence, input.at)
+  const scope = taskWorkflowScope(database, 'worker_tasks', input.taskId)
+  recordWorkflowEvent(database, {
+    stream: 'worker_task',
+    event: workflowTransitionEvent(input.from, input.to),
+    entityId: input.taskId,
+    repository: scope.repository,
+    itemNumber: scope.item_number,
+    revisionId: scope.revision_id,
+    taskId: input.taskId,
+    from: input.from,
+    to: input.to,
+    reason: input.reason,
+    attempt: scope.attempts,
+    fence: input.fence,
+    ...(input.usage === undefined ? {} : { usage: input.usage }),
+    at: input.at,
+  })
 }
 
 function recordPublicationEvent(database: DatabaseSync, input: {
@@ -2827,6 +3275,22 @@ function recordPublicationEvent(database: DatabaseSync, input: {
     INSERT INTO publication_events (command_id, from_tag, to_tag, reason, fence, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(input.commandId, input.from, input.to, input.reason, input.fence, input.at)
+  const scope = publicationWorkflowScope(database, input.commandId)
+  recordWorkflowEvent(database, {
+    stream: 'publication',
+    event: workflowTransitionEvent(input.from, input.to),
+    entityId: input.commandId,
+    repository: scope.repository,
+    itemNumber: scope.item_number,
+    revisionId: scope.revision_id,
+    taskId: scope.task_id,
+    from: input.from,
+    to: input.to,
+    reason: input.reason,
+    attempt: scope.attempts,
+    fence: input.fence,
+    at: input.at,
+  })
 }
 
 /**
@@ -3296,14 +3760,32 @@ function planAdversarialReview(
   const localAttempt = database.prepare(`
     SELECT
       EXISTS (SELECT 1 FROM review_runs WHERE subject_id = ?) AS any_attempt,
-      EXISTS (SELECT 1 FROM review_runs WHERE subject_id = ? AND revision_id = ?) AS revision_attempt
-  `).get(subjectId, subjectId, revisionId) as { any_attempt: number, revision_attempt: number }
-  const alreadyReviewed = subject.kind === 'pull_request'
+      EXISTS (SELECT 1 FROM review_runs WHERE subject_id = ? AND revision_id = ?) AS revision_attempt,
+      (SELECT review_runs.id FROM review_runs
+        JOIN review_evidence_scopes ON review_evidence_scopes.review_run_id = review_runs.id
+        WHERE review_runs.subject_id = ? AND review_runs.head_sha = ?
+          AND review_runs.kind = 'adversarial_review'
+          AND review_evidence_scopes.policy_digest = ?
+        ORDER BY review_runs.completed_at DESC, review_runs.id DESC LIMIT 1) AS head_review_run_id
+  `).get(
+    subjectId,
+    subjectId,
+    revisionId,
+    subjectId,
+    subject.kind === 'pull_request' ? subject.headSha : '',
+    digest(JSON.stringify(mapping)),
+  ) as {
+    any_attempt: number
+    revision_attempt: number
+    head_review_run_id: string | null
+  }
+  const priorComplete = subject.kind === 'pull_request'
     && subject.priorAutomatedReview._tag === 'Found'
     && subject.priorAutomatedReview.state === 'complete'
+  const alreadyReviewed = subject.kind === 'pull_request'
+    && (localAttempt.head_review_run_id !== null || (priorComplete && localAttempt.any_attempt === 0))
     && !rerunRequested
     && !(manualReviewRequested && localAttempt.revision_attempt === 0)
-    && (localAttempt.any_attempt === 0 || localAttempt.revision_attempt === 1)
   const eligible = subject.kind === 'pull_request'
     && subject.state === 'open'
     && !subject.draft
@@ -3312,6 +3794,55 @@ function planAdversarialReview(
     && mapping.pullRequestReview
     && !alreadyReviewed
     && (!approvalRequired || reviewApproved)
+
+  if (alreadyReviewed && subject.kind === 'pull_request' && subject.priorAutomatedReview._tag === 'Found') {
+    const stored = database.prepare(`
+      INSERT INTO review_resolutions (
+        subject_id, revision_id, task_id, task_fence, resolution_tag,
+        review_run_id, baseline_task_id, github_url, reason, created_at
+      ) VALUES (?, ?, NULL, 0, 'ExistingReview', NULL, NULL, ?, NULL, ?)
+      ON CONFLICT(subject_id, revision_id) DO UPDATE SET
+        task_id = NULL, task_fence = 0, resolution_tag = 'ExistingReview',
+        review_run_id = NULL, baseline_task_id = NULL, github_url = excluded.github_url,
+        reason = NULL, created_at = excluded.created_at
+      WHERE review_resolutions.resolution_tag = 'UnknownNeedsReconciliation'
+    `).run(subjectId, revisionId, subject.priorAutomatedReview.url, observedAt)
+    if (stored.changes === 1) {
+      recordWorkflowEvent(database, {
+        stream: 'review_resolution',
+        event: 'Recorded',
+        entityId: `${subjectId}:${revisionId}`,
+        repository: mapping.github,
+        itemNumber: subject.number,
+        revisionId,
+        from: null,
+        to: 'ExistingReview',
+        at: observedAt,
+      })
+    }
+  }
+  else if (alreadyReviewed && localAttempt.head_review_run_id !== null) {
+    const stored = database.prepare(`
+      INSERT INTO review_resolutions (
+        subject_id, revision_id, task_id, task_fence, resolution_tag,
+        review_run_id, baseline_task_id, github_url, reason, created_at
+      ) VALUES (?, ?, NULL, 0, 'Reviewed', ?, NULL, NULL, NULL, ?)
+      ON CONFLICT(subject_id, revision_id) DO NOTHING
+    `).run(subjectId, revisionId, localAttempt.head_review_run_id, observedAt)
+    if (stored.changes === 1) {
+      recordWorkflowEvent(database, {
+        stream: 'review_resolution',
+        event: 'Reused',
+        entityId: `${subjectId}:${revisionId}`,
+        repository: mapping.github,
+        itemNumber: subject.number,
+        revisionId,
+        from: null,
+        to: 'Reviewed',
+        at: observedAt,
+      })
+    }
+  }
 
   if (!eligible) {
     supersedeWorkerTasks(
@@ -3361,6 +3892,26 @@ function planAdversarialReview(
       from: 'Completed',
       to: 'Queued',
       reason: 'The manual Review label overrode pull request triage.',
+      fence: existing.fence,
+      at: observedAt,
+    })
+    return
+  }
+  if (existing?.state_tag === 'Completed' && localAttempt.revision_attempt === 1 && localAttempt.head_review_run_id === null) {
+    database.prepare(`
+      UPDATE worker_tasks
+      SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
+        worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
+        progress_label = 'Starting', updated_at = ?
+      WHERE id = ? AND state_tag = 'Completed'
+    `).run(observedAt, existing.id)
+    database.prepare('DELETE FROM review_resolutions WHERE subject_id = ? AND revision_id = ?')
+      .run(subjectId, revisionId)
+    recordWorkerTransition(database, {
+      taskId: existing.id,
+      from: 'Completed',
+      to: 'Queued',
+      reason: 'Trusted Review policy changed.',
       fence: existing.fence,
       at: observedAt,
     })
@@ -4229,6 +4780,233 @@ const issueTriageCommentContentMigration = `
   PRAGMA user_version = 50;
 `
 
+/** Adds one queryable event stream and keeps Routine Agent usage. */
+const workflowTelemetryMigration = `
+  ALTER TABLE routine_runs
+    ADD COLUMN usage TEXT NOT NULL DEFAULT '{"_tag":"Unavailable"}' CHECK (json_valid(usage));
+
+  CREATE TABLE workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stream TEXT NOT NULL CHECK (stream IN (
+      'task', 'worker_task', 'publication', 'review_run', 'review_status',
+      'routine_run', 'candidate_issue', 'routine_report', 'provider_circuit'
+    )),
+    event TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    repository TEXT,
+    item_number INTEGER,
+    revision_id TEXT,
+    task_id TEXT,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    reason TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    fence INTEGER NOT NULL DEFAULT 0 CHECK (fence >= 0),
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    usage TEXT CHECK (usage IS NULL OR json_valid(usage)),
+    occurred_at TEXT NOT NULL
+  );
+
+  CREATE INDEX workflow_events_stream_time
+    ON workflow_events(stream, occurred_at DESC, id DESC);
+  CREATE INDEX workflow_events_entity
+    ON workflow_events(stream, entity_id, occurred_at, id);
+
+  PRAGMA user_version = 51;
+`
+
+/** Persists Agent provider health independently from Task retry budgets. */
+const providerCircuitMigration = `
+  CREATE TABLE provider_circuits (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'opencode')),
+    credential TEXT NOT NULL,
+    model TEXT NOT NULL,
+    failure_class TEXT NOT NULL CHECK (failure_class IN (
+      'network', 'overloaded', 'stalled', 'process_exit', 'authentication', 'unknown'
+    )),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Closed', 'Open', 'HalfOpen')),
+    failures INTEGER NOT NULL DEFAULT 0 CHECK (failures >= 0),
+    retry_at TEXT,
+    canary_worker_id TEXT,
+    canary_fence INTEGER NOT NULL DEFAULT 0 CHECK (canary_fence >= 0),
+    canary_lease_expires_at TEXT,
+    last_detail TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (provider, credential, model, failure_class),
+    CHECK (
+      (state_tag = 'Open' AND retry_at IS NOT NULL
+        AND canary_worker_id IS NULL AND canary_lease_expires_at IS NULL)
+      OR (state_tag = 'HalfOpen' AND retry_at IS NULL
+        AND canary_worker_id IS NOT NULL AND canary_lease_expires_at IS NOT NULL)
+      OR (state_tag = 'Closed' AND retry_at IS NULL
+        AND canary_worker_id IS NULL AND canary_lease_expires_at IS NULL)
+    )
+  );
+
+  CREATE INDEX provider_circuits_availability
+    ON provider_circuits(provider, credential, state_tag, retry_at);
+
+  PRAGMA user_version = 52;
+`
+
+/** Makes successful Review completion explicit and detaches its terminal Publication. */
+const reviewResolutionMigration = `
+  ALTER TABLE review_status_commands ADD COLUMN review_run_id TEXT REFERENCES review_runs(id);
+  ALTER TABLE review_status_commands ADD COLUMN desired_outcome TEXT
+    CHECK (desired_outcome IN ('READY', 'PENDING', 'BLOCKED', 'WAITING', 'EXISTING', 'SKIPPED'));
+
+  UPDATE review_status_commands
+  SET desired_outcome = CASE
+    WHEN body LIKE '%### 🤖 READY%' THEN 'READY'
+    WHEN body LIKE '%### 🤖 BLOCKED%' THEN 'BLOCKED'
+    WHEN body LIKE '%### 🤖 WAITING%' THEN 'WAITING'
+    WHEN body LIKE '%### 🤖 REVIEW SKIPPED%' THEN 'SKIPPED'
+    WHEN body LIKE '%### 🤖 PENDING%' THEN 'PENDING'
+    ELSE NULL
+  END
+  WHERE phase = 'terminal';
+
+  CREATE TABLE review_resolutions (
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL,
+    task_id TEXT REFERENCES worker_tasks(id),
+    task_fence INTEGER NOT NULL CHECK (task_fence >= 0),
+    resolution_tag TEXT NOT NULL CHECK (resolution_tag IN (
+      'Reviewed', 'ReviewSkipped', 'WaitingForBaselineRepair',
+      'ExistingReview', 'UnknownNeedsReconciliation'
+    )),
+    review_run_id TEXT REFERENCES review_runs(id),
+    baseline_task_id TEXT REFERENCES tasks(id),
+    github_url TEXT,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, revision_id),
+    FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id),
+    CHECK ((task_id IS NULL AND task_fence = 0) OR (task_id IS NOT NULL AND task_fence > 0)),
+    CHECK (
+      (resolution_tag = 'Reviewed' AND review_run_id IS NOT NULL
+        AND baseline_task_id IS NULL AND github_url IS NULL AND reason IS NULL)
+      OR (resolution_tag = 'WaitingForBaselineRepair' AND review_run_id IS NULL
+        AND baseline_task_id IS NOT NULL AND github_url IS NULL AND reason IS NULL)
+      OR (resolution_tag = 'ExistingReview' AND review_run_id IS NULL
+        AND baseline_task_id IS NULL AND github_url IS NOT NULL AND reason IS NULL)
+      OR (resolution_tag IN ('ReviewSkipped', 'UnknownNeedsReconciliation') AND review_run_id IS NULL
+        AND baseline_task_id IS NULL AND github_url IS NULL AND reason IS NOT NULL)
+    )
+  );
+
+  INSERT INTO review_resolutions (
+    subject_id, revision_id, task_id, task_fence, resolution_tag,
+    review_run_id, baseline_task_id, github_url, reason, created_at
+  )
+  SELECT worker_tasks.subject_id, worker_tasks.revision_id, worker_tasks.id, worker_tasks.fence,
+    CASE WHEN review_runs.id IS NOT NULL THEN 'Reviewed' ELSE 'UnknownNeedsReconciliation' END,
+    review_runs.id, NULL, NULL,
+    CASE WHEN review_runs.id IS NULL THEN 'Legacy Review evidence needs reconciliation.' ELSE NULL END,
+    worker_tasks.updated_at
+  FROM worker_tasks
+  LEFT JOIN review_runs ON review_runs.id = worker_tasks.evidence
+  WHERE worker_tasks.kind = 'adversarial_review' AND worker_tasks.state_tag = 'Completed';
+
+  ALTER TABLE workflow_events RENAME TO workflow_events_v52;
+  CREATE TABLE workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stream TEXT NOT NULL CHECK (stream IN (
+      'task', 'worker_task', 'publication', 'review_run', 'review_resolution', 'review_status',
+      'routine_run', 'candidate_issue', 'routine_report', 'provider_circuit'
+    )),
+    event TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    repository TEXT,
+    item_number INTEGER,
+    revision_id TEXT,
+    task_id TEXT,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    reason TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    fence INTEGER NOT NULL DEFAULT 0 CHECK (fence >= 0),
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    usage TEXT CHECK (usage IS NULL OR json_valid(usage)),
+    occurred_at TEXT NOT NULL
+  );
+  INSERT INTO workflow_events SELECT * FROM workflow_events_v52;
+  DROP TABLE workflow_events_v52;
+  CREATE INDEX workflow_events_stream_time
+    ON workflow_events(stream, occurred_at DESC, id DESC);
+  CREATE INDEX workflow_events_entity
+    ON workflow_events(stream, entity_id, occurred_at, id);
+
+  PRAGMA user_version = 53;
+`
+
+/** Binds Review reuse to the trusted repository policy that produced it. */
+const reviewEvidenceScopeMigration = `
+  CREATE TABLE review_evidence_scopes (
+    review_run_id TEXT PRIMARY KEY REFERENCES review_runs(id) ON DELETE CASCADE,
+    policy_digest TEXT NOT NULL CHECK (length(policy_digest) = 64),
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
+  SELECT id, '0000000000000000000000000000000000000000000000000000000000000000', completed_at
+  FROM review_runs;
+  PRAGMA user_version = 54;
+`
+
+/** Pins Routine authority to each Run and retires definitions without deleting history. */
+const routineAuthorityMigration = `
+  ALTER TABLE routines ADD COLUMN retired_at TEXT;
+  ALTER TABLE routine_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'report' CHECK (mode IN ('report', 'propose'));
+  CREATE INDEX routines_active ON routines(repository, retired_at, enabled);
+  PRAGMA user_version = 55;
+`
+
+/** Keeps moving controller gates separate from immutable Agent time and usage. */
+const reviewGateProjectionMigration = `
+  CREATE TABLE review_gate_projections (
+    review_run_id TEXT PRIMARY KEY REFERENCES review_runs(id) ON DELETE CASCADE,
+    gates TEXT NOT NULL CHECK (json_valid(gates)),
+    outcome_tag TEXT NOT NULL CHECK (outcome_tag IN ('Ready', 'Pending', 'Blocked')),
+    confidence INTEGER CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 100),
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO review_gate_projections (review_run_id, gates, outcome_tag, confidence, updated_at)
+  SELECT id, gates, outcome_tag, confidence, completed_at FROM review_runs;
+
+  ALTER TABLE workflow_events RENAME TO workflow_events_v55;
+  CREATE TABLE workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stream TEXT NOT NULL CHECK (stream IN (
+      'task', 'worker_task', 'publication', 'review_run', 'review_gate',
+      'review_resolution', 'review_status', 'issue_triage_status', 'routine_run',
+      'candidate_issue', 'routine_report', 'provider_circuit'
+    )),
+    event TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    repository TEXT,
+    item_number INTEGER,
+    revision_id TEXT,
+    task_id TEXT,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    reason TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    fence INTEGER NOT NULL DEFAULT 0 CHECK (fence >= 0),
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    usage TEXT CHECK (usage IS NULL OR json_valid(usage)),
+    occurred_at TEXT NOT NULL
+  );
+  INSERT INTO workflow_events SELECT * FROM workflow_events_v55;
+  DROP TABLE workflow_events_v55;
+  CREATE INDEX workflow_events_stream_time
+    ON workflow_events(stream, occurred_at DESC, id DESC);
+  CREATE INDEX workflow_events_entity
+    ON workflow_events(stream, entity_id, occurred_at, id);
+
+  PRAGMA user_version = 56;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4254,8 +5032,6 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 50)
-    return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
   `).get() as { count: number }
@@ -4455,8 +5231,34 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 49) {
     applyMigration(database, issueTriageCommentContentMigration)
+    version = 50
+  }
+  if (version === 50) {
+    applyMigration(database, workflowTelemetryMigration)
+    version = 51
+  }
+  if (version === 51) {
+    applyMigration(database, providerCircuitMigration)
+    version = 52
+  }
+  if (version === 52) {
+    applyForeignKeyMigration(database, reviewResolutionMigration)
+    version = 53
+  }
+  if (version === 53) {
+    applyMigration(database, reviewEvidenceScopeMigration)
+    version = 54
+  }
+  if (version === 54) {
+    applyMigration(database, routineAuthorityMigration)
+    version = 55
+  }
+  if (version === 55) {
+    applyForeignKeyMigration(database, reviewGateProjectionMigration)
     return
   }
+  if (version === 56)
+    return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
 
@@ -4643,9 +5445,9 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       review_runs.started_at,
       review_runs.completed_at,
       review_runs.usage,
-      review_runs.gates,
-      review_runs.outcome_tag,
-      review_runs.confidence,
+      COALESCE(review_gate_projections.gates, review_runs.gates) AS gates,
+      COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
+      COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
       review_runs.findings,
       agent_feedback.kind AS feedback_tag,
       agent_feedback.reason AS feedback_reason,
@@ -4658,40 +5460,49 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
     JOIN subjects ON subjects.id = review_runs.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = review_runs.revision_id AND revisions.subject_id = subjects.id
+    LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
     LEFT JOIN agent_feedback ON agent_feedback.review_run_id = review_runs.id
     WHERE review_runs.kind = 'adversarial_review'
       AND NOT EXISTS (
         SELECT 1 FROM review_runs AS settled
         WHERE settled.supersedes_review_run_id = review_runs.id
       )
-    ORDER BY review_runs.completed_at DESC, review_runs.id
-    LIMIT 30
-  `).all() as unknown as DashboardReviewRunRow[]
-  const publications = database.prepare(`
-    SELECT
-      review_publications.id,
-      review_publications.review_run_id,
-      review_publications.body,
-      review_publications.body_sha256,
-      review_publications.created_at,
-      review_publications.result_tag,
-      review_publications.github_comment_id,
-      review_publications.github_url,
-      review_publications.reason
-    FROM review_publications
-    WHERE review_publications.review_run_id IN (
-      SELECT review_runs.id
-      FROM review_runs
-      WHERE review_runs.kind = 'adversarial_review'
-        AND NOT EXISTS (
-          SELECT 1 FROM review_runs AS settled
-          WHERE settled.supersedes_review_run_id = review_runs.id
+      AND (
+        (
+          subjects.current_revision_id = review_runs.revision_id
+          AND json_extract(revisions.payload, '$.state') = 'open'
         )
-      ORDER BY review_runs.completed_at DESC, review_runs.id
-      LIMIT 30
-    )
-    ORDER BY review_publications.created_at, review_publications.id
-  `).all() as unknown as ReviewPublicationRow[]
+        OR review_runs.id IN (
+          SELECT recent.id
+          FROM review_runs AS recent
+          WHERE recent.kind = 'adversarial_review'
+            AND NOT EXISTS (
+              SELECT 1 FROM review_runs AS settled
+              WHERE settled.supersedes_review_run_id = recent.id
+            )
+          ORDER BY recent.completed_at DESC, recent.id
+          LIMIT 30
+        )
+      )
+    ORDER BY review_runs.completed_at DESC, review_runs.id
+  `).all() as unknown as DashboardReviewRunRow[]
+  const publications = reviewRuns.length === 0
+    ? []
+    : database.prepare(`
+        SELECT
+          review_publications.id,
+          review_publications.review_run_id,
+          review_publications.body,
+          review_publications.body_sha256,
+          review_publications.created_at,
+          review_publications.result_tag,
+          review_publications.github_comment_id,
+          review_publications.github_url,
+          review_publications.reason
+        FROM review_publications
+        WHERE review_publications.review_run_id IN (${reviewRuns.map(() => '?').join(', ')})
+        ORDER BY review_publications.created_at, review_publications.id
+      `).all(...reviewRuns.map(run => run.id)) as unknown as ReviewPublicationRow[]
   const publicationsByRun = Map.groupBy(publications.map(reviewPublicationFromRow), publication => publication.reviewRunId)
   return reviewRuns.map(row => reviewAgentFromRow(row, publicationsByRun.get(row.id) ?? []))
 }
@@ -5383,6 +6194,7 @@ export function openJournalStore(
         json_extract(revisions.payload, '$.url') AS url,
         json_extract(revisions.payload, '$.createdAt') AS github_created_at,
         json_extract(revisions.payload, '$.updatedAt') AS github_updated_at,
+        json_extract(revisions.payload, '$.contentDigest') AS content_digest,
         json_extract(revisions.payload, '$.draft') AS draft,
         json_extract(revisions.payload, '$.baseSha') AS base_sha,
         json_extract(revisions.payload, '$.headSha') AS head_sha,
@@ -5406,6 +6218,7 @@ export function openJournalStore(
         ? {
             kind: 'issue',
             approvalLabels: [],
+            contentDigest: current.contentDigest,
             routineFiled: false,
             routineTracking: false,
             repository: current.repository,
@@ -5692,6 +6505,7 @@ export function openJournalStore(
       return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
 
     const runUsage: AgentTokenUsage = input.usage ?? { _tag: 'Unavailable' }
+    const policyDigest = input.policyDigest ?? digest(revision.policy_json)
     const gates = JSON.stringify(input.gates)
     const findings = JSON.stringify(input.findings)
     const usage = JSON.stringify(runUsage)
@@ -5705,6 +6519,7 @@ export function openJournalStore(
       model: input.model,
       agentVersion: input.agentVersion,
       skillDigest: input.skillDigest,
+      policyDigest,
       startedAt: input.startedAt,
       completedAt: input.completedAt,
       usage: runUsage,
@@ -5747,6 +6562,29 @@ export function openJournalStore(
         contentDigest,
         usage,
       )
+      database.prepare(`
+        INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
+        VALUES (?, ?, ?)
+      `).run(input.id, policyDigest, input.completedAt)
+      database.prepare(`
+        INSERT INTO review_gate_projections (
+          review_run_id, gates, outcome_tag, confidence, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+      `).run(input.id, gates, outcome._tag, input.confidence ?? null, input.completedAt)
+      recordWorkflowEvent(database, {
+        stream: 'review_run',
+        event: 'Completed',
+        entityId: input.id,
+        repository: input.repository,
+        itemNumber: input.pullRequestNumber,
+        revisionId: input.revisionId,
+        taskId: input.id,
+        from: 'Running',
+        to: 'Completed',
+        usage: runUsage,
+        durationMilliseconds: Math.max(0, Date.parse(input.completedAt) - Date.parse(input.startedAt)),
+        at: input.completedAt,
+      })
       const repairableFinding = input.findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
       if (!repairableFinding) {
         supersedeTasks(
@@ -5798,6 +6636,7 @@ export function openJournalStore(
       return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
 
     const runUsage: AgentTokenUsage = input.usage ?? { _tag: 'Unavailable' }
+    const policyDigest = input.policyDigest ?? digest(revision.policy_json)
     const gates = JSON.stringify(input.gates)
     const findings = JSON.stringify(input.findings)
     const usage = JSON.stringify(runUsage)
@@ -5812,6 +6651,7 @@ export function openJournalStore(
       model: input.model,
       agentVersion: input.agentVersion,
       skillDigest: input.skillDigest,
+      policyDigest,
       startedAt: input.startedAt,
       completedAt: input.completedAt,
       usage: runUsage,
@@ -5879,6 +6719,15 @@ export function openJournalStore(
         usage,
         input.supersedesReviewRunId,
       )
+      database.prepare(`
+        INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
+        VALUES (?, ?, ?)
+      `).run(input.id, policyDigest, input.completedAt)
+      database.prepare(`
+        INSERT INTO review_gate_projections (
+          review_run_id, gates, outcome_tag, confidence, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+      `).run(input.id, gates, outcome._tag, input.confidence ?? null, input.completedAt)
       database.prepare(`
         INSERT INTO review_publications (
           id, review_run_id, body, body_sha256, created_at, result_tag,
@@ -6078,9 +6927,9 @@ export function openJournalStore(
         review_runs.started_at,
         review_runs.completed_at,
         review_runs.usage,
-        review_runs.gates,
-        review_runs.outcome_tag,
-        review_runs.confidence,
+        COALESCE(review_gate_projections.gates, review_runs.gates) AS gates,
+        COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
+        COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
         review_runs.findings,
         agent_feedback.kind AS feedback_tag,
         agent_feedback.reason AS feedback_reason,
@@ -6088,6 +6937,7 @@ export function openJournalStore(
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
+      LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
       LEFT JOIN agent_feedback ON agent_feedback.review_run_id = review_runs.id
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
@@ -6705,6 +7555,113 @@ export function openJournalStore(
     `).run(leaseExpiresAt, input.taskId, input.workerId, input.fence, input.at).changes === 1
   }
 
+  const completeReviewTask: JournalStore['completeReviewTask'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const task = database.prepare(`
+        SELECT worker_tasks.subject_id, worker_tasks.revision_id
+        FROM worker_tasks
+        JOIN subjects ON subjects.id = worker_tasks.subject_id
+        WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
+          AND worker_tasks.state_tag = 'Running' AND worker_tasks.worker_id = ?
+          AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
+          AND worker_tasks.revision_id = subjects.current_revision_id
+      `).get(input.taskId, input.workerId, input.fence, input.at) as {
+        subject_id: number
+        revision_id: string
+      } | undefined
+      if (task === undefined) {
+        database.exec('COMMIT')
+        return false
+      }
+
+      const fields = (() => {
+        switch (input.resolution._tag) {
+          case 'Reviewed': {
+            const run = database.prepare(`
+              SELECT 1 FROM review_runs
+              WHERE id = ? AND subject_id = ? AND revision_id = ?
+            `).get(input.resolution.reviewRunId, task.subject_id, task.revision_id)
+            if (run === undefined)
+              throw new Error('The Review resolution references a different Review run.')
+            return { reviewRunId: input.resolution.reviewRunId, baselineTaskId: null, githubUrl: null, reason: null }
+          }
+          case 'WaitingForBaselineRepair': {
+            const baseline = database.prepare(`
+              SELECT 1 FROM tasks
+              WHERE id = ? AND subject_id = ? AND revision_id = ? AND kind = 'baseline_repair'
+            `).get(input.resolution.taskId, task.subject_id, task.revision_id)
+            if (baseline === undefined)
+              throw new Error('The Review resolution references a different Baseline repair Task.')
+            return { reviewRunId: null, baselineTaskId: input.resolution.taskId, githubUrl: null, reason: null }
+          }
+          case 'ExistingReview':
+            return { reviewRunId: null, baselineTaskId: null, githubUrl: input.resolution.url, reason: null }
+          case 'ReviewSkipped':
+          case 'UnknownNeedsReconciliation':
+            return { reviewRunId: null, baselineTaskId: null, githubUrl: null, reason: input.resolution.reason }
+        }
+      })()
+
+      const completed = database.prepare(`
+        UPDATE worker_tasks
+        SET state_tag = 'Completed', evidence = ?, reason = NULL, worker_id = NULL,
+          lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          AND lease_expires_at > ?
+      `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at).changes === 1
+      if (!completed)
+        throw new Error('The Review Task completion lost its fenced lease.')
+
+      database.prepare(`
+        INSERT INTO review_resolutions (
+          subject_id, revision_id, task_id, task_fence, resolution_tag,
+          review_run_id, baseline_task_id, github_url, reason, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(subject_id, revision_id) DO UPDATE SET
+          task_id = excluded.task_id,
+          task_fence = excluded.task_fence,
+          resolution_tag = excluded.resolution_tag,
+          review_run_id = excluded.review_run_id,
+          baseline_task_id = excluded.baseline_task_id,
+          github_url = excluded.github_url,
+          reason = excluded.reason,
+          created_at = excluded.created_at
+        WHERE excluded.task_fence >= review_resolutions.task_fence
+      `).run(
+        task.subject_id,
+        task.revision_id,
+        input.taskId,
+        input.fence,
+        input.resolution._tag,
+        fields.reviewRunId,
+        fields.baselineTaskId,
+        fields.githubUrl,
+        fields.reason,
+        input.at,
+      )
+      recordWorkerTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
+      recordWorkflowEvent(database, {
+        stream: 'review_resolution',
+        event: 'Recorded',
+        entityId: `${task.subject_id}:${task.revision_id}`,
+        revisionId: task.revision_id,
+        taskId: input.taskId,
+        from: null,
+        to: input.resolution._tag,
+        fence: input.fence,
+        at: input.at,
+      })
+      resolveTaskIncidents(database, input.taskId, input.at)
+      database.exec('COMMIT')
+      return true
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const completeWorkerTask: JournalStore['completeWorkerTask'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -6717,9 +7674,16 @@ export function openJournalStore(
           AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = worker_tasks.subject_id)
       `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
-        recordWorkerTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
+        recordWorkerTransition(database, {
+          taskId: input.taskId,
+          from: 'Running',
+          to: 'Completed',
+          reason: null,
+          fence: input.fence,
+          ...(input.usage === undefined ? {} : { usage: input.usage }),
+          at: input.at,
+        })
         resolveTaskIncidents(database, input.taskId, input.at)
-        restoreAgentProviderRecoveryBudget(database, input.at)
         const row = database.prepare(`
           SELECT worker_tasks.subject_id, worker_tasks.revision_id, revisions.payload, repositories.policy_json
           FROM worker_tasks
@@ -6770,14 +7734,16 @@ export function openJournalStore(
       // A reason no retry can satisfy must not spend the attempt budget. Every
       // attempt is one whole agent turn that reads the same policy, and fails
       // the same way, seven minutes later.
-      const retry = row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason })
+      const providerPaused = isProviderCircuitPause(input.reason)
+      const retry = providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason }))
       const nextTag = retry ? 'Queued' : 'Failed'
       database.prepare(`
         UPDATE worker_tasks
-        SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        SET state_tag = ?, reason = ?, attempts = CASE WHEN ? THEN MAX(0, attempts - 1) ELSE attempts END,
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-      `).run(nextTag, retry ? null : input.reason, input.at, input.taskId, input.workerId, input.fence, input.at)
+      `).run(nextTag, retry ? null : input.reason, providerPaused ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
       recordWorkerTransition(database, { taskId: input.taskId, from: 'Running', to: nextTag, reason: input.reason, fence: input.fence, at: input.at })
       if (!retry)
         recordTaskIncident(database, input.taskId, input.reason, input.at)
@@ -6947,6 +7913,20 @@ export function openJournalStore(
         WHERE state_tag = 'Running'
           OR (state_tag = 'Failed' AND reason LIKE '%operation was aborted%')
       `).all() as unknown as Array<{ id: string, fence: number, state_tag: 'Running' | 'Failed' }>
+      const routineRows = database.prepare(`
+        SELECT id, fence FROM routine_runs WHERE state_tag = 'Running'
+      `).all() as unknown as Array<{ id: string, fence: number }>
+      const terminalReviewStatusRows = database.prepare(`
+        SELECT id, fence FROM review_status_commands
+        WHERE state_tag = 'Running' AND phase = 'terminal'
+      `).all() as unknown as Array<{ id: string, fence: number }>
+      const transientReviewStatusRows = database.prepare(`
+        SELECT id, fence FROM review_status_commands
+        WHERE state_tag = 'Running' AND phase != 'terminal'
+      `).all() as unknown as Array<{ id: string, fence: number }>
+      const issueTriageStatusRows = database.prepare(`
+        SELECT id, fence FROM issue_triage_comment_commands WHERE state_tag = 'Running'
+      `).all() as unknown as Array<{ id: string, fence: number }>
       const recoverConflict = database.prepare(`
         UPDATE tasks
         SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
@@ -6958,6 +7938,13 @@ export function openJournalStore(
         SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
           lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = ?
+      `)
+      const recoverRoutine = database.prepare(`
+        UPDATE routine_runs
+        SET state_tag = 'Queued', reason = NULL, attempts = MAX(0, attempts - 1),
+          worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
+          progress_label = 'Starting', updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND fence = ?
       `)
       let recovered = 0
       conflictRows.forEach((row) => {
@@ -6972,18 +7959,66 @@ export function openJournalStore(
         recovered += 1
         recordWorkerTransition(database, { taskId: row.id, from: row.state_tag, to: 'Queued', reason: 'The service restarted.', fence: row.fence, at })
       })
+      routineRows.forEach((row) => {
+        if (recoverRoutine.run(at, row.id, row.fence).changes !== 1)
+          return
+        recovered += 1
+        recordRoutineRunEvent(database, {
+          runId: row.id,
+          event: 'RestartRecovered',
+          from: 'Running',
+          to: 'Queued',
+          reason: 'The service restarted.',
+          fence: row.fence,
+          at,
+        })
+      })
+      database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Pending', outcome_unknown = 1,
+          reason = 'The service restarted during terminal Publication.',
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE state_tag = 'Running' AND phase = 'terminal'
+      `).run(at)
+      terminalReviewStatusRows.forEach(row => recordReviewStatusEvent(database, {
+        commandId: row.id,
+        event: 'RestartRecovered',
+        from: 'Running',
+        to: 'Pending',
+        reason: 'The service restarted during terminal Publication.',
+        fence: row.fence,
+        at,
+      }))
       database.prepare(`
         UPDATE review_status_commands
         SET state_tag = 'Superseded', reason = 'The service restarted.',
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-        WHERE state_tag = 'Running'
+        WHERE state_tag = 'Running' AND phase != 'terminal'
       `).run(at)
+      transientReviewStatusRows.forEach(row => recordReviewStatusEvent(database, {
+        commandId: row.id,
+        event: 'RestartSuperseded',
+        from: 'Running',
+        to: 'Superseded',
+        reason: 'The service restarted.',
+        fence: row.fence,
+        at,
+      }))
       database.prepare(`
         UPDATE issue_triage_comment_commands
         SET state_tag = 'Superseded', reason = 'The service restarted.',
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE state_tag = 'Running'
       `).run(at)
+      issueTriageStatusRows.forEach(row => recordIssueTriageStatusEvent(database, {
+        commandId: row.id,
+        event: 'RestartSuperseded',
+        from: 'Running',
+        to: 'Superseded',
+        reason: 'The service restarted.',
+        fence: row.fence,
+        at,
+      }))
       database.exec('COMMIT')
       return recovered
     }
@@ -7047,6 +8082,13 @@ export function openJournalStore(
         input.at,
         input.at,
       )
+      recordIssueTriageStatusEvent(database, {
+        commandId,
+        event: 'Staged',
+        from: null,
+        to: 'Pending',
+        at: input.at,
+      })
       database.exec('COMMIT')
       return { _tag: 'Staged', commandId }
     }
@@ -7059,12 +8101,22 @@ export function openJournalStore(
   const claimIssueTriageComment: JournalStore['claimIssueTriageComment'] = (commandId, workerId, now, leaseMilliseconds) => {
     database.exec('BEGIN IMMEDIATE')
     try {
-      database.prepare(`
+      const recovered = database.prepare(`
         UPDATE issue_triage_comment_commands
         SET state_tag = 'Pending', outcome_unknown = 1, reason = 'Comment lease expired.',
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND lease_expires_at <= ?
       `).run(now, commandId, now)
+      if (recovered.changes === 1) {
+        recordIssueTriageStatusEvent(database, {
+          commandId,
+          event: 'LeaseRecovered',
+          from: 'Running',
+          to: 'Pending',
+          reason: 'Comment lease expired.',
+          at: now,
+        })
+      }
       const row = database.prepare(`
         SELECT
           issue_triage_comment_commands.id,
@@ -7122,6 +8174,14 @@ export function openJournalStore(
       `).run(workerId, fence, leaseExpiresAt, now, row.id, row.fence)
       if (update.changes !== 1)
         throw new Error(`Issue triage comment claim lost for ${row.id}.`)
+      recordIssueTriageStatusEvent(database, {
+        commandId: row.id,
+        event: 'Claimed',
+        from: 'Pending',
+        to: 'Running',
+        fence,
+        at: now,
+      })
       database.exec('COMMIT')
       return {
         id: row.id,
@@ -7144,42 +8204,86 @@ export function openJournalStore(
     }
   }
 
-  const completeIssueTriageComment: JournalStore['completeIssueTriageComment'] = input => database.prepare(`
-    UPDATE issue_triage_comment_commands
-    SET state_tag = 'Published', github_comment_id = ?, github_url = ?, reason = NULL,
-      outcome_unknown = 0, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-    -- No clock here on purpose. GitHub has already accepted this write, and a
-    -- record refused because a lease ran out cannot un-send it: the outcome is
-    -- lost and the next attempt sends it again. The worker and the fence prove
-    -- this is the attempt that was authorized, because every re-claim raises the
-    -- fence. One triage comment posted twelve minutes after a two minute lease,
-    -- and the deadlock that followed took a completed triage to Failed.
-    WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      AND revision_id = (
-        SELECT subjects.current_revision_id
-        FROM worker_tasks JOIN subjects ON subjects.id = worker_tasks.subject_id
-        WHERE worker_tasks.id = issue_triage_comment_commands.task_id
-      )
-      AND EXISTS (
-        SELECT 1 FROM worker_tasks
-        WHERE worker_tasks.id = issue_triage_comment_commands.task_id
-          AND worker_tasks.kind = 'issue_triage'
-          AND worker_tasks.state_tag = 'Running'
-          AND worker_tasks.fence = issue_triage_comment_commands.task_fence
-      )
-  `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
+  const completeIssueTriageComment: JournalStore['completeIssueTriageComment'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE issue_triage_comment_commands
+        SET state_tag = 'Published', github_comment_id = ?, github_url = ?, reason = NULL,
+          outcome_unknown = 0, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        -- No clock here on purpose. GitHub has already accepted this write, and a
+        -- record refused because a lease ran out cannot un-send it: the outcome is
+        -- lost and the next attempt sends it again. The worker and the fence prove
+        -- this is the attempt that was authorized, because every re-claim raises the
+        -- fence. One triage comment posted twelve minutes after a two minute lease,
+        -- and the deadlock that followed took a completed triage to Failed.
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          AND revision_id = (
+            SELECT subjects.current_revision_id
+            FROM worker_tasks JOIN subjects ON subjects.id = worker_tasks.subject_id
+            WHERE worker_tasks.id = issue_triage_comment_commands.task_id
+          )
+          AND EXISTS (
+            SELECT 1 FROM worker_tasks
+            WHERE worker_tasks.id = issue_triage_comment_commands.task_id
+              AND worker_tasks.kind = 'issue_triage'
+              AND worker_tasks.state_tag = 'Running'
+              AND worker_tasks.fence = issue_triage_comment_commands.task_fence
+          )
+      `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordIssueTriageStatusEvent(database, {
+          commandId: input.commandId,
+          event: 'Published',
+          from: 'Running',
+          to: 'Published',
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
 
-  const deferIssueTriageComment: JournalStore['deferIssueTriageComment'] = input => database.prepare(`
-    UPDATE issue_triage_comment_commands
-    SET state_tag = 'Pending', outcome_unknown = 1, reason = ?, worker_id = NULL,
-      lease_expires_at = NULL, updated_at = ?
-    WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      AND lease_expires_at > ?
-  `).run(input.reason, input.at, input.commandId, input.workerId, input.fence, input.at).changes === 1
+  const deferIssueTriageComment: JournalStore['deferIssueTriageComment'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE issue_triage_comment_commands
+        SET state_tag = 'Pending', outcome_unknown = 1, reason = ?, worker_id = NULL,
+          lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          AND lease_expires_at > ?
+      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence, input.at).changes === 1
+      if (changed) {
+        recordIssueTriageStatusEvent(database, {
+          commandId: input.commandId,
+          event: 'Deferred',
+          from: 'Running',
+          to: 'Pending',
+          reason: input.reason,
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
 
   const stageReviewStatus: JournalStore['stageReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
-    const commandId = digest(`${input.taskKind}:${input.taskId}:${input.fence}:${input.phase}:${bodySha256}`)
+    const desiredOutcome = input.desiredOutcome ?? reviewDesiredOutcomeFromBody(input.body)
+    const commandId = digest(`${input.taskKind}:${input.taskId}:${input.fence}:${input.phase}:${input.reviewRunId ?? ''}:${desiredOutcome ?? ''}:${bodySha256}`)
     database.exec('BEGIN IMMEDIATE')
     try {
       const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
@@ -7210,6 +8314,22 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: 'The Task lease or repository policy no longer authorizes this review status.' }
       }
+      if (input.phase === 'terminal' && desiredOutcome === null) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'A terminal review status needs an explicit outcome.' }
+      }
+      if (input.reviewRunId !== undefined) {
+        const reviewRun = database.prepare(`
+          SELECT 1 FROM review_runs
+          JOIN ${taskTable} ON ${taskTable}.subject_id = review_runs.subject_id
+            AND ${taskTable}.revision_id = review_runs.revision_id
+          WHERE review_runs.id = ? AND ${taskTable}.id = ?
+        `).get(input.reviewRunId, input.taskId)
+        if (reviewRun === undefined) {
+          database.exec('COMMIT')
+          return { _tag: 'Rejected', reason: 'The Review run does not belong to this Review Task.' }
+        }
+      }
 
       const existing = database.prepare(`
         SELECT id, body FROM review_status_commands WHERE id = ?
@@ -7223,8 +8343,8 @@ export function openJournalStore(
       database.prepare(`
         INSERT INTO review_status_commands (
           id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase, body, body_sha256,
-          state_tag, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+          review_run_id, desired_outcome, state_tag, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
       `).run(
         commandId,
         input.taskKind,
@@ -7235,9 +8355,153 @@ export function openJournalStore(
         input.phase,
         input.body,
         bodySha256,
+        input.reviewRunId ?? null,
+        desiredOutcome,
         input.at,
         input.at,
       )
+      recordReviewStatusEvent(database, {
+        commandId,
+        event: 'Staged',
+        from: null,
+        to: 'Pending',
+        at: input.at,
+      })
+      database.exec('COMMIT')
+      return { _tag: 'Staged', commandId }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const stageReviewGateStatus: JournalStore['stageReviewGateStatus'] = (input) => {
+    const outcome = derivedReviewOutcome(input.gates)
+    const desiredOutcome = outcome === 'Ready' ? 'READY' : outcome === 'Pending' ? 'PENDING' : 'BLOCKED'
+    if (desiredOutcome !== input.desiredOutcome)
+      return { _tag: 'Rejected', reason: 'The Review gate projection and desired outcome disagree.' }
+
+    const gates = JSON.stringify(input.gates)
+    const bodySha256 = digest(input.body)
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = database.prepare(`
+        SELECT review_runs.subject_id, review_runs.revision_id, review_runs.head_sha,
+          projection.gates AS prior_gates, projection.outcome_tag AS prior_outcome,
+          worker_tasks.id AS task_id, worker_tasks.fence AS task_fence
+        FROM review_runs
+        JOIN review_gate_projections AS projection ON projection.review_run_id = review_runs.id
+        JOIN subjects ON subjects.id = review_runs.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        JOIN worker_tasks ON worker_tasks.id = (
+          SELECT candidate.id
+          FROM worker_tasks AS candidate
+          LEFT JOIN review_resolutions AS resolution
+            ON resolution.task_id = candidate.id AND resolution.review_run_id = review_runs.id
+          WHERE candidate.subject_id = review_runs.subject_id
+            AND candidate.revision_id = review_runs.revision_id
+            AND candidate.kind = 'adversarial_review'
+          ORDER BY
+            (resolution.review_run_id IS NOT NULL) DESC,
+            (candidate.evidence = review_runs.id) DESC,
+            candidate.updated_at DESC,
+            candidate.id DESC
+          LIMIT 1
+        )
+        WHERE review_runs.id = ?
+          AND repositories.github = ? AND subjects.github_number = ?
+          AND subjects.kind = 'pull_request'
+          AND review_runs.revision_id = ? AND subjects.current_revision_id = ?
+          AND review_runs.head_sha = ?
+          AND json_extract(revisions.payload, '$.state') = 'open'
+          AND json_extract(revisions.payload, '$.headSha') = ?
+          AND repositories.enabled = 1
+          AND repositories.paused = 0
+          AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      `).get(
+        input.reviewRunId,
+        input.repository,
+        input.pullRequestNumber,
+        input.revisionId,
+        input.revisionId,
+        input.expectedHeadSha,
+        input.expectedHeadSha,
+      ) as {
+        subject_id: number
+        revision_id: string
+        head_sha: string
+        prior_gates: string
+        prior_outcome: ReviewOutcome['_tag']
+        task_id: string
+        task_fence: number
+      } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'The Review run, current head, or repository policy no longer authorizes this gate projection.' }
+      }
+
+      const projectionChanged = row.prior_gates !== gates || row.prior_outcome !== outcome
+      if (projectionChanged) {
+        database.prepare(`
+          UPDATE review_gate_projections
+          SET gates = ?, outcome_tag = ?, updated_at = ?
+          WHERE review_run_id = ?
+        `).run(gates, outcome, input.at, input.reviewRunId)
+        recordWorkflowEvent(database, {
+          stream: 'review_gate',
+          event: 'Projected',
+          entityId: input.reviewRunId,
+          repository: input.repository,
+          itemNumber: input.pullRequestNumber,
+          revisionId: input.revisionId,
+          taskId: row.task_id,
+          from: row.prior_outcome,
+          to: outcome,
+          at: input.at,
+        })
+      }
+
+      const commandId = digest([
+        'review_gate',
+        row.task_id,
+        String(row.task_fence),
+        input.reviewRunId,
+        desiredOutcome,
+        bodySha256,
+        input.reconciliationId ?? '',
+      ].join(':'))
+      const existing = database.prepare('SELECT 1 FROM review_status_commands WHERE id = ?').get(commandId)
+      if (existing !== undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Duplicate', commandId }
+      }
+      database.prepare(`
+        INSERT INTO review_status_commands (
+          id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase,
+          body, body_sha256, review_run_id, desired_outcome, state_tag, created_at, updated_at
+        ) VALUES (?, 'adversarial_review', ?, ?, ?, ?, 'terminal', ?, ?, ?, ?, 'Pending', ?, ?)
+      `).run(
+        commandId,
+        row.task_id,
+        row.task_fence,
+        input.revisionId,
+        input.expectedHeadSha,
+        input.body,
+        bodySha256,
+        input.reviewRunId,
+        desiredOutcome,
+        input.at,
+        input.at,
+      )
+      recordReviewStatusEvent(database, {
+        commandId,
+        event: input.reconciliationId === undefined ? 'Staged' : 'ReconciliationStaged',
+        from: null,
+        to: 'Pending',
+        at: input.at,
+      })
       database.exec('COMMIT')
       return { _tag: 'Staged', commandId }
     }
@@ -7250,12 +8514,22 @@ export function openJournalStore(
   const claimReviewStatus: JournalStore['claimReviewStatus'] = (commandId, workerId, now, leaseMilliseconds) => {
     database.exec('BEGIN IMMEDIATE')
     try {
-      database.prepare(`
+      const recovered = database.prepare(`
         UPDATE review_status_commands
         SET state_tag = 'Pending', outcome_unknown = 1, reason = 'Publication lease expired.',
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND lease_expires_at <= ?
       `).run(now, commandId, now)
+      if (recovered.changes === 1) {
+        recordReviewStatusEvent(database, {
+          commandId,
+          event: 'LeaseRecovered',
+          from: 'Running',
+          to: 'Pending',
+          reason: 'Publication lease expired.',
+          at: now,
+        })
+      }
       const row = database.prepare(`
         SELECT
           review_status_commands.id,
@@ -7267,6 +8541,8 @@ export function openJournalStore(
           review_status_commands.expected_head_sha,
           review_status_commands.phase,
           review_status_commands.body,
+          review_status_commands.review_run_id,
+          review_status_commands.desired_outcome,
           review_status_commands.outcome_unknown,
           COALESCE(review_status_commands.github_comment_id, (
             SELECT previous.github_comment_id
@@ -7290,6 +8566,14 @@ export function openJournalStore(
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Pending'
           AND (
+            (
+              review_status_commands.phase = 'terminal'
+              AND (
+                (review_status_commands.task_kind = 'adversarial_review' AND worker_tasks.kind = 'adversarial_review')
+                OR (review_status_commands.task_kind = 'review_fix' AND tasks.kind = 'review_fix')
+              )
+            )
+            OR
             (
               review_status_commands.task_kind = 'adversarial_review'
               AND worker_tasks.kind = 'adversarial_review'
@@ -7319,6 +8603,8 @@ export function openJournalStore(
         expected_head_sha: string
         phase: 'snapshot' | 'review' | 'repair' | 'terminal'
         body: string
+        review_run_id: string | null
+        desired_outcome: ReviewDesiredOutcome | null
         outcome_unknown: number
         github_comment_id: number | null
         fence: number
@@ -7337,6 +8623,14 @@ export function openJournalStore(
       `).run(workerId, fence, leaseExpiresAt, now, row.id, row.fence)
       if (update.changes !== 1)
         throw new Error(`Review status claim lost for ${row.id}.`)
+      recordReviewStatusEvent(database, {
+        commandId: row.id,
+        event: 'Claimed',
+        from: 'Pending',
+        to: 'Running',
+        fence,
+        at: now,
+      })
       database.exec('COMMIT')
       const taskPhase: ReviewStatusTaskPhase = row.task_kind === 'review_fix'
         ? { taskKind: 'review_fix', phase: row.phase as 'repair' | 'terminal' }
@@ -7350,6 +8644,8 @@ export function openJournalStore(
         expectedHeadSha: row.expected_head_sha,
         ...taskPhase,
         body: row.body,
+        reviewRunId: row.review_run_id,
+        desiredOutcome: row.desired_outcome,
         outcomeUnknown: row.outcome_unknown === 1,
         commentId: row.github_comment_id,
         workerId,
@@ -7364,52 +8660,201 @@ export function openJournalStore(
     }
   }
 
-  const completeReviewStatus: JournalStore['completeReviewStatus'] = input => database.prepare(`
-    UPDATE review_status_commands
-    SET state_tag = 'Published', github_comment_id = ?, github_url = ?, reason = NULL,
-      outcome_unknown = 0, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-    -- No clock here on purpose. GitHub has already accepted this write, and a
-    -- record refused because a lease ran out cannot un-send it: the outcome is
-    -- lost and the next attempt sends it again. The worker and the fence prove
-    -- this is the attempt that was authorized, because every re-claim raises the
-    -- fence. One triage comment posted twelve minutes after a two minute lease,
-    -- and the deadlock that followed took a completed triage to Failed.
-    WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      AND (
-        EXISTS (
-          SELECT 1
-          FROM worker_tasks
-          JOIN subjects ON subjects.id = worker_tasks.subject_id
-          WHERE review_status_commands.task_kind = 'adversarial_review'
-            AND worker_tasks.id = review_status_commands.task_id
-            AND worker_tasks.kind = 'adversarial_review'
-            AND worker_tasks.state_tag = 'Running'
-            AND worker_tasks.fence = review_status_commands.task_fence
-            AND worker_tasks.revision_id = subjects.current_revision_id
-            AND review_status_commands.revision_id = subjects.current_revision_id
-        )
-        OR EXISTS (
-          SELECT 1
-          FROM tasks
-          JOIN subjects ON subjects.id = tasks.subject_id
-          WHERE review_status_commands.task_kind = 'review_fix'
-            AND tasks.id = review_status_commands.task_id
-            AND tasks.kind = 'review_fix'
-            AND tasks.state_tag = 'Running'
-            AND tasks.fence = review_status_commands.task_fence
-            AND tasks.revision_id = subjects.current_revision_id
-            AND review_status_commands.revision_id = subjects.current_revision_id
-        )
-      )
-  `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
+  const claimNextTerminalReviewStatus: JournalStore['claimNextTerminalReviewStatus'] = (workerId, now, leaseMilliseconds) => {
+    const row = database.prepare(`
+      SELECT review_status_commands.id
+      FROM review_status_commands
+      LEFT JOIN worker_tasks
+        ON review_status_commands.task_kind = 'adversarial_review'
+        AND worker_tasks.id = review_status_commands.task_id
+      LEFT JOIN tasks
+        ON review_status_commands.task_kind = 'review_fix'
+        AND tasks.id = review_status_commands.task_id
+      JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE review_status_commands.state_tag = 'Pending'
+        AND review_status_commands.phase = 'terminal'
+        AND review_status_commands.revision_id = subjects.current_revision_id
+        AND COALESCE(worker_tasks.revision_id, tasks.revision_id) = subjects.current_revision_id
+        AND COALESCE(worker_tasks.state_tag, tasks.state_tag) != 'Running'
+        AND repositories.enabled = 1
+        AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      ORDER BY review_status_commands.updated_at, review_status_commands.id
+      LIMIT 1
+    `).get() as { id: string } | undefined
+    return row === undefined
+      ? null
+      : claimReviewStatus(row.id, workerId, now, leaseMilliseconds)
+  }
 
-  const deferReviewStatus: JournalStore['deferReviewStatus'] = input => database.prepare(`
-    UPDATE review_status_commands
-    SET state_tag = 'Pending', outcome_unknown = 1, reason = ?, worker_id = NULL,
-      lease_expires_at = NULL, updated_at = ?
-    WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      AND lease_expires_at > ?
-  `).run(input.reason, input.at, input.commandId, input.workerId, input.fence, input.at).changes === 1
+  const completeReviewStatus: JournalStore['completeReviewStatus'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Published', github_comment_id = ?, github_url = ?, reason = NULL,
+          outcome_unknown = 0, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        -- No clock here on purpose. GitHub has already accepted this write, and a
+        -- record refused because a lease ran out cannot un-send it. The worker
+        -- and fence prove this is the authorized attempt.
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          AND (
+            (
+              review_status_commands.phase = 'terminal'
+              AND (
+                EXISTS (
+                  SELECT 1
+                  FROM worker_tasks
+                  JOIN subjects ON subjects.id = worker_tasks.subject_id
+                  WHERE review_status_commands.task_kind = 'adversarial_review'
+                    AND worker_tasks.id = review_status_commands.task_id
+                    AND worker_tasks.kind = 'adversarial_review'
+                    AND worker_tasks.revision_id = subjects.current_revision_id
+                    AND review_status_commands.revision_id = subjects.current_revision_id
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM tasks
+                  JOIN subjects ON subjects.id = tasks.subject_id
+                  WHERE review_status_commands.task_kind = 'review_fix'
+                    AND tasks.id = review_status_commands.task_id
+                    AND tasks.kind = 'review_fix'
+                    AND tasks.revision_id = subjects.current_revision_id
+                    AND review_status_commands.revision_id = subjects.current_revision_id
+                )
+              )
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM worker_tasks
+              JOIN subjects ON subjects.id = worker_tasks.subject_id
+              WHERE review_status_commands.task_kind = 'adversarial_review'
+                AND worker_tasks.id = review_status_commands.task_id
+                AND worker_tasks.kind = 'adversarial_review'
+                AND worker_tasks.state_tag = 'Running'
+                AND worker_tasks.fence = review_status_commands.task_fence
+                AND worker_tasks.revision_id = subjects.current_revision_id
+                AND review_status_commands.revision_id = subjects.current_revision_id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM tasks
+              JOIN subjects ON subjects.id = tasks.subject_id
+              WHERE review_status_commands.task_kind = 'review_fix'
+                AND tasks.id = review_status_commands.task_id
+                AND tasks.kind = 'review_fix'
+                AND tasks.state_tag = 'Running'
+                AND tasks.fence = review_status_commands.task_fence
+                AND tasks.revision_id = subjects.current_revision_id
+                AND review_status_commands.revision_id = subjects.current_revision_id
+            )
+          )
+      `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        const command = database.prepare(`
+          SELECT review_run_id, body FROM review_status_commands WHERE id = ?
+        `).get(input.commandId) as { review_run_id: string | null, body: string }
+        if (command.review_run_id !== null) {
+          const publicationResult = { _tag: 'Published' as const, githubCommentId: input.commentId, url: input.url }
+          database.prepare(`
+            INSERT OR IGNORE INTO review_publications (
+              id, review_run_id, body, body_sha256, created_at, result_tag,
+              github_comment_id, github_url, reason, content_digest
+            ) VALUES (?, ?, ?, ?, ?, 'Published', ?, ?, NULL, ?)
+          `).run(
+            input.commandId,
+            command.review_run_id,
+            command.body,
+            digest(command.body),
+            input.at,
+            input.commentId,
+            input.url,
+            digest(JSON.stringify({
+              reviewRunId: command.review_run_id,
+              body: command.body,
+              at: input.at,
+              result: publicationResult,
+            })),
+          )
+        }
+        recordReviewStatusEvent(database, {
+          commandId: input.commandId,
+          event: 'Published',
+          from: 'Running',
+          to: 'Published',
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const recordReviewStatusReceipt: JournalStore['recordReviewStatusReceipt'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = input.sink === 'comment'
+        ? database.prepare(`
+            UPDATE review_status_commands
+            SET github_comment_id = ?, github_url = ?, outcome_unknown = 0, updated_at = ?
+            WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          `).run(input.commentId ?? null, input.url ?? null, input.at, input.commandId, input.workerId, input.fence).changes === 1
+        : database.prepare(`
+            UPDATE review_status_commands SET updated_at = ?
+            WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          `).run(input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordReviewStatusEvent(database, {
+          commandId: input.commandId,
+          event: input.sink === 'comment' ? 'CommentConfirmed' : 'OutcomeLabelConfirmed',
+          from: 'Running',
+          to: 'Running',
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const deferReviewStatus: JournalStore['deferReviewStatus'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Pending', outcome_unknown = 1, reason = ?, worker_id = NULL,
+          lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordReviewStatusEvent(database, {
+          commandId: input.commandId,
+          event: 'Deferred',
+          from: 'Running',
+          to: 'Pending',
+          reason: input.reason,
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
 
   const heartbeatTask: JournalStore['heartbeatTask'] = (input) => {
     const leaseExpiresAt = new Date(new Date(input.at).getTime() + input.leaseMilliseconds).toISOString()
@@ -7434,7 +8879,6 @@ export function openJournalStore(
       if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
         resolveTaskIncidents(database, input.taskId, input.at)
-        restoreAgentProviderRecoveryBudget(database, input.at)
       }
       database.exec('COMMIT')
       return result.changes === 1
@@ -7457,7 +8901,15 @@ export function openJournalStore(
           AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id)
       `).run(input.reason, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
-        recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Superseded', reason: input.reason, fence: input.fence, at: input.at })
+        recordTransition(database, {
+          taskId: input.taskId,
+          from: 'Running',
+          to: 'Superseded',
+          reason: input.reason,
+          fence: input.fence,
+          ...(input.usage === undefined ? {} : { usage: input.usage }),
+          at: input.at,
+        })
         resolveTaskIncidents(database, input.taskId, input.at)
       }
       database.exec('COMMIT')
@@ -7480,8 +8932,17 @@ export function openJournalStore(
           AND lease_expires_at > ?
           AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id)
       `).run(input.reason, input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
-      if (result.changes === 1)
-        recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'ActionRequired', reason: input.reason, fence: input.fence, at: input.at })
+      if (result.changes === 1) {
+        recordTransition(database, {
+          taskId: input.taskId,
+          from: 'Running',
+          to: 'ActionRequired',
+          reason: input.reason,
+          fence: input.fence,
+          ...(input.usage === undefined ? {} : { usage: input.usage }),
+          at: input.at,
+        })
+      }
       database.exec('COMMIT')
       return result.changes === 1
     }
@@ -7505,13 +8966,16 @@ export function openJournalStore(
       }
       // An agent Task pays for a retry with a whole agent turn, so a reason no
       // retry can satisfy ends the Task now and names an Incident instead.
-      const retry = row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason })
+      const providerPaused = isProviderCircuitPause(input.reason)
+      const retry = providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason }))
       const nextTag = retry ? 'Queued' : 'Failed'
       database.prepare(`
-        UPDATE tasks SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        UPDATE tasks SET state_tag = ?, reason = ?,
+          attempts = CASE WHEN ? THEN MAX(0, attempts - 1) ELSE attempts END,
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-      `).run(nextTag, retry ? null : input.reason, input.at, input.taskId, input.workerId, input.fence, input.at)
+      `).run(nextTag, retry ? null : input.reason, providerPaused ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
       recordTransition(database, {
         taskId: input.taskId,
         from: 'Running',
@@ -7656,6 +9120,7 @@ export function openJournalStore(
         to: 'Publishing',
         reason: null,
         fence: input.fence,
+        ...(input.usage === undefined ? {} : { usage: input.usage }),
         at: input.at,
       })
       database.exec('COMMIT')
@@ -8248,13 +9713,280 @@ export function openJournalStore(
         OR EXISTS (SELECT 1 FROM worker_tasks WHERE state_tag = 'Running')
         OR EXISTS (SELECT 1 FROM routine_runs WHERE state_tag = 'Running')
         OR EXISTS (SELECT 1 FROM publication_commands WHERE state_tag IN ('Pending', 'Running'))
-        OR EXISTS (SELECT 1 FROM review_status_commands WHERE state_tag = 'Running')
+        OR EXISTS (
+          SELECT 1 FROM review_status_commands
+          WHERE state_tag = 'Running' OR (state_tag = 'Pending' AND phase = 'terminal')
+        )
         OR EXISTS (SELECT 1 FROM issue_triage_comment_commands WHERE state_tag = 'Running')
         OR EXISTS (SELECT 1 FROM candidate_issue_commands WHERE state_tag = 'Running')
         OR EXISTS (SELECT 1 FROM routine_report_commands WHERE state_tag = 'Running')
       ) AS busy
     `).get() as { busy: number }
     return row.busy === 0
+  }
+
+  const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
+    const limit = Math.max(1, Math.min(1_000, input.limit ?? 200))
+    const rows = input.stream === undefined
+      ? database.prepare(`
+          SELECT * FROM workflow_events
+          ORDER BY occurred_at DESC, id DESC LIMIT ?
+        `).all(limit)
+      : database.prepare(`
+          SELECT * FROM workflow_events WHERE stream = ?
+          ORDER BY occurred_at DESC, id DESC LIMIT ?
+        `).all(input.stream, limit)
+    return (rows as unknown as Array<{
+      id: number
+      stream: WorkflowEventStream
+      event: string
+      entity_id: string
+      repository: string | null
+      item_number: number | null
+      revision_id: string | null
+      task_id: string | null
+      from_state: string | null
+      to_state: string
+      reason: string | null
+      attempt: number
+      fence: number
+      duration_ms: number | null
+      usage: string | null
+      occurred_at: string
+    }>).map(row => ({
+      id: row.id,
+      stream: row.stream,
+      event: row.event,
+      entityId: row.entity_id,
+      repository: row.repository,
+      itemNumber: row.item_number,
+      revisionId: row.revision_id,
+      taskId: row.task_id,
+      from: row.from_state,
+      to: row.to_state,
+      reason: row.reason,
+      attempt: row.attempt,
+      fence: row.fence,
+      durationMilliseconds: row.duration_ms,
+      usage: row.usage === null ? null : JSON.parse(row.usage) as AgentTokenUsage,
+      occurredAt: row.occurred_at,
+    }))
+  }
+
+  const providerFailureThreshold = 3
+  const providerCircuitCooldownMilliseconds = 5 * 60_000
+
+  const listProviderCircuits: JournalStore['listProviderCircuits'] = () =>
+    (database.prepare(`
+      SELECT * FROM provider_circuits
+      ORDER BY updated_at DESC, id
+    `).all() as unknown as ProviderCircuitRow[]).map(providerCircuitFromRow)
+
+  const providerCanStart: JournalStore['providerCanStart'] = (input) => {
+    const modelClause = input.model === undefined ? '' : 'AND model = ?'
+    const parameters = input.model === undefined
+      ? [input.provider, input.credential]
+      : [input.provider, input.credential, input.model]
+    const rows = database.prepare(`
+      SELECT * FROM provider_circuits
+      WHERE provider = ? AND credential = ? ${modelClause}
+    `).all(...parameters) as unknown as ProviderCircuitRow[]
+    return !rows.some(row =>
+      (row.state_tag === 'Open' && Date.parse(row.retry_at ?? input.at) > Date.parse(input.at))
+      || (row.state_tag === 'HalfOpen' && Date.parse(row.canary_lease_expires_at ?? input.at) > Date.parse(input.at)),
+    )
+  }
+
+  const reserveProviderStart: JournalStore['reserveProviderStart'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const readRows = (): ProviderCircuitRow[] => database.prepare(`
+        SELECT * FROM provider_circuits
+        WHERE provider = ? AND credential = ? AND model = ?
+        ORDER BY updated_at, id
+      `).all(input.provider, input.credential, input.model) as unknown as ProviderCircuitRow[]
+
+      for (const row of readRows()) {
+        if (row.state_tag !== 'HalfOpen' || Date.parse(row.canary_lease_expires_at ?? input.at) > Date.parse(input.at))
+          continue
+        const retryAt = input.at
+        const changed = database.prepare(`
+          UPDATE provider_circuits
+          SET state_tag = 'Open', retry_at = ?, canary_worker_id = NULL,
+            canary_lease_expires_at = NULL, updated_at = ?
+          WHERE id = ? AND state_tag = 'HalfOpen' AND canary_fence = ?
+            AND canary_lease_expires_at <= ?
+        `).run(retryAt, input.at, row.id, row.canary_fence, input.at).changes === 1
+        if (changed) {
+          const recovered = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+            .get(row.id) as unknown as ProviderCircuitRow
+          recordProviderCircuitEvent(database, recovered, 'CanaryLeaseRecovered', 'HalfOpen', 'Open', input.at, 'The provider canary lease expired.')
+        }
+      }
+
+      const rows = readRows()
+      const activeCanary = rows.find(row => row.state_tag === 'HalfOpen')
+      if (activeCanary !== undefined) {
+        database.exec('COMMIT')
+        return {
+          _tag: 'Paused',
+          retryAt: activeCanary.canary_lease_expires_at ?? input.at,
+          reason: 'Another Agent Task owns the provider health canary.',
+        }
+      }
+      const blocked = rows
+        .filter(row => row.state_tag === 'Open' && Date.parse(row.retry_at ?? input.at) > Date.parse(input.at))
+        .sort((left, right) => (right.retry_at ?? '').localeCompare(left.retry_at ?? ''))[0]
+      if (blocked !== undefined) {
+        database.exec('COMMIT')
+        return {
+          _tag: 'Paused',
+          retryAt: blocked.retry_at ?? input.at,
+          reason: 'The Agent provider circuit is open.',
+        }
+      }
+      const eligible = rows.find(row => row.state_tag === 'Open')
+      if (eligible === undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Allowed', canary: null }
+      }
+      const fence = eligible.canary_fence + 1
+      const leaseExpiresAt = new Date(Date.parse(input.at) + input.leaseMilliseconds).toISOString()
+      const claimed = database.prepare(`
+        UPDATE provider_circuits
+        SET state_tag = 'HalfOpen', retry_at = NULL, canary_worker_id = ?,
+          canary_fence = ?, canary_lease_expires_at = ?, updated_at = ?
+        WHERE id = ? AND state_tag = 'Open' AND retry_at <= ? AND canary_fence = ?
+      `).run(input.workerId, fence, leaseExpiresAt, input.at, eligible.id, input.at, eligible.canary_fence).changes === 1
+      if (!claimed)
+        throw new Error(`Provider canary claim lost for ${eligible.id}.`)
+      const claimedRow = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+        .get(eligible.id) as unknown as ProviderCircuitRow
+      recordProviderCircuitEvent(database, claimedRow, 'CanaryClaimed', 'Open', 'HalfOpen', input.at)
+      database.exec('COMMIT')
+      return {
+        _tag: 'Allowed',
+        canary: { circuitId: eligible.id, workerId: input.workerId, fence },
+      }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const recordProviderFailure: JournalStore['recordProviderFailure'] = (input) => {
+    const id = input.canaryCircuitId ?? digest(`${input.provider}:${input.credential}:${input.model}:${input.failureClass}`)
+    const detail = `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+        .get(id) as unknown as ProviderCircuitRow | undefined
+      if (existing === undefined) {
+        if (input.canaryCircuitId !== undefined)
+          throw new Error(`Provider canary circuit ${input.canaryCircuitId} no longer exists.`)
+        database.prepare(`
+          INSERT INTO provider_circuits (
+            id, provider, credential, model, failure_class, state_tag, failures,
+            retry_at, canary_worker_id, canary_fence, canary_lease_expires_at,
+            last_detail, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 'Closed', 1, NULL, NULL, 0, NULL, ?, ?)
+        `).run(id, input.provider, input.credential, input.model, input.failureClass, detail, input.at)
+        const inserted = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+          .get(id) as unknown as ProviderCircuitRow
+        recordProviderCircuitEvent(database, inserted, 'FailureObserved', null, 'Closed', input.at, detail)
+        database.exec('COMMIT')
+        return providerCircuitFromRow(inserted)
+      }
+
+      const failures = existing.failures + 1
+      const canaryFailed = existing.state_tag === 'HalfOpen'
+        && existing.canary_worker_id === input.workerId
+        && existing.canary_fence === input.canaryFence
+      const shouldOpen = canaryFailed || (existing.state_tag === 'Closed' && failures >= providerFailureThreshold)
+      const retryAt = shouldOpen
+        ? new Date(Date.parse(input.at) + providerCircuitCooldownMilliseconds).toISOString()
+        : existing.retry_at
+      database.prepare(`
+        UPDATE provider_circuits
+        SET state_tag = ?, failures = ?, retry_at = ?,
+          canary_worker_id = CASE WHEN ? = 'Open' THEN NULL ELSE canary_worker_id END,
+          canary_lease_expires_at = CASE WHEN ? = 'Open' THEN NULL ELSE canary_lease_expires_at END,
+          last_detail = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        shouldOpen ? 'Open' : existing.state_tag,
+        failures,
+        retryAt,
+        shouldOpen ? 'Open' : existing.state_tag,
+        shouldOpen ? 'Open' : existing.state_tag,
+        detail,
+        input.at,
+        id,
+      )
+      const updated = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+        .get(id) as unknown as ProviderCircuitRow
+      recordProviderCircuitEvent(
+        database,
+        updated,
+        shouldOpen ? 'Opened' : 'FailureObserved',
+        existing.state_tag,
+        updated.state_tag,
+        input.at,
+        detail,
+      )
+      database.exec('COMMIT')
+      return providerCircuitFromRow(updated)
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const recordProviderSuccess: JournalStore['recordProviderSuccess'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const rows = database.prepare(`
+        SELECT * FROM provider_circuits
+        WHERE provider = ? AND credential = ? AND model = ?
+          ${input.canaryCircuitId === undefined ? '' : 'AND id = ?'}
+      `).all(
+        input.provider,
+        input.credential,
+        input.model,
+        ...(input.canaryCircuitId === undefined ? [] : [input.canaryCircuitId]),
+      ) as unknown as ProviderCircuitRow[]
+      const ownsCanary = rows.some(row => row.state_tag === 'HalfOpen'
+        && row.canary_worker_id === input.workerId
+        && row.canary_fence === input.canaryFence)
+      let changed = 0
+      for (const row of rows) {
+        const mayClose = input.canaryCircuitId === undefined
+          ? row.state_tag === 'Closed'
+          : ownsCanary && row.id === input.canaryCircuitId
+        if (!mayClose || (row.state_tag === 'Closed' && row.failures === 0))
+          continue
+        const updated = database.prepare(`
+          UPDATE provider_circuits
+          SET state_tag = 'Closed', failures = 0, retry_at = NULL,
+            canary_worker_id = NULL, canary_lease_expires_at = NULL, updated_at = ?
+          WHERE id = ?
+        `).run(input.at, row.id).changes === 1
+        if (!updated)
+          continue
+        changed += 1
+        const closed = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+          .get(row.id) as unknown as ProviderCircuitRow
+        recordProviderCircuitEvent(database, closed, 'Closed', row.state_tag, 'Closed', input.at)
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   const getStats: JournalStore['getStats'] = (range, generatedAt) => {
@@ -8280,8 +10012,11 @@ export function openJournalStore(
     })))
 
     const reviewRows = database.prepare(`
-      SELECT started_at, completed_at, outcome_tag, findings
+      SELECT review_runs.started_at, review_runs.completed_at,
+        COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
+        review_runs.findings
       FROM review_runs
+      LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
       WHERE completed_at >= ? AND completed_at < ?
         AND NOT EXISTS (
           SELECT 1 FROM review_runs AS settlement
@@ -8444,6 +10179,7 @@ export function openJournalStore(
         json_extract(revisions.payload, '$.url') AS url,
         json_extract(revisions.payload, '$.createdAt') AS github_created_at,
         json_extract(revisions.payload, '$.updatedAt') AS github_updated_at,
+        json_extract(revisions.payload, '$.contentDigest') AS content_digest,
         json_extract(revisions.payload, '$.draft') AS draft,
         json_extract(revisions.payload, '$.baseSha') AS base_sha,
         json_extract(revisions.payload, '$.headSha') AS head_sha,
@@ -8483,11 +10219,18 @@ export function openJournalStore(
     const items = subjectRows.map(row => subjectFromRow(database, row))
     const tasks = taskRows(database).map(taskFromRow)
     const routines = listRoutines()
-    const candidatesByRoutine = new Map(routines.map(routine => [routine.id, listCandidates(routine.id)]))
-    const latestRoutineRuns = routines
-      .flatMap(routine => listRoutineRuns(routine.id, 5))
-      .sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor))
-      .slice(0, 50)
+    const latestRoutineRuns = (database.prepare(`
+      SELECT routine_runs.*, routines.repository AS repository, routines.name AS name
+      FROM routine_runs
+      JOIN routines ON routines.id = routine_runs.routine_id
+      ORDER BY routine_runs.scheduled_for DESC
+      LIMIT 50
+    `).all() as unknown as RoutineRunRow[]).map(readRoutineRun)
+    const routineIds = [...new Set([
+      ...routines.map(routine => routine.id),
+      ...latestRoutineRuns.map(run => run.routineId),
+    ])]
+    const candidatesByRoutine = new Map(routineIds.map(routineId => [routineId, listCandidates(routineId)]))
     // One report command per run, so the dashboard can tell a published run
     // from one still waiting on GitHub writes.
     const reportStateRows = latestRoutineRuns.length === 0
@@ -8530,6 +10273,62 @@ export function openJournalStore(
         openPullRequestsByRepository.set(item.repository, (openPullRequestsByRepository.get(item.repository) ?? 0) + 1)
     })
     const currentSelectionMode = selectionMode(database)
+    const reviewResolutionRows = database.prepare(`
+      SELECT repositories.github AS repository, subjects.github_number, review_resolutions.revision_id,
+        review_resolutions.resolution_tag, review_resolutions.review_run_id,
+        review_resolutions.baseline_task_id, review_resolutions.github_url, review_resolutions.reason
+      FROM review_resolutions
+      JOIN subjects ON subjects.id = review_resolutions.subject_id
+        AND subjects.current_revision_id = review_resolutions.revision_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE subjects.kind = 'pull_request'
+    `).all() as unknown as Array<{
+      repository: string
+      github_number: number
+      revision_id: string
+      resolution_tag: ReviewResolution['_tag']
+      review_run_id: string | null
+      baseline_task_id: string | null
+      github_url: string | null
+      reason: string | null
+    }>
+    const reviewResolutions = new Map(reviewResolutionRows.map((row): [string, ReviewResolution] => {
+      const key = `${row.repository}:${row.github_number}:${row.revision_id}`
+      switch (row.resolution_tag) {
+        case 'Reviewed': return [key, { _tag: 'Reviewed', reviewRunId: row.review_run_id ?? '' }]
+        case 'WaitingForBaselineRepair': return [key, { _tag: 'WaitingForBaselineRepair', taskId: row.baseline_task_id ?? '' }]
+        case 'ExistingReview': return [key, { _tag: 'ExistingReview', url: row.github_url ?? '' }]
+        case 'ReviewSkipped': return [key, { _tag: 'ReviewSkipped', reason: row.reason ?? 'Review skipped.' }]
+        case 'UnknownNeedsReconciliation': return [key, { _tag: 'UnknownNeedsReconciliation', reason: row.reason ?? 'Review result needs reconciliation.' }]
+      }
+      throw new Error(`Unknown Review resolution: ${row.resolution_tag}`)
+    }))
+    const desiredReviewOutcomes = new Map((database.prepare(`
+      SELECT repositories.github AS repository, subjects.github_number,
+        review_status_commands.revision_id, review_status_commands.desired_outcome
+      FROM review_status_commands
+      JOIN worker_tasks ON review_status_commands.task_kind = 'adversarial_review'
+        AND worker_tasks.id = review_status_commands.task_id
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+        AND subjects.current_revision_id = review_status_commands.revision_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE review_status_commands.phase = 'terminal'
+        AND review_status_commands.state_tag IN ('Pending', 'Running', 'Published')
+        AND review_status_commands.desired_outcome IS NOT NULL
+        AND review_status_commands.id = (
+          SELECT current.id FROM review_status_commands AS current
+          WHERE current.task_kind = 'adversarial_review'
+            AND current.task_id = review_status_commands.task_id
+            AND current.phase = 'terminal'
+            AND current.state_tag IN ('Pending', 'Running', 'Published')
+          ORDER BY current.updated_at DESC, current.id DESC LIMIT 1
+        )
+    `).all() as unknown as Array<{
+      repository: string
+      github_number: number
+      revision_id: string
+      desired_outcome: ReviewDesiredOutcome
+    }>).map(row => [`${row.repository}:${row.github_number}:${row.revision_id}`, row.desired_outcome]))
 
     const storedAgentControl = getAgentControl()
     const agentControl = storedAgentControl._tag === 'Running'
@@ -8559,6 +10358,7 @@ export function openJournalStore(
       agentModels: AGENT_MODELS,
       reasoningEfforts: REASONING_EFFORTS,
       providerCapacities: [],
+      providerCircuits: listProviderCircuits(),
       agents,
       incidents,
       queue: dashboardQueue(
@@ -8569,6 +10369,8 @@ export function openJournalStore(
         rejectedIssueWorkResults,
         openPullRequestsByRepository,
         currentSelectionMode,
+        reviewResolutions,
+        desiredReviewOutcomes,
       ),
       repositories,
       items,
@@ -8582,6 +10384,8 @@ export function openJournalStore(
     SELECT id AS taskId, fence FROM tasks WHERE state_tag NOT IN ('Completed', 'Failed', 'Superseded')
     UNION ALL
     SELECT id AS taskId, fence FROM worker_tasks WHERE state_tag NOT IN ('Completed', 'Failed', 'Superseded')
+    UNION ALL
+    SELECT id AS taskId, fence FROM routine_runs WHERE state_tag IN ('Queued', 'Running')
   `).all() as unknown as AgentWorktreeLease[]
 
   const listRunningTaskItems: JournalStore['listRunningTaskItems'] = () => database.prepare(`
@@ -8834,15 +10638,16 @@ export function openJournalStore(
       ranked.started_at,
       ranked.completed_at,
       ranked.usage,
-      ranked.gates,
+      COALESCE(projection.gates, ranked.gates) AS gates,
       ranked.findings,
-      ranked.confidence,
+      COALESCE(projection.confidence, ranked.confidence) AS confidence,
       published.github_comment_id,
       published.body AS published_body
     FROM ranked
     JOIN subjects ON subjects.id = ranked.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions AS current_revisions ON current_revisions.id = subjects.current_revision_id
+    LEFT JOIN review_gate_projections AS projection ON projection.review_run_id = ranked.id
     JOIN review_publications AS published ON published.id = (
       SELECT candidate.id FROM review_publications AS candidate
       WHERE candidate.review_run_id = ranked.id
@@ -9371,6 +11176,7 @@ export function openJournalStore(
     spec_sha: string
     last_run_at: string | null
     tracking_issue_number: number | null
+    retired_at: string | null
     updated_at: string
   }
 
@@ -9388,53 +11194,32 @@ export function openJournalStore(
     updatedAt: row.updated_at,
   })
 
-  /**
-   * Replaces one repository's Routines with what its spec declares.
-   *
-   * A Routine the spec dropped is deleted, and its runs and Candidates go with
-   * it through the cascade. Leaving them would let a Routine nobody declares
-   * keep answering a clock. Its Publications go too: the routine_runs foreign
-   * key on publication_commands has no cascade of its own, so a command left
-   * behind would wedge this delete forever, on every tick after a normal
-   * spec-file removal.
-   *
-   * `last_run_at` survives a rewrite. A schedule edit must not make every past
-   * instant look unrun, which would fire a catch-up run on the next tick.
-   */
+  /** Reconciles active definitions while preserving every historical Run. */
   const syncRoutines: JournalStore['syncRoutines'] = (input) => {
     const upsert = database.prepare(`
-      INSERT INTO routines (id, repository, name, crons, time_zone, mode, enabled, spec_sha, last_run_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+      INSERT INTO routines (id, repository, name, crons, time_zone, mode, enabled, spec_sha, last_run_at, retired_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
       ON CONFLICT (repository, name) DO UPDATE SET
+        last_run_at = CASE
+          WHEN routines.crons != excluded.crons
+            OR routines.time_zone != excluded.time_zone
+            OR routines.enabled != excluded.enabled
+            OR routines.retired_at IS NOT NULL
+          THEN excluded.updated_at
+          ELSE routines.last_run_at
+        END,
         crons = excluded.crons,
         time_zone = excluded.time_zone,
         mode = excluded.mode,
         enabled = excluded.enabled,
         spec_sha = excluded.spec_sha,
+        retired_at = NULL,
         updated_at = excluded.updated_at
     `)
     database.exec('BEGIN IMMEDIATE')
     try {
       const declared = input.entries.map(entry => `${input.repository}:${entry.name}`)
       const placeholders = declared.map(() => '?').join(', ')
-      const dropping = declared.length === 0
-        ? 'SELECT id FROM routines WHERE repository = ?'
-        : `SELECT id FROM routines WHERE repository = ? AND id NOT IN (${placeholders})`
-      database.prepare(`
-        DELETE FROM publication_events WHERE command_id IN (
-          SELECT publication_commands.id FROM publication_commands
-          JOIN routine_runs ON routine_runs.id = publication_commands.routine_run_id
-          WHERE routine_runs.routine_id IN (${dropping})
-        )
-      `).run(input.repository, ...declared)
-      database.prepare(`
-        DELETE FROM publication_commands WHERE routine_run_id IN (
-          SELECT id FROM routine_runs WHERE routine_id IN (${dropping})
-        )
-      `).run(input.repository, ...declared)
-      database.prepare(
-        `DELETE FROM routines WHERE repository = ?${declared.length === 0 ? '' : ` AND id NOT IN (${placeholders})`}`,
-      ).run(input.repository, ...declared)
       input.entries.forEach((entry) => {
         upsert.run(
           `${input.repository}:${entry.name}`,
@@ -9448,6 +11233,38 @@ export function openJournalStore(
           input.at,
         )
       })
+      database.prepare(`
+        UPDATE routines
+        SET enabled = 0, retired_at = ?, last_run_at = ?, updated_at = ?
+        WHERE repository = ?
+          ${declared.length === 0 ? '' : `AND id NOT IN (${placeholders})`}
+          AND retired_at IS NULL
+      `).run(input.at, input.at, input.at, input.repository, ...declared)
+
+      const superseded = database.prepare(`
+        SELECT routine_runs.id, routine_runs.fence
+        FROM routine_runs
+        JOIN routines ON routines.id = routine_runs.routine_id
+        WHERE routine_runs.state_tag = 'Queued'
+          AND routines.repository = ?
+          AND (routines.enabled = 0 OR routines.retired_at IS NOT NULL)
+      `).all(input.repository) as unknown as Array<{ id: string, fence: number }>
+      superseded.forEach((run) => {
+        database.prepare(`
+          UPDATE routine_runs
+          SET state_tag = 'Superseded', reason = 'The Routine definition is disabled or retired.', updated_at = ?
+          WHERE id = ? AND state_tag = 'Queued'
+        `).run(input.at, run.id)
+        recordRoutineRunEvent(database, {
+          runId: run.id,
+          event: 'Superseded',
+          from: 'Queued',
+          to: 'Superseded',
+          reason: 'The Routine definition is disabled or retired.',
+          fence: run.fence,
+          at: input.at,
+        })
+      })
       database.exec('COMMIT')
     }
     catch (error) {
@@ -9459,8 +11276,8 @@ export function openJournalStore(
 
   const listRoutines: JournalStore['listRoutines'] = (repository) => {
     const rows = repository === undefined
-      ? database.prepare('SELECT * FROM routines ORDER BY repository, name').all() as unknown as RoutineRow[]
-      : database.prepare('SELECT * FROM routines WHERE repository = ? ORDER BY name').all(repository) as unknown as RoutineRow[]
+      ? database.prepare('SELECT * FROM routines WHERE retired_at IS NULL ORDER BY repository, name').all() as unknown as RoutineRow[]
+      : database.prepare('SELECT * FROM routines WHERE repository = ? AND retired_at IS NULL ORDER BY name').all(repository) as unknown as RoutineRow[]
     return rows.map(readRoutine)
   }
 
@@ -9471,6 +11288,7 @@ export function openJournalStore(
     name: string
     scheduled_for: string
     spec_sha: string
+    mode: string
     state_tag: string
     reason: string | null
     evidence: string | null
@@ -9480,6 +11298,7 @@ export function openJournalStore(
     attempts: number
     progress_percent: number
     progress_label: string
+    usage: string
     created_at: string
     updated_at: string
   }
@@ -9510,10 +11329,12 @@ export function openJournalStore(
     name: row.name as Routine['name'],
     scheduledFor: row.scheduled_for,
     specSha: row.spec_sha,
+    mode: row.mode as RoutineRun['mode'],
     state: readRoutineRunState(row),
     fence: row.fence,
     attempts: row.attempts,
     progress: { percent: row.progress_percent, label: row.progress_label },
+    usage: JSON.parse(row.usage) as AgentTokenUsage,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })
@@ -9545,18 +11366,43 @@ export function openJournalStore(
     reason: string | null
   }): RoutineRun | null => {
     const id = `${input.routineId}:${input.scheduledFor}`
-    const inserted = database.prepare(`
-      INSERT INTO routine_runs (id, routine_id, scheduled_for, spec_sha, state_tag, reason, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (routine_id, scheduled_for) DO NOTHING
-    `).run(id, input.routineId, input.scheduledFor, input.specSha, input.state, input.reason, input.at, input.at).changes === 1
-    if (!inserted)
-      return null
-    // The clock only moves forward, so the last run is the newest instant that
-    // produced one. A skipped instant counts, or the next tick tries it again.
-    database.prepare('UPDATE routines SET last_run_at = ?, updated_at = ? WHERE id = ?')
-      .run(input.scheduledFor, input.at, input.routineId)
-    return readRunById(id)
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const authority = database.prepare(`
+        SELECT spec_sha, mode FROM routines WHERE id = ? AND retired_at IS NULL
+      `).get(input.routineId) as { spec_sha: string, mode: string } | undefined
+      if (authority === undefined || authority.spec_sha !== input.specSha) {
+        database.exec('COMMIT')
+        return null
+      }
+      const inserted = database.prepare(`
+        INSERT INTO routine_runs (id, routine_id, scheduled_for, spec_sha, mode, state_tag, reason, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (routine_id, scheduled_for) DO NOTHING
+      `).run(id, input.routineId, input.scheduledFor, authority.spec_sha, authority.mode, input.state, input.reason, input.at, input.at).changes === 1
+      if (!inserted) {
+        database.exec('COMMIT')
+        return null
+      }
+      // The clock only moves forward, so the last run is the newest instant that
+      // produced one. A skipped instant counts, or the next tick tries it again.
+      database.prepare('UPDATE routines SET last_run_at = ?, updated_at = ? WHERE id = ?')
+        .run(input.scheduledFor, input.at, input.routineId)
+      recordRoutineRunEvent(database, {
+        runId: id,
+        event: input.state === 'Skipped' ? 'Skipped' : 'Opened',
+        from: null,
+        to: input.state,
+        reason: input.reason,
+        at: input.at,
+      })
+      database.exec('COMMIT')
+      return readRunById(id)
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   const openRoutineRun: JournalStore['openRoutineRun'] = input =>
@@ -9696,12 +11542,29 @@ export function openJournalStore(
    * the unique constraint on the instant means no replacement could open.
    */
   const recoverExpiredRoutineRuns = (now: string): void => {
-    database.prepare(`
-      UPDATE routine_runs
-      SET state_tag = 'Queued', worker_id = NULL, lease_expires_at = NULL,
-        fence = fence + 1, progress_percent = 0, progress_label = 'Starting', updated_at = ?
+    const expired = database.prepare(`
+      SELECT id, fence FROM routine_runs
       WHERE state_tag = 'Running' AND lease_expires_at <= ?
-    `).run(now, now)
+    `).all(now) as unknown as Array<{ id: string, fence: number }>
+    expired.forEach((run) => {
+      const changed = database.prepare(`
+        UPDATE routine_runs
+        SET state_tag = 'Queued', worker_id = NULL, lease_expires_at = NULL,
+          fence = fence + 1, progress_percent = 0, progress_label = 'Starting', updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND fence = ? AND lease_expires_at <= ?
+      `).run(now, run.id, run.fence, now).changes === 1
+      if (changed) {
+        recordRoutineRunEvent(database, {
+          runId: run.id,
+          event: 'LeaseRecovered',
+          from: 'Running',
+          to: 'Queued',
+          reason: 'Routine lease expired.',
+          fence: run.fence + 1,
+          at: now,
+        })
+      }
+    })
   }
 
   const claimNextRoutineRun: JournalStore['claimNextRoutineRun'] = (workerId, now, leaseMilliseconds) => {
@@ -9714,17 +11577,18 @@ export function openJournalStore(
           routine_runs.routine_id,
           routine_runs.scheduled_for,
           routine_runs.spec_sha,
+          routine_runs.mode,
           routine_runs.fence,
           routine_runs.attempts,
           routines.repository,
           routines.name,
-          routines.mode,
           repositories.policy_json
         FROM routine_runs
         JOIN routines ON routines.id = routine_runs.routine_id
         JOIN repositories ON repositories.github = routines.repository
         WHERE routine_runs.state_tag = 'Queued'
           AND routines.enabled = 1
+          AND routines.retired_at IS NULL
           AND repositories.enabled = 1
         ORDER BY routine_runs.scheduled_for
         LIMIT 1
@@ -9757,6 +11621,14 @@ export function openJournalStore(
         database.exec('COMMIT')
         return null
       }
+      recordRoutineRunEvent(database, {
+        runId: row.id,
+        event: 'Claimed',
+        from: 'Queued',
+        to: 'Running',
+        fence,
+        at: now,
+      })
       database.exec('COMMIT')
       return {
         id: row.id,
@@ -9796,14 +11668,36 @@ export function openJournalStore(
     `).run(input.progress.percent, input.progress.label, input.at, input.taskId, input.workerId, input.fence).changes === 1
   }
 
-  const completeRoutineRun: JournalStore['completeRoutineRun'] = input =>
-    database.prepare(`
-      UPDATE routine_runs
-      SET state_tag = 'Completed', evidence = ?, reason = NULL, worker_id = NULL,
-        lease_expires_at = NULL, updated_at = ?
-      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-        AND lease_expires_at > ?
-    `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at).changes === 1
+  const completeRoutineRun: JournalStore['completeRoutineRun'] = (input) => {
+    const usage = input.usage ?? { _tag: 'Unavailable' as const }
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE routine_runs
+        SET state_tag = 'Completed', evidence = ?, reason = NULL, worker_id = NULL,
+          lease_expires_at = NULL, usage = ?, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          AND lease_expires_at > ?
+      `).run(input.evidence, JSON.stringify(usage), input.at, input.taskId, input.workerId, input.fence, input.at).changes === 1
+      if (changed) {
+        recordRoutineRunEvent(database, {
+          runId: input.taskId,
+          event: 'Completed',
+          from: 'Running',
+          to: 'Completed',
+          fence: input.fence,
+          usage,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
 
   /**
    * Records one failed Routine run, retrying it until its attempts run out.
@@ -9813,22 +11707,44 @@ export function openJournalStore(
    * missed morning out into several runs.
    */
   const failRoutineRun: JournalStore['failRoutineRun'] = (input) => {
-    const row = database.prepare('SELECT attempts, max_attempts FROM routine_runs WHERE id = ?')
-      .get(input.taskId) as unknown as { attempts: number, max_attempts: number } | undefined
-    if (row === undefined)
-      return 'Rejected'
-    const retrying = row.attempts < row.max_attempts
-    const changed = database.prepare(`
-      UPDATE routine_runs
-      SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL,
-        progress_percent = CASE WHEN ? = 'Queued' THEN 0 ELSE progress_percent END,
-        progress_label = CASE WHEN ? = 'Queued' THEN 'Starting' ELSE progress_label END,
-        updated_at = ?
-      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-    `).run(retrying ? 'Queued' : 'Failed', input.reason, retrying ? 'Queued' : 'Failed', retrying ? 'Queued' : 'Failed', input.at, input.taskId, input.workerId, input.fence).changes === 1
-    if (!changed)
-      return 'Rejected'
-    return retrying ? 'Retrying' : 'Failed'
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = database.prepare('SELECT attempts, max_attempts FROM routine_runs WHERE id = ?')
+        .get(input.taskId) as unknown as { attempts: number, max_attempts: number } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return 'Rejected'
+      }
+      const retrying = row.attempts < row.max_attempts
+      const to = retrying ? 'Queued' : 'Failed'
+      const changed = database.prepare(`
+        UPDATE routine_runs
+        SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL,
+          progress_percent = CASE WHEN ? = 'Queued' THEN 0 ELSE progress_percent END,
+          progress_label = CASE WHEN ? = 'Queued' THEN 'Starting' ELSE progress_label END,
+          updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(to, input.reason, to, to, input.at, input.taskId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordRoutineRunEvent(database, {
+          runId: input.taskId,
+          event: retrying ? 'Retrying' : 'Failed',
+          from: 'Running',
+          to,
+          reason: input.reason,
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      if (!changed)
+        return 'Rejected'
+      return retrying ? 'Retrying' : 'Failed'
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   const stageCandidateIssues: JournalStore['stageCandidateIssues'] = (input) => {
@@ -9843,7 +11759,7 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       input.commands.forEach((command) => {
-        staged += Number(statement.run(
+        const inserted = statement.run(
           command.id,
           command.candidateId,
           command.repository,
@@ -9852,7 +11768,18 @@ export function openJournalStore(
           command.body,
           input.at,
           input.at,
-        ).changes)
+        ).changes === 1
+        staged += Number(inserted)
+        if (inserted) {
+          recordDurableCommandEvent(database, {
+            stream: 'candidate_issue',
+            commandId: command.id,
+            event: 'Staged',
+            from: null,
+            to: 'Pending',
+            at: input.at,
+          })
+        }
       })
       database.exec('COMMIT')
     }
@@ -9866,6 +11793,31 @@ export function openJournalStore(
   const claimNextCandidateIssue: JournalStore['claimNextCandidateIssue'] = (workerId, now, leaseMilliseconds) => {
     database.exec('BEGIN IMMEDIATE')
     try {
+      const expired = database.prepare(`
+        SELECT id, fence FROM candidate_issue_commands
+        WHERE state_tag = 'Running' AND lease_expires_at <= ?
+      `).all(now) as unknown as Array<{ id: string, fence: number }>
+      expired.forEach((command) => {
+        const recovered = database.prepare(`
+          UPDATE candidate_issue_commands
+          SET state_tag = 'Pending', worker_id = NULL, lease_expires_at = NULL,
+            fence = fence + 1, updated_at = ?
+          WHERE id = ? AND state_tag = 'Running' AND fence = ? AND lease_expires_at <= ?
+        `).run(now, command.id, command.fence, now).changes === 1
+        if (recovered) {
+          recordDurableCommandEvent(database, {
+            stream: 'candidate_issue',
+            commandId: command.id,
+            event: 'LeaseRecovered',
+            from: 'Running',
+            to: 'Pending',
+            reason: 'Candidate issue lease expired.',
+            fence: command.fence + 1,
+            at: now,
+          })
+        }
+      })
+      /* Legacy bulk recovery is kept empty by the fenced loop above. */
       database.prepare(`
         UPDATE candidate_issue_commands
         SET state_tag = 'Pending', worker_id = NULL, lease_expires_at = NULL,
@@ -9918,6 +11870,17 @@ export function openJournalStore(
           attempts = attempts + 1, updated_at = ?
         WHERE id = ? AND state_tag = 'Pending' AND fence = ?
       `).run(workerId, leaseExpiresAt, fence, now, row.id, row.fence).changes === 1
+      if (claimed) {
+        recordDurableCommandEvent(database, {
+          stream: 'candidate_issue',
+          commandId: row.id,
+          event: 'Claimed',
+          from: 'Pending',
+          to: 'Running',
+          fence,
+          at: now,
+        })
+      }
       database.exec('COMMIT')
       if (!claimed)
         return null
@@ -9951,6 +11914,17 @@ export function openJournalStore(
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
       `).run(input.issueNumber, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordDurableCommandEvent(database, {
+          stream: 'candidate_issue',
+          commandId: input.commandId,
+          event: 'Published',
+          from: 'Running',
+          to: 'Published',
+          fence: input.fence,
+          at: input.at,
+        })
+      }
       database.exec('COMMIT')
       return changed
     }
@@ -9969,39 +11943,99 @@ export function openJournalStore(
    * reserved for dead letters a person has to act on.
    */
   const failCandidateIssue: JournalStore['failCandidateIssue'] = (input) => {
-    return database.prepare(`
-      UPDATE candidate_issue_commands
-      SET state_tag = 'Pending', reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-    `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE candidate_issue_commands
+        SET state_tag = 'Pending', reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordDurableCommandEvent(database, {
+          stream: 'candidate_issue',
+          commandId: input.commandId,
+          event: 'Deferred',
+          from: 'Running',
+          to: 'Pending',
+          reason: input.reason,
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
-  const stageRoutineReport: JournalStore['stageRoutineReport'] = input => database.prepare(`
-    INSERT INTO routine_report_commands (
-      id, routine_id, run_id, repository, routine_name, body, state_tag, created_at, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
-    ON CONFLICT (run_id) DO NOTHING
-  `).run(
-    input.command.id,
-    input.command.routineId,
-    input.command.runId,
-    input.command.repository,
-    input.command.routineName,
-    input.command.body,
-    input.at,
-    input.at,
-  ).changes === 1
+  const stageRoutineReport: JournalStore['stageRoutineReport'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const inserted = database.prepare(`
+        INSERT INTO routine_report_commands (
+          id, routine_id, run_id, repository, routine_name, body, state_tag, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+        ON CONFLICT (run_id) DO NOTHING
+      `).run(
+        input.command.id,
+        input.command.routineId,
+        input.command.runId,
+        input.command.repository,
+        input.command.routineName,
+        input.command.body,
+        input.at,
+        input.at,
+      ).changes === 1
+      if (inserted) {
+        recordDurableCommandEvent(database, {
+          stream: 'routine_report',
+          commandId: input.command.id,
+          event: 'Staged',
+          from: null,
+          to: 'Pending',
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return inserted
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
 
   const claimNextRoutineReport: JournalStore['claimNextRoutineReport'] = (workerId, now, leaseMilliseconds, excludedCommandIds = []) => {
     database.exec('BEGIN IMMEDIATE')
     try {
-      database.prepare(`
-        UPDATE routine_report_commands
-        SET state_tag = 'Pending', worker_id = NULL, lease_expires_at = NULL,
-          fence = fence + 1, updated_at = ?
+      const expired = database.prepare(`
+        SELECT id, fence FROM routine_report_commands
         WHERE state_tag = 'Running' AND lease_expires_at <= ?
-      `).run(now, now)
+      `).all(now) as unknown as Array<{ id: string, fence: number }>
+      expired.forEach((command) => {
+        const recovered = database.prepare(`
+          UPDATE routine_report_commands
+          SET state_tag = 'Pending', worker_id = NULL, lease_expires_at = NULL,
+            fence = fence + 1, updated_at = ?
+          WHERE id = ? AND state_tag = 'Running' AND fence = ? AND lease_expires_at <= ?
+        `).run(now, command.id, command.fence, now).changes === 1
+        if (recovered) {
+          recordDurableCommandEvent(database, {
+            stream: 'routine_report',
+            commandId: command.id,
+            event: 'LeaseRecovered',
+            from: 'Running',
+            to: 'Pending',
+            reason: 'Routine report lease expired.',
+            fence: command.fence + 1,
+            at: now,
+          })
+        }
+      })
 
       const exclusion = excludedCommandIds.length === 0
         ? ''
@@ -10050,6 +12084,17 @@ export function openJournalStore(
           attempts = attempts + 1, updated_at = ?
         WHERE id = ? AND state_tag = 'Pending' AND fence = ?
       `).run(workerId, leaseExpiresAt, fence, now, row.id, row.fence).changes === 1
+      if (claimed) {
+        recordDurableCommandEvent(database, {
+          stream: 'routine_report',
+          commandId: row.id,
+          event: 'Claimed',
+          from: 'Pending',
+          to: 'Running',
+          fence,
+          at: now,
+        })
+      }
       const candidates = (database.prepare('SELECT * FROM candidates WHERE run_id = ? ORDER BY created_at').all(row.run_id) as unknown as CandidateRow[])
         .map(readCandidate)
       database.exec('COMMIT')
@@ -10096,6 +12141,42 @@ export function openJournalStore(
           UPDATE routines SET tracking_issue_number = ?, updated_at = ?
           WHERE id = (SELECT routine_id FROM routine_report_commands WHERE id = ?)
         `).run(input.trackingIssueNumber, input.at, input.commandId)
+        recordDurableCommandEvent(database, {
+          stream: 'routine_report',
+          commandId: input.commandId,
+          event: 'Published',
+          from: 'Running',
+          to: 'Published',
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const recordRoutineReportReceipt: JournalStore['recordRoutineReportReceipt'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE routine_report_commands SET updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordDurableCommandEvent(database, {
+          stream: 'routine_report',
+          commandId: input.commandId,
+          event: input.sink === 'tracking_issue' ? 'TrackingIssueConfirmed' : 'RunCommentConfirmed',
+          from: 'Running',
+          to: 'Running',
+          fence: input.fence,
+          at: input.at,
+        })
       }
       database.exec('COMMIT')
       return changed
@@ -10107,16 +12188,40 @@ export function openJournalStore(
   }
 
   const failRoutineReport: JournalStore['failRoutineReport'] = (input) => {
-    const row = database.prepare('SELECT attempts, max_attempts FROM routine_report_commands WHERE id = ?')
-      .get(input.commandId) as unknown as { attempts: number, max_attempts: number } | undefined
-    if (row === undefined)
-      return false
-    const retrying = row.attempts < row.max_attempts
-    return database.prepare(`
-      UPDATE routine_report_commands
-      SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-      WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-    `).run(retrying ? 'Pending' : 'Failed', input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = database.prepare('SELECT attempts, max_attempts FROM routine_report_commands WHERE id = ?')
+        .get(input.commandId) as unknown as { attempts: number, max_attempts: number } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return false
+      }
+      const retrying = row.attempts < row.max_attempts
+      const to = retrying ? 'Pending' : 'Failed'
+      const changed = database.prepare(`
+        UPDATE routine_report_commands
+        SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(to, input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordDurableCommandEvent(database, {
+          stream: 'routine_report',
+          commandId: input.commandId,
+          event: retrying ? 'Deferred' : 'Failed',
+          from: 'Running',
+          to,
+          reason: input.reason,
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   return {
@@ -10137,6 +12242,7 @@ export function openJournalStore(
     stageRoutineReport,
     claimNextRoutineReport,
     completeRoutineReport,
+    recordRoutineReportReceipt,
     failRoutineReport,
     claimNextRoutineRun,
     heartbeatRoutineRun,
@@ -10176,14 +12282,17 @@ export function openJournalStore(
     claimNextPublication,
     claimIssueTriageComment,
     claimReviewStatus,
+    claimNextTerminalReviewStatus,
     close: () => database.close(),
     closeMissingItems,
     completeTask,
     supersedeTask,
+    completeReviewTask,
     completeWorkerTask,
     completeIssueTriageComment,
     completePublication,
     completeReviewStatus,
+    recordReviewStatusReceipt,
     deferPublication,
     deferIssueTriageComment,
     deferReviewStatus,
@@ -10194,6 +12303,12 @@ export function openJournalStore(
     getAgentSelection,
     getDashboardSnapshot,
     getStats,
+    listWorkflowEvents,
+    providerCanStart,
+    reserveProviderStart,
+    recordProviderFailure,
+    recordProviderSuccess,
+    listProviderCircuits,
     getWorkerSession,
     heartbeatPublication,
     hasPullRequestApproval,
@@ -10241,6 +12356,7 @@ export function openJournalStore(
     stagePublication,
     stageIssueTriageComment,
     stageReviewStatus,
+    stageReviewGateStatus,
     supersedePublication,
     syncRepositories,
     updateAgentProgress,

@@ -93,6 +93,7 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
             fence: task.state.fence,
             at: options.now().toISOString(),
             reason: result.value.reason,
+            ...(result.value.usage === undefined ? {} : { usage: result.value.usage }),
           })
           return
         }
@@ -104,6 +105,7 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
             at: options.now().toISOString(),
             reason: result.value.reason,
             evidence: result.value.evidence,
+            ...(result.value.usage === undefined ? {} : { usage: result.value.usage }),
           })
           return
         }
@@ -113,6 +115,7 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
           fence: task.state.fence,
           at: options.now().toISOString(),
           publication: result.value.publication,
+          ...(result.value.usage === undefined ? {} : { usage: result.value.usage }),
         })
         if (staged._tag !== 'Rejected')
           return

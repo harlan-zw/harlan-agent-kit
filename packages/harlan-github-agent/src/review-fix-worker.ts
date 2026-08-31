@@ -188,6 +188,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
           _tag: 'ActionRequired',
           reason: turn.value.value.summary,
           evidence: JSON.stringify({ findings, checks: turn.value.value.checks }),
+          usage: turn.value.usage,
         })
       }
       if (turn.value.value.outcome === 'disputed') {
@@ -206,6 +207,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
             _tag: 'ActionRequired',
             reason: `Repair disputed the finding. One fresh Review was queued: ${turn.value.value.summary}`,
             evidence,
+            usage: turn.value.usage,
           })
         }
         if (rerun._tag === 'Duplicate' || rerun.reason._tag === 'DisputeCapReached') {
@@ -213,12 +215,14 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
             _tag: 'ActionRequired',
             reason: `Repair and the fresh Review still disagree: ${turn.value.value.summary}`,
             evidence,
+            usage: turn.value.usage,
           })
         }
         return ok({
           _tag: 'ActionRequired',
           reason: `The disputed finding could not receive a fresh Review: ${rerun.reason._tag}.`,
           evidence,
+          usage: turn.value.usage,
         })
       }
 
@@ -243,6 +247,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         return committedProgress
       return ok({
         _tag: 'Publish',
+        usage: turn.value.usage,
         publication: {
           _tag: 'UpdatePullRequest',
           taskKind: 'review_fix',

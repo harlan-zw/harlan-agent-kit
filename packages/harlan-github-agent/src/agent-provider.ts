@@ -67,6 +67,8 @@ export function agentTextEvent(text: string): Extract<AgentEvent, { _tag: 'Messa
 }
 
 export interface AgentTurnRequest {
+  /** Durable Task identity used to fence one provider health canary. */
+  taskId?: string
   /** Provider-specific model identifier taken from the worker profile. */
   model: string
   /** JSON Schema the turn must answer with. */
