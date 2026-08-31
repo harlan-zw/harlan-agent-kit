@@ -8899,11 +8899,20 @@ export function openJournalStore(
         `).get(input.commandId) as { review_run_id: string | null, body: string }
         if (command.review_run_id !== null) {
           const publicationResult = { _tag: 'Published' as const, githubCommentId: input.commentId, url: input.url }
+          // A drift repair republishes the same command id, so the row already
+          // exists and must move to the replacement comment. Keeping the stale
+          // comment id here would requeue the command on every sweep pass and
+          // create a duplicate gate comment each time.
           database.prepare(`
-            INSERT OR IGNORE INTO review_publications (
+            INSERT INTO review_publications (
               id, review_run_id, body, body_sha256, created_at, result_tag,
               github_comment_id, github_url, reason, content_digest
             ) VALUES (?, ?, ?, ?, ?, 'Published', ?, ?, NULL, ?)
+            ON CONFLICT (id) DO UPDATE SET
+              created_at = excluded.created_at,
+              github_comment_id = excluded.github_comment_id,
+              github_url = excluded.github_url,
+              content_digest = excluded.content_digest
           `).run(
             input.commandId,
             command.review_run_id,

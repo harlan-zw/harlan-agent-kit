@@ -5289,12 +5289,31 @@ describe('journal store', () => {
       at: '2026-08-13T01:05:00.000Z',
     })).toEqual({ _tag: 'Staged', commandId: staged.commandId })
 
-    expect(store.claimReviewStatus(staged.commandId, 'publisher-2', '2026-08-13T01:05:10.000Z', 60_000))
-      .toEqual(expect.objectContaining({
-        id: staged.commandId,
-        outcomeUnknown: true,
-        commentId: 42,
-      }))
+    const repaired = store.claimReviewStatus(staged.commandId, 'publisher-2', '2026-08-13T01:05:10.000Z', 60_000)
+    expect(repaired).toEqual(expect.objectContaining({
+      id: staged.commandId,
+      outcomeUnknown: true,
+      commentId: 42,
+    }))
+    if (repaired === null)
+      throw new Error('Expected the drift repair claim.')
+
+    expect(store.completeReviewStatus({
+      commandId: repaired.id,
+      workerId: repaired.workerId,
+      fence: repaired.fence,
+      at: '2026-08-13T01:05:20.000Z',
+      commentId: 43,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-43',
+    })).toBe(true)
+
+    // The repair published a replacement comment. The next sweep pass must
+    // target the replacement, or every pass requeues the command and creates
+    // another duplicate gate comment forever.
+    expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({
+      reviewRunId: 'gate-status-drift-review',
+      commentId: 43,
+    })])
   })
 
   it('records comment publication failures for later analysis', () => {
