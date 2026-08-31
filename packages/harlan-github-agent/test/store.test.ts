@@ -5174,6 +5174,58 @@ describe('journal store', () => {
     expect(store.listReviewGateRefreshes()).toHaveLength(1)
   })
 
+  it('deduplicates a reconciled gate status with the same published body', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'gate-status-deduplication',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    finishReviewTask(store, '2026-08-13T01:00:30.000Z')
+    const gates = passedReviewGates()
+    store.recordReviewRun({
+      id: 'gate-status-review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates,
+      confidence: 96,
+      findings: [],
+    })
+    const input = {
+      reviewRunId: 'gate-status-review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      expectedHeadSha: 'abc123',
+      gates,
+      body: '### 🤖 READY',
+      desiredOutcome: 'READY' as const,
+      at: '2026-08-13T01:03:00.000Z',
+    }
+    const staged = store.stageReviewGateStatus(input)
+    if (staged._tag !== 'Staged')
+      throw new Error(`Expected a staged gate status, not ${staged._tag}.`)
+
+    expect(store.stageReviewGateStatus({
+      ...input,
+      reconciliationId: 'github-comment-drifted',
+      at: '2026-08-13T01:04:00.000Z',
+    })).toEqual({ _tag: 'Duplicate', commandId: staged.commandId })
+  })
+
   it('records comment publication failures for later analysis', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

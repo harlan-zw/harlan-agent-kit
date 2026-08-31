@@ -8536,10 +8536,15 @@ export function openJournalStore(
         bodySha256,
         input.reconciliationId ?? '',
       ].join(':'))
-      const existing = database.prepare('SELECT 1 FROM review_status_commands WHERE id = ?').get(commandId)
+      const existing = database.prepare(`
+        SELECT id FROM review_status_commands
+        WHERE task_kind = 'adversarial_review'
+          AND task_id = ? AND task_fence = ?
+          AND phase = 'terminal' AND body_sha256 = ?
+      `).get(row.task_id, row.task_fence, bodySha256) as { id: string } | undefined
       if (existing !== undefined) {
         database.exec('COMMIT')
-        return { _tag: 'Duplicate', commandId }
+        return { _tag: 'Duplicate', commandId: existing.id }
       }
       database.prepare(`
         INSERT INTO review_status_commands (
