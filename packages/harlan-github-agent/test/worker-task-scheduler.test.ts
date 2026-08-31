@@ -1,13 +1,48 @@
 import type { ClaimedAdversarialReviewTask } from '../src/types.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
-import { err } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { createWorkerTaskScheduler } from '../src/worker-task-scheduler.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 afterEach(() => vi.useRealTimers())
 
 describe('agent task scheduler', () => {
+  it('lets four schedulers use four shared Agent permits', async () => {
+    const permits = createAgentPermitPool(4)
+    const queued = Array.from({ length: 4 }, (_value, index) => ({
+      id: `issue-${index + 1}`,
+      state: { fence: 1 },
+    }))
+    const started: string[] = []
+    const releases: Array<() => void> = []
+    const schedulers = Array.from({ length: 4 }, (_value, index) => createWorkerTaskScheduler<typeof queued[number], { evidence: string }>({
+      claim: () => queued.shift() ?? null,
+      complete: () => true,
+      fail: () => 'Rejected',
+      heartbeat: () => true,
+      intervalMilliseconds: 60_000,
+      leaseMilliseconds: 60_000,
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      onError: (error) => { throw error },
+      permits,
+      worker: {
+        run: task => new Promise((resolve) => {
+          started.push(task.id)
+          releases.push(() => resolve(ok({ evidence: 'Done.' })))
+        }),
+      },
+      workerId: `issue-worker-${index + 1}`,
+    }))
+
+    const running = schedulers.map(scheduler => scheduler.runNow())
+    await vi.waitFor(() => expect(started).toHaveLength(4))
+    releases.forEach(release => release())
+    await Promise.all(running)
+
+    expect(started).toHaveLength(4)
+  })
+
   it('does not claim new work while agents are paused', async () => {
     const claim = vi.fn(() => null)
     const worker = { run: vi.fn() }

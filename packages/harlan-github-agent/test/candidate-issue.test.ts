@@ -2,7 +2,7 @@ import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { Candidate, ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { candidateIssueBody, candidateIssueCommands, createCandidateIssueController, routineIssueLabel } from '../src/candidate-issue-controller.ts'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -67,6 +67,8 @@ function seed(store: ReturnType<typeof openJournalStore>): void {
 function publisher(calls: Array<{ title: string, labels?: readonly string[] }>): GitHubIssuePublisher {
   return {
     findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+    findRoutineTrackingIssue: () => Promise.resolve(ok(null)),
+    findIssueCommentByMarker: () => Promise.resolve(ok(null)),
     createComment: async () => ok({ id: 1 }),
     createIssue: async (input) => {
       calls.push({ title: input.title, ...(input.labels === undefined ? {} : { labels: input.labels }) })
@@ -226,6 +228,36 @@ describe('filing the issues Candidates propose', () => {
 
       expect(failed[0]?._tag).toBe('Err')
       expect(retried[0]).toMatchObject({ _tag: 'Ok' })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('creates nothing when duplicate detection cannot read GitHub', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      let created = 0
+      const results = await createCandidateIssueController({
+        github: {
+          findOpenIssueByFingerprint: () => Promise.resolve(err({ repository: 'harlan-zw/example', message: 'GitHub timed out.' })),
+          createIssue: async () => {
+            created += 1
+            return ok({ number: 7, url: 'https://github.com/harlan-zw/example/issues/7' })
+          },
+        },
+        now,
+        store,
+        workerId: 'controller-1',
+      }).publishPending(new AbortController().signal, 1)
+
+      expect(created).toBe(0)
+      expect(results).toEqual([{ _tag: 'Err', error: 'harlan-zw/example: GitHub timed out.' }])
     }
     finally {
       store.close()

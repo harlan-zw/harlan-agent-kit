@@ -303,6 +303,30 @@ describe('running one scan', () => {
     }
   })
 
+  it('restages a Candidate command after a crash between its ledger writes', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const task = claimStoredRun(store)
+      store.recordCandidates({
+        routineId: task.routineId,
+        runId: task.id,
+        candidates: [candidate],
+        at: '2026-08-27T07:05:00.000Z',
+      })
+
+      await workerFor(store, scanning({ candidates: [candidate] }))
+        .run(task, new AbortController().signal)
+
+      store.setRepositoryWritesEnabled(task.repository, true)
+      expect(store.claimNextCandidateIssue('controller-1', '2026-08-27T07:06:00.000Z', 60_000))
+        .toMatchObject({ candidateId: `${task.id}:${candidate.fingerprint}` })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('sends a prior rejection back to the next scan', async () => {
     const store = openJournalStore(':memory:')
     try {

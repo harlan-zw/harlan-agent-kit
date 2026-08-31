@@ -31,6 +31,7 @@ export function issueItem(overrides: Partial<GitHubIssueItem> = {}): GitHubIssue
   return {
     kind: 'issue',
     approvalLabels: [],
+    contentDigest: '0'.repeat(64),
     routineFiled: false,
     routineTracking: false,
     repository: 'harlan-zw/example',
@@ -93,6 +94,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     },
     reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     providerCapacities: [],
+    providerCircuits: [],
     agents: [],
     incidents: [],
     queue: [],

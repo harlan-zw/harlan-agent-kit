@@ -112,7 +112,7 @@ export function priorAutomatedReviewForHead(
   comments: AutomatedReviewComment[],
   headSha: string,
   currentAgentLogin: string,
-  baseSha?: string,
+  _baseSha?: string,
 ): PriorAutomatedReview {
   const currentAgent = currentAgentLogin.toLowerCase()
   const found = comments.findLast((comment) => {
@@ -121,7 +121,7 @@ export function priorAutomatedReviewForHead(
     if (comment.authorLogin.toLowerCase() !== currentAgent)
       return trustedAssociations.has(comment.authorAssociation.toUpperCase())
     const workflow = automatedReviewWorkflowState(comment.body)
-    if (workflow === undefined || workflow.headSha.toLowerCase() !== headSha.toLowerCase() || (baseSha !== undefined && workflow.baseSha.toLowerCase() !== baseSha.toLowerCase()))
+    if (workflow === undefined || workflow.headSha.toLowerCase() !== headSha.toLowerCase())
       return false
     return workflow._tag === 'ReviewSkipped' || workflow.outcome !== 'PENDING'
   })

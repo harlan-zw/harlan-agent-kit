@@ -77,7 +77,7 @@ export function candidateIssueCommands(
 }
 
 export interface CandidateIssueControllerOptions {
-  github: GitHubIssuePublisher
+  github: Pick<GitHubIssuePublisher, 'createIssue' | 'findOpenIssueByFingerprint'>
   leaseMilliseconds?: number
   now: () => Date
   store: Pick<JournalStore, 'claimNextCandidateIssue' | 'completeCandidateIssue' | 'failCandidateIssue'>
@@ -121,7 +121,20 @@ export function createCandidateIssueController(options: CandidateIssueController
           repository: command.repositoryMapping,
           fingerprint: command.fingerprint,
         }, signal)
-        if (existing._tag === 'Ok' && existing.value !== null) {
+        if (existing._tag === 'Err') {
+          if (!signal.aborted) {
+            options.store.failCandidateIssue({
+              commandId: command.id,
+              workerId: command.workerId,
+              fence: command.fence,
+              at: options.now().toISOString(),
+              reason: existing.error.message,
+            })
+            results.push(err(`${command.repository}: ${existing.error.message}`))
+          }
+          return results
+        }
+        if (existing.value !== null) {
           options.store.completeCandidateIssue({
             commandId: command.id,
             workerId: command.workerId,

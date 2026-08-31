@@ -114,6 +114,7 @@ const WEEKDAY_INDEX: Record<string, number> = {
 
 /** Reads one instant as wall-clock parts in the Routine's own time zone. */
 export function wallClockParts(at: Date, timeZone: string): {
+  year: number
   minute: number
   hour: number
   dayOfMonth: number
@@ -134,6 +135,7 @@ export function wallClockParts(at: Date, timeZone: string): {
   // `hour12: false` still answers midnight as 24 in some runtimes, so fold it.
   const hour = Number(parts.get('hour')) % 24
   return {
+    year: Number(parts.get('year')),
     minute: Number(parts.get('minute')),
     hour,
     dayOfMonth: Number(parts.get('day')),
@@ -142,15 +144,21 @@ export function wallClockParts(at: Date, timeZone: string): {
   }
 }
 
-/** Whether one instant matches the expression, read in the Routine's time zone. */
-export function matchesCron(expression: CronExpression, at: Date, timeZone: string): boolean {
-  const parts = wallClockParts(at, timeZone)
-  if (!expression.minutes.has(parts.minute) || !expression.hours.has(parts.hour) || !expression.months.has(parts.month))
+function matchesCronDate(expression: CronExpression, parts: ReturnType<typeof wallClockParts>): boolean {
+  if (!expression.months.has(parts.month))
     return false
   const dayOfMonth = expression.daysOfMonth.has(parts.dayOfMonth)
   const dayOfWeek = expression.daysOfWeek.has(parts.dayOfWeek)
-  // Standard cron matches either day field when both are restricted.
   return expression.restrictsBothDayFields ? dayOfMonth || dayOfWeek : dayOfMonth && dayOfWeek
+}
+
+/** Whether one instant matches the expression, read in the Routine's time zone. */
+export function matchesCron(expression: CronExpression, at: Date, timeZone: string): boolean {
+  const parts = wallClockParts(at, timeZone)
+  if (!expression.minutes.has(parts.minute) || !expression.hours.has(parts.hour))
+    return false
+  // Standard cron matches either day field when both are restricted.
+  return matchesCronDate(expression, parts)
 }
 
 /**
@@ -162,15 +170,11 @@ export function matchesCron(expression: CronExpression, at: Date, timeZone: stri
  */
 export const DEFAULT_CATCH_UP_MINUTES = 6 * 60
 
-/**
- * How far back the search looks to name a missed instant.
- *
- * Eight days covers a weekly Routine, so even the sparsest schedule reports the
- * run it did not get rather than going quiet.
- */
-export const DEFAULT_MISSED_HORIZON_MINUTES = 8 * 24 * 60
-
 const MINUTE = 60_000
+const DAY = 24 * 60 * MINUTE
+// A five-field cron has no year. Its longest valid calendar gap is the eight
+// years between leap days around a non-leap century year.
+const MAXIMUM_CRON_GAP_DAYS = 8 * 366
 
 export type DueRoutine
   = | { _tag: 'NotDue' }
@@ -182,10 +186,58 @@ export interface DueRoutineInput {
   expression: CronExpression
   /** When this Routine last ran, or null when it never has. */
   lastRunAt: Date | null
-  /** How far back to look when naming a missed instant. */
-  missedHorizonMinutes?: number
   now: Date
   timeZone: string
+}
+
+function sameWallClockDate(left: ReturnType<typeof wallClockParts>, right: ReturnType<typeof wallClockParts>): boolean {
+  return left.year === right.year
+    && left.month === right.month
+    && left.dayOfMonth === right.dayOfMonth
+}
+
+/** Whether the last run already answered this local schedule instant. */
+function alreadyAnswered(candidate: Date, lastRunAt: Date, timeZone: string): boolean {
+  if (candidate.getTime() <= lastRunAt.getTime())
+    return true
+
+  const candidateParts = wallClockParts(candidate, timeZone)
+  const lastRunParts = wallClockParts(lastRunAt, timeZone)
+  if (!sameWallClockDate(candidateParts, lastRunParts))
+    return false
+
+  const candidateMinute = candidateParts.hour * 60 + candidateParts.minute
+  const lastRunMinute = lastRunParts.hour * 60 + lastRunParts.minute
+  return candidateMinute <= lastRunMinute
+}
+
+function utcDayCanMatch(expression: CronExpression, utcDayStart: number, timeZone: string): boolean {
+  // A UTC day normally spans two local dates. Noon also covers historical
+  // offset jumps, so a skipped local date cannot hide a nearby valid one.
+  return [utcDayStart, utcDayStart + DAY / 2, utcDayStart + DAY - MINUTE]
+    .some(at => matchesCronDate(expression, wallClockParts(new Date(at), timeZone)))
+}
+
+/** Finds the newest matching minute without scanning every minute for years. */
+function newestMatchBetween(input: {
+  expression: CronExpression
+  newest: number
+  oldest: number
+  timeZone: string
+}): Date | null {
+  const oldestDay = Math.floor(input.oldest / DAY) * DAY
+  for (let utcDay = Math.floor(input.newest / DAY) * DAY; utcDay >= oldestDay; utcDay -= DAY) {
+    if (!utcDayCanMatch(input.expression, utcDay, input.timeZone))
+      continue
+    const newest = Math.min(input.newest, utcDay + DAY - MINUTE)
+    const oldest = Math.max(input.oldest, utcDay)
+    for (let at = Math.floor(newest / MINUTE) * MINUTE; at >= oldest; at -= MINUTE) {
+      const candidate = new Date(at)
+      if (matchesCron(input.expression, candidate, input.timeZone))
+        return candidate
+    }
+  }
+  return null
 }
 
 /**
@@ -210,28 +262,30 @@ export function dueRoutine(input: DueRoutineInput): DueRoutine {
     const candidate = new Date(start - step * MINUTE)
     if (!matchesCron(input.expression, candidate, input.timeZone))
       continue
-    if (input.lastRunAt !== null && candidate.getTime() <= input.lastRunAt.getTime())
+    if (input.lastRunAt !== null && alreadyAnswered(candidate, input.lastRunAt, input.timeZone))
       return { _tag: 'NotDue' }
     return { _tag: 'Due', scheduledFor: candidate }
   }
 
-  // Nothing matched inside the window. Look back far enough to name the missed
-  // instant, so a check-in that did not happen is recorded and not lost.
-  //
-  // This walk is long, and it runs at most once per missed instant: recording
-  // the skip moves `lastRunAt` forward, so the next tick answers `NotDue` from
-  // the short walk above.
-  for (let step = catchUpMinutes + 1; step <= (input.missedHorizonMinutes ?? DEFAULT_MISSED_HORIZON_MINUTES); step += 1) {
-    const candidate = new Date(start - step * MINUTE)
-    if (!matchesCron(input.expression, candidate, input.timeZone))
-      continue
-    if (input.lastRunAt !== null && candidate.getTime() <= input.lastRunAt.getTime())
-      return { _tag: 'NotDue' }
-    return {
-      _tag: 'Missed',
-      scheduledFor: candidate,
-      reason: `This run was due more than ${Math.round(catchUpMinutes / 60)} hours ago, so it was skipped.`,
-    }
+  // Search calendar dates instead of an arbitrary minute horizon. This finds
+  // monthly and annual schedules without making common daily checks slower.
+  const oldest = Math.max(
+    start - MAXIMUM_CRON_GAP_DAYS * DAY,
+    input.lastRunAt?.getTime() ?? Number.NEGATIVE_INFINITY,
+  )
+  const candidate = newestMatchBetween({
+    expression: input.expression,
+    newest: start - (catchUpMinutes + 1) * MINUTE,
+    oldest,
+    timeZone: input.timeZone,
+  })
+  if (candidate === null)
+    return { _tag: 'NotDue' }
+  if (input.lastRunAt !== null && alreadyAnswered(candidate, input.lastRunAt, input.timeZone))
+    return { _tag: 'NotDue' }
+  return {
+    _tag: 'Missed',
+    scheduledFor: candidate,
+    reason: `This run was due more than ${Math.round(catchUpMinutes / 60)} hours ago, so it was skipped.`,
   }
-  return { _tag: 'NotDue' }
 }

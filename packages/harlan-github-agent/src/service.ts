@@ -38,6 +38,7 @@ import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 import { createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
+import { createCircuitProtectedProvider } from './provider-circuit.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
 import { createPullRequestStatusController } from './pull-request-status-controller.ts'
 import { createPullRequestTriageAgent } from './pull-request-triage.ts'
@@ -51,6 +52,7 @@ import { createReviewFixWorker } from './review-fix-worker.ts'
 import { refreshReviewGates } from './review-gate-sweep.ts'
 import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
+import { createReviewStatusScheduler } from './review-status-scheduler.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
 import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
 import { createRoutineReportController } from './routine-report-controller.ts'
@@ -279,7 +281,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   const chooseProvider = (order: readonly AgentProviderName[]): AgentProviderName | null => chooseAgentProvider({
     capacity: capacity.read,
-    order,
+    order: order.filter((provider) => {
+      const profile = agentProfile(provider)
+      return store.providerCanStart({
+        provider,
+        credential: profile.authentication,
+        at: now().toISOString(),
+      })
+    }),
     reservePercent: config.agent.reservePercent,
   })
   // Both provider runtimes are built once. Switching the Agent selection then
@@ -289,8 +298,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
     providers: {
-      codex: createCodexProvider(),
-      opencode: createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }),
+      codex: createCircuitProtectedProvider({
+        credential: agentProfile('codex').authentication,
+        now,
+        provider: createCodexProvider(),
+        store,
+      }),
+      opencode: createCircuitProtectedProvider({
+        credential: agentProfile('opencode').authentication,
+        now,
+        provider: createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }),
+        store,
+      }),
     },
     selection: store.getAgentSelection,
   })
@@ -393,9 +412,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       if (!restartAllowsTaskClaims(store.getRestartRequest()))
         return false
       const selection = store.getAgentSelection()
-      if (selection._tag !== 'Automatic')
-        return true
-      return chooseProvider(selection.order) !== null
+      if (selection._tag === 'Automatic')
+        return chooseProvider(selection.order) !== null
+      const current = runtime().profile
+      return store.providerCanStart({
+        provider: current.provider,
+        credential: current.authentication,
+        at: now().toISOString(),
+      })
     }
     /**
      * Writes the Running label as the scheduler takes and gives up a lease.
@@ -575,7 +599,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
         workerId: randomUUID(),
       }),
-      issues: createWorkerTaskScheduler({
+      issues: Array.from({ length: profile.maximumActiveAgents }, () => createWorkerTaskScheduler({
         canClaim,
         claim: store.claimNextIssueTriageTask,
         complete: store.completeWorkerTask,
@@ -594,7 +618,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           worker: createIssueTriageWorker(subjectWorkerOptions),
         }),
         workerId: randomUUID(),
-      }),
+      })),
       publications: createPublicationScheduler({
         intervalMilliseconds: 2_000,
         leaseMilliseconds: 2 * 60_000,
@@ -607,6 +631,19 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           root: controllerRoot,
           tokens,
         }),
+        workerId: randomUUID(),
+      }),
+      reviewStatuses: createReviewStatusScheduler({
+        github: workerGithub,
+        intervalMilliseconds: 2_000,
+        leaseMilliseconds: 2 * 60_000,
+        now,
+        onError: error => options.logger.error(error),
+        onFailure: (repository, pullRequestNumber, reason) => {
+          options.logger.error(`${repository}#${pullRequestNumber}: terminal Review Publication failed: ${reason}`)
+          recordServiceIncident(store, now().toISOString(), 'review_status_publication', reason)
+        },
+        store,
         workerId: randomUUID(),
       }),
       repairs: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
@@ -640,7 +677,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       reviews: Array.from({ length: profile.maximumActiveAgents }, () => createWorkerTaskScheduler({
         canClaim,
         claim: store.claimNextAdversarialReviewTask,
-        complete: store.completeWorkerTask,
+        complete: store.completeReviewTask,
         fail: store.failWorkerTask,
         heartbeat: store.heartbeatWorkerTask,
         intervalMilliseconds: 5_000,
@@ -863,10 +900,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }, signal)
         settled.forEach((result) => {
           if (result._tag === 'Ok') {
-            if (result.value._tag === 'Republished')
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: controller gates changed, so the Review now reads ${result.value.outcome}.`)
-            else if (result.value._tag === 'CommentGone')
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the review comment was deleted, so nothing was written.`)
+            if (result.value._tag === 'PublicationQueued')
+              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: queued the ${result.value.outcome} Review status.`)
             else if (result.value._tag === 'Superseded')
               options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the head commit moved, so the prior Review was left alone.`)
           }
@@ -962,7 +997,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       mutationSchedulers.tasks,
       mutationSchedulers.baselineRepairs,
       mutationSchedulers.issueWork,
-      mutationSchedulers.issues,
+      ...mutationSchedulers.issues,
       ...mutationSchedulers.repairs,
       ...mutationSchedulers.reviews,
     ]
@@ -993,6 +1028,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         return { ...current, agentStart: resolveAgentStartState(current) }
       },
       getStats: store.getStats,
+      listWorkflowEvents: store.listWorkflowEvents,
       listReviewRuns: store.listReviewRuns,
       pauseAgents: store.pauseAgents,
       recordAgentFeedback: store.recordAgentFeedback,
@@ -1089,11 +1125,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   if (answers('github'))
     mutationSchedulers?.publications.start()
   if (answers('github'))
+    mutationSchedulers?.reviewStatuses.start()
+  if (answers('github'))
     mutationSchedulers?.repairs.forEach(scheduler => scheduler.start())
   if (answers('github'))
     mutationSchedulers?.reviews.forEach(scheduler => scheduler.start())
   if (answers('github'))
-    mutationSchedulers?.issues.start()
+    mutationSchedulers?.issues.forEach(scheduler => scheduler.start())
   if (answers('routine'))
     mutationSchedulers?.routines.start()
 
@@ -1112,9 +1150,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         mutationSchedulers?.baselineRepairs.stop() ?? Promise.resolve(),
         mutationSchedulers?.issueWork.stop() ?? Promise.resolve(),
         mutationSchedulers?.publications.stop() ?? Promise.resolve(),
+        mutationSchedulers?.reviewStatuses.stop() ?? Promise.resolve(),
         ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.reviews.map(scheduler => scheduler.stop()) ?? []),
-        mutationSchedulers?.issues.stop() ?? Promise.resolve(),
+        ...(mutationSchedulers?.issues.map(scheduler => scheduler.stop()) ?? []),
         mutationSchedulers?.routines.stop() ?? Promise.resolve(),
       ])
       dashboardShutdown.abort()

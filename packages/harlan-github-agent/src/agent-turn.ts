@@ -96,6 +96,7 @@ export async function runAgentTurn(
   const runtime = options.runtime()
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({
+    taskId: input.taskId,
     model: profile.model,
     ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }),
     outputSchema: input.schema,

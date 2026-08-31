@@ -188,4 +188,30 @@ describe('deciding whether a Routine owes a run', () => {
 
     expect(due._tag).toBe('Missed')
   })
+
+  it('finds the newest missed monthly instant', () => {
+    const due = dueRoutine({
+      expression: cron('0 7 1 * *'),
+      lastRunAt: new Date('2026-06-01T07:00:00.000Z'),
+      now: new Date('2026-08-10T12:00:00.000Z'),
+      timeZone,
+    })
+
+    expect(due).toEqual({
+      _tag: 'Missed',
+      scheduledFor: new Date('2026-08-01T07:00:00.000Z'),
+      reason: 'This run was due more than 6 hours ago, so it was skipped.',
+    })
+  })
+
+  it('does not run a repeated fallback wall-clock instant twice', () => {
+    const due = dueRoutine({
+      expression: cron('30 2 * * *'),
+      lastRunAt: new Date('2026-04-04T15:30:00.000Z'),
+      now: new Date('2026-04-04T16:35:00.000Z'),
+      timeZone: 'Australia/Sydney',
+    })
+
+    expect(due).toEqual({ _tag: 'NotDue' })
+  })
 })

@@ -10,44 +10,23 @@ const workLabel: Record<QueuedReviewStatus['taskKind'], string> = {
   review_fix: 'Repair',
 }
 
-function ordinal(position: number): string {
-  const teen = position % 100
-  if (teen >= 11 && teen <= 13)
-    return `${position}th`
-  const suffix = { 1: 'st', 2: 'nd', 3: 'rd' }[position % 10] ?? 'th'
-  return `${position}${suffix}`
-}
-
 /**
  * The canonical comment while its Task waits in the Queue.
  *
- * No timestamp, no estimate, and no Queue length. The comment carries one
- * changing fact, this Task's own position, so a Task nobody overtook renders
- * an identical body and the sweep writes nothing.
- *
- * The length used to appear as "3rd of 7". Every Task joining the Queue moved
- * that number, so one new pull request rewrote the comment on every other
- * waiting pull request, once per poll. A position moves only when the Task
- * ahead leaves, which is the fact worth an edit.
+ * Exact position belongs to the Dashboard. A Queue movement therefore does
+ * not create serial GitHub writes across every waiting pull request.
  */
 export function queuePositionComment(status: QueuedReviewStatus): string {
   const work = workLabel[status.taskKind]
-  const heading = status.queue._tag === 'Paused'
-    ? 'PAUSED'
-    : `QUEUED · ${ordinal(status.queue.position)}`
-  const ahead = status.queue._tag === 'Paused' ? 0 : status.queue.position - 1
+  const heading = status.queue._tag === 'Paused' ? 'PAUSED' : 'QUEUED'
   const next = status.queue._tag === 'Paused'
     ? `${work} starts when this repository resumes.`
-    : ahead === 0
-      ? `${work} starts as soon as an agent is free.`
-      : ahead === 1
-        ? `${work} starts after the 1 Task ahead of it finishes.`
-        : `${work} starts after the ${ahead} Tasks ahead of it finish.`
+    : `${work} starts when an Agent is free.`
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${status.headSha} -->
 ### 🤖 ${heading}
 
-${automatedDisclosure({ kind: 'review', notes: ['This comment updates as the Queue moves.'] })}
+${automatedDisclosure({ kind: 'review', notes: ['The Dashboard shows the exact Queue position.'] })}
 
 Next: ${next}`
 }

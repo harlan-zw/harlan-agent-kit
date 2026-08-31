@@ -1,9 +1,10 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentTokenUsage } from './agent-provider.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
-import type { PullRequestTriageAgent, PullRequestTriageResult } from './pull-request-triage.ts'
+import type { PullRequestTriageAgent } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
@@ -19,6 +20,7 @@ import type {
   ReviewGates,
   ReviewGateState,
   ReviewOutcomeName,
+  ReviewResolution,
   ReviewRun,
 } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
@@ -51,11 +53,11 @@ interface ReviewResponse {
 }
 
 export interface ReviewWorker {
-  run: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<{ evidence: string }, string>>
+  run: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<{ evidence: string, resolution: ReviewResolution }, string>>
 }
 
 export interface IssueTriageWorker {
-  run: (task: ClaimedIssueTriageTask, signal: AbortSignal) => Promise<Result<{ evidence: string }, string>>
+  run: (task: ClaimedIssueTriageTask, signal: AbortSignal) => Promise<Result<{ evidence: string, usage: AgentTokenUsage }, string>>
 }
 
 export interface ItemAgentOptions {
@@ -68,7 +70,7 @@ export interface ItemAgentOptions {
   onProgressPublishSuccess?: (task: ClaimedAgentTask) => void
   runtime: AgentRuntimeSource
   store: Pick<JournalStore, 'getWorkerSession' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'updateAgentProgress'>
-  status: Pick<ReviewStatusController, 'publish'>
+  status: Pick<ReviewStatusController, 'publish' | 'stageTerminal'>
   triageStatus: IssueTriageCommentController
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue'>
 }
@@ -78,19 +80,6 @@ export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'
   pullRequestTriage?: PullRequestTriageAgent
   store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'listReviewRuns' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
-}
-
-function reviewSkippedComment(headSha: string, baseSha: string, result: PullRequestTriageResult, at: string): string {
-  const workflow = JSON.stringify({ _tag: 'ReviewSkipped', headSha, baseSha })
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
-<!-- workflow-state: ${workflow} -->
-### 🤖 REVIEW SKIPPED
-
-${automatedDisclosure({ kind: 'triage', updatedAt: at })}
-
-- **Reason:** ${result.reason}
-- **Override:** Add the \`${APPROVAL_LABELS.review}\` label to force an adversarial Review.`
 }
 
 const reviewPolicy = `Work as a normal local agent session inside the prepared Git worktree. Use the user's global agent context, environment, and authenticated GitHub CLI.
@@ -894,7 +883,7 @@ async function projectReviewRun(
   run: ReviewRun,
   preflight: RepairPreflight,
   signal: AbortSignal,
-): Promise<Result<{ evidence: string }, string>> {
+): Promise<Result<{ evidence: string, resolution: ReviewResolution }, string>> {
   const refreshed = refreshControllerGates(run.gates, snapshot, task.repositoryMapping)
   const gates = refreshed.gates
   const gatesChanged = JSON.stringify(gates) !== JSON.stringify(run.gates)
@@ -914,7 +903,7 @@ async function projectReviewRun(
       if (reported._tag === 'Err')
         return reported
       await stampAgentLabel(options, task, 'BLOCKED', signal)
-      return ok({ evidence: run.id })
+      return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
     }
     findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
       ? { ...finding, nextAction: queued.reason }
@@ -928,75 +917,22 @@ async function projectReviewRun(
 
   if (!gatesChanged && run.publications.some(publication => publication.result._tag === 'Published')) {
     await stampAgentLabel(options, task, storedOutcomeName(run), signal)
-    return ok({ evidence: run.id })
+    return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
   }
 
   const outcome = reviewOutcome(gates)
   const confidence = outcome === 'READY' ? run.outcome.confidence : undefined
   const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks)
-  const published = await options.status.publish(task, 'terminal', body, signal)
-  const at = options.now().toISOString()
-  if (published._tag === 'Err') {
-    const failed = options.store.recordReviewPublication({
-      id: randomUUID(),
-      reviewRunId: run.id,
-      body,
-      at,
-      result: { _tag: 'Failed', reason: published.error },
-    })
-    if (failed._tag === 'Rejected' || failed._tag === 'Conflict')
-      return err('The automated review comment failure could not be saved.')
-    return published
-  }
+  const durablePublication = options.status.stageTerminal !== undefined
+  const staged = !durablePublication
+    ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
+    : options.status.stageTerminal?.(task, body, outcome, run.id) ?? err('The terminal Review status could not be staged.')
+  if (staged._tag === 'Err')
+    return staged
+  if (!durablePublication)
+    await stampAgentLabel(options, task, outcome, signal)
 
-  let evidenceId = run.id
-  if (gatesChanged) {
-    const reviewRunId = randomUUID()
-    const settled = options.store.supersedeReviewRun({
-      id: reviewRunId,
-      repository: run.repository,
-      pullRequestNumber: run.pullRequestNumber,
-      revisionId: run.revisionId,
-      headSha: run.headSha,
-      provider: run.provider,
-      sessionId: run.sessionId,
-      model: run.model,
-      agentVersion: run.agentVersion,
-      skillDigest: run.skillDigest,
-      startedAt: run.startedAt,
-      completedAt: at,
-      usage: run.usage,
-      gates,
-      ...(run.outcome.confidence === undefined ? {} : { confidence: run.outcome.confidence }),
-      findings,
-      supersedesReviewRunId: run.id,
-      publication: {
-        id: randomUUID(),
-        body,
-        at,
-        result: { _tag: 'Published', githubCommentId: published.value.commentId, url: published.value.url },
-      },
-    })
-    if (settled._tag === 'Rejected')
-      return err(`The refreshed review could not be saved: ${settled.reason._tag}.`)
-    if (settled._tag === 'Conflict')
-      return err('A different refreshed review already uses this ID.')
-    evidenceId = reviewRunId
-  }
-  else {
-    const publication = options.store.recordReviewPublication({
-      id: randomUUID(),
-      reviewRunId: run.id,
-      body,
-      at,
-      result: { _tag: 'Published', githubCommentId: published.value.commentId, url: published.value.url },
-    })
-    if (publication._tag === 'Rejected' || publication._tag === 'Conflict')
-      return err('The automated review comment could not be saved.')
-  }
-
-  await stampAgentLabel(options, task, outcome, signal)
-  return ok({ evidence: evidenceId })
+  return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
 }
 
 export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
@@ -1031,8 +967,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         )
       }
 
-      if (snapshot.value.priorAutomatedReview._tag === 'Found' && snapshot.value.priorAutomatedReview.state === 'complete' && task.rerun._tag === 'NotRequested' && !manualReview)
-        return ok({ evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}` })
+      if (snapshot.value.priorAutomatedReview._tag === 'Found' && snapshot.value.priorAutomatedReview.state === 'complete' && task.rerun._tag === 'NotRequested' && !manualReview) {
+        return ok({
+          evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}`,
+          resolution: { _tag: 'ExistingReview', url: snapshot.value.priorAutomatedReview.url },
+        })
+      }
 
       let freshReviewSession = false
       if (manualReview) {
@@ -1050,87 +990,16 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         }
         freshReviewSession = true
       }
-      else if (task.rerun._tag === 'NotRequested' && options.pullRequestTriage !== undefined) {
-        const triageStartedAt = options.now().toISOString()
-        const files = await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
-        const triage = files._tag === 'Err'
-          ? files
-          : await options.pullRequestTriage.run(task, { body: snapshot.value.body, changedFiles: files.value }, signal)
-        let statsOutcome: { _tag: 'ReviewRequired' | 'ReviewRequiredAfterFailure', reason: string }
-        if (triage._tag === 'Ok' && triage.value._tag === 'ADVERSARIAL_REVIEW_SKIPPED') {
-          // A person may add the manual override while the cheap Agent runs.
-          // Re-read labels before settling so that late authority always wins.
-          const current = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal)
-          const manuallyOverridden = current._tag === 'Ok'
-            && current.value.pullRequest.headSha === task.pullRequest.headSha
-            && current.value.pullRequest.approvalLabels.includes('review')
-          if (!manuallyOverridden) {
-            const stamped = await options.github.stampAgentLabel(task.repositoryMapping, task.pullRequestNumber, 'ADVERSARIAL_REVIEW_SKIPPED', signal)
-            if (stamped._tag === 'Ok') {
-              const published = await options.status.publish(
-                task,
-                'terminal',
-                reviewSkippedComment(task.pullRequest.headSha, task.pullRequest.baseSha, triage.value, options.now().toISOString()),
-                signal,
-              )
-              if (published._tag === 'Ok') {
-                const recorded = options.store.recordPullRequestTriageRun({
-                  taskId: task.id,
-                  repository: task.repository,
-                  pullRequestNumber: task.pullRequestNumber,
-                  revisionId: task.revisionId,
-                  headSha: task.pullRequest.headSha,
-                  startedAt: triageStartedAt,
-                  completedAt: options.now().toISOString(),
-                  outcome: { _tag: 'ReviewSkipped', reason: triage.value.reason },
-                })
-                if (recorded._tag === 'Conflict')
-                  return err('The pull request already has a different triage decision.')
-                if (recorded._tag === 'Rejected')
-                  return err('The pull request changed before its triage decision was recorded.')
-                return ok({ evidence: JSON.stringify(triage.value) })
-              }
-            }
-          }
-          statsOutcome = manuallyOverridden
-            ? { _tag: 'ReviewRequired', reason: 'A manual Review override arrived before triage finished.' }
-            : { _tag: 'ReviewRequired', reason: 'The Review skip could not be published safely.' }
-          freshReviewSession = true
-        }
-        else if (triage._tag === 'Ok') {
-          const routed = await options.github.stampAgentLabel(task.repositoryMapping, task.pullRequestNumber, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
-          if (routed._tag === 'Ok') {
-            const consumed = await options.github.consumeApprovalLabel(
-              task.repositoryMapping,
-              'pull_request',
-              task.pullRequestNumber,
-              APPROVAL_LABELS.review,
-              signal,
-            )
-            if (consumed._tag === 'Err')
-              options.onProgressPublishFailure?.(task, consumed.error)
-          }
-          statsOutcome = { _tag: 'ReviewRequired', reason: triage.value.reason }
-          freshReviewSession = true
-        }
-        else {
-          // A failed or malformed triage answer cannot waive the Review.
-          statsOutcome = { _tag: 'ReviewRequiredAfterFailure', reason: triage.error }
-        }
-        const recorded = options.store.recordPullRequestTriageRun({
-          taskId: task.id,
-          repository: task.repository,
-          pullRequestNumber: task.pullRequestNumber,
-          revisionId: task.revisionId,
-          headSha: task.pullRequest.headSha,
-          startedAt: triageStartedAt,
-          completedAt: options.now().toISOString(),
-          outcome: statsOutcome,
-        })
-        if (recorded._tag === 'Conflict')
-          return err('The pull request already has a different triage decision.')
-        if (recorded._tag === 'Rejected')
-          return err('The pull request changed before its triage decision was recorded.')
+      else if (task.rerun._tag === 'NotRequested') {
+        const routed = await options.github.stampAgentLabel(
+          task.repositoryMapping,
+          task.pullRequestNumber,
+          'ADVERSARIAL_REVIEW_REQUIRED',
+          signal,
+        )
+        if (routed._tag === 'Err' && !signal.aborted)
+          options.onProgressPublishFailure?.(task, routed.error)
+        freshReviewSession = true
       }
       const markedBaselineRepair = snapshot.value.pullRequest.purpose._tag === 'BaselineRepair'
       const repairsBaseline = markedBaselineRepair
@@ -1151,16 +1020,17 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         // A repository Harlan only watches cannot get a Baseline repair. The
         // review still runs, and its CI gate reports the red default branch.
         if (baseline._tag !== 'NotAuthorized') {
-          const waiting = await options.status.publish(
-            task,
-            'terminal',
-            baselineWaitingComment(task.pullRequest.headSha, snapshot.value.pullRequest.baseSha, options.now().toISOString()),
-            signal,
-          )
+          const waitingBody = baselineWaitingComment(task.pullRequest.headSha, snapshot.value.pullRequest.baseSha, options.now().toISOString())
+          const waiting = options.status.stageTerminal === undefined
+            ? await options.status.publish(task, 'terminal', waitingBody, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
+            : options.status.stageTerminal(task, waitingBody, 'WAITING')
           if (waiting._tag === 'Err')
             return waiting
           await stampAgentLabel(options, task, 'PENDING', signal)
-          return ok({ evidence: `Waiting for Baseline repair ${baseline.taskId}.` })
+          return ok({
+            evidence: `Waiting for Baseline repair ${baseline.taskId}.`,
+            resolution: { _tag: 'WaitingForBaselineRepair', taskId: baseline.taskId },
+          })
         }
       }
       else if (!markedBaselineRepair) {
@@ -1353,7 +1223,7 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
       const published = await options.triageStatus.publish(task, response, signal)
       return published._tag === 'Err'
         ? published
-        : ok({ evidence: JSON.stringify(response) })
+        : ok({ evidence: JSON.stringify(response), usage: turn.value.usage })
     },
   }
 }

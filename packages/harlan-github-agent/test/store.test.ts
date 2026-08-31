@@ -100,6 +100,26 @@ describe('journal store', () => {
     expect(snapshot.routineRuns).toEqual([expect.objectContaining({ id: run.id, state: { _tag: 'Queued' } })])
   })
 
+  it('keeps retired Routine Runs visible in the dashboard history', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-28T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'sentry-checkin', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }],
+      at: '2026-08-28T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    const run = store.openRoutineRun({ routineId: routine.id, scheduledFor: '2026-08-28T07:00:00.000Z', specSha: routine.specSha, at: '2026-08-28T07:00:01.000Z' })
+    if (run === null)
+      throw new Error('Expected a stored Routine run.')
+    store.syncRoutines({ repository: routine.repository, specSha: 'def456', entries: [], at: '2026-08-28T08:00:00.000Z' })
+
+    expect(store.getDashboardSnapshot('2026-08-28T08:00:01.000Z').routineRuns)
+      .toContainEqual(expect.objectContaining({ id: run.id, mode: 'report' }))
+  })
+
   it('exposes each Routine run report state in the dashboard snapshot', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-28T00:00:00.000Z')
@@ -321,6 +341,166 @@ describe('journal store', () => {
       _tag: 'Paused',
       pausedAt: '2026-08-13T01:01:03.000Z',
       safeToRestart: true,
+    })
+  })
+
+  it('keeps restart unsafe until a pending terminal Review Publication finishes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'pause-terminal-status',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:01.000Z',
+      revisionId: observed.revisionId,
+      expectedHeadSha: task.pullRequest.headSha,
+      phase: 'terminal',
+      body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY',
+    })
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:02.000Z',
+      evidence: 'review-1',
+    })
+    store.pauseAgents('2026-08-13T01:01:03.000Z')
+
+    expect(store.isSafeToRestart()).toBe(false)
+    const command = store.claimNextTerminalReviewStatus('publisher-1', '2026-08-13T01:01:04.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected a terminal Review Publication.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:01:05.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    expect(store.isSafeToRestart()).toBe(true)
+  })
+
+  it('supersedes a pending terminal Review Publication when policy is disabled', () => {
+    const store = createStore()
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'policy-disabled-terminal-status',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:01.000Z',
+      revisionId: observed.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      phase: 'terminal',
+      body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:02.000Z',
+      evidence: 'review-1',
+    })
+    expect(store.isSafeToRestart()).toBe(false)
+
+    store.syncRepositories([{ ...repository, pullRequestReview: false }], '2026-08-13T01:02:00.000Z')
+
+    expect(store.isSafeToRestart()).toBe(true)
+    expect(store.claimNextTerminalReviewStatus('publisher-1', '2026-08-13T01:03:00.000Z', 60_000)).toBeNull()
+    expect(store.listWorkflowEvents({ stream: 'review_status', limit: 1 })[0]).toMatchObject({
+      event: 'PolicySuperseded',
+      entityId: staged.commandId,
+      from: 'Pending',
+      to: 'Superseded',
+      reason: 'Repository policy no longer permits this automated review.',
+    })
+  })
+
+  it('supersedes a terminal Review Publication deferred after policy was disabled', () => {
+    const store = createStore()
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'policy-disabled-running-status',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:01.000Z',
+      revisionId: observed.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      phase: 'terminal',
+      body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:02.000Z',
+      evidence: 'review-1',
+    })
+    const command = store.claimNextTerminalReviewStatus('publisher-1', '2026-08-13T01:01:03.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected a terminal Review Publication.')
+
+    store.syncRepositories([{ ...repository, pullRequestReview: false }], '2026-08-13T01:01:04.000Z')
+    expect(store.deferReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:01:05.000Z',
+      reason: 'GitHub timed out.',
+    })).toBe(true)
+    expect(store.isSafeToRestart()).toBe(false)
+
+    expect(store.claimNextTerminalReviewStatus('publisher-2', '2026-08-13T01:01:06.000Z', 60_000)).toBeNull()
+    expect(store.isSafeToRestart()).toBe(true)
+    expect(store.listWorkflowEvents({ stream: 'review_status', limit: 1 })[0]).toMatchObject({
+      event: 'PolicySuperseded',
+      entityId: staged.commandId,
+      from: 'Pending',
+      to: 'Superseded',
     })
   })
 
@@ -3262,7 +3442,7 @@ describe('journal store', () => {
     expect(override?.state.fence).toBe(2)
   })
 
-  it('reviews the same head again after its base commit changes', () => {
+  it('reuses the Review when only the base commit changes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const firstObservation = store.recordObservation({
@@ -3319,10 +3499,71 @@ describe('journal store', () => {
     if (secondObservation._tag !== 'Inserted')
       throw new Error('Expected the new base revision.')
 
-    expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 10_000)).toEqual(expect.objectContaining({
+    expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 10_000)).toBeNull()
+    expect(store.listWorkflowEvents({ stream: 'review_resolution', limit: 10 })).toContainEqual(expect.objectContaining({
+      event: 'Recorded',
       revisionId: secondObservation.revisionId,
-      pullRequest: expect.objectContaining({ baseSha: 'new-base' }),
+      to: 'ExistingReview',
     }))
+  })
+
+  it('starts a fresh Review when trusted repository policy changes', () => {
+    const store = createStore()
+    const initialPolicy = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.syncRepositories([initialPolicy], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'review-before-policy-change',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const first = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 10_000)
+    if (first === null)
+      throw new Error('Expected the first Review.')
+    store.recordReviewRun({
+      id: 'old-policy-review',
+      repository: first.repository,
+      pullRequestNumber: first.pullRequestNumber,
+      revisionId: first.revisionId,
+      headSha: first.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'old-policy-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 95,
+      findings: [],
+    })
+    store.completeWorkerTask({
+      taskId: first.id,
+      workerId: first.state.workerId,
+      fence: first.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      evidence: 'old-policy-review',
+    })
+
+    store.syncRepositories([{
+      ...initialPolicy,
+      writablePullRequestHeadPrefixes: [...initialPolicy.writablePullRequestHeadPrefixes, 'refactor/'],
+    }], '2026-08-13T02:00:00.000Z')
+    store.recordObservation({
+      externalId: 'review-after-policy-change',
+      observedAt: '2026-08-13T02:00:01.000Z',
+      source: 'poll',
+      subject: { ...pullRequest, priorAutomatedReview: {
+        _tag: 'Found',
+        authorLogin: 'harlan-github-agent[bot]',
+        state: 'complete',
+        url: `${pullRequest.url}#issuecomment-42`,
+      } },
+    })
+
+    expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 10_000))
+      .toEqual(expect.objectContaining({ id: first.id }))
   })
 
   it('releases a review after its completed Baseline repair becomes stale', () => {
@@ -4013,6 +4254,48 @@ describe('journal store', () => {
     }))
   })
 
+  it('invalidates triage and Approval when human Issue content changes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const first = store.recordObservation({
+      externalId: 'issue-content-first',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem({ contentDigest: 'a'.repeat(64) }),
+    })
+    if (first._tag !== 'Inserted')
+      throw new Error('Expected the first Issue Revision.')
+    const triage = store.claimNextIssueTriageTask('triage-1', '2026-08-13T01:00:01.000Z', 60_000)
+    if (triage === null)
+      throw new Error('Expected Issue triage.')
+    store.completeWorkerTask({
+      taskId: triage.id,
+      workerId: triage.state.workerId,
+      fence: triage.state.fence,
+      at: '2026-08-13T01:00:02.000Z',
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
+    })
+    expect(store.approveIssueWork({
+      repository: triage.repository,
+      issueNumber: triage.issueNumber,
+      revisionId: triage.revisionId,
+      at: '2026-08-13T01:00:03.000Z',
+    })._tag).toBe('Approved')
+
+    const changed = store.recordObservation({
+      externalId: 'issue-content-changed',
+      observedAt: '2026-08-13T01:00:04.000Z',
+      source: 'poll',
+      subject: issueItem({ contentDigest: 'b'.repeat(64) }),
+    })
+    if (changed._tag !== 'Inserted')
+      throw new Error('Expected changed Issue content to create a Revision.')
+
+    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:00:05.000Z', 60_000)).toBeNull()
+    expect(store.claimNextIssueTriageTask('triage-2', '2026-08-13T01:00:05.000Z', 60_000))
+      .toMatchObject({ revisionId: changed.revisionId })
+  })
+
   it('shows repeated pull request description failures instead of the Agent fallback', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -4158,6 +4441,30 @@ describe('journal store', () => {
     expect(store.claimNextAdversarialReviewTask('worker-2', '2026-08-13T01:03:00.000Z', 10_000)?.state.fence).toBe(2)
   })
 
+  it('requeues a Routine run interrupted by a service restart', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'pr-triage', crons: ['0 9 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }],
+      at: '2026-08-13T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    store.openRoutineRun({ routineId: routine.id, scheduledFor: '2026-08-13T09:00:00.000Z', specSha: routine.specSha, at: '2026-08-13T09:00:01.000Z' })
+    expect(store.claimNextRoutineRun('routine-1', '2026-08-13T09:00:02.000Z', 60_000)).not.toBeNull()
+
+    expect(store.recoverInterruptedAgentTasks('2026-08-13T09:00:03.000Z')).toBe(1)
+    expect(store.claimNextRoutineRun('routine-2', '2026-08-13T09:00:04.000Z', 60_000)).toMatchObject({
+      attempts: 1,
+      mode: 'report',
+      state: { fence: 2 },
+    })
+    expect(store.listWorkflowEvents({ stream: 'routine_run', limit: 10 }).map(event => event.event))
+      .toContain('RestartRecovered')
+  })
+
   it('requeues a task that an earlier shutdown recorded as aborted', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -4265,6 +4572,128 @@ describe('journal store', () => {
       }),
     ])
     expect(dashboard.queue).toEqual([])
+  })
+
+  it('keeps every current open pull request Review outside the recent History limit', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+
+    for (let index = 0; index < 31; index += 1) {
+      const number = index + 1
+      const headSha = number.toString(16).padStart(40, '0')
+      const observed = store.recordObservation({
+        externalId: `open-review-${number}`,
+        observedAt: '2026-08-13T01:00:00.000Z',
+        source: 'poll',
+        subject: pullRequestItem({ number, headSha, mergeState: 'clean' }),
+      })
+      if (observed._tag !== 'Inserted')
+        throw new Error(`Expected pull request ${number}.`)
+      expect(store.recordReviewRun({
+        id: `review-${number}`,
+        repository: 'harlan-zw/example',
+        pullRequestNumber: number,
+        revisionId: observed.revisionId,
+        headSha,
+        provider: 'codex',
+        sessionId: `session-${number}`,
+        model: 'gpt-5.6-sol',
+        agentVersion: '1.2.3',
+        skillDigest: 'f'.repeat(64),
+        startedAt: '2026-08-13T01:01:00.000Z',
+        completedAt: '2026-08-13T01:02:00.000Z',
+        gates: passedReviewGates(),
+        confidence: 96,
+        findings: [],
+      })).toEqual({ _tag: 'Inserted', reviewRunId: `review-${number}` })
+    }
+
+    const dashboard = store.getDashboardSnapshot('2026-08-13T01:03:00.000Z')
+
+    expect(dashboard.agents.filter(agent => agent._tag === 'ReviewAgent')).toHaveLength(31)
+    expect(dashboard.queue).toEqual([])
+  })
+
+  it('shows a stored Review outcome while its terminal Publication finishes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'publishing-final-review',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 10 * 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    expect(store.recordReviewRun({
+      id: 'review-ready-before-publication',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: task.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6-sol',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 96,
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'review-ready-before-publication' })
+    expect(store.updateAgentProgress({
+      taskId: task.id,
+      taskKind: task.kind,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      progress: { percent: 90, label: 'Publishing final Review' },
+      at: '2026-08-13T01:03:00.000Z',
+    })).toBe(true)
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:03:01.000Z').queue).toEqual([])
+  })
+
+  it('publishes a staged terminal Review after its Agent Task completes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'detached-terminal-publication',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:10.000Z',
+      revisionId: observed.revisionId,
+      expectedHeadSha: task.pullRequest.headSha,
+      body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY · 96/100',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    expect(store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:20.000Z',
+      evidence: 'review-ready-before-publication',
+    })).toBe(true)
+
+    expect(store.claimReviewStatus(staged.commandId, 'publisher-1', '2026-08-13T01:01:30.000Z', 60_000))
+      .toEqual(expect.objectContaining({ id: staged.commandId, phase: 'terminal' }))
   })
 
   it('keeps a passing review that named no confidence', () => {

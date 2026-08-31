@@ -127,6 +127,7 @@ Closes #12.`,
     })])
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         _tag: 'OpenPullRequest',
         taskKind: 'issue_work',
@@ -207,6 +208,7 @@ Closes #12.`,
     expect(JSON.stringify(recorded)).not.toContain('ghp_Abcdefghijklmnopqrstuvwx')
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         pullRequestTitle: 'fix: resolve issue #12',
         pullRequestBody: expect.stringMatching(/### Description[\s\S]*### Linked Issues[\s\S]*Closes #12\./),
@@ -263,6 +265,7 @@ Closes #12.`,
     expect(committed).toBe(false)
     expect(result).toEqual(ok({
       _tag: 'ActionRequired',
+      usage: { _tag: 'Unavailable' },
       reason: 'The Agent reported that it could not safely complete the issue work.',
       evidence: '{"outcome":"blocked","summary":"The Agent reported that it could not safely complete the issue work.","checks":[]}',
     }))
@@ -353,6 +356,7 @@ Closes #12.`,
     expect(bases).toEqual([{ _tag: 'Stacked', ref: 'fix/baseline-ci-70a5f7bd49f2', pullRequestNumber: 102, headSha: 'repair-head' }])
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         baseRef: 'fix/baseline-ci-70a5f7bd49f2',
         baseSha: 'repair-head',
@@ -384,6 +388,7 @@ Closes #12.`,
     expect(bases).toEqual([{ _tag: 'DefaultBranch', ref: 'main' }])
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         baseRef: 'fix/issue-9',
         baseSha: 'issue-head',
@@ -410,6 +415,7 @@ Closes #12.`,
 
     expect(result).toEqual(ok({
       _tag: 'Publish',
+      usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
         baseRef: 'main',
         baseSha: 'base-sha',

@@ -762,14 +762,13 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
 
   return {
     async prepareRoutine(task, signal) {
-      // A Routine scans what is merged, so it starts from the default branch
-      // and never from a pull request head. Reading unmerged work would let a
-      // pull request steer what the next scan proposes.
+      // A Routine runs from the exact source commit stored when its Run opened.
+      // A later default branch push cannot change queued work.
       const baseRef = `refs/harlan-github-agent/routines/${task.name}`
       return prepareRepository(
         task,
         `routine-${task.name}-${task.scheduledFor.slice(0, 10)}`,
-        [`+refs/heads/${task.repositoryMapping.defaultBranch}:${baseRef}`],
+        [`+${task.specSha}:${baseRef}`],
         baseRef,
         signal,
       )

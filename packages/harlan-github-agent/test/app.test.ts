@@ -49,6 +49,7 @@ const agentControls = {
   dismissItem: () => ({ _tag: 'Dismissed' as const }),
   restoreItem: () => ({ _tag: 'Restored' as const }),
   recordAgentFeedback: () => ({ _tag: 'Rejected' as const, reason: { _tag: 'ReviewRunNotFound' as const } }),
+  listWorkflowEvents: () => [],
 }
 
 afterEach(() => vi.useRealTimers())
@@ -110,10 +111,12 @@ describe('dashboard HTTP app', () => {
         name: 'sentry-checkin',
         scheduledFor: '2026-08-13T00:00:00.000Z',
         specSha: 'abc123',
+        mode: 'report',
         state: { _tag: 'Running', workerId: 'worker-1', leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
         fence: 1,
         attempts: 1,
         progress: { percent: 55, label: 'Checking the repository' },
+        usage: { _tag: 'Unavailable' },
         candidates: [],
         activity: [],
         reportState: null,
@@ -346,6 +349,7 @@ describe('dashboard HTTP app', () => {
       items: [{
         kind: 'issue',
         approvalLabels: [],
+        contentDigest: '0'.repeat(64),
         routineFiled: false,
         routineTracking: false,
         dismissed: false,
@@ -464,6 +468,39 @@ describe('dashboard HTTP app', () => {
 
     expect(response.status).toBe(400)
     expect(await response.json()).toEqual(expect.objectContaining({ message: 'The end date must follow the start date.' }))
+  })
+
+  it('returns filtered workflow events for reliability analysis', async () => {
+    const requests: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        getStats: (range, generatedAt) => statsSnapshot(range, generatedAt),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        listWorkflowEvents(input) {
+          requests.push(input)
+          return []
+        },
+      },
+    })
+
+    const response = await app.request(
+      `http://${allowedHost}/api/workflow-events?stream=review_status&limit=25`,
+      { headers: { authorization, host: allowedHost } },
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ events: [] })
+    expect(requests).toEqual([{ stream: 'review_status', limit: 25 }])
   })
 
   it('records a local Review and repair approval for the exact Revision', async () => {

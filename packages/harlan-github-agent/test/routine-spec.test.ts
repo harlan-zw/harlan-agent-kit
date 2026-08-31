@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseRoutineSpec } from '../src/routine-spec.ts'
 import { openJournalStore } from '../src/store.ts'
+import { repositoryMapping } from './fixtures.ts'
 
 const validSpec = `
 version: 1
@@ -42,7 +43,7 @@ routines:
 
     expect(parsed).toMatchObject({
       _tag: 'Ok',
-      value: { routines: [{ timeZone: 'UTC', mode: 'propose', enabled: true }] },
+      value: { routines: [{ timeZone: 'UTC', mode: 'report', enabled: true }] },
     })
   })
 
@@ -257,6 +258,68 @@ describe('storing Routines and their runs', () => {
     }
   })
 
+  it('retires a removed Routine without deleting its Run history', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      const [routine] = store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'abc', entries, at: '2026-08-27T00:00:00.000Z' })
+      if (routine === undefined)
+        throw new Error('Expected a stored Routine.')
+      const run = store.openRoutineRun({
+        routineId: routine.id,
+        scheduledFor: '2026-08-27T07:00:00.000Z',
+        specSha: routine.specSha,
+        at: '2026-08-27T07:00:05.000Z',
+      })
+      if (run === null)
+        throw new Error('Expected a stored Routine run.')
+
+      store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'def', entries: [], at: '2026-08-27T08:00:00.000Z' })
+
+      expect(store.listRoutines('harlan-zw/example')).toEqual([])
+      expect(store.listRoutineRuns(routine.id)).toEqual([
+        expect.objectContaining({ id: run.id, specSha: 'abc' }),
+      ])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('claims a queued Run with its pinned mode after the Routine changes', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
+      const [routine] = store.syncRoutines({
+        repository: 'harlan-zw/example',
+        specSha: 'report-sha',
+        entries: [{ ...entries[0]!, mode: 'report' }],
+        at: '2026-08-27T00:00:00.000Z',
+      })
+      if (routine === undefined)
+        throw new Error('Expected a stored Routine.')
+      store.openRoutineRun({
+        routineId: routine.id,
+        scheduledFor: '2026-08-27T07:00:00.000Z',
+        specSha: routine.specSha,
+        at: '2026-08-27T07:00:05.000Z',
+      })
+      store.syncRoutines({
+        repository: 'harlan-zw/example',
+        specSha: 'propose-sha',
+        entries: [{ ...entries[0]!, mode: 'propose' }],
+        at: '2026-08-27T07:01:00.000Z',
+      })
+
+      expect(store.claimNextRoutineRun('routine-1', '2026-08-27T07:02:00.000Z', 60_000)).toMatchObject({
+        mode: 'report',
+        specSha: 'report-sha',
+      })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('keeps the last run across a schedule edit, so an edit fires no catch-up', () => {
     const store = openJournalStore(':memory:')
     try {
@@ -275,7 +338,7 @@ describe('storing Routines and their runs', () => {
       })
 
       expect(edited[0]?.crons).toEqual(['0 9 * * *'])
-      expect(edited[0]?.lastRunAt).toBe('2026-08-27T07:00:00.000Z')
+      expect(edited[0]?.lastRunAt).toBe('2026-08-27T08:00:00.000Z')
     }
     finally {
       store.close()

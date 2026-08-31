@@ -17,8 +17,29 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+function dropReviewResolutionAdditions(database: DatabaseSync): void {
+  database.exec('DROP TABLE IF EXISTS review_gate_projections')
+  database.exec('DROP INDEX IF EXISTS routines_active')
+  const routineRunColumns = database.prepare('PRAGMA table_info(routine_runs)').all() as unknown as Array<{ name: string }>
+  if (routineRunColumns.some(column => column.name === 'mode'))
+    database.exec('ALTER TABLE routine_runs DROP COLUMN mode')
+  const routineColumns = database.prepare('PRAGMA table_info(routines)').all() as unknown as Array<{ name: string }>
+  if (routineColumns.some(column => column.name === 'retired_at'))
+    database.exec('ALTER TABLE routines DROP COLUMN retired_at')
+  database.exec('DROP TABLE IF EXISTS review_evidence_scopes')
+  database.exec('DROP TABLE IF EXISTS review_resolutions')
+  const reviewStatusColumns = database.prepare('PRAGMA table_info(review_status_commands)').all() as unknown as Array<{ name: string }>
+  if (reviewStatusColumns.some(column => column.name === 'desired_outcome'))
+    database.exec('ALTER TABLE review_status_commands DROP COLUMN desired_outcome')
+  if (reviewStatusColumns.some(column => column.name === 'review_run_id'))
+    database.exec('ALTER TABLE review_status_commands DROP COLUMN review_run_id')
+}
+
 /** Rewinds past the Routine tables, which every version below 38 predates. */
 function dropRoutines(database: DatabaseSync): void {
+  dropReviewResolutionAdditions(database)
+  database.exec('DROP TABLE IF EXISTS provider_circuits')
+  database.exec('DROP TABLE IF EXISTS workflow_events')
   database.exec('DROP TABLE IF EXISTS pull_request_closure_verifications')
   database.exec('DROP TABLE IF EXISTS review_closure_resolutions')
   database.exec('DROP TABLE IF EXISTS restart_requests')
@@ -342,7 +363,14 @@ describe('pull request closure verification migration', () => {
     store.close()
 
     const oldJournal = new DatabaseSync(path)
-    oldJournal.exec('DROP TABLE pull_request_closure_verifications; PRAGMA user_version = 48;')
+    dropReviewResolutionAdditions(oldJournal)
+    oldJournal.exec(`
+      DROP TABLE provider_circuits;
+      DROP TABLE workflow_events;
+      ALTER TABLE routine_runs DROP COLUMN usage;
+      DROP TABLE pull_request_closure_verifications;
+      PRAGMA user_version = 48;
+    `)
     restoreExpectedUpdatedAt(oldJournal)
     oldJournal.close()
 
@@ -481,7 +509,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(50)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(56)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

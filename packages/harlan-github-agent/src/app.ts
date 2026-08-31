@@ -1,7 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
-import type { DashboardSnapshot } from './types.ts'
+import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -15,7 +15,7 @@ import { parseAgentSelection } from './agent-profile.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -449,6 +449,37 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (range._tag === 'Err')
       throw createError({ status: 400, statusText: 'Bad Request', message: statsRangeMessage(range.error) })
     return options.store.getStats(range.value, options.now().toISOString())
+  })
+
+  app.get('/api/workflow-events', (event) => {
+    const query = new URL(event.req.url).searchParams
+    const stream = query.get('stream')
+    const allowed = new Set([
+      'task',
+      'worker_task',
+      'publication',
+      'review_run',
+      'review_gate',
+      'review_resolution',
+      'review_status',
+      'issue_triage_status',
+      'routine_run',
+      'candidate_issue',
+      'routine_report',
+      'provider_circuit',
+    ])
+    if (stream !== null && !allowed.has(stream))
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Select a valid workflow event stream.' })
+    const rawLimit = query.get('limit')
+    const limit = rawLimit === null ? 200 : Number(rawLimit)
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000)
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Set limit from 1 to 1000.' })
+    return {
+      events: options.store.listWorkflowEvents({
+        ...(stream === null ? {} : { stream: stream as WorkflowEventStream }),
+        limit,
+      }),
+    }
   })
 
   app.post('/api/approvals', async (event) => {

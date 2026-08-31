@@ -50,6 +50,7 @@ describe('task scheduler', () => {
       worker: {
         run: () => Promise.resolve(ok({
           _tag: 'Publish',
+          usage: { _tag: 'Available', input: 70, cachedInput: 30, cacheWrite: 0, output: 11, reasoning: 3 },
           publication: {
             _tag: 'UpdatePullRequest',
             taskKind: 'resolve_conflict',
@@ -73,6 +74,14 @@ describe('task scheduler', () => {
     expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').tasks[0]?.state).toEqual({
       _tag: 'Publishing',
       commandId: expect.any(String),
+    })
+    expect(store.listWorkflowEvents({ stream: 'task', limit: 1 })[0]?.usage).toEqual({
+      _tag: 'Available',
+      input: 70,
+      cachedInput: 30,
+      cacheWrite: 0,
+      output: 11,
+      reasoning: 3,
     })
     await scheduler.stop()
     store.close()

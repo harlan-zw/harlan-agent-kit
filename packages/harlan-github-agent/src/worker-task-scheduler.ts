@@ -1,4 +1,5 @@
 import type { AgentPermitPool } from './agent-permit-pool.ts'
+import type { AgentTokenUsage } from './agent-provider.ts'
 import type { Result } from './result.ts'
 import { err } from './result.ts'
 /**
@@ -13,8 +14,8 @@ export interface LeasedWork {
   state: { fence: number }
 }
 
-export interface ItemAgent<Task extends LeasedWork> {
-  run: (task: Task, signal: AbortSignal) => Promise<Result<{ evidence: string }, string>>
+export interface ItemAgent<Task extends LeasedWork, Success extends { evidence: string, usage?: AgentTokenUsage } = { evidence: string, usage?: AgentTokenUsage }> {
+  run: (task: Task, signal: AbortSignal) => Promise<Result<Success, string>>
 }
 
 export interface WorkerTaskScheduler {
@@ -24,10 +25,10 @@ export interface WorkerTaskScheduler {
   stop: () => Promise<void>
 }
 
-export interface WorkerTaskSchedulerOptions<Task extends LeasedWork> {
+export interface WorkerTaskSchedulerOptions<Task extends LeasedWork, Success extends { evidence: string, usage?: AgentTokenUsage }> {
   canClaim?: () => boolean
   claim: (workerId: string, now: string, leaseMilliseconds: number) => Task | null
-  complete: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
+  complete: (input: { taskId: string, workerId: string, fence: number, at: string } & Success) => boolean
   fail: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   heartbeat: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   intervalMilliseconds: number
@@ -44,11 +45,11 @@ export interface WorkerTaskSchedulerOptions<Task extends LeasedWork> {
   /** Called once the worker stops running a task, whatever the outcome. */
   onTaskSettled?: (taskId: string, task: Task) => void
   permits: AgentPermitPool
-  worker: ItemAgent<Task>
+  worker: ItemAgent<Task, Success>
   workerId: string
 }
 
-export function createWorkerTaskScheduler<Task extends LeasedWork>(options: WorkerTaskSchedulerOptions<Task>): WorkerTaskScheduler {
+export function createWorkerTaskScheduler<Task extends LeasedWork, Success extends { evidence: string, usage?: AgentTokenUsage }>(options: WorkerTaskSchedulerOptions<Task, Success>): WorkerTaskScheduler {
   let stopped = true
   let timer: NodeJS.Timeout | undefined
   let controller: AbortController | undefined
@@ -95,11 +96,11 @@ export function createWorkerTaskScheduler<Task extends LeasedWork>(options: Work
         return
       if (result._tag === 'Ok') {
         const completed = options.complete({
+          ...result.value,
           taskId: task.id,
           workerId: options.workerId,
           fence: task.state.fence,
           at: options.now().toISOString(),
-          evidence: result.value.evidence,
         })
         if (completed)
           return

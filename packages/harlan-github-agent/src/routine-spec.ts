@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml'
 import { err, ok } from './result.ts'
 
 /** Where every repository declares its own Routine schedule. */
-export const ROUTINE_SPEC_PATH = '.github/harlan-agent.yml'
+export const ROUTINE_SPEC_PATH = '.github/routines.yml'
 
 /**
  * Every Routine the service knows how to run.
@@ -83,7 +83,7 @@ function parseEntry(value: unknown, index: number): Result<RoutineSpecEntry, str
   if (typeof timeZone !== 'string' || !knowsTimeZone(timeZone))
     return err(`${name}: write a time zone this machine knows, for example Australia/Sydney.`)
 
-  const mode = value.mode === undefined ? 'propose' : ROUTINE_MODES.find(candidate => candidate === value.mode)
+  const mode = value.mode === undefined ? 'report' : ROUTINE_MODES.find(candidate => candidate === value.mode)
   if (mode === undefined)
     return err(`${name}: set the mode to report or propose.`)
 

@@ -22,6 +22,11 @@ export function trackingIssueBody(name: RoutineName): string {
   return trackingIssueBodyText(name)
 }
 
+/** Stable identity for one Run report comment. */
+export function routineRunMarker(runId: string): string {
+  return `<!-- routine-run: ${runId} -->`
+}
+
 /** Recognises a run log even when another controller filed it. */
 export function isRoutineTrackingIssue(input: {
   repository: string
@@ -87,15 +92,15 @@ export function routineReportCommand(input: {
     runId: input.run.id,
     repository: input.repository,
     routineName: input.routineName,
-    body: routineReportBody(input.run, input.report),
+    body: `${routineRunMarker(input.run.id)}\n${routineReportBody(input.run, input.report)}`,
   }
 }
 
 export interface RoutineReportControllerOptions {
-  github: GitHubIssuePublisher
+  github: Pick<GitHubIssuePublisher, 'createComment' | 'createIssue' | 'findIssueCommentByMarker' | 'findRoutineTrackingIssue'>
   leaseMilliseconds?: number
   now: () => Date
-  store: Pick<JournalStore, 'claimNextRoutineReport' | 'completeRoutineReport' | 'failRoutineReport'>
+  store: Pick<JournalStore, 'claimNextRoutineReport' | 'completeRoutineReport' | 'failRoutineReport' | 'recordRoutineReportReceipt'>
   workerId: string
 }
 
@@ -146,17 +151,76 @@ export function createRoutineReportController(options: RoutineReportControllerOp
 
         let issueNumber = command.trackingIssueNumber
         if (issueNumber === null) {
-          const created = await options.github.createIssue({
+          const existing = await options.github.findRoutineTrackingIssue({
             repository: command.repositoryMapping,
-            title: trackingIssueTitle(command.routineName, command.repository),
-            body: trackingIssueBody(command.routineName),
-            labels: [routineIssueLabel(command.routineName)],
+            routineName: command.routineName,
           }, signal)
-          if (created._tag === 'Err') {
-            fail(created.error.message)
+          if (existing._tag === 'Err') {
+            fail(existing.error.message)
             continue
           }
-          issueNumber = created.value.number
+          if (existing.value !== null) {
+            issueNumber = existing.value.number
+          }
+          else {
+            const created = await options.github.createIssue({
+              repository: command.repositoryMapping,
+              title: trackingIssueTitle(command.routineName, command.repository),
+              body: trackingIssueBody(command.routineName),
+              labels: [routineIssueLabel(command.routineName)],
+            }, signal)
+            if (created._tag === 'Err') {
+              fail(created.error.message)
+              continue
+            }
+            issueNumber = created.value.number
+          }
+        }
+
+        const issueConfirmed = options.store.recordRoutineReportReceipt({
+          commandId: command.id,
+          workerId: command.workerId,
+          fence: command.fence,
+          at: options.now().toISOString(),
+          sink: 'tracking_issue',
+        })
+        if (!issueConfirmed) {
+          results.push(err(`${command.repository}: The Routine report lease changed after GitHub confirmed the tracking Issue.`))
+          continue
+        }
+
+        const marker = routineRunMarker(command.runId)
+        const existingComment = await options.github.findIssueCommentByMarker({
+          repository: command.repositoryMapping,
+          issueNumber,
+          marker,
+        }, signal)
+        if (existingComment._tag === 'Err') {
+          fail(existingComment.error.message)
+          continue
+        }
+        if (existingComment.value !== null) {
+          const commentConfirmed = options.store.recordRoutineReportReceipt({
+            commandId: command.id,
+            workerId: command.workerId,
+            fence: command.fence,
+            at: options.now().toISOString(),
+            sink: 'run_comment',
+          })
+          if (!commentConfirmed) {
+            results.push(err(`${command.repository}: The Routine report lease changed after GitHub confirmed the run comment.`))
+            continue
+          }
+          options.store.completeRoutineReport({
+            commandId: command.id,
+            workerId: command.workerId,
+            fence: command.fence,
+            at: options.now().toISOString(),
+            commentId: existingComment.value.id,
+            trackingIssueNumber: issueNumber,
+          })
+          results.push(ok({ repository: command.repository, issueNumber }))
+          continue
         }
 
         const commented = await options.github.createComment({
@@ -166,6 +230,18 @@ export function createRoutineReportController(options: RoutineReportControllerOp
         }, signal)
         if (commented._tag === 'Err') {
           fail(commented.error.message)
+          continue
+        }
+
+        const commentConfirmed = options.store.recordRoutineReportReceipt({
+          commandId: command.id,
+          workerId: command.workerId,
+          fence: command.fence,
+          at: options.now().toISOString(),
+          sink: 'run_comment',
+        })
+        if (!commentConfirmed) {
+          results.push(err(`${command.repository}: The Routine report lease changed after GitHub accepted the run comment.`))
           continue
         }
 
