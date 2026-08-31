@@ -42,6 +42,8 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 
 - **Never amend published commits** -- CI and reviewers lose context. Always fix-forward with new commits.
 - **Never `--force` push** during a PR -- rewrites shared history. Use `git push` (regular) after new commits.
+- **Never sync a clean pull request with its base branch:** A newer base alone needs no pull request commit.
+  Merge the base into the head only when GitHub reports merge conflicts.
 - **Never `--no-verify`** -- if hooks fail, fix the underlying issue.
 - **Never move unknown changes** -- primary checkout changes may belong to another task. Copy only changes this task owns.
 - **`gh pr create` fails silently with bad body** -- always use HEREDOC for the body, never inline quotes.

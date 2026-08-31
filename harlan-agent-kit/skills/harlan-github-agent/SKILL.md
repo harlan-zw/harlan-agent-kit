@@ -221,6 +221,8 @@ When required CI fails on the current base of an owned repository, dispatch a se
 
 Create one conflict resolution task when GitHub reports an open pull request as conflicting.
 
+Never update a pull request with a clean mergeable state because its base branch advanced.
+
 Delegate it to the pull request's implementation worker. Use a fresh worktree from the current remote head.
 
 Establish mutation authority before editing. If the head branch is not writable, mark `Needs attention` with the exact boundary.
