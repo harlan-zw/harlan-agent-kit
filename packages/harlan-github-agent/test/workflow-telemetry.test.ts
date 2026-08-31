@@ -14,6 +14,48 @@ function createStore() {
 }
 
 describe('workflow telemetry', () => {
+  it('links a Review run to its Review Task', () => {
+    const store = createStore()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'telemetry-review-run-task',
+      observedAt: '2026-08-13T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T00:00:10.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    store.recordReviewRun({
+      id: 'telemetry-review-run',
+      repository: task.repository,
+      pullRequestNumber: task.pullRequestNumber,
+      revisionId: task.revisionId,
+      headSha: task.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'telemetry-review-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T00:00:10.000Z',
+      completedAt: '2026-08-13T00:00:20.000Z',
+      gates: {
+        merge: { _tag: 'Passed', evidence: [] },
+        review: { _tag: 'Passed', evidence: [] },
+        ci: { _tag: 'Passed', evidence: [] },
+      },
+      confidence: 95,
+      findings: [],
+    })
+
+    expect(store.listWorkflowEvents({ stream: 'review_run', limit: 1 })[0]).toMatchObject({
+      entityId: 'telemetry-review-run',
+      taskId: task.id,
+    })
+  })
+
   it('keeps every Issue triage status transition with retry telemetry', () => {
     const store = createStore()
     const issue = issueItem()

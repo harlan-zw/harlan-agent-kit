@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { approvalLabels } from '../src/approval-labels.ts'
 import { BASELINE_REPAIR_MARKER, pullRequestPurpose } from '../src/baseline-repair-state.ts'
 import { createGitHubSource, isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from '../src/github.ts'
+import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { ok } from '../src/result.ts'
 import { trackingIssueBody } from '../src/routine-report-controller.ts'
 import { repositoryMapping } from './fixtures.ts'
@@ -140,12 +141,12 @@ describe('gitHub subjects', () => {
     ]))
   })
 
-  it('scopes an Issue to human content and ignores controller comments', async () => {
+  it('keeps unmarked user-token comments and ignores marked controller comments', async () => {
     const listIssues = () => undefined
     const listPulls = () => undefined
     const listComments = () => undefined
     let humanBody = 'First detail.'
-    let controllerBody = 'Running.'
+    let controllerBody = `${AUTOMATED_ISSUE_TRIAGE_MARKER}\nRunning.`
     const client = {
       paginate: (method: unknown) => Promise.resolve(method === listIssues
         ? [{
@@ -161,8 +162,8 @@ describe('gitHub subjects', () => {
           }]
         : method === listComments
           ? [
-              { id: 1, body: humanBody, updated_at: '2026-08-13T00:01:00.000Z', user: { login: 'contributor' } },
-              { id: 2, body: controllerBody, updated_at: '2026-08-13T00:02:00.000Z', user: { login: 'harlan-github-agent[bot]' } },
+              { id: 1, body: humanBody, updated_at: '2026-08-13T00:01:00.000Z', user: { login: 'harlan-zw' } },
+              { id: 2, body: controllerBody, updated_at: '2026-08-13T00:02:00.000Z', user: { login: 'harlan-zw' } },
             ]
           : []),
       rest: {
@@ -171,7 +172,7 @@ describe('gitHub subjects', () => {
       },
     } as unknown as Octokit
     const source = createGitHubSource({
-      actorLogin: () => 'harlan-github-agent[bot]',
+      actorLogin: () => 'harlan-zw',
       createClient: () => client,
       issueCutoff: '2026-07-01',
       tokens: {
@@ -181,7 +182,7 @@ describe('gitHub subjects', () => {
     })
 
     const first = await source.listOpenItems(repositoryMapping())
-    controllerBody = 'Completed.'
+    controllerBody = `${AUTOMATED_ISSUE_TRIAGE_MARKER}\nCompleted.`
     const controllerChanged = await source.listOpenItems(repositoryMapping())
     humanBody = 'Corrected detail.'
     const humanChanged = await source.listOpenItems(repositoryMapping())

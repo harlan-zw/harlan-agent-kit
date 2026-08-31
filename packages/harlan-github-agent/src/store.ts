@@ -6481,6 +6481,21 @@ export function openJournalStore(
 
     const revision = database.prepare(`
       SELECT subjects.id AS subject_id, revisions.payload, repositories.policy_json,
+        (
+          SELECT worker_tasks.id
+          FROM worker_tasks
+          WHERE worker_tasks.subject_id = subjects.id
+            AND worker_tasks.revision_id = revisions.id
+            AND worker_tasks.kind = 'adversarial_review'
+          ORDER BY
+            CASE worker_tasks.state_tag
+              WHEN 'Running' THEN 0
+              WHEN 'Queued' THEN 1
+              ELSE 2
+            END,
+            worker_tasks.updated_at DESC
+          LIMIT 1
+        ) AS review_task_id,
         EXISTS (
           SELECT 1 FROM pull_request_approvals
           WHERE subject_id = subjects.id AND revision_id = revisions.id AND kind = 'review'
@@ -6495,6 +6510,7 @@ export function openJournalStore(
       subject_id: number
       payload: string
       policy_json: string
+      review_task_id: string | null
       review_approved: number
     } | undefined
     const pullRequest = revision === undefined ? undefined : JSON.parse(revision.payload) as GitHubItem
@@ -6578,7 +6594,7 @@ export function openJournalStore(
         repository: input.repository,
         itemNumber: input.pullRequestNumber,
         revisionId: input.revisionId,
-        taskId: input.id,
+        taskId: revision.review_task_id,
         from: 'Running',
         to: 'Completed',
         usage: runUsage,
@@ -7559,9 +7575,11 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       const task = database.prepare(`
-        SELECT worker_tasks.subject_id, worker_tasks.revision_id
+        SELECT worker_tasks.subject_id, worker_tasks.revision_id,
+          repositories.github AS repository, subjects.github_number
         FROM worker_tasks
         JOIN subjects ON subjects.id = worker_tasks.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
         WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
           AND worker_tasks.state_tag = 'Running' AND worker_tasks.worker_id = ?
           AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
@@ -7569,6 +7587,8 @@ export function openJournalStore(
       `).get(input.taskId, input.workerId, input.fence, input.at) as {
         subject_id: number
         revision_id: string
+        repository: string
+        github_number: number
       } | undefined
       if (task === undefined) {
         database.exec('COMMIT')
@@ -7645,6 +7665,8 @@ export function openJournalStore(
         stream: 'review_resolution',
         event: 'Recorded',
         entityId: `${task.subject_id}:${task.revision_id}`,
+        repository: task.repository,
+        itemNumber: task.github_number,
         revisionId: task.revision_id,
         taskId: input.taskId,
         from: null,
@@ -8661,6 +8683,50 @@ export function openJournalStore(
   }
 
   const claimNextTerminalReviewStatus: JournalStore['claimNextTerminalReviewStatus'] = (workerId, now, leaseMilliseconds) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const stale = database.prepare(`
+        SELECT review_status_commands.id, review_status_commands.fence
+        FROM review_status_commands
+        LEFT JOIN worker_tasks
+          ON review_status_commands.task_kind = 'adversarial_review'
+          AND worker_tasks.id = review_status_commands.task_id
+        LEFT JOIN tasks
+          ON review_status_commands.task_kind = 'review_fix'
+          AND tasks.id = review_status_commands.task_id
+        JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+        WHERE review_status_commands.state_tag = 'Pending'
+          AND review_status_commands.phase = 'terminal'
+          AND (
+            review_status_commands.revision_id != subjects.current_revision_id
+            OR COALESCE(worker_tasks.revision_id, tasks.revision_id) != subjects.current_revision_id
+          )
+      `).all() as unknown as Array<{ id: string, fence: number }>
+      const supersede = database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Superseded', reason = 'The pull request changed before terminal Publication.',
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Pending' AND phase = 'terminal' AND fence = ?
+      `)
+      stale.forEach((command) => {
+        if (supersede.run(now, command.id, command.fence).changes !== 1)
+          return
+        recordReviewStatusEvent(database, {
+          commandId: command.id,
+          event: 'Superseded',
+          from: 'Pending',
+          to: 'Superseded',
+          reason: 'The pull request changed before terminal Publication.',
+          fence: command.fence,
+          at: now,
+        })
+      })
+      database.exec('COMMIT')
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
     const row = database.prepare(`
       SELECT review_status_commands.id
       FROM review_status_commands

@@ -53,6 +53,9 @@ describe('explicit Review resolution', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:00:04.000Z').queue).toEqual([])
     expect(store.listWorkflowEvents({ stream: 'review_resolution', limit: 10 })).toMatchObject([{
       event: 'Recorded',
+      repository: pullRequest.repository,
+      itemNumber: pullRequest.number,
+      revisionId: observed.revisionId,
       taskId: task.id,
       to: 'ExistingReview',
     }])
@@ -95,6 +98,61 @@ describe('explicit Review resolution', () => {
       resolution: { _tag: 'ReviewSkipped', reason: 'Stale test.' },
     })).toBe(false)
     expect(store.listWorkflowEvents({ stream: 'review_resolution', limit: 10 })).toEqual([])
+    store.close()
+  })
+
+  it('supersedes a terminal Publication when a new head replaces its Revision', () => {
+    const store = openJournalStore(':memory:', true)
+    store.syncRepositories([repositoryMapping()], '2026-08-13T01:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'terminal-before-new-head',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the first Review Revision.')
+    const task = store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:00:01.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:00:02.000Z',
+      revisionId: task.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY',
+      desiredOutcome: 'READY',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    expect(store.completeReviewTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:00:03.000Z',
+      evidence: 'Existing Review.',
+      resolution: { _tag: 'ExistingReview', url: `${pullRequest.url}#issuecomment-42` },
+    })).toBe(true)
+    store.recordObservation({
+      externalId: 'terminal-after-new-head',
+      observedAt: '2026-08-13T01:00:04.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean', headSha: 'new-head' }),
+    })
+
+    expect(store.claimNextTerminalReviewStatus('publisher', '2026-08-13T01:00:05.000Z', 60_000)).toBeNull()
+    expect(store.listWorkflowEvents({ stream: 'review_status', limit: 1 })[0]).toMatchObject({
+      entityId: staged.commandId,
+      event: 'Superseded',
+      from: 'Pending',
+      to: 'Superseded',
+    })
+    expect(store.isSafeToRestart()).toBe(true)
     store.close()
   })
 })

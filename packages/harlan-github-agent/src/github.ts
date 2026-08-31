@@ -11,6 +11,7 @@ import { pullRequestPurpose } from './baseline-repair-state.ts'
 import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
+import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { isReviewRerunCommand } from './review-rerun.ts'
@@ -406,7 +407,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             body: issue.body ?? '',
             comments: comments.flatMap(comment =>
               comment.user?.login === undefined || comment.body === undefined || comment.body === null
-              || comment.user.login.toLowerCase() === controllerLogin
+              || (comment.user.login.toLowerCase() === controllerLogin && comment.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
                 ? []
                 : [{
                     id: comment.id,
