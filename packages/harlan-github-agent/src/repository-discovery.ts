@@ -106,7 +106,7 @@ function defaultMapping(repository: InstalledRepository, checkout: string): Repo
     ownership,
     defaultBranch: repository.defaultBranch,
     writablePullRequestAuthors: ['harlan-zw', AGENT_ACTOR_LOGIN],
-    writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/'],
+    writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/', 'ci/'],
     issueWork: ownership === 'owned',
     maxOpenPullRequests: null,
     pullRequestReview: true,
