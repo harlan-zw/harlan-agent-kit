@@ -5,6 +5,7 @@ import {
   emptyHogwildHistory,
   formatHogwildHost,
   formatHogwildLoad,
+  formatHogwildRunnerCapacity,
   formatHogwildServiceMetrics,
   formatHogwildTemperature,
   formatHogwildTemperatures,
@@ -21,6 +22,24 @@ const details: HogwildStatus = {
     operatingSystem: 'Linux',
   },
   load: [0.2, 0.4, 1.02],
+  runners: {
+    _tag: 'Available',
+    budgets: {
+      cpu: 20,
+      memoryBytes: 24 * 1024 ** 3,
+      memoryHeadroomBytes: 6 * 1024 ** 3,
+    },
+    pools: [{
+      cpuPerRunner: 8,
+      live: 2,
+      maximum: 4,
+      memoryLimitBytes: 9 * 1024 ** 3,
+      memoryReservationBytes: 5 * 1024 ** 3,
+      queue: { _tag: 'Available', jobs: 1 },
+      running: 2,
+    }],
+    updatedAt: 1_787_899_378_238,
+  },
   services: [
     {
       name: 'Jellyfin',
@@ -102,6 +121,7 @@ describe('hogwild status boundary', () => {
     expect(formatHogwildTemperatures(details.temperatures)).toBe('CPU 41.0°C · Storage 54.9°C')
     expect(formatHogwildLoad(details.load)).toBe('0.20 · 0.40 · 1.02')
     expect(formatHogwildHost(details.host)).toBe('Intel(R) Core(TM) Ultra 9 285HX · 24 logical cores · Linux 7.0.0-30-generic')
+    expect(formatHogwildRunnerCapacity(details.runners)).toBe('2 running · 1 queued · 2 / 4 live · 16 / 20 CPU reserved · 10 GiB / 24 GiB memory reserved · 9 GiB largest hard limit · keeps 6 GiB available')
   })
 
   it('appends each live poll once and keeps a bounded recent window', () => {
