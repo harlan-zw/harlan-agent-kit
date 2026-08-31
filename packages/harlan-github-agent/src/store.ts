@@ -3113,6 +3113,46 @@ function recordReviewStatusEvent(database: DatabaseSync, input: {
   })
 }
 
+function supersedeUnauthorizedReviewStatuses(database: DatabaseSync, at: string): void {
+  const reason = 'Repository policy no longer permits this automated review.'
+  const commands = database.prepare(`
+    SELECT review_status_commands.id, review_status_commands.fence
+    FROM review_status_commands
+    LEFT JOIN worker_tasks
+      ON review_status_commands.task_kind = 'adversarial_review'
+      AND worker_tasks.id = review_status_commands.task_id
+    LEFT JOIN tasks
+      ON review_status_commands.task_kind = 'review_fix'
+      AND tasks.id = review_status_commands.task_id
+    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE review_status_commands.state_tag = 'Pending'
+      AND (
+        repositories.enabled = 0
+        OR json_extract(repositories.policy_json, '$.pullRequestReview') != 1
+      )
+  `).all() as unknown as Array<{ id: string, fence: number }>
+  const supersede = database.prepare(`
+    UPDATE review_status_commands
+    SET state_tag = 'Superseded', reason = ?, worker_id = NULL,
+      lease_expires_at = NULL, updated_at = ?
+    WHERE id = ? AND state_tag = 'Pending' AND fence = ?
+  `)
+  commands.forEach((command) => {
+    if (supersede.run(reason, at, command.id, command.fence).changes !== 1)
+      return
+    recordReviewStatusEvent(database, {
+      commandId: command.id,
+      event: 'PolicySuperseded',
+      from: 'Pending',
+      to: 'Superseded',
+      reason,
+      fence: command.fence,
+      at,
+    })
+  })
+}
+
 function routineWorkflowScope(database: DatabaseSync, runId: string): WorkflowScope {
   return database.prepare(`
     SELECT routines.repository, NULL AS item_number, NULL AS revision_id,
@@ -5615,6 +5655,7 @@ export function openJournalStore(
         at,
         'Repository policy no longer permits this Worker.',
       ))
+      supersedeUnauthorizedReviewStatuses(database, at)
       database.prepare(`
         UPDATE incidents SET resolved_at = ?
         WHERE resolved_at IS NULL AND scope_tag = 'Repository' AND repository IN (
@@ -8685,6 +8726,7 @@ export function openJournalStore(
   const claimNextTerminalReviewStatus: JournalStore['claimNextTerminalReviewStatus'] = (workerId, now, leaseMilliseconds) => {
     database.exec('BEGIN IMMEDIATE')
     try {
+      supersedeUnauthorizedReviewStatuses(database, now)
       const stale = database.prepare(`
         SELECT review_status_commands.id, review_status_commands.fence
         FROM review_status_commands

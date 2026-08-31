@@ -393,6 +393,117 @@ describe('journal store', () => {
     expect(store.isSafeToRestart()).toBe(true)
   })
 
+  it('supersedes a pending terminal Review Publication when policy is disabled', () => {
+    const store = createStore()
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'policy-disabled-terminal-status',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:01.000Z',
+      revisionId: observed.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      phase: 'terminal',
+      body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:02.000Z',
+      evidence: 'review-1',
+    })
+    expect(store.isSafeToRestart()).toBe(false)
+
+    store.syncRepositories([{ ...repository, pullRequestReview: false }], '2026-08-13T01:02:00.000Z')
+
+    expect(store.isSafeToRestart()).toBe(true)
+    expect(store.claimNextTerminalReviewStatus('publisher-1', '2026-08-13T01:03:00.000Z', 60_000)).toBeNull()
+    expect(store.listWorkflowEvents({ stream: 'review_status', limit: 1 })[0]).toMatchObject({
+      event: 'PolicySuperseded',
+      entityId: staged.commandId,
+      from: 'Pending',
+      to: 'Superseded',
+      reason: 'Repository policy no longer permits this automated review.',
+    })
+  })
+
+  it('supersedes a terminal Review Publication deferred after policy was disabled', () => {
+    const store = createStore()
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordObservation({
+      externalId: 'policy-disabled-running-status',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:01.000Z',
+      revisionId: observed.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      phase: 'terminal',
+      body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:02.000Z',
+      evidence: 'review-1',
+    })
+    const command = store.claimNextTerminalReviewStatus('publisher-1', '2026-08-13T01:01:03.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected a terminal Review Publication.')
+
+    store.syncRepositories([{ ...repository, pullRequestReview: false }], '2026-08-13T01:01:04.000Z')
+    expect(store.deferReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:01:05.000Z',
+      reason: 'GitHub timed out.',
+    })).toBe(true)
+    expect(store.isSafeToRestart()).toBe(false)
+
+    expect(store.claimNextTerminalReviewStatus('publisher-2', '2026-08-13T01:01:06.000Z', 60_000)).toBeNull()
+    expect(store.isSafeToRestart()).toBe(true)
+    expect(store.listWorkflowEvents({ stream: 'review_status', limit: 1 })[0]).toMatchObject({
+      event: 'PolicySuperseded',
+      entityId: staged.commandId,
+      from: 'Pending',
+      to: 'Superseded',
+    })
+  })
+
   it('deduplicates one immutable observation', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
