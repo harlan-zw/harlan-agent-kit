@@ -1031,7 +1031,6 @@ describe('journal store', () => {
       fence: task.state.fence,
       at: '2026-08-13T01:02:00.000Z',
       revisionId: observed.revisionId,
-      expectedUpdatedAt: task.issue.updatedAt,
       body: '<!-- harlan-agent-kit:issue-triage -->\nTriage result.',
     })
     if (staged._tag === 'Rejected')
@@ -1090,7 +1089,6 @@ describe('journal store', () => {
       fence: task.state.fence,
       at: '2026-08-13T01:02:00.000Z',
       revisionId: observed.revisionId,
-      expectedUpdatedAt: task.issue.updatedAt,
       body: '<!-- harlan-agent-kit:issue-triage -->\nTriage result.',
     })
     expect(staged).toEqual({ _tag: 'Staged', commandId: expect.any(String) })
@@ -1101,7 +1099,6 @@ describe('journal store', () => {
       repository: 'harlan-zw/example',
       issueNumber: 12,
       revisionId: observed.revisionId,
-      expectedUpdatedAt: task.issue.updatedAt,
       commentId: null,
       body: '<!-- harlan-agent-kit:issue-triage -->\nTriage result.',
     }))
@@ -1140,13 +1137,47 @@ describe('journal store', () => {
       fence: rerun.state.fence,
       at: '2026-08-13T02:02:00.000Z',
       revisionId: changed.revisionId,
-      expectedUpdatedAt: rerun.issue.updatedAt,
       body: '<!-- harlan-agent-kit:issue-triage -->\nUpdated triage result.',
     })
     if (restaged._tag === 'Rejected')
       throw new Error(restaged.reason)
     expect(store.claimIssueTriageComment(restaged.commandId, 'comment-controller', '2026-08-13T02:02:01.000Z', 600_000))
       .toEqual(expect.objectContaining({ commentId: 42 }))
+  })
+
+  it('stages a triage comment after the Running label moved updatedAt', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'label-bumped-issue',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem(),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new issue Revision.')
+    const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
+    if (task === null)
+      throw new Error('Expected an issue triage Task.')
+
+    // The Running label write bumps GitHub's updatedAt without changing any
+    // Revision content, and the next observation carries the new timestamp.
+    store.recordObservation({
+      externalId: 'label-bumped-issue-again',
+      observedAt: '2026-08-13T01:01:30.000Z',
+      source: 'poll',
+      subject: issueItem({ updatedAt: '2026-08-13T01:01:30.000Z' }),
+    })
+
+    const staged = store.stageIssueTriageComment({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:10:00.000Z',
+      revisionId: observed.revisionId,
+      body: '<!-- harlan-agent-kit:issue-triage -->\nTriage result.',
+    })
+    expect(staged).toEqual({ _tag: 'Staged', commandId: expect.any(String) })
   })
 
   it('queues trusted author Issue work only after Ready to implement triage', () => {

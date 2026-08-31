@@ -885,7 +885,6 @@ export interface JournalStore {
     fence: number
     at: string
     revisionId: string
-    expectedUpdatedAt: string
     body: string
   }) => { _tag: 'Staged' | 'Duplicate', commandId: string } | { _tag: 'Rejected', reason: string }
   stagePublication: (input: {
@@ -4216,6 +4215,20 @@ const verifiedPullRequestClosureMigration = `
   PRAGMA user_version = 49;
 `
 
+/**
+ * Drops the expected updated at column from issue triage comments.
+ *
+ * The column compared GitHub's `updatedAt` at publish time, but the Running
+ * label the service itself writes bumps `updatedAt` on every claim. A comment
+ * staged under one label state could never publish under the next, so it
+ * waited forever. The Revision identity already answers whether the issue
+ * changed, and it excludes `updatedAt` on purpose.
+ */
+const issueTriageCommentContentMigration = `
+  ALTER TABLE issue_triage_comment_commands DROP COLUMN expected_updated_at;
+  PRAGMA user_version = 50;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -4241,7 +4254,7 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-  if (version === 49)
+  if (version === 50)
     return
   const existing = database.prepare(`
     SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -4438,6 +4451,10 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 48) {
     applyMigration(database, verifiedPullRequestClosureMigration)
+    version = 49
+  }
+  if (version === 49) {
+    applyMigration(database, issueTriageCommentContentMigration)
     return
   }
   throw new Error(`Unsupported database schema version: ${version}.`)
@@ -6991,7 +7008,6 @@ export function openJournalStore(
           AND worker_tasks.state_tag = 'Running' AND worker_tasks.worker_id = ?
           AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
           AND worker_tasks.revision_id = ? AND subjects.current_revision_id = ?
-          AND json_extract(revisions.payload, '$.updatedAt') = ?
           AND repositories.enabled = 1
           AND json_extract(repositories.policy_json, '$.issueWork') = 1
       `).get(
@@ -7001,7 +7017,6 @@ export function openJournalStore(
         input.at,
         input.revisionId,
         input.revisionId,
-        input.expectedUpdatedAt,
       )
       if (authorized === undefined) {
         database.exec('COMMIT')
@@ -7019,15 +7034,14 @@ export function openJournalStore(
       }
       database.prepare(`
         INSERT INTO issue_triage_comment_commands (
-          id, task_id, task_fence, revision_id, expected_updated_at, body, body_sha256,
+          id, task_id, task_fence, revision_id, body, body_sha256,
           state_tag, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
       `).run(
         commandId,
         input.taskId,
         input.fence,
         input.revisionId,
-        input.expectedUpdatedAt,
         input.body,
         bodySha256,
         input.at,
@@ -7058,7 +7072,6 @@ export function openJournalStore(
           repositories.github AS repository,
           subjects.github_number,
           issue_triage_comment_commands.revision_id,
-          issue_triage_comment_commands.expected_updated_at,
           issue_triage_comment_commands.body,
           issue_triage_comment_commands.outcome_unknown,
           COALESCE(issue_triage_comment_commands.github_comment_id, (
@@ -7090,7 +7103,6 @@ export function openJournalStore(
         repository: string
         github_number: number
         revision_id: string
-        expected_updated_at: string
         body: string
         outcome_unknown: number
         github_comment_id: number | null
@@ -7117,7 +7129,6 @@ export function openJournalStore(
         repository: row.repository,
         issueNumber: row.github_number,
         revisionId: row.revision_id,
-        expectedUpdatedAt: row.expected_updated_at,
         body: row.body,
         outcomeUnknown: row.outcome_unknown === 1,
         commentId: row.github_comment_id,

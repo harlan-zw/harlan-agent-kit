@@ -36,6 +36,12 @@ function dropSelectionMode(database: DatabaseSync): void {
   database.exec('DROP TABLE item_dismissals')
   database.exec('ALTER TABLE repositories DROP COLUMN writes_enabled')
   dropRoutines(database)
+  restoreExpectedUpdatedAt(database)
+}
+
+/** Rewinds the triage comment table to version 49, which still stored the expected updated at. */
+function restoreExpectedUpdatedAt(database: DatabaseSync): void {
+  database.exec(`ALTER TABLE issue_triage_comment_commands ADD COLUMN expected_updated_at TEXT NOT NULL DEFAULT ''`)
 }
 
 /**
@@ -219,6 +225,7 @@ function journalAtVersion30(path: string): void {
     'a'.repeat(64),
   )
   dropRoutines(database)
+  restoreExpectedUpdatedAt(database)
   database.exec('PRAGMA user_version = 30')
   database.close()
 }
@@ -336,6 +343,7 @@ describe('pull request closure verification migration', () => {
 
     const oldJournal = new DatabaseSync(path)
     oldJournal.exec('DROP TABLE pull_request_closure_verifications; PRAGMA user_version = 48;')
+    restoreExpectedUpdatedAt(oldJournal)
     oldJournal.close()
 
     const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
@@ -386,6 +394,7 @@ describe('installation permission recovery migration', () => {
 
     const oldJournal = new DatabaseSync(path)
     dropRoutines(oldJournal)
+    restoreExpectedUpdatedAt(oldJournal)
     oldJournal.exec('PRAGMA user_version = 32')
     oldJournal.close()
 
@@ -439,6 +448,7 @@ describe('provider session recovery migration', () => {
 
     const oldJournal = new DatabaseSync(path)
     dropRoutines(oldJournal)
+    restoreExpectedUpdatedAt(oldJournal)
     oldJournal.exec('PRAGMA user_version = 34')
     oldJournal.close()
 
@@ -471,7 +481,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(49)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(50)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
