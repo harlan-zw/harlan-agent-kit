@@ -8537,14 +8537,43 @@ export function openJournalStore(
         input.reconciliationId ?? '',
       ].join(':'))
       const existing = database.prepare(`
-        SELECT id FROM review_status_commands
+        SELECT id, state_tag, fence FROM review_status_commands
         WHERE task_kind = 'adversarial_review'
           AND task_id = ? AND task_fence = ?
           AND phase = 'terminal' AND body_sha256 = ?
-      `).get(row.task_id, row.task_fence, bodySha256) as { id: string } | undefined
-      if (existing !== undefined) {
+      `).get(row.task_id, row.task_fence, bodySha256) as {
+        id: string
+        state_tag: 'Pending' | 'Running' | 'Published' | 'Superseded'
+        fence: number
+      } | undefined
+      if (existing !== undefined && (existing.state_tag === 'Pending' || existing.state_tag === 'Running')) {
         database.exec('COMMIT')
         return { _tag: 'Duplicate', commandId: existing.id }
+      }
+      if (existing !== undefined) {
+        // The identical body already went through Publication, so this restage
+        // means GitHub lost the comment. Requeue the same command, keeping its
+        // comment id, so the publisher repairs the existing comment.
+        const reason = existing.state_tag === 'Published'
+          ? 'The published gate comment needs repair.'
+          : 'The superseded gate status was requeued for Publication.'
+        database.prepare(`
+          UPDATE review_status_commands
+          SET state_tag = 'Pending', outcome_unknown = 1, reason = ?, worker_id = NULL,
+            lease_expires_at = NULL, revision_id = ?, expected_head_sha = ?, updated_at = ?
+          WHERE id = ? AND state_tag = ? AND fence = ?
+        `).run(reason, input.revisionId, input.expectedHeadSha, input.at, existing.id, existing.state_tag, existing.fence)
+        recordReviewStatusEvent(database, {
+          commandId: existing.id,
+          event: 'DriftReconciliationStaged',
+          from: existing.state_tag,
+          to: 'Pending',
+          reason,
+          fence: existing.fence,
+          at: input.at,
+        })
+        database.exec('COMMIT')
+        return { _tag: 'Staged', commandId: existing.id }
       }
       database.prepare(`
         INSERT INTO review_status_commands (
