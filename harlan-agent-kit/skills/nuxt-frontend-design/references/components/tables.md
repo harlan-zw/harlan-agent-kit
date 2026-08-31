@@ -22,7 +22,7 @@ const columns = [
   { key: 'actions', label: '' }
 ]
 
-const projects = ref<Project[]>([...])
+const projects = ref<Project[]>([])
 </script>
 
 <template>
@@ -36,11 +36,13 @@ const projects = ref<Project[]>([...])
       </UBadge>
     </template>
 
-    <template #actions-data="{ row }">
-      <UDropdownMenu :items="[
-        [{ label: 'Edit', icon: 'i-lucide-pencil' }],
-        [{ label: 'Delete', icon: 'i-lucide-trash-2', color: 'error' }]
-      ]">
+    <template #actions-data>
+      <UDropdownMenu
+        :items="[
+          [{ label: 'Edit', icon: 'i-lucide-pencil' }],
+          [{ label: 'Delete', icon: 'i-lucide-trash-2', color: 'error' }],
+        ]"
+      >
         <UButton icon="i-lucide-ellipsis" variant="ghost" size="sm" />
       </UDropdownMenu>
     </template>

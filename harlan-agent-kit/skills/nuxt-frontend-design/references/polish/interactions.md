@@ -198,8 +198,12 @@ Use `USkeleton` for content placeholders. Match the shape of the content they re
 ### Optimistic Updates
 Update UI immediately, revert on error:
 ```ts
-const items = ref([...])
-function removeItem(id: string) {
+interface Item {
+  id: string
+}
+
+const items = ref<Item[]>([])
+async function removeItem(id: string) {
   const backup = [...items.value]
   items.value = items.value.filter(i => i.id !== id)
   try { await api.delete(id) }

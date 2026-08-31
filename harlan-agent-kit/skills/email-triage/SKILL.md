@@ -83,8 +83,15 @@ Split envelopes into batches of 10, one parallel `haiku` classification agent pe
 
 Each agent receives a batch of envelopes (id, subject, from, date, flags) and classifies using [references/heuristics.md](references/heuristics.md), returning a JSON array conforming exactly to this schema (reject and re-run any batch with malformed entries):
 
-```json
-{ "id": string, "urgency": 1-5, "category": "client|finance|notification|newsletter|spam|personal|project|automated", "suggestedAction": "reply|move|delete|skip", "suggestedFolder": string, "reason": string }
+```ts
+interface EmailClassification {
+  id: string
+  urgency: 1 | 2 | 3 | 4 | 5
+  category: 'client' | 'finance' | 'notification' | 'newsletter' | 'spam' | 'personal' | 'project' | 'automated'
+  suggestedAction: 'reply' | 'move' | 'delete' | 'skip'
+  suggestedFolder: string
+  reason: string
+}
 ```
 
 ### Step 3: Read high-urgency emails

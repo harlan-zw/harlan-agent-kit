@@ -96,13 +96,16 @@ export function useOrderForm(): OrderFormService {
 <!-- pages/orders/new.vue (or any parent component) -->
 <script setup lang="ts">
 import { provideOrderForm } from '~/composables/useOrderForm'
+
 const form = provideOrderForm(input => $fetch('/api/orders', { method: 'POST', body: input }))
 </script>
 
 <template>
   <OrderItemList />
   <OrderTotals />
-  <button :disabled="form.submitting.value" @click="form.submit">Place order</button>
+  <button :disabled="form.submitting.value" @click="form.submit">
+    Place order
+  </button>
 </template>
 ```
 

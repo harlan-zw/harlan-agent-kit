@@ -1,6 +1,7 @@
 import sharp from 'sharp'
 
-const W = 1280; const H = 640
+const W = 1280
+const H = 640
 
 function hash(x, y, seed = 0) {
   const n = Math.sin(x * 12.9898 + y * 78.233 + seed * 43.12) * 43758.5453
@@ -8,8 +9,10 @@ function hash(x, y, seed = 0) {
 }
 
 function smoothNoise(x, y, seed = 0) {
-  const ix = Math.floor(x); const iy = Math.floor(y)
-  const fx = x - ix; const fy = y - iy
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  const fx = x - ix
+  const fy = y - iy
   const ux = fx * fx * (3 - 2 * fx)
   const uy = fy * fy * (3 - 2 * fy)
   return (
@@ -21,7 +24,9 @@ function smoothNoise(x, y, seed = 0) {
 }
 
 function fbm(x, y, octaves = 6, seed = 0) {
-  let val = 0; let amp = 0.5; let freq = 1
+  let val = 0
+  let amp = 0.5
+  let freq = 1
   for (let i = 0; i < octaves; i++) {
     val += smoothNoise(x * freq, y * freq, seed + i * 100) * amp
     freq *= 2
@@ -75,7 +80,8 @@ async function generateVariant(variant, isLight) {
     const py = Math.floor((y + 1.25) / 2.5 * H)
     for (let dy = -radius; dy <= radius; dy++) {
       for (let dx = -radius; dx <= radius; dx++) {
-        const nx = px + dx; const ny = py + dy
+        const nx = px + dx
+        const ny = py + dy
         if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
           const dist = Math.sqrt(dx * dx + dy * dy)
           const falloff = Math.exp(-dist * 0.6) * intensity
@@ -193,10 +199,12 @@ async function generateVariant(variant, isLight) {
   else if (variant === 4) {
     // MANDALA
     const symmetry = 12
-    let ax = 0.1; let ay = 0.1
+    let ax = 0.1
+    let ay = 0.1
     for (let i = 0; i < 600000; i++) {
       const next = clifford(ax, ay, -1.7, 1.8, -1.9, -0.4)
-      ax = next.x; ay = next.y
+      ax = next.x
+      ay = next.y
       if (i < 100)
         continue
       const r = Math.sqrt(ax * ax + ay * ay) * 0.5
@@ -232,7 +240,8 @@ async function generateVariant(variant, isLight) {
       const startY = (hash(stream, 0, 42) - 0.5) * 1.5
       const color1 = palette[stream % palette.length]
       const color2 = palette[(stream + 3) % palette.length]
-      let x = startX; let y = startY
+      let x = startX
+      let y = startY
       for (let i = 0; i < 500; i++) {
         const angle = fbm(x * 0.4, y * 0.4, 5, 33) * Math.PI * 4
         x += Math.cos(angle) * 0.018
@@ -310,11 +319,15 @@ async function generateVariant(variant, isLight) {
 
       // Vignette
       const vig = isLight ? (1 - Math.sqrt(px * px + py * py) * 0.15) : (1 - Math.sqrt(px * px + py * py) * 0.4)
-      r *= vig; g *= vig; b *= vig
+      r *= vig
+      g *= vig
+      b *= vig
 
       // Grain
       const grain = (Math.random() - 0.5) * (isLight ? 0.02 : 0.03)
-      r += grain; g += grain; b += grain
+      r += grain
+      g += grain
+      b += grain
 
       pixels[i] = Math.max(0, Math.min(255, r * 255))
       pixels[i + 1] = Math.max(0, Math.min(255, g * 255))
