@@ -46,20 +46,35 @@ Predictable layouts feel generic. Introduce controlled asymmetry:
 ```vue
 <!-- Offset grid — items don't align perfectly -->
 <div class="grid grid-cols-3 gap-6">
-  <div class="col-span-2 mt-8">Large feature</div>
-  <div class="col-span-1 -mt-4">Small accent</div>
+  <div class="col-span-2 mt-8">
+    Large feature
+  </div>
+
+  <div class="col-span-1 -mt-4">
+    Small accent
+  </div>
 </div>
 
 <!-- Overlapping elements -->
 <div class="relative">
-  <div class="absolute -top-6 -right-6 z-10">Floating badge</div>
-  <UCard>Main content</UCard>
+  <div class="absolute -top-6 -right-6 z-10">
+    Floating badge
+  </div>
+
+  <UCard>
+    Main content
+  </UCard>
 </div>
 
 <!-- Diagonal flow -->
 <div class="grid grid-cols-2 gap-8">
-  <div class="justify-self-start">Left item</div>
-  <div class="justify-self-end mt-16">Right item, offset down</div>
+  <div class="justify-self-start">
+    Left item
+  </div>
+
+  <div class="justify-self-end mt-16">
+    Right item, offset down
+  </div>
 </div>
 ```
 

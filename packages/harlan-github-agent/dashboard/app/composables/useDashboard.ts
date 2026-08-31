@@ -486,7 +486,6 @@ type Dashboard = ReturnType<typeof createDashboard>
 let dashboard: Dashboard | undefined
 
 // The reactivity lives in createDashboard, inside a scope this owns for the app's lifetime.
-// eslint-disable-next-line harlanzw/vue-no-faux-composables -- This returns the shared reactive dashboard scope.
 export function useDashboard(): Dashboard {
   if (dashboard === undefined) {
     // A detached scope keeps the watchers and the event stream alive across
