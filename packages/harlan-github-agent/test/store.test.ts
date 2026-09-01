@@ -2313,6 +2313,50 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
+  it('stops a Baseline repair the next pull request Revision left behind', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'stale-baseline-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the review Task.')
+    const queued = store.queueBaselineRepairForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      baseSha: review.pullRequest.baseSha,
+      at: '2026-08-13T01:02:00.000Z',
+    })
+    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized')
+      throw new Error(queued.reason)
+    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
+    if (repair === null)
+      throw new Error('Expected the Baseline repair Task.')
+
+    const moved = store.recordObservation({
+      externalId: 'stale-baseline-pr-moved',
+      observedAt: '2026-08-13T01:04:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        mergeState: 'clean',
+        headSha: 'moved-head-commit',
+        updatedAt: '2026-08-13T01:04:00.000Z',
+      }),
+    })
+    if (moved._tag !== 'Inserted')
+      throw new Error('Expected the head move to create a new Revision.')
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:05:00.000Z').tasks.find(task => task.id === repair.id)?.state).toEqual({
+      _tag: 'Superseded',
+      reason: 'A newer pull request Revision replaced this Baseline repair.',
+    })
+  })
+
   it('lists the open pull requests this service opened, so a new one can stack on them', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

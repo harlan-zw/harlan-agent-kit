@@ -7,6 +7,7 @@ function sweep(options: {
   labelled: number[]
   running: Array<{ repository: string, itemNumber: number }>
   clear?: (itemNumber: number) => ReturnType<typeof ok<void>> | ReturnType<typeof err<string>>
+  mayWrite?: boolean
 }) {
   const cleared: number[] = []
   const run = async () => clearAbandonedRunningLabels({
@@ -20,12 +21,21 @@ function sweep(options: {
       },
     },
     repositories: [repositoryMapping()],
-    store: { listRunningTaskItems: () => options.running },
+    store: { listRunningTaskItems: () => options.running, mayWriteRepository: () => options.mayWrite ?? true },
   }, new AbortController().signal)
   return { cleared, run }
 }
 
 describe('clearAbandonedRunningLabels', () => {
+  it('asks nothing of a repository the controller may not write to', async () => {
+    const { cleared, run } = sweep({ labelled: [24], running: [], mayWrite: false })
+
+    const results = await run()
+
+    expect(results).toEqual([])
+    expect(cleared).toEqual([])
+  })
+
   it('takes the label off an item a dead process left it on', async () => {
     const { cleared, run } = sweep({ labelled: [24, 25], running: [] })
 

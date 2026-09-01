@@ -645,7 +645,14 @@ export interface JournalStore {
   stageCandidateIssues: (input: { commands: readonly CandidateIssueCommand[], at: string }) => number
   claimNextCandidateIssue: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedCandidateIssueCommand | null
   completeCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, issueNumber: number, url: string }) => boolean
-  failCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
+  /**
+   * Records one failed attempt at filing a Candidate's issue.
+   *
+   * `Deferred` returns the command to Pending for the next pass. `Failed` is
+   * terminal: GitHub refused in a way no retry changes, or the command spent
+   * its attempts. `Unchanged` means the lease moved on before this call.
+   */
+  failCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string, status?: number | undefined }) => 'Deferred' | 'Failed' | 'Unchanged'
   /** Requests the run log entry for one run. Answers false when it already exists. */
   stageRoutineReport: (input: { command: RoutineReportCommand, at: string }) => boolean
   claimNextRoutineReport: (workerId: string, now: string, leaseMilliseconds: number, excludedCommandIds?: readonly string[]) => ClaimedRoutineReportCommand | null
@@ -5870,6 +5877,10 @@ export function openJournalStore(
           return
         }
         if (input.subject.kind === 'pull_request') {
+          // Every mutation Task is claimable only on the subject's current
+          // Revision, so one left on an older Revision can never run again. It
+          // still holds the one active Task slot for its kind, which blocked
+          // the next Repair. Two sat Queued for a fortnight before this.
           supersedeTasks(
             database,
             subject.id,
@@ -5877,6 +5888,22 @@ export function openJournalStore(
             'A newer pull request Revision replaced this Repair.',
             revisionId,
             'review_fix',
+          )
+          supersedeTasks(
+            database,
+            subject.id,
+            input.observedAt,
+            'A newer pull request Revision replaced this Baseline repair.',
+            revisionId,
+            'baseline_repair',
+          )
+          supersedeTasks(
+            database,
+            subject.id,
+            input.observedAt,
+            'A newer pull request Revision replaced this conflict resolution.',
+            revisionId,
+            'resolve_conflict',
           )
         }
         if (input.subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, input.subject.author)) {
@@ -12114,25 +12141,38 @@ export function openJournalStore(
   const failCandidateIssue: JournalStore['failCandidateIssue'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
-      const changed = database.prepare(`
-        UPDATE candidate_issue_commands
-        SET state_tag = 'Pending', reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+      const row = database.prepare(`
+        SELECT attempts, max_attempts FROM candidate_issue_commands
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
-      if (changed) {
-        recordDurableCommandEvent(database, {
-          stream: 'candidate_issue',
-          commandId: input.commandId,
-          event: 'Deferred',
-          from: 'Running',
-          to: 'Pending',
-          reason: input.reason,
-          fence: input.fence,
-          at: input.at,
-        })
+      `).get(input.commandId, input.workerId, input.fence) as { attempts: number, max_attempts: number } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return 'Unchanged'
       }
+      // This command returned to Pending whatever GitHub answered, and nothing
+      // read the attempts the claim had already counted. A repository with
+      // issues switched off was asked to file the same proposal 282 times. A
+      // refusal no retry can change stops here, and so does a spent budget.
+      const terminal = !mayRetryFailure({ message: input.reason, status: input.status })
+        || row.attempts >= row.max_attempts
+      const state = terminal ? 'Failed' : 'Pending'
+      database.prepare(`
+        UPDATE candidate_issue_commands
+        SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(state, input.reason, input.at, input.commandId, input.workerId, input.fence)
+      recordDurableCommandEvent(database, {
+        stream: 'candidate_issue',
+        commandId: input.commandId,
+        event: terminal ? 'Failed' : 'Deferred',
+        from: 'Running',
+        to: state,
+        reason: input.reason,
+        fence: input.fence,
+        at: input.at,
+      })
       database.exec('COMMIT')
-      return changed
+      return terminal ? 'Failed' : 'Deferred'
     }
     catch (error) {
       database.exec('ROLLBACK')
