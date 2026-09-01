@@ -36,6 +36,7 @@ import { createIssueTriageCommentController } from './issue-triage-comment-contr
 import { createIssueWorkWorker } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
+import { runPassStep } from './poll-pass.ts'
 import { createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createCircuitProtectedProvider } from './provider-circuit.ts'
@@ -760,9 +761,22 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
     poll: async (signal) => {
       const recordPassIncidents = createPassIncidentRecorder({ store, now, signal })
+      // Cleared here and written only by the guard below, so a pass where every
+      // step answered normally resolves the last pass's defects.
+      recordPassIncidents('poll_pass', [])
+      const passDefects: string[] = []
+      const guarded = <T>(step: string, run: () => T | Promise<T>, fallback: T): Promise<T> =>
+        runPassStep(step, run, fallback, {
+          signal,
+          onDefect: (name, reason) => {
+            options.logger.error(`${name}: ${reason}`)
+            passDefects.push(`${name}: ${reason}`)
+            recordPassIncidents('poll_pass', passDefects)
+          },
+        })
       const results = !config.triggers.includes('github')
         ? []
-        : await reconcileAllRepositories(config.repositories, {
+        : await guarded('Repository reconciliation', () => reconcileAllRepositories(config.repositories, {
             ...(mutationSchedulers === undefined
               ? {}
               : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge }),
@@ -770,7 +784,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             store,
             now,
             signal,
-          })
+          }), [])
       if (signal.aborted)
         return
       results.forEach((result) => {
@@ -783,8 +797,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // restart is what kept a transient GitHub reject holding a review down
       // for a whole day.
       if (config.mutationsEnabled) {
-        store.resolveStaleTaskIncidents(now().toISOString())
-        const retried = store.retryRecoverableWorkerFailures(now().toISOString())
+        const retried = await guarded('Task recovery', () => {
+          store.resolveStaleTaskIncidents(now().toISOString())
+          return store.retryRecoverableWorkerFailures(now().toISOString())
+        }, 0)
         if (retried > 0)
           options.logger.info(`Requeued ${retried} tasks after recoverable failures.`)
       }
@@ -794,12 +810,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const routineFailures: string[] = []
       const syncedRoutines = !config.triggers.includes('routine')
         ? []
-        : await Promise.all(config.repositories
+        : await guarded('Routine spec sync', () => Promise.all(config.repositories
             .filter(repository => repository.enabled)
             .map(async repository => ({
               repository: repository.github,
               outcome: await syncRepositoryRoutines(repository, { github, store, now, signal }),
-            })))
+            }))), [])
       if (signal.aborted)
         return
       syncedRoutines.forEach(({ repository, outcome }) => {
@@ -828,19 +844,19 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // Candidate issues are filed on the same pass, a few at a time. A scan
       // that found twenty proposals must not open twenty issues at once.
       if (config.mutationsEnabled && config.triggers.includes('routine')) {
-        const filed = await candidateIssues.publishPending(signal)
+        const filed = await guarded('Candidate issue publication', () => candidateIssues.publishPending(signal), [])
         filed.forEach((result) => {
           if (result._tag === 'Ok')
             options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a routine proposal.`)
         })
         recordPassIncidents('candidate_issue', filed.flatMap(result => result._tag === 'Err' ? [result.error] : []))
 
-        const reported = await routineReports.publishPending(signal)
+        const reported = await guarded('Routine report publication', () => routineReports.publishPending(signal), [])
         recordPassIncidents('routine_report', reported.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       }
 
       if (config.mutationsEnabled && config.triggers.includes('routine')) {
-        const planned = planRoutineRuns({ now, store })
+        const planned = await guarded('Routine planning', () => planRoutineRuns({ now, store }), { opened: [], skipped: [] })
         planned.opened.forEach(run => options.logger.info(`${run.repository}: queued the ${run.name} routine for ${run.scheduledFor}.`))
         planned.skipped.forEach(run => options.logger.info(`${run.repository}: skipped the ${run.name} routine due at ${run.scheduledFor}.`))
       }
@@ -849,13 +865,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // machine skips it and never reads or writes another machine's work.
       if (!config.triggers.includes('github'))
         return
-      const reruns = await syncOpenReviewRerunRequests(config.repositories, {
+      const reruns = await guarded('Review rerun sync', () => syncOpenReviewRerunRequests(config.repositories, {
         allowedAuthors: config.github.allowedOwners,
         github,
         store,
         now,
         signal,
-      })
+      }), [])
       reruns.forEach((result) => {
         if (result._tag === 'Err') {
           options.logger.error(`Review rerun command: ${result.error}`)
@@ -865,18 +881,22 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }
       })
       recordPassIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-      const statusSync = await pullRequestStatuses.sync(store.getDashboardSnapshot(now().toISOString()), signal)
+      const statusSync = await guarded(
+        'Pull request status sync',
+        () => pullRequestStatuses.sync(store.getDashboardSnapshot(now().toISOString()), signal),
+        { checked: 0, errors: [] },
+      )
       statusSync.errors.forEach((error) => {
         options.logger.error(`Pull request status: ${error}`)
       })
       recordPassIncidents('pull_request_status', statusSync.errors)
       if (mutationSchedulers !== undefined) {
-        const stopped = await publishStoppedReviews({
+        const stopped = await guarded('Stopped review comments', () => publishStoppedReviews({
           github: workerGithub,
           now,
           repositories: config.repositories,
           store,
-        }, signal)
+        }, signal), { results: [], remaining: 0 })
         // The list size, every pass. A sweep that reports three outcomes while
         // its list holds a hundred rows is invisible without this line.
         if (stopped.results.length > 0 || stopped.remaining > 0) {
@@ -897,12 +917,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-        const settled = await refreshReviewGates({
+        const settled = await guarded('Review gate refresh', () => refreshReviewGates({
           github: workerGithub,
           now,
           repositories: config.repositories,
           store,
-        }, signal)
+        }, signal), [])
         settled.forEach((result) => {
           if (result._tag === 'Ok') {
             if (result.value._tag === 'PublicationQueued')
@@ -915,12 +935,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('review_gate_refresh', settled.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-        const positions = await publishQueuePositions({
+        const positions = await guarded('Queue position comments', () => publishQueuePositions({
           github: workerGithub,
           now,
           repositories: config.repositories,
           store,
-        }, signal)
+        }, signal), [])
         positions.forEach((result) => {
           if (result._tag === 'Ok') {
             options.logger.info(result.value._tag === 'CommentGone'
