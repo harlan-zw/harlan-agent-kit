@@ -37,7 +37,7 @@ skipped=()
 if should_skip eslint; then
   skipped+=("eslint")
 elif [ -f "node_modules/.bin/eslint" ]; then
-  run_check eslint ./node_modules/.bin/eslint . --fix
+  run_check eslint ./node_modules/.bin/eslint .
 else
   skipped+=("eslint")
 fi
