@@ -5877,6 +5877,10 @@ export function openJournalStore(
           return
         }
         if (input.subject.kind === 'pull_request') {
+          // Every mutation Task is claimable only on the subject's current
+          // Revision, so one left on an older Revision can never run again. It
+          // still holds the one active Task slot for its kind, which blocked
+          // the next Repair. Two sat Queued for a fortnight before this.
           supersedeTasks(
             database,
             subject.id,
@@ -5884,6 +5888,22 @@ export function openJournalStore(
             'A newer pull request Revision replaced this Repair.',
             revisionId,
             'review_fix',
+          )
+          supersedeTasks(
+            database,
+            subject.id,
+            input.observedAt,
+            'A newer pull request Revision replaced this Baseline repair.',
+            revisionId,
+            'baseline_repair',
+          )
+          supersedeTasks(
+            database,
+            subject.id,
+            input.observedAt,
+            'A newer pull request Revision replaced this conflict resolution.',
+            revisionId,
+            'resolve_conflict',
           )
         }
         if (input.subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, input.subject.author)) {
