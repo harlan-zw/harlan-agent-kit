@@ -34,7 +34,7 @@ async function onSubmit() {
 </script>
 
 <template>
-  <UForm :schema="schema" :state="state" class="space-y-4" @submit="onSubmit">
+  <UForm :schema="schema" :state="state" @submit="onSubmit" class="space-y-4">
     <UFormField label="Name" name="name">
       <UInput v-model="state.name" placeholder="Jane Doe" />
     </UFormField>
@@ -47,9 +47,7 @@ async function onSubmit() {
       <USelect v-model="state.role" :items="['admin', 'user', 'viewer']" />
     </UFormField>
 
-    <UButton type="submit" :loading="loading">
-      Create User
-    </UButton>
+    <UButton type="submit" :loading="loading">Create User</UButton>
   </UForm>
 </template>
 ```

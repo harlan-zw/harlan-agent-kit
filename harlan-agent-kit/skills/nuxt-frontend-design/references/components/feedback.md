@@ -52,15 +52,11 @@ const open = ref(false)
 </script>
 
 <template>
-  <UButton @click="open = true">
-    Open Settings
-  </UButton>
+  <UButton @click="open = true">Open Settings</UButton>
 
   <UModal v-model:open="open">
     <template #header>
-      <h3 class="text-lg font-semibold">
-        Settings
-      </h3>
+      <h3 class="text-lg font-semibold">Settings</h3>
     </template>
 
     <div class="p-6">
@@ -69,12 +65,8 @@ const open = ref(false)
 
     <template #footer>
       <div class="flex justify-end gap-3">
-        <UButton variant="outline" @click="open = false">
-          Cancel
-        </UButton>
-        <UButton @click="save">
-          Save
-        </UButton>
+        <UButton variant="outline" @click="open = false">Cancel</UButton>
+        <UButton @click="save">Save</UButton>
       </div>
     </template>
   </UModal>
@@ -118,8 +110,7 @@ const open = ref(false)
   [
     { label: 'Delete', icon: 'i-lucide-trash-2', color: 'error' }
   ]
-]"
->
+]">
   <UButton icon="i-lucide-ellipsis-vertical" variant="ghost" />
 </UDropdownMenu>
 ```

@@ -11,8 +11,7 @@ Sidebar, breadcrumbs, command palette, and header patterns for Nuxt UI.
   { label: 'Docs', to: '/docs' },
   { label: 'Pricing', to: '/pricing' },
   { label: 'Blog', to: '/blog' }
-]"
->
+]">
   <template #logo>
     <span class="font-display text-xl font-bold">AppName</span>
   </template>
@@ -28,8 +27,7 @@ Sidebar, breadcrumbs, command palette, and header patterns for Nuxt UI.
 ```vue
 <UHeader :ui="{
   root: 'sticky top-0 z-50 backdrop-blur-lg bg-default/80 border-b border-default'
-}"
-/>
+}" />
 ```
 
 ---
@@ -55,8 +53,7 @@ Sidebar, breadcrumbs, command palette, and header patterns for Nuxt UI.
   { label: 'Home', to: '/' },
   { label: 'Projects', to: '/projects' },
   { label: 'My Project' }
-]"
-/>
+]" />
 ```
 
 ---
@@ -92,8 +89,7 @@ For custom command palette:
   { label: 'Overview', slot: 'overview', icon: 'i-lucide-layout-grid' },
   { label: 'Analytics', slot: 'analytics', icon: 'i-lucide-bar-chart-3' },
   { label: 'Settings', slot: 'settings', icon: 'i-lucide-settings' }
-]"
->
+]">
   <template #overview>...</template>
   <template #analytics>...</template>
   <template #settings>...</template>
