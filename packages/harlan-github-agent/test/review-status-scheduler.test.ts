@@ -66,6 +66,7 @@ describe('review status scheduler', () => {
     const test = stagedTerminalStatus()
     const bodies: string[] = []
     const failures: string[] = []
+    const published: string[] = []
     const scheduler = createReviewStatusScheduler({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
@@ -80,6 +81,7 @@ describe('review status scheduler', () => {
       now: () => new Date('2026-08-13T01:01:30.000Z'),
       onError: (error) => { throw error },
       onFailure: (_repository, _number, reason) => failures.push(reason),
+      onPublished: (repository, number) => published.push(`${repository}#${number}`),
       store: test.store,
       workerId: 'status-publisher-1',
     })
@@ -88,6 +90,8 @@ describe('review status scheduler', () => {
 
     expect(bodies).toEqual(['<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY · 96/100'])
     expect(failures).toEqual([])
+    // The success signal an Incident raised here needs to be resolved by.
+    expect(published).toEqual([`harlan-zw/example#${test.pullRequest.number}`])
     expect(test.store.claimNextTerminalReviewStatus('status-publisher-2', '2026-08-13T01:02:00.000Z', 60_000)).toBeNull()
   })
 
@@ -95,6 +99,7 @@ describe('review status scheduler', () => {
     const test = stagedTerminalStatus()
     let writes = 0
     const failures: string[] = []
+    const published: string[] = []
     const scheduler = createReviewStatusScheduler({
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
@@ -111,6 +116,7 @@ describe('review status scheduler', () => {
       now: () => new Date('2026-08-13T01:01:30.000Z'),
       onError: (error) => { throw error },
       onFailure: (_repository, _number, reason) => failures.push(reason),
+      onPublished: (repository, number) => published.push(`${repository}#${number}`),
       store: test.store,
       workerId: 'status-publisher-1',
     })
@@ -143,6 +149,7 @@ describe('review status scheduler', () => {
       now: () => new Date('2026-08-13T01:01:30.000Z'),
       onError: (error) => { throw error },
       onFailure: () => undefined,
+      onPublished: () => undefined,
       store: test.store,
       workerId: 'status-publisher-1',
     })
