@@ -261,6 +261,27 @@ EOF
 
 Keep it to the checks a reviewer would otherwise have to repeat. Prose lines, not ticked boxes.
 
+### Screenshots
+
+A visible change earns a picture, in that same comment. GitHub only accepts a pasted image through the web UI, so upload the file first and embed the URL it prints:
+
+```bash
+"${CLAUDE_SKILL_DIR}/../../scripts/pr-asset.sh" .playwright/after.png
+# https://pr.harlanzw.com/<repo>/<branch>/after.png
+```
+
+The key is `<repo>/<branch>/<filename>`, so a rerun on the same branch replaces the image and the comment keeps working. The edge caches it for 5 minutes, so a replaced image can take that long to show. `~/.config/harlan-agent-kit/pr-assets.env` holds the bucket and its public host. Without that file the script exits 2 and says what is missing; post the comment without the image rather than blocking the PR.
+
+Take the picture before you need it: [nuxt-frontend-review](../nuxt-frontend-review/SKILL.md) already captures the running page. Two images beat one, labelled `Before` and `After`:
+
+```markdown
+| Before | After |
+| --- | --- |
+| ![before](https://pr.harlanzw.com/nuxt-seo/fix-og-image/before.png) | ![after](https://pr.harlanzw.com/nuxt-seo/fix-og-image/after.png) |
+```
+
+Only for a change someone can see: a page, a component, a CLI frame, a rendered email. Never a screenshot of passing tests or a green terminal.
+
 ## Step 6: Monitor CI & Review Comments
 
 After creating or updating a PR, enter a **fix loop** -- keep watching until CI is green and all review comments are addressed.
