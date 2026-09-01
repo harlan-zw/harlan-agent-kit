@@ -129,6 +129,7 @@ export function createCandidateIssueController(options: CandidateIssueController
               fence: command.fence,
               at: options.now().toISOString(),
               reason: existing.error.message,
+              status: existing.error.status,
             })
             results.push(err(`${command.repository}: ${existing.error.message}`))
           }
@@ -163,6 +164,7 @@ export function createCandidateIssueController(options: CandidateIssueController
               fence: command.fence,
               at: options.now().toISOString(),
               reason: created.error.message,
+              status: created.error.status,
             })
             results.push(err(`${command.repository}: ${created.error.message}`))
           }

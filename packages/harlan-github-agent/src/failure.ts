@@ -270,6 +270,11 @@ export function classifyFailure(signal: FailureSignal): FailureClass {
     return { _tag: 'Transient', kind: 'agent_provider' }
   if (signal.status === 429 || matches(rateLimitPatterns, message))
     return { _tag: 'Transient', kind: 'rate_limit' }
+  // GitHub answers 410 Gone when the repository switched the feature off, such
+  // as issues on a repository that accepts none. No retry turns it back on, and
+  // the wording is GitHub's to change, so the status decides and not the text.
+  if (signal.status === 410)
+    return { _tag: 'Permanent', kind: 'policy' }
   if (signal.status !== undefined && signal.status >= 500)
     return { _tag: 'Transient', kind: 'github_unavailable' }
   if (matches(githubUnavailablePatterns, message))

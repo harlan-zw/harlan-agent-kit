@@ -7,7 +7,7 @@ import { err, ok } from './result.ts'
 export interface RunningLabelSweepOptions {
   github: Pick<GitHubAgentSource, 'clearRunningLabel' | 'listRunningLabelledItems'>
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listRunningTaskItems'>
+  store: Pick<JournalStore, 'listRunningTaskItems' | 'mayWriteRepository'>
 }
 
 export interface RunningLabelSweepOutcome {
@@ -53,8 +53,13 @@ export async function clearAbandonedRunningLabels(
     return ok({ repository: mapping.github, cleared })
   }
 
+  // A repository the controller may not write to cannot hold a label this
+  // service wrote, so asking about it only reports the quarantine as a failure
+  // on every start. Two quarantined repositories filed that Incident for days.
   const results: Array<Result<RunningLabelSweepOutcome, string>> = []
-  for (const mapping of options.repositories.filter(candidate => candidate.enabled))
+  const writable = options.repositories.filter((candidate: RepositoryMapping) =>
+    candidate.enabled && options.store.mayWriteRepository(candidate.github))
+  for (const mapping of writable)
     results.push(await sweep(mapping))
   return results
 }
