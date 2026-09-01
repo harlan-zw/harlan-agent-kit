@@ -41,7 +41,9 @@ Components:
 <template>
   <div>
     <LandingHero>
-      <template #visual><HeroVisual /></template>
+      <template #visual>
+        <HeroVisual />
+      </template>
     </LandingHero>
     <TrustBar :logos="logos" />
     <FeaturesGrid :features="features" />

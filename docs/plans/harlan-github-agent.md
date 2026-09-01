@@ -455,7 +455,7 @@ If CI or deployment fails because of the merge, create a minimal repair from the
 
 Direct default branch repair requires repository owner equality, a canonical checkout below `/home/harlan/sites`, a current writer fence, and a normal push.
 
-Use `chore: <specific problem>` for CI repairs. Never force push or bypass protection. Create a repair PR when protection rejects the push.
+Use `chore: <specific problem>`{lang="html"} for CI repairs. Never force push or bypass protection. Create a repair PR when protection rejects the push.
 
 After the matched deployment succeeds, run HTTP and browser smoke checks against configured production paths.
 
