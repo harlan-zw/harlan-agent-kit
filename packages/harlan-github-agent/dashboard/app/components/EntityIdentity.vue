@@ -2,7 +2,7 @@
 import { avatarUrl } from '../utils/dashboard.ts'
 
 /**
- * Who opened it, what it is, and where it lives.
+ * Who opened it, where it lives, what it is.
  *
  * The avatar leads because author identity is what separates work that proceeds
  * on its own from work that waits for Harlan.
@@ -26,12 +26,15 @@ const {
 }>()
 
 const titleClass = {
-  sm: 'text-sm font-medium',
-  md: 'text-sm font-medium',
-  lg: 'text-base font-medium',
+  sm: 'text-sm font-medium line-clamp-1',
+  md: 'text-sm font-medium line-clamp-2',
+  lg: 'text-base font-medium line-clamp-2',
 }
 
 const avatarSize = { sm: 'xs', md: 'sm', lg: 'md' } as const
+
+const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-git-pull-request-16' }
+const kindLabel = { issue: 'Issue', pull_request: 'Pull request' }
 </script>
 
 <template>
@@ -46,15 +49,15 @@ const avatarSize = { sm: 'xs', md: 'sm', lg: 'md' } as const
       <UAvatar :src="avatarUrl(author)" :alt="`@${author}`" :size="avatarSize[size]" />
     </a>
     <div class="min-w-0 flex-1">
-      <a :href="url" target="_blank" rel="noreferrer" class="entity-link line-clamp-2" :class="titleClass[size]">
+      <p class="flex items-center gap-1 font-mono text-sm text-dimmed">
+        <UIcon :name="kindIcon[kind]" class="size-3.5 shrink-0" aria-hidden="true" />
+        <span class="sr-only">{{ kindLabel[kind] }}</span>
+        <a :href="url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ repository }}#{{ number }}</a>
+      </p>
+      <a :href="url" target="_blank" rel="noreferrer" class="entity-link mt-0.5 block text-highlighted" :class="titleClass[size]">
         {{ title }}
         <span class="sr-only"> on GitHub</span>
       </a>
-      <p class="mt-0.5 truncate font-mono text-xs text-dimmed">
-        <a :href="`https://github.com/${repository}`" target="_blank" rel="noreferrer" class="entity-link">{{ repository }}</a>
-        <span aria-hidden="true"> · </span>
-        <a :href="url" target="_blank" rel="noreferrer" class="entity-link">{{ kind === 'issue' ? 'Issue' : 'PR' }} #{{ number }}</a>
-      </p>
     </div>
   </div>
 </template>

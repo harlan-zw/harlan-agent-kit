@@ -6,22 +6,29 @@ import {
   activeProviderCircuits,
   agentProfileState,
   agentStartState,
+  approvalActionLabel,
   approvalConsequence,
+  boardColumns,
   buildHistory,
+  cancelConsequence,
+  cardActions,
+  cardStateLine,
+  columnEmptyReason,
   decisionEntries,
+  dismissConsequence,
   incidentEntries,
+  incidentKindLabel,
   incidentRecoveryLabel,
   incidentScopeLabel,
   incidentUrl,
   isIssueWorkThrottled,
   isProgressStalled,
   isSnapshotStale,
+  presentWorkKinds,
   providerCapacityPresentation,
+
   queuedEntries,
-  queueDetail,
-  queueStateLabel,
   queueWork,
-  recentlyFinished,
   repositoryState,
   repositoryWritesControl,
   reviewOutcomeDetail,
@@ -30,6 +37,7 @@ import {
   routineReportPending,
   routineRunPresentation,
   routineTrackingUrl,
+  runningPhaseLine,
   scheduledRoutineRecords,
   stalledLabel,
   systemState,
@@ -219,34 +227,6 @@ describe('buildHistory', () => {
   })
 })
 
-describe('recentlyFinished', () => {
-  it('keeps the three newest finished records for the System pane', () => {
-    const tasks = [
-      triageTask,
-      { ...triageTask, id: 'task-2', updatedAt: '2026-08-14T11:46:00.000Z' },
-      { ...triageTask, id: 'task-3', updatedAt: '2026-08-14T11:47:00.000Z' },
-      { ...triageTask, id: 'task-4', updatedAt: '2026-08-14T11:48:00.000Z' },
-    ]
-
-    expect(recentlyFinished([], tasks).map(record => record.key)).toEqual([
-      'task-4',
-      'task-3',
-      'task-2',
-    ])
-  })
-
-  it('keeps superseded work in History without letting it crowd out System outcomes', () => {
-    const superseded: DashboardTask = {
-      ...triageTask,
-      id: 'superseded',
-      updatedAt: '2026-08-14T11:59:00.000Z',
-      state: { _tag: 'Superseded', reason: 'A newer issue state replaced this Task.' },
-    }
-
-    expect(recentlyFinished([], [triageTask, superseded]).map(record => record.key)).toEqual(['task-triage'])
-  })
-})
-
 describe('history outcome visibility', () => {
   it('does not promise a Repair before its Task exists', () => {
     const blocked = reviewAgent({
@@ -376,48 +356,6 @@ describe('decisionEntries', () => {
 
 const running = { agentStart: { _tag: 'Available' as const }, openPullRequests: 0, maxOpenPullRequests: 8, selectionMode: 'auto' as const }
 
-describe('queue copy', () => {
-  it('says agents are paused rather than queued when the engine is paused', () => {
-    const entry = queueEntry()
-    expect(queueStateLabel(entry, { ...running, agentStart: { _tag: 'Paused' } })).toBe('Agents paused')
-    expect(queueStateLabel(entry, { ...running, agentStart: { _tag: 'WritesDisabled' } })).toBe('Agents disabled')
-    expect(queueStateLabel(entry, running)).toBe('Queued')
-  })
-
-  it('explains how to start work when Pause is on', () => {
-    const entry = queueEntry()
-    expect(queueDetail(entry, { ...running, agentStart: { _tag: 'Paused' } }))
-      .toBe('Pause is on. Select Resume to start this Task.')
-  })
-
-  it('explains how to enable work when GitHub writes are off', () => {
-    const entry = queueEntry()
-    expect(queueDetail(entry, { ...running, agentStart: { _tag: 'WritesDisabled' } }))
-      .toBe('GitHub writes are off. Enable them in the configuration, then restart the service.')
-  })
-
-  it('explains when every automatic provider has reached its Reserve', () => {
-    const entry = queueEntry()
-    const context = { ...running, agentStart: { _tag: 'ReserveReached' as const } }
-
-    expect(queueStateLabel(entry, context)).toBe('Reserve reached')
-    expect(queueDetail(entry, context)).toBe('Every automatic Agent provider reached its Reserve. Work starts after a limit resets.')
-  })
-
-  it('explains when provider limits could not load', () => {
-    const entry = queueEntry()
-    const context = { ...running, agentStart: { _tag: 'CapacityUnavailable' as const } }
-
-    expect(queueStateLabel(entry, context)).toBe('Agent provider unavailable')
-    expect(queueDetail(entry, context)).toBe('Agent provider limits could not load. The controller will retry.')
-  })
-
-  it('reports the reason a subject needs attention', () => {
-    const entry = queueEntry({ state: { _tag: 'ActionRequired', reason: 'The fork branch is not writable.' } })
-    expect(queueDetail(entry, running)).toBe('The fork branch is not writable.')
-  })
-})
-
 describe('isIssueWorkThrottled', () => {
   const issueWork = queueEntry({ state: { _tag: 'Queued', work: 'issue_work' } })
 
@@ -439,8 +377,179 @@ describe('isIssueWorkThrottled', () => {
   })
 
   it('names the limit and the count, so the number is actionable', () => {
-    expect(queueDetail(issueWork, { ...running, openPullRequests: 17 }))
-      .toBe('Issue work stops above 8 open pull requests, and 17 are open. Merge or close some to start it.')
+    expect(cardStateLine(issueWork, dashboardSnapshot({ agentStart: { _tag: 'Available' }, openPullRequests: 17 }), now))
+      .toEqual({ text: 'Issue work stops above 8 open pull requests, and 17 are open.', tone: 'muted' })
+  })
+})
+
+describe('cardStateLine', () => {
+  const available = dashboardSnapshot({ agentStart: { _tag: 'Available' } })
+
+  it('names why a pull request needs Approval, by Selection mode', () => {
+    const entry = queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } })
+    expect(cardStateLine(entry, available, now)).toEqual({ text: 'Outside contributor. Approval starts Review.', tone: 'warning' })
+    expect(cardStateLine(entry, dashboardSnapshot({ selectionMode: 'manual' }), now).text).toBe('Manual selection. Approval starts Review.')
+  })
+
+  it('names Issue work for an issue Approval', () => {
+    const entry = queueEntry({ kind: 'issue', state: { _tag: 'AwaitingApproval', kind: 'issue_work' } })
+    expect(cardStateLine(entry, available, now).text).toBe('Outside contributor. Approval starts Issue work.')
+  })
+
+  it('passes the reason through for Action required and Pending, with the right tone', () => {
+    expect(cardStateLine(queueEntry({ state: { _tag: 'ActionRequired', reason: 'The fork branch is not writable.' } }), available, now))
+      .toEqual({ text: 'The fork branch is not writable.', tone: 'error' })
+    expect(cardStateLine(queueEntry({ state: { _tag: 'Pending', reason: 'Blocked on a draft.' } }), available, now))
+      .toEqual({ text: 'Blocked on a draft.', tone: 'muted' })
+  })
+
+  it.each([
+    [{ _tag: 'Available' } as const, 'Starts when an agent is free.'],
+    [{ _tag: 'Paused' } as const, 'Paused. Nothing starts until you select Resume.'],
+    [{ _tag: 'WritesDisabled' } as const, 'GitHub writes are off, so no agent will start.'],
+    [{ _tag: 'ReserveReached' } as const, 'Every automatic Agent provider reached its Reserve.'],
+    [{ _tag: 'CapacityUnavailable' } as const, 'Agent provider limits could not load. The controller will retry.'],
+    [{ _tag: 'RestartRequested' } as const, 'A Restart request is finishing active work.'],
+  ])('tells queued work what holds it: %o', (agentStart, text) => {
+    expect(cardStateLine(queueEntry(), dashboardSnapshot({ agentStart }), now).text).toBe(text)
+  })
+
+  it('warns once a starting Task has reported nothing for the stall threshold', () => {
+    const entry = queueEntry({ state: { _tag: 'Active', work: 'issue_work' }, updatedAt: '2026-08-14T11:59:30.000Z' })
+    expect(cardStateLine(entry, available, now)).toEqual({ text: 'Starting.', tone: 'muted' })
+    expect(cardStateLine({ ...entry, updatedAt: '2026-08-14T11:55:00.000Z' }, available, now))
+      .toEqual({ text: 'Starting for 5m with nothing reported.', tone: 'warning' })
+  })
+
+  it('never names the work kind, which the chip on the same face already shows', () => {
+    const queued = cardStateLine(queueEntry({ state: { _tag: 'Queued', work: 'review_fix' } }), available, now).text
+    expect(queued).not.toMatch(/repair/i)
+  })
+})
+
+describe('incidentKindLabel', () => {
+  const base = {
+    id: 'incident-1',
+    scope: { _tag: 'Task' as const, taskId: 't', repository: 'harlan-zw/nuxt-seo', itemNumber: 412 },
+    severity: 'warning' as const,
+    message: 'The pull request changed before the review completed.',
+    recovery: { _tag: 'Retrying' as const, attempt: 1, nextAttemptAt: '2026-08-14T12:05:00.000Z' },
+    occurrences: 1,
+    firstSeenAt: '2026-08-14T11:00:00.000Z',
+    lastSeenAt: '2026-08-14T11:58:00.000Z',
+  }
+
+  it('names which GitHub state moved, never an Item', () => {
+    expect(incidentKindLabel({ ...base, kind: 'subject_changed', operation: 'adversarial_review' })).toBe('Head commit moved')
+    expect(incidentKindLabel({ ...base, kind: 'subject_changed', operation: 'issue_work' })).toBe('Issue changed')
+    expect(incidentKindLabel({ ...base, kind: 'github_access', operation: 'poll' })).toBe('GitHub access')
+  })
+})
+
+describe('runningPhaseLine', () => {
+  it('drops the phase when it only repeats the chip', () => {
+    expect(runningPhaseLine(activeAgent({ role: 'review_fix', progress: { percent: 40, label: 'Repair' } }))).toBeUndefined()
+    expect(runningPhaseLine(activeAgent({ role: 'adversarial_review', progress: { percent: 40, label: 'review' } }))).toBeUndefined()
+  })
+
+  it('keeps a phase that says something the chip does not', () => {
+    expect(runningPhaseLine(activeAgent({ role: 'review_fix', progress: { percent: 40, label: 'Running tests and checks' } }))).toBe('Running tests and checks')
+  })
+})
+
+describe('columnEmptyReason', () => {
+  it('keeps the Needs you slot with one line', () => {
+    expect(columnEmptyReason('needsYou', dashboardSnapshot())).toEqual({ _tag: 'Plain', text: 'Nothing needs you.' })
+  })
+
+  it('offers Resume only when Pause is the cause', () => {
+    expect(columnEmptyReason('upNext', dashboardSnapshot({ agentStart: { _tag: 'Paused' } })))
+      .toEqual({ _tag: 'Paused', text: 'Paused. Nothing will start.' })
+    expect(columnEmptyReason('upNext', dashboardSnapshot({ agentStart: { _tag: 'WritesDisabled' } })))
+      .toEqual({ _tag: 'Plain', text: 'GitHub writes are off, so no agent will start.' })
+  })
+
+  it('points at the Needs you column in Manual when approvals are waiting', () => {
+    const snapshot = dashboardSnapshot({
+      agentStart: { _tag: 'Available' },
+      selectionMode: 'manual',
+      queue: [queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } })],
+    })
+    expect(columnEmptyReason('upNext', snapshot).text).toBe('Manual selection. Approve a pull request to queue it.')
+    expect(columnEmptyReason('upNext', { ...snapshot, queue: [] }).text).toBe('Nothing queued.')
+  })
+})
+
+describe('boardColumns', () => {
+  const queue = [
+    queueEntry({ number: 1, state: { _tag: 'AwaitingApproval', kind: 'review' } }),
+    queueEntry({ number: 2, state: { _tag: 'ActionRequired', reason: 'Not writable.' } }),
+    queueEntry({ number: 3, state: { _tag: 'Queued', work: 'adversarial_review' } }),
+    queueEntry({ number: 4, state: { _tag: 'Queued', work: 'issue_work' } }),
+    queueEntry({ number: 5, state: { _tag: 'Pending', reason: 'Blocked on a draft.' } }),
+    queueEntry({ number: 412, state: { _tag: 'Active', work: 'adversarial_review' } }),
+    queueEntry({ number: 6, state: { _tag: 'Active', work: 'review_fix' } }),
+  ]
+
+  it('places every entry in exactly one column, decided by state', () => {
+    const columns = boardColumns(dashboardSnapshot({ agentStart: { _tag: 'Available' }, openPullRequests: 17, queue, agents: [activeAgent()] }))
+    const numbers = (cards: ReturnType<typeof boardColumns>['queued']): Array<number | string> =>
+      cards.map(card => card._tag === 'Running' ? card.agent.itemNumber : card._tag === 'Done' ? card.key : card.entry.number)
+    expect(numbers(columns.needsYou)).toEqual([1, 2])
+    expect(numbers(columns.queued)).toEqual([3])
+    expect(numbers(columns.waiting)).toEqual([4, 5])
+    expect(columns.running.map(card => card._tag)).toEqual(['Running', 'Starting'])
+    expect(numbers(columns.running)).toEqual([412, 6])
+  })
+
+  it('holds eight Done cards and reports the full total', () => {
+    const tasks = Array.from({ length: 10 }, (_, index) => ({ ...triageTask, id: `task-${index}` }))
+    const columns = boardColumns(dashboardSnapshot({ tasks }))
+    expect(columns.done).toHaveLength(8)
+    expect(columns.doneTotal).toBe(10)
+  })
+
+  it('filters every column by work kind', () => {
+    const columns = boardColumns(dashboardSnapshot({ agentStart: { _tag: 'Available' }, queue, agents: [activeAgent()] }), 'issue_work')
+    expect(columns.needsYou).toEqual([])
+    expect(columns.queued.map(card => card._tag === 'Queued' && card.entry.number)).toEqual([4])
+    expect(columns.running).toEqual([])
+  })
+
+  it('only offers a work kind filter for kinds on the board', () => {
+    const columns = boardColumns(dashboardSnapshot({ agentStart: { _tag: 'Available' }, queue: queue.slice(0, 1) }))
+    expect(presentWorkKinds(columns).map(([role]) => role)).toEqual(['adversarial_review'])
+  })
+})
+
+describe('card actions', () => {
+  const needsYou = { _tag: 'NeedsYou' as const, key: 'a', entry: queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } }) }
+
+  it('puts Dismiss last and offers Cancel only with a live Task', () => {
+    expect(cardActions(needsYou, { canRunReview: false, hasTask: false })).toEqual(['open', 'dismiss'])
+    expect(cardActions(needsYou, { canRunReview: false, hasTask: true })).toEqual(['open', 'cancel', 'dismiss'])
+  })
+
+  it('offers Rerun review only when the controller would accept it', () => {
+    const waiting = { _tag: 'Waiting' as const, key: 'w', entry: queueEntry({ state: { _tag: 'Pending', reason: 'Approved and waiting.' } }) }
+    expect(cardActions(waiting, { canRunReview: true, hasTask: false })).toEqual(['open', 'rerun', 'dismiss'])
+  })
+
+  it('lets a Done card only open on GitHub', () => {
+    const done = { _tag: 'Done' as const, key: 'd', record: { _tag: 'Task' as const, key: 'd', at: triageTask.updatedAt, task: triageTask } }
+    expect(cardActions(done, { canRunReview: true, hasTask: true })).toEqual(['open'])
+  })
+
+  it('names the primary action by what Approval starts', () => {
+    expect(approvalActionLabel(queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'review' } }))).toBe('Review and repair')
+    expect(approvalActionLabel(queueEntry({ kind: 'issue', state: { _tag: 'AwaitingApproval', kind: 'issue_work' } }))).toBe('Approve')
+    expect(approvalActionLabel(queueEntry({ state: { _tag: 'ActionRequired', reason: 'Not writable.' } }))).toBeUndefined()
+  })
+
+  it('states the consequence before the verb', () => {
+    expect(dismissConsequence('pull_request')).toBe('This pull request will never run again, and any running work on it stops now.')
+    expect(cancelConsequence('review_fix')).toBe('Repair stops now.')
+    expect(cancelConsequence(undefined)).toBe('This task stops now.')
   })
 })
 
@@ -516,7 +625,7 @@ describe('activeAgentActivity', () => {
     })
   })
 
-  it('shows the percentage the Agent reported', () => {
+  it('shows the phase the Agent reported and never its percentage', () => {
     expect(activeAgentActivity(activeAgent({
       activity: [{
         _tag: 'Progress',
@@ -526,7 +635,7 @@ describe('activeAgentActivity', () => {
       }],
     }))).toEqual({
       at: '2026-08-14T11:59:00.000Z',
-      text: '25% · next-step (waitlist flow read).',
+      text: 'next-step (waitlist flow read).',
       tone: 'muted',
     })
   })
@@ -619,7 +728,7 @@ describe('incident pane', () => {
   })
 
   it('says what the controller will do next', () => {
-    expect(incidentRecoveryLabel(incident())).toBe('Retrying · attempt 2')
+    expect(incidentRecoveryLabel(incident())).toBe('Retrying · retry 2')
     expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'Exhausted' } }))).toBe('Retries exhausted')
     expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'ActionRequired' } }))).toBe('Action required')
   })

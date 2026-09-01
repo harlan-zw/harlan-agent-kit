@@ -44,7 +44,7 @@
     "yaml": "catalog:"
   },
   "devDependencies": {
-    "@iconify-json/lucide": "catalog:",
+    "@iconify-json/octicon": "catalog:",
     "@iconify-json/simple-icons": "catalog:",
     "@nuxt/fonts": "catalog:",
     "@nuxt/icon": "catalog:",

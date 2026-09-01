@@ -11,7 +11,7 @@ trustPolicyIgnoreAfter: 262800
 
 catalog:
   '@antfu/eslint-config': ^9.3.0
-  '@iconify-json/lucide': ^1.2.123
+  '@iconify-json/octicon': ^1.2.20
   '@iconify-json/simple-icons': ^1.2.93
   '@nuxt/fonts': ^0.14.0
   '@nuxt/icon': ^2.5.0

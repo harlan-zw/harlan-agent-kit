@@ -9,8 +9,7 @@ const chip = computed(() => workChip(work))
 </script>
 
 <template>
-  <span class="inline-flex items-center gap-1 rounded-sm border border-default bg-muted/60 px-1.5 py-0.5 text-xs font-medium text-toned">
-    <UIcon :name="chip.icon" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
+  <UBadge variant="outline" color="neutral" :icon="chip.icon" class="text-toned" :ui="{ leadingIcon: 'text-dimmed' }">
     {{ chip.label }}
-  </span>
+  </UBadge>
 </template>

@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import type { StatsSnapshot } from '../../../src/stats.ts'
-import { statusClass } from '../utils/dashboard.ts'
-import { statsDateRange, statsRequestRange } from '../utils/stats.ts'
+import { activeStatsPreset, coverageText, hasStatsResults, statsDateRange, statsPresets, statsRequestRange } from '../utils/stats.ts'
 import StatsDailyChart from './_StatsDailyChart.vue'
 import StatsOutcomeChart from './_StatsOutcomeChart.vue'
 import StatsWorkTable from './_StatsWorkTable.vue'
 
+/**
+ * What the work produced over a range. Two small charts and one table.
+ *
+ * The URL query is the source of truth for the range: the form writes it,
+ * and every change of it refetches. The page never scores or ranks.
+ */
 const route = useRoute()
 const from = ref('')
 const to = ref('')
@@ -17,19 +22,11 @@ const loadMessage = ref<string>()
 const mounted = ref(false)
 const currentDate = shallowRef<Date>()
 
-const presets = [7, 30, 90] as const
-
-const activePreset = computed(() => presets.find((days) => {
-  if (currentDate.value === undefined)
-    return false
-  const range = statsDateRange(days, currentDate.value)
-  return range.from === from.value && range.to === to.value
-}))
-
-const hasResults = computed(() => snapshot.value !== undefined && (
-  Object.values(snapshot.value.summary).some(value => value.value > 0)
-  || snapshot.value.work.some(entry => entry.runs > 0)
-))
+const activePreset = computed(() => currentDate.value === undefined
+  ? undefined
+  : activeStatsPreset({ from: from.value, to: to.value }, currentDate.value))
+const hasResults = computed(() => snapshot.value !== undefined && hasStatsResults(snapshot.value))
+const coverageLine = computed(() => snapshot.value === undefined ? undefined : coverageText(snapshot.value.coverage.pullRequestTriage))
 
 function queryDate(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
@@ -55,7 +52,7 @@ async function loadStats(): Promise<void> {
     snapshot.value = value
   }).catch((cause: unknown) => {
     snapshot.value = undefined
-    loadMessage.value = cause instanceof Error ? cause.message : 'Stats did not load. Retry.'
+    loadMessage.value = cause instanceof Error ? cause.message : 'Stats did not load.'
   }).finally(() => {
     pending.value = false
   })
@@ -67,20 +64,20 @@ async function setRouteRange(nextFrom: string, nextTo: string): Promise<void> {
     rangeMessage.value = range.message
     return
   }
+  rangeMessage.value = undefined
   from.value = nextFrom
   to.value = nextTo
-  const nextQuery = { ...route.query, from: nextFrom, to: nextTo }
   if (route.query.from === nextFrom && route.query.to === nextTo)
     await loadStats()
   else
-    await navigateTo({ path: '/stats', query: nextQuery })
+    await navigateTo({ path: '/stats', query: { ...route.query, from: nextFrom, to: nextTo } })
 }
 
 async function applyRange(): Promise<void> {
   await setRouteRange(from.value, to.value)
 }
 
-async function choosePreset(days: typeof presets[number]): Promise<void> {
+async function choosePreset(days: number): Promise<void> {
   const range = statsDateRange(days, new Date())
   await setRouteRange(range.from, range.to)
 }
@@ -91,7 +88,7 @@ async function initializeStats(): Promise<void> {
   const routeFrom = queryDate(route.query.from)
   const routeTo = queryDate(route.query.to)
   if (routeFrom === undefined || routeTo === undefined) {
-    const range = statsDateRange(30, new Date())
+    const range = statsDateRange(30, currentDate.value)
     from.value = range.from
     to.value = range.to
     await navigateTo({ path: '/stats', query: { ...route.query, ...range }, replace: true })
@@ -120,95 +117,83 @@ watch(() => [route.query.from, route.query.to], async ([nextFrom, nextTo]) => {
   await loadStats()
 })
 
+usePageTitle('Stats')
 useHead({
-  title: 'Stats · Harlan GitHub Agent',
-  meta: [{ name: 'description', content: 'Completed agent work and outcomes for one date range.' }],
+  meta: [{ name: 'description', content: 'What the agents produced over one date range.' }],
 })
 </script>
 
 <template>
-  <div>
-    <header class="grid gap-5 border-b border-default pb-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-      <div>
-        <h1 class="text-3xl font-semibold tracking-tight">
-          Stats
-        </h1>
-        <p v-if="snapshot" class="mt-2 text-sm text-muted">
-          <span class="font-mono text-2xl font-medium text-default">{{ snapshot.summary.changedPullRequests.value }}</span>
-          pull request{{ snapshot.summary.changedPullRequests.value === 1 ? '' : 's' }} changed in this period.
-        </p>
-        <p v-else class="mt-2 text-sm text-muted">
-          Completed work and outcomes from the Journal.
-        </p>
-      </div>
+  <div class="flex flex-col gap-6">
+    <ColumnHeading label="Stats" :level="1" />
 
-      <form class="flex min-w-0 flex-wrap items-end gap-2" @submit.prevent="applyRange">
-        <label class="grid gap-1 text-sm text-dimmed sm:text-xs" for="stats-from">
-          From
-          <UInput id="stats-from" v-model="from" type="date" required />
+    <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+      <form class="flex flex-wrap items-center gap-2" aria-label="Date range" @submit.prevent="applyRange">
+        <label class="flex items-center gap-2">
+          <span class="field-label">From</span>
+          <UInput v-model="from" type="date" size="md" required class="w-38" />
         </label>
-        <label class="grid gap-1 text-sm text-dimmed sm:text-xs" for="stats-to">
-          To
-          <UInput id="stats-to" v-model="to" type="date" required />
+        <label class="flex items-center gap-2">
+          <span class="field-label">To</span>
+          <UInput v-model="to" type="date" size="md" required class="w-38" />
         </label>
-        <div class="flex items-center gap-1" aria-label="Date range presets">
+
+        <div class="flex items-center gap-0.5" role="group" aria-label="Presets">
           <UButton
-            v-for="days in presets"
+            v-for="days in statsPresets"
             :key="days"
             type="button"
-            size="md"
-            :color="activePreset === days ? 'primary' : 'neutral'"
-            :variant="activePreset === days ? 'soft' : 'ghost'"
-            :class="activePreset === days ? statusClass('primary') : undefined"
+            size="xs"
+            color="neutral"
+            :variant="activePreset === days ? 'outline' : 'ghost'"
             :aria-pressed="activePreset === days"
+            :aria-label="`${days} days`"
+            class="font-mono"
             @click="choosePreset(days)"
           >
-            {{ days }} days
+            {{ days }}
           </UButton>
         </div>
-        <UButton type="submit" color="neutral" variant="soft" :loading="pending">
+        <UButton type="submit" color="neutral" variant="outline" size="sm" :loading="pending">
           Apply
         </UButton>
       </form>
-    </header>
-
-    <p v-if="rangeMessage" class="mt-4 status-error text-sm" role="alert">
-      {{ rangeMessage }}
-    </p>
-    <div v-if="loadMessage" class="mt-4 flex flex-wrap items-center gap-3 text-sm" role="alert">
-      <span class="status-error">{{ loadMessage }}</span>
-      <UButton size="sm" color="error" variant="soft" @click="loadStats">
-        Retry
-      </UButton>
     </div>
 
-    <div v-if="pending && !snapshot" class="grid gap-8 py-10" role="status" aria-label="Loading Stats">
-      <USkeleton class="h-44 w-full" />
-      <USkeleton class="h-56 w-full" />
+    <p v-if="rangeMessage" class="status-error text-sm" role="alert">
+      {{ rangeMessage }}
+    </p>
+    <p v-if="loadMessage" class="flex flex-wrap items-center gap-3 text-sm" role="alert">
+      <span class="status-error">{{ loadMessage }}</span>
+      <UButton size="xs" color="neutral" variant="outline" @click="loadStats">
+        Retry
+      </UButton>
+    </p>
+    <p v-if="coverageLine" class="text-sm text-muted" role="status">
+      {{ coverageLine }}
+    </p>
+
+    <div v-if="pending" class="grid gap-10 md:grid-cols-2" role="status" aria-label="Loading Stats">
+      <USkeleton class="h-48 w-full" />
+      <USkeleton class="h-48 w-full" />
+      <USkeleton class="h-40 w-full md:col-span-2" />
     </div>
 
     <template v-else-if="snapshot">
-      <div v-if="snapshot.coverage.pullRequestTriage._tag === 'Partial'" class="mt-6 border-l-2 border-warning pl-4 text-sm status-warning" role="status">
-        Pull request triage recording started {{ new Date(snapshot.coverage.pullRequestTriage.startedAt).toLocaleDateString() }}. Earlier totals omit that work.
-      </div>
-
-      <div v-if="hasResults" class="grid min-w-0 gap-10 py-8">
-        <div class="grid min-w-0 gap-10 xl:grid-cols-2">
+      <div v-if="hasResults" class="grid min-w-0 gap-10">
+        <div class="grid min-w-0 gap-10 md:grid-cols-2">
           <StatsOutcomeChart :summary="snapshot.summary" />
           <StatsDailyChart :days="snapshot.days" />
         </div>
         <StatsWorkTable :work="snapshot.work" :from="from" :to="to" />
       </div>
 
-      <div v-else class="py-16 text-center">
-        <UIcon name="i-lucide-chart-no-axes-column" class="mx-auto size-6 text-dimmed" aria-hidden="true" />
-        <p class="mt-3 text-sm text-muted">
-          No completed work exists in this date range.
-        </p>
-        <UButton class="mt-4" color="neutral" variant="ghost" @click="choosePreset(90)">
+      <p v-else class="flex flex-wrap items-center gap-3 text-sm text-muted">
+        <span>No completed work exists in this range.</span>
+        <UButton size="xs" color="neutral" variant="outline" @click="choosePreset(90)">
           Show 90 days
         </UButton>
-      </div>
+      </p>
     </template>
   </div>
 </template>
