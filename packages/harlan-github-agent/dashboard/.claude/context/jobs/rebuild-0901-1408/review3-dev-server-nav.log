@@ -1,0 +1,18 @@
+$ nuxt dev dashboard --port 4817
+│
+●  Nuxt 4.5.2 (with Nitro 2.13.4, Vite 8.2.1 and Vue 3.5.41)
+
+  ➜ Local:    http://localhost:4817/
+  ➜ Network:  use --host to expose
+
+  ➜ DevTools: press Shift + Alt + D in the browser (v3.4.1)
+
+[nuxt:icon] ✔ Nuxt Icon discovered local-installed 2 collections: octicon, simple-icons
+ℹ Nuxt Icon client bundle consist of 51 icons with 23.34KB(uncompressed) in size
+✔ Vite client built in 30ms
+✔ Vite server built in 7ms
+[nitro] ✔ Nuxt Nitro server built in 522ms
+ℹ Vite server warmed up in 8ms
+ℹ Vite client warmed up in 14ms
+Killed
+[ELIFECYCLE] Command failed with exit code 137.

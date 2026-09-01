@@ -10,11 +10,12 @@ import type {
   SelectionMode,
 } from '../../../src/types.ts'
 import type { EjectedSessionNotice } from '../utils/eject.ts'
-import { formatTimeAgo, useBrowserLocation, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
+import { createSharedComposable, formatTimeAgo, useBrowserLocation, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
 import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import {
   agentStartState,
   decisionEntries,
+  incidentEntries,
   isSnapshotStale,
   taskNumber,
 } from '../utils/dashboard.ts'
@@ -83,10 +84,8 @@ function createDashboard() {
 
   const {
     data: liveSnapshot,
-    error: liveError,
     open: openLiveUpdates,
     close: closeLiveUpdates,
-    status: liveStatus,
   } = useEventSource<['state'], DashboardSnapshot>('/api/events', ['state'], {
     immediate: false,
     autoReconnect: { delay: 1_500 },
@@ -96,8 +95,9 @@ function createDashboard() {
   const activeAgents = computed(() => snapshot.value.agents.filter((agent): agent is ActiveAgent => agent._tag === 'ActiveAgent'))
   const reviewAgents = computed(() => snapshot.value.agents.filter((agent): agent is ReviewAgent => agent._tag === 'ReviewAgent'))
   const agentStart = computed(() => agentStartState(snapshot.value))
-  const agentsCanStart = computed(() => agentStart.value._tag === 'Available')
   const decisions = computed(() => decisionEntries(snapshot.value.queue))
+  /** Errors first, then newest. The chip, the Incident row, and the pane all read this one order. */
+  const incidents = computed(() => incidentEntries(snapshot.value.incidents))
   const unhealthyRepositories = computed(() => snapshot.value.repositories.filter(repository => repository.lastError !== null).length)
   const queueContext = computed(() => ({
     agentStart: agentStart.value,
@@ -105,12 +105,6 @@ function createDashboard() {
     maxOpenPullRequests: snapshot.value.maxOpenPullRequests,
     selectionMode: snapshot.value.selectionMode,
   }))
-
-  const connectionLabel = computed(() => {
-    if (liveStatus.value === 'OPEN')
-      return 'Live'
-    return liveError.value !== null ? 'Reconnecting' : 'Connecting'
-  })
 
   /** Old data on a monitoring surface is worse than none, because it still looks authoritative. */
   const isStale = computed(() => !loading.value && isSnapshotStale(snapshot.value.generatedAt, now.value))
@@ -177,7 +171,7 @@ function createDashboard() {
     control(() => $fetch('/api/service/restart', { method: 'POST', body: { source: 'dashboard' } }))
 
   /** A switch starts the next agent turn. Work already running keeps its model. */
-  const switchAgent = (selection: AgentSelection): Promise<void> =>
+  const selectAgent = (selection: AgentSelection): Promise<void> =>
     control(() => $fetch('/api/agents/select', { method: 'POST', body: selection }))
 
   async function setRepositoryPaused(repository: string, paused: boolean): Promise<void> {
@@ -449,12 +443,11 @@ function createDashboard() {
     now,
     activeAgents,
     reviewAgents,
-    agentsCanStart,
+    agentStart,
     decisions,
+    incidents,
     unhealthyRepositories,
     queueContext,
-    connectionLabel,
-    liveStatus,
     isStale,
     relativeTime,
     duration,
@@ -463,7 +456,7 @@ function createDashboard() {
     setAgentControl,
     requestRestart,
     setSelectionMode,
-    switchAgent,
+    selectAgent,
     setRepositoryPaused,
     setRepositoryWritesEnabled,
     rerunReview,
@@ -481,16 +474,10 @@ function createDashboard() {
   }
 }
 
-type Dashboard = ReturnType<typeof createDashboard>
-
-let dashboard: Dashboard | undefined
-
-// The reactivity lives in createDashboard, inside a scope this owns for the app's lifetime.
-export function useDashboard(): Dashboard {
-  if (dashboard === undefined) {
-    // A detached scope keeps the watchers and the event stream alive across
-    // page changes, instead of tearing them down with the first page to unmount.
-    dashboard = effectScope(true).run(createDashboard) as Dashboard
-  }
-  return dashboard
-}
+/**
+ * Shared by every page. The first caller creates the detached scope, so moving
+ * between the board, History, and Watching keeps one event stream instead of
+ * tearing it down with the first page to unmount. The layout subscribes for the
+ * app's lifetime, so the scope never disposes while the app is open.
+ */
+export const useDashboard = createSharedComposable(createDashboard)

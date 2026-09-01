@@ -1,37 +1,69 @@
 @import "tailwindcss";
 @import "@nuxt/ui";
 
+/*
+ * Tokens for the dashboard. DESIGN.md holds the rules; this file holds the values.
+ * Every neutral is OKLCH hue 80 with chroma 0.004 to 0.01, so the greys read as paper.
+ * Contrast is verified by the /kit page at runtime.
+ */
+
 @theme {
-  --font-sans: 'Geist', sans-serif;
-  --font-mono: 'Geist Mono', monospace;
+  --font-sans: 'Mona Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --default-transition-duration: 120ms;
+  --default-transition-timing-function: var(--ease-out);
 }
 
 :root {
-  color-scheme: light dark;
-  --ui-primary: var(--ui-color-primary-700);
-  --ui-radius: 0.375rem;
-  --ui-bg: oklch(98.5% 0 0);
-  --ui-bg-muted: oklch(96.5% 0 0);
-  --ui-bg-elevated: oklch(100% 0 0);
-  --ui-text-dimmed: oklch(54% 0 0);
-  --ui-text-muted: oklch(52% 0 0);
-  --ui-text-toned: oklch(38% 0 0);
-  --ui-text: oklch(20% 0 0);
-  --ui-border: oklch(92.5% 0 0);
-  --ui-border-accented: oklch(87% 0 0);
+  color-scheme: light;
+  /* 0.25rem: sm 4px, md 6px, lg 8px through Nuxt UI's radius multipliers. */
+  --ui-radius: 0.25rem;
+  --ui-bg: oklch(98.6% 0.004 80);
+  --ui-bg-muted: oklch(96.2% 0.006 80);
+  --ui-bg-elevated: oklch(99.4% 0.004 80);
+  --ui-bg-accented: oklch(92.5% 0.008 80);
+  --ui-bg-inverted: oklch(21% 0.006 80);
+  --ui-border: oklch(91.5% 0.008 80);
+  --ui-border-muted: oklch(93.5% 0.007 80);
+  --ui-border-accented: oklch(85% 0.01 80);
+  --ui-border-inverted: oklch(21% 0.006 80);
+  --ui-text: oklch(21% 0.006 80);
+  --ui-text-highlighted: oklch(21% 0.006 80);
+  --ui-text-toned: oklch(38% 0.008 80);
+  --ui-text-muted: oklch(49% 0.01 80);
+  --ui-text-dimmed: oklch(53.5% 0.01 80);
+  --ui-text-inverted: oklch(96.2% 0.006 80);
+  --ui-primary: oklch(21% 0.006 80);
+  /* Primer foreground colours. Text on a tint uses the .status-* ramp below. */
+  --ui-success: #1a7f37;
+  --ui-warning: #9a6700;
+  --ui-error: #cf222e;
+  --status-mix: var(--ui-text) 30%;
 }
 
 .dark {
-  --ui-primary: var(--ui-color-primary-400);
-  --ui-bg: oklch(14.5% 0 0);
-  --ui-bg-muted: oklch(17.5% 0 0);
-  --ui-bg-elevated: oklch(19.5% 0 0);
-  --ui-text-dimmed: oklch(58% 0 0);
-  --ui-text-muted: oklch(66% 0 0);
-  --ui-text-toned: oklch(80% 0 0);
-  --ui-text: oklch(96% 0 0);
-  --ui-border: oklch(26% 0 0);
-  --ui-border-accented: oklch(32% 0 0);
+  color-scheme: dark;
+  --ui-bg: oklch(17% 0.006 80);
+  --ui-bg-muted: oklch(20% 0.006 80);
+  --ui-bg-elevated: oklch(23% 0.007 80);
+  --ui-bg-accented: oklch(30% 0.008 80);
+  --ui-bg-inverted: oklch(96.2% 0.006 80);
+  --ui-border: oklch(29% 0.008 80);
+  --ui-border-muted: oklch(26% 0.007 80);
+  --ui-border-accented: oklch(36% 0.009 80);
+  --ui-border-inverted: oklch(96.2% 0.006 80);
+  --ui-text: oklch(96.2% 0.006 80);
+  --ui-text-highlighted: oklch(96.2% 0.006 80);
+  --ui-text-toned: oklch(82% 0.006 80);
+  --ui-text-muted: oklch(72% 0.008 80);
+  --ui-text-dimmed: oklch(63% 0.008 80);
+  --ui-text-inverted: oklch(17% 0.006 80);
+  --ui-primary: oklch(96.2% 0.006 80);
+  --ui-success: #3fb950;
+  --ui-warning: #d29922;
+  --ui-error: #f85149;
+  --status-mix: var(--ui-text) 20%;
 }
 
 html {
@@ -44,39 +76,57 @@ body {
   background-color: var(--ui-bg);
   color: var(--ui-text);
   font-family: var(--font-sans);
+  font-size: 0.875rem;
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-:where(a, button, input, select, summary, [tabindex]):focus-visible {
-  outline: 0.125rem solid var(--ui-primary);
-  outline-offset: 0.125rem;
+/* One focus style everywhere. Unlayered, so it wins over component utilities. */
+:focus-visible {
+  outline: 2px solid var(--ui-primary);
+  outline-offset: 2px;
 }
 
-/* Coarse pointers get the full 44px target without inflating dense desktop rows. */
+/* Coarse pointers get the full 44px target without inflating dense desktop rows. Entity links stay inline text. */
 @media (pointer: coarse) {
-  :where(button, input, select, summary) {
+  :where(button, [role="button"], [role="menuitem"], a:not(.entity-link), input, select, summary) {
     min-height: 2.75rem;
+  }
+
+  :where(button, [role="button"], a:not(.entity-link)) {
+    min-width: 2.75rem;
   }
 }
 
-/* Skip link: parked offscreen, slides in on keyboard focus. */
+/* The first focusable element. Offscreen until keyboard focus, then a solid ink pill. */
 .skip-link {
-  position: fixed;
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
   z-index: 60;
-  top: 0.75rem;
-  left: 0.75rem;
-  translate: 0 -5rem;
-  border-radius: var(--ui-radius);
+  border-radius: var(--radius-md);
   background: var(--ui-bg-inverted);
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0.75rem;
   color: var(--ui-text-inverted);
-  transition: translate 120ms ease-out;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transform: translateY(-200%);
 }
 
-.skip-link:focus {
-  translate: 0;
+.skip-link:focus-visible {
+  transform: none;
+}
+
+
+/* The only micro label in the system: column headings, table headers, detail list terms. */
+.field-label {
+  color: var(--ui-text-dimmed);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 /* Anything that resolves to a GitHub URL. Underline stays quiet until hover. */
@@ -84,65 +134,31 @@ body {
   text-decoration-color: var(--ui-border-accented);
   text-decoration-line: underline;
   text-underline-offset: 0.2em;
-  transition: text-decoration-color 120ms ease-out;
+  transition: text-decoration-color 120ms var(--ease-out);
 }
 
-.entity-link:hover {
-  text-decoration-color: currentColor;
+@media (hover: hover) {
+  .entity-link:hover {
+    text-decoration-color: currentColor;
+  }
 }
 
-.entity-link.no-underline {
-  text-decoration-line: none;
-}
-
-/* Subtle badges fall short of AA on small text, so state text gets its own ramp. */
-.status-success,
-.status-warning,
-.status-primary,
-.status-error {
-  color: color-mix(in oklab, var(--status-color), black 55%);
-}
-
+/* Semantic text mixed toward ink in light and toward paper in dark, so it clears AA on a tint. */
 .status-success {
-  --status-color: var(--ui-success);
+  color: color-mix(in oklab, var(--ui-success), var(--status-mix));
 }
 
 .status-warning {
-  --status-color: var(--ui-warning);
-}
-
-.status-primary {
-  --status-color: var(--ui-primary);
+  color: color-mix(in oklab, var(--ui-warning), var(--status-mix));
 }
 
 .status-error {
-  --status-color: var(--ui-error);
+  color: color-mix(in oklab, var(--ui-error), var(--status-mix));
 }
 
-.dark .status-success,
-.dark .status-warning,
-.dark .status-primary,
-.dark .status-error {
-  color: color-mix(in oklab, var(--status-color), white 65%);
-}
-
-/* Zone markers. Headings recede to a rule so the data below them carries the weight. */
-.zone-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.zone-rule {
-  border: 0;
-  border-top: 1px solid var(--ui-border);
-  flex: 1;
-}
-
-/* The one animation in the system: proof that the feed is live, not stale. */
+/* The one loop in the system: proof that agents are running now. */
 .live-dot {
-  animation: live-pulse 2s ease-in-out infinite;
+  animation: live-pulse 2s var(--ease-out) infinite;
 }
 
 @keyframes live-pulse {
@@ -156,78 +172,39 @@ body {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .live-dot {
-    animation: none;
-  }
+/* Board content once the snapshot is over 90 seconds old. */
+.stale {
+  opacity: 0.55;
+  transition: opacity 160ms var(--ease-out);
 }
 
-/* Live agent shell activity. Capped height so a chatty agent cannot own the page. */
-.agent-terminal {
+/* Agent and Routine output inside slideovers. Capped so a chatty agent cannot own the pane. */
+.terminal {
   max-height: 20rem;
   overflow: auto;
   border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius);
+  border-radius: var(--radius-md);
   background: var(--ui-bg-muted);
   padding: 0.75rem;
+  color: var(--ui-text-toned);
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   line-height: 1.6;
-}
-
-.agent-terminal > li + li {
-  margin-top: 0.5rem;
-}
-
-.agent-terminal pre {
-  margin-top: 0.25rem;
-  overflow-x: auto;
-  color: var(--ui-text-muted);
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-/* Stale data still looks authoritative, so it gets visibly demoted while the banner explains why. */
-.stale-content {
-  opacity: 0.55;
-  transition: opacity 150ms ease-out;
-}
-
-/* Keyboard navigation through the decisions zone needs a visible carriage. */
-[id="decisions"] li:focus {
-  outline: 0.125rem solid var(--ui-primary);
-  outline-offset: 0.125rem;
-}
-
-kbd {
-  border: 1px solid var(--ui-border);
-  border-radius: 0.25rem;
-  padding: 0.05rem 0.3rem;
-  color: var(--ui-text-muted);
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-}
-
-/* The only micro label in the system: detail list terms and table headers. */
-.field-label {
-  color: var(--ui-text-dimmed);
-  font-size: 0.75rem;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-/* Long repository and pull request sections stay out of the first paint. */
-.deferred-section {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 32rem;
 }
 
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0ms !important;
+  }
+
+  .live-dot {
+    animation: none;
   }
 }

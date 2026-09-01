@@ -1,11 +1,37 @@
 <script setup lang="ts">
+import type { DropdownMenuItem } from '@nuxt/ui'
+import type { RepositoryStatus } from '../../../src/types.ts'
+import type { OpenItemsFilter, RepositoryAction } from '../utils/watching.ts'
 import { useEventListener } from '@vueuse/core'
-import { repositoryState, repositoryWritesControl, statusClass } from '../utils/dashboard.ts'
+import ConfirmModal from '../components/ConfirmModal.vue'
+import { repositoryState } from '../utils/dashboard.ts'
+import { isTypingTarget, overlayOpen } from '../utils/keyboard.ts'
+import {
+  dismissedItems,
+  enableWritesConsequence,
+  filterRepositories,
+  openItemsEmptyLine,
+  openItemsFilter,
+  repositoriesEmpty,
+  repositoriesEmptyLine,
+  repositoryActionIcon,
+  repositoryActionLabel,
+  repositoryActions,
+  repositoryAgentsLabel,
+  repositoryWritesLabel,
+} from '../utils/watching.ts'
 
+/**
+ * What is being polled. Two zones: the repository table with its per-row
+ * controls, and the open pull requests and issues. Dismissed items sit under
+ * Open because Restore lives nowhere else.
+ */
 const {
   snapshot,
+  loading,
   relativeTime,
   repositoryPending,
+  controlError,
   setRepositoryPaused,
   setRepositoryWritesEnabled,
   restoreItem,
@@ -15,266 +41,286 @@ const {
 } = useDashboard()
 
 const repositoryQuery = ref('')
-const subjectFilter = ref<'all' | 'issue' | 'pull_request'>('all')
+const itemsFilter = ref<OpenItemsFilter>('all')
+const filterInput = useTemplateRef('filterInput')
+/** The repository whose Enable writes is waiting for confirmation. */
+const enabling = ref<RepositoryStatus>()
 
-const filteredRepositories = computed(() => {
-  const query = repositoryQuery.value.trim().toLowerCase()
-  return query.length === 0
-    ? snapshot.value.repositories
-    : snapshot.value.repositories.filter(repository => repository.github.toLowerCase().includes(query))
+const repositories = computed(() => filterRepositories(snapshot.value.repositories, repositoryQuery.value))
+const repositoriesEmptyReason = computed(() => repositoriesEmpty(snapshot.value.repositories.length, repositoryQuery.value))
+const openItems = computed(() => openItemsFilter(snapshot.value.items, itemsFilter.value))
+const dismissed = computed(() => dismissedItems(snapshot.value.items))
+
+const itemFilters: Array<{ label: string, value: OpenItemsFilter }> = [
+  { label: 'All', value: 'all' },
+  { label: 'Pull requests', value: 'pull_request' },
+  { label: 'Issues', value: 'issue' },
+]
+
+const busy = computed(() => repositoryPending.value !== undefined)
+
+function act(repository: RepositoryStatus, action: RepositoryAction): void {
+  switch (action._tag) {
+    case 'Pause': return void setRepositoryPaused(repository.github, true)
+    case 'Resume': return void setRepositoryPaused(repository.github, false)
+    case 'DisableWrites': return void setRepositoryWritesEnabled(repository.github, false)
+    case 'EnableWrites':
+      enabling.value = repository
+  }
+}
+
+function menuItems(repository: RepositoryStatus): DropdownMenuItem[] {
+  return repositoryActions(repository).map(action => ({
+    label: repositoryActionLabel(action),
+    icon: repositoryActionIcon(action),
+    disabled: busy.value,
+    onSelect: () => act(repository, action),
+  }))
+}
+
+async function confirmEnableWrites(): Promise<void> {
+  if (enabling.value === undefined)
+    return
+  await setRepositoryWritesEnabled(enabling.value.github, true)
+  if (controlError.value === undefined)
+    enabling.value = undefined
+}
+
+const enableOpen = computed({
+  get: () => enabling.value !== undefined,
+  set: (value: boolean) => {
+    if (!value)
+      enabling.value = undefined
+  },
 })
 
-/** Dismissed items have their own list below, so they never pad this one. */
-const openSubjects = computed(() => snapshot.value.items.filter(subject => !subject.dismissed))
-
-const filteredSubjects = computed(() => subjectFilter.value === 'all'
-  ? openSubjects.value
-  : openSubjects.value.filter(subject => subject.kind === subjectFilter.value))
-
-const dismissedSubjects = computed(() => snapshot.value.items.filter(subject => subject.dismissed))
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement))
-    return false
-  return target.isContentEditable || /^(?:input|textarea|select)$/i.test(target.tagName)
+function itemLabel(item: { kind: 'issue' | 'pull_request' }): string {
+  return item.kind === 'issue' ? 'issue' : 'pull request'
 }
 
 useEventListener('keydown', (event: KeyboardEvent) => {
-  if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target) || event.key !== '/')
+  if (event.metaKey || event.ctrlKey || event.altKey || event.key !== '/' || isTypingTarget(event.target) || overlayOpen(document))
     return
   event.preventDefault()
-  document.querySelector<HTMLInputElement>('input[aria-label="Filter repositories"]')?.focus()
+  filterInput.value?.inputRef?.focus()
 })
 
+usePageTitle('Watching')
 useHead({
   meta: [{ name: 'description', content: 'Repository health and the open pull requests and issues being polled.' }],
 })
 </script>
 
 <template>
-  <div class="grid items-start gap-x-10 gap-y-10 xl:grid-cols-2">
-    <section class="min-w-0" aria-labelledby="repositories-heading">
-      <div class="zone-header">
-        <h1 id="repositories-heading" class="field-label">
-          Repositories
-        </h1>
-        <span class="font-mono text-sm text-dimmed">{{ filteredRepositories.length }}</span>
-        <hr class="zone-rule">
+  <div class="grid items-start gap-10 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <h1 class="sr-only">
+      Watching
+    </h1>
+    <section class="flex min-w-0 flex-col gap-3" aria-label="Repositories">
+      <div class="flex items-center gap-3">
+        <ColumnHeading label="Repositories" :count="repositories.length" class="min-w-0 flex-1" />
         <UInput
+          ref="filterInput"
           v-model="repositoryQuery"
           size="sm"
-          icon="i-lucide-search"
-          placeholder="Filter"
+          icon="i-octicon-search-16"
+          placeholder="Filter repositories"
           aria-label="Filter repositories"
           class="w-40 shrink-0 sm:w-56"
         />
       </div>
 
-      <div class="overflow-x-auto border-y border-default">
-        <table v-if="filteredRepositories.length > 0" class="w-full min-w-[44rem] border-collapse text-left">
+      <div v-if="loading" class="flex flex-col gap-px" aria-busy="true">
+        <USkeleton v-for="row in 3" :key="row" class="h-11 rounded-sm" />
+      </div>
+
+      <!-- Positioned, so the sr-only cells inside cannot push the document wider than the viewport. -->
+      <div v-else-if="repositories.length > 0" class="relative overflow-x-auto border-y border-default">
+        <table class="w-full border-collapse text-left">
           <caption class="sr-only">
-            Repository health and latest poll state
+            Repositories being polled, their health, and their controls
           </caption>
           <thead class="border-b border-default">
-            <tr class="field-label">
-              <th scope="col" class="py-2 pr-4">
+            <tr>
+              <th scope="col" class="field-label py-2 pr-3 pl-2">
                 Repository
               </th>
-              <th scope="col" class="py-2 pr-4">
+              <th scope="col" class="field-label py-2 pr-3">
                 Health
               </th>
-              <th scope="col" class="py-2 pr-4 text-right">
+              <th scope="col" class="field-label py-2 pr-3 text-right">
                 Open
               </th>
-              <th scope="col" class="py-2 pr-4">
-                Authority
+              <th scope="col" class="field-label py-2 pr-3">
+                Ownership
               </th>
-              <th scope="col" class="py-2 pr-4">
+              <th scope="col" class="field-label py-2 pr-3">
                 Writes
               </th>
-              <th scope="col" class="py-2 pr-4">
+              <th scope="col" class="field-label py-2 pr-3">
                 Agents
               </th>
-              <th scope="col" class="py-2">
+              <th scope="col" class="field-label py-2 pr-3">
                 Last success
+              </th>
+              <th scope="col" class="py-2 pr-2">
+                <span class="sr-only">Actions</span>
               </th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-default">
-            <tr v-for="repository in filteredRepositories" :key="repository.github" class="transition-colors hover:bg-muted/40">
-              <th scope="row" class="whitespace-nowrap py-2.5 pr-4 font-mono text-sm font-normal">
+          <!-- One body per repository, so a poll error can sit under its row without breaking the dividers. -->
+          <tbody
+            v-for="repository in repositories"
+            :key="repository.github"
+            class="border-b border-default transition-colors last:border-b-0 hover:bg-muted"
+          >
+            <tr class="h-11">
+              <th scope="row" class="whitespace-nowrap py-2 pr-3 pl-2 font-mono text-sm font-normal">
                 <a :href="`https://github.com/${repository.github}`" target="_blank" rel="noreferrer" class="entity-link">{{ repository.github }}</a>
               </th>
-              <td class="py-2.5 pr-4">
-                <UBadge
-                  :color="repositoryState(repository).tone"
-                  :class="statusClass(repositoryState(repository).tone)"
-                  variant="subtle"
-                >
-                  {{ repositoryState(repository).label }}
-                </UBadge>
+              <td class="py-2 pr-3">
+                <StateBadge :tone="repositoryState(repository).tone" :label="repositoryState(repository).label" />
               </td>
-              <td class="py-2.5 pr-4 text-right font-mono text-sm tabular-nums">
-                <a :href="`https://github.com/${repository.github}/issues`" target="_blank" rel="noreferrer" class="entity-link">{{ repository.subjectCount }}</a>
+              <td class="py-2 pr-3 text-right font-mono text-sm">
+                <a :href="`https://github.com/${repository.github}/issues`" target="_blank" rel="noreferrer" class="entity-link">{{ repository.subjectCount }}<span class="sr-only"> open on GitHub</span></a>
               </td>
-              <td class="py-2.5 pr-4 font-mono text-sm text-dimmed">
+              <td class="py-2 pr-3 text-sm text-muted">
                 {{ repository.ownership }}
               </td>
-              <td class="py-2.5 pr-4">
-                <!-- An external watch has no repositories row, so an enable action could only answer 404. -->
-                <span v-if="repositoryWritesControl(repository)._tag === 'External'" class="font-mono text-sm text-dimmed">n/a</span>
-                <UButton
-                  v-else-if="repository.writesEnabled"
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  icon="i-lucide-lock-open"
-                  :loading="repositoryPending === repository.github"
-                  :disabled="repositoryPending !== undefined"
-                  :aria-label="`Disable writes for ${repository.github}`"
-                  @click="setRepositoryWritesEnabled(repository.github, false)"
-                >
-                  Enabled
-                </UButton>
-                <ConfirmButton
-                  v-else
-                  label="Disabled"
-                  confirm-label="Enable writes"
-                  :aria-label="`Enable writes for ${repository.github}`"
-                  :confirm-aria-label="`Confirm enabling writes for ${repository.github}`"
-                  color="warning"
-                  icon="i-lucide-lock"
-                  size="xs"
-                  :loading="repositoryPending === repository.github"
-                  :disabled="repositoryPending !== undefined"
-                  @confirm="setRepositoryWritesEnabled(repository.github, true)"
-                />
+              <td class="py-2 pr-3 text-sm" :class="repositoryWritesLabel(repository) === 'Enabled' ? 'text-default' : 'text-muted'">
+                {{ repositoryWritesLabel(repository) }}
               </td>
-              <td class="py-2.5 pr-4">
-                <UButton
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  :icon="repository.paused ? 'i-lucide-play' : 'i-lucide-pause'"
-                  :loading="repositoryPending === repository.github"
-                  :disabled="repositoryPending !== undefined"
-                  :aria-label="repository.paused
-                    ? `Resume agents for ${repository.github}`
-                    : `Pause agents for ${repository.github}`"
-                  @click="setRepositoryPaused(repository.github, !repository.paused)"
-                >
-                  {{ repository.paused ? 'Paused' : 'Running' }}
-                </UButton>
+              <td class="py-2 pr-3 text-sm" :class="repository.paused ? 'text-muted' : 'text-default'">
+                {{ repositoryAgentsLabel(repository) }}
               </td>
-              <td class="py-2.5 font-mono text-sm text-dimmed">
+              <td class="whitespace-nowrap py-2 pr-3 font-mono text-sm text-dimmed">
                 {{ relativeTime(repository.lastSuccessAt) }}
+              </td>
+              <td class="py-1 pr-2 text-right">
+                <UDropdownMenu :items="menuItems(repository)" :content="{ align: 'end' }">
+                  <UButton
+                    icon="i-octicon-kebab-horizontal-16"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    square
+                    :loading="repositoryPending === repository.github"
+                    :aria-label="`Actions for ${repository.github}`"
+                  />
+                </UDropdownMenu>
+              </td>
+            </tr>
+            <tr v-if="repository.lastError !== null">
+              <td colspan="8" class="status-error pb-2.5 pl-2 pr-2 text-sm whitespace-normal">
+                {{ repository.lastError }}
               </td>
             </tr>
           </tbody>
         </table>
-        <p v-else class="py-6 font-mono text-sm text-dimmed">
-          No repository mappings. The agent is waiting for an installed repository with a trusted checkout.
-        </p>
       </div>
 
-      <p v-for="repository in filteredRepositories.filter(candidate => candidate.lastError !== null)" :key="`${repository.github}-error`" class="status-error mt-3 text-sm">
-        {{ repository.github }}: {{ repository.lastError }}
+      <p v-else-if="repositoriesEmptyReason" class="text-sm text-dimmed">
+        {{ repositoriesEmptyLine(repositoriesEmptyReason) }}
       </p>
     </section>
 
-    <section class="min-w-0" aria-labelledby="open-items-heading">
-      <div class="zone-header">
-        <h2 id="open-items-heading" class="field-label">
-          Open
-        </h2>
-        <span class="font-mono text-sm text-dimmed">{{ filteredSubjects.length }}</span>
-        <hr class="zone-rule">
-        <div class="flex shrink-0 items-center gap-1" aria-label="Filter pull requests and issues">
-          <UButton
-            v-for="filter in [
-              { label: 'All', value: 'all' as const },
-              { label: 'PRs', value: 'pull_request' as const },
-              { label: 'Issues', value: 'issue' as const },
-            ]"
-            :key="filter.value"
-            size="xs"
-            :color="subjectFilter === filter.value ? 'primary' : 'neutral'"
-            :variant="subjectFilter === filter.value ? 'soft' : 'ghost'"
-            :aria-pressed="subjectFilter === filter.value"
-            @click="subjectFilter = filter.value"
+    <div class="flex min-w-0 flex-col gap-10">
+      <section class="flex min-w-0 flex-col gap-3" aria-label="Open">
+        <div class="flex items-center gap-3">
+          <ColumnHeading label="Open" :count="openItems.length" class="min-w-0 flex-1" />
+          <div class="flex shrink-0 items-center gap-1" role="group" aria-label="Filter by kind">
+            <UButton
+              v-for="filter in itemFilters"
+              :key="filter.value"
+              size="xs"
+              color="neutral"
+              :variant="itemsFilter === filter.value ? 'outline' : 'ghost'"
+              :aria-pressed="itemsFilter === filter.value"
+              @click="itemsFilter = filter.value"
+            >
+              {{ filter.label }}
+            </UButton>
+          </div>
+        </div>
+
+        <div v-if="loading" class="flex flex-col gap-px" aria-busy="true">
+          <USkeleton v-for="row in 3" :key="row" class="h-11 rounded-sm" />
+        </div>
+
+        <ul v-else-if="openItems.length > 0" class="divide-y divide-default border-y border-default" role="list">
+          <li
+            v-for="item in openItems"
+            :key="`${item.repository}#${item.number}`"
+            class="flex min-h-11 items-center justify-between gap-3 px-2 py-2 transition-colors hover:bg-muted"
           >
-            {{ filter.label }}
-          </UButton>
-        </div>
-      </div>
+            <EntityIdentity
+              :author="item.author"
+              :title="item.title"
+              :url="item.url"
+              :repository="item.repository"
+              :kind="item.kind"
+              :number="item.number"
+              size="sm"
+            />
+            <time class="shrink-0 font-mono text-sm text-dimmed" :datetime="item.observedAt">{{ relativeTime(item.observedAt) }}</time>
+          </li>
+        </ul>
 
-      <ul v-if="filteredSubjects.length > 0" class="divide-y divide-default border-y border-default" role="list">
-        <li
-          v-for="subject in filteredSubjects"
-          :key="`${subject.repository}:${subject.kind}:${subject.number}`"
-          class="flex items-start justify-between gap-4 py-2.5 transition-colors hover:bg-muted/40"
-        >
-          <ItemIdentity
-            :author="subject.author"
-            :title="subject.title"
-            :url="subject.url"
-            :repository="subject.repository"
-            :kind="subject.kind"
-            :number="subject.number"
-          />
-          <span class="shrink-0 font-mono text-xs text-dimmed">{{ relativeTime(subject.observedAt) }}</span>
-        </li>
-      </ul>
-      <p v-else class="font-mono text-sm text-dimmed">
-        No open pull requests or issues. The agent is waiting for a human issue or pull request.
-      </p>
-
-      <!-- The only place a Dismissal can be undone, so it has to be findable. -->
-      <template v-if="dismissedSubjects.length > 0">
-        <div class="zone-header mt-8">
-          <h2 class="field-label">
-            Dismissed
-          </h2>
-          <span class="font-mono text-sm text-dimmed">{{ dismissedSubjects.length }}</span>
-          <hr class="zone-rule">
-        </div>
-        <p class="mb-3 text-sm text-muted">
-          No agent runs on these, whatever changes. Restoring lets the next poll queue work again.
+        <p v-else class="text-sm text-dimmed">
+          {{ openItemsEmptyLine(itemsFilter) }}
         </p>
+      </section>
+
+      <!-- The only place a Dismissal can be undone. Absent until one exists. -->
+      <section v-if="dismissed.length > 0" class="flex min-w-0 flex-col gap-3" aria-label="Dismissed">
+        <ColumnHeading label="Dismissed" :count="dismissed.length" />
         <ul class="divide-y divide-default border-y border-default" role="list">
           <li
-            v-for="subject in dismissedSubjects"
-            :key="`${subject.repository}:${subject.kind}:${subject.number}`"
-            class="flex items-start justify-between gap-4 py-2.5"
+            v-for="item in dismissed"
+            :key="`${item.repository}#${item.number}`"
+            class="flex min-h-11 flex-col gap-1 px-2 py-2 transition-colors hover:bg-muted"
           >
-            <ItemIdentity
-              :author="subject.author"
-              :title="subject.title"
-              :url="subject.url"
-              :repository="subject.repository"
-              :kind="subject.kind"
-              :number="subject.number"
-            />
-            <div class="shrink-0">
+            <div class="flex items-center justify-between gap-3">
+              <EntityIdentity
+                :author="item.author"
+                :title="item.title"
+                :url="item.url"
+                :repository="item.repository"
+                :kind="item.kind"
+                :number="item.number"
+                size="sm"
+              />
               <UButton
                 size="xs"
                 color="neutral"
-                variant="ghost"
-                icon="i-lucide-undo-2"
-                :loading="dismissPending === dismissKey(subject.repository, subject.number)"
+                variant="outline"
+                icon="i-octicon-undo-16"
+                class="shrink-0"
+                :loading="dismissPending === dismissKey(item.repository, item.number)"
                 :disabled="dismissPending !== undefined"
-                :aria-label="`Restore ${subject.repository} ${subject.kind === 'issue' ? 'issue' : 'pull request'} ${subject.number}`"
-                @click="restoreItem(subject.repository, subject.number)"
+                :aria-label="`Restore ${item.repository} ${itemLabel(item)} ${item.number}`"
+                @click="restoreItem(item.repository, item.number)"
               >
                 Restore
               </UButton>
-              <p v-if="dismissErrors[dismissKey(subject.repository, subject.number)]" role="alert" class="status-error mt-1 text-sm">
-                {{ dismissErrors[dismissKey(subject.repository, subject.number)] }}
-              </p>
             </div>
+            <p v-if="dismissErrors[dismissKey(item.repository, item.number)]" role="alert" class="status-error text-sm">
+              {{ dismissErrors[dismissKey(item.repository, item.number)] }}
+            </p>
           </li>
         </ul>
-      </template>
-    </section>
+      </section>
+    </div>
+
+    <ConfirmModal
+      v-model:open="enableOpen"
+      :title="`Enable writes for ${enabling?.github ?? 'this repository'}?`"
+      :consequence="enableWritesConsequence()"
+      confirm-label="Enable writes"
+      tone="primary"
+      :pending="enabling !== undefined && repositoryPending === enabling.github"
+      :error="enabling === undefined ? null : controlError ?? null"
+      @confirm="confirmEnableWrites"
+    />
   </div>
 </template>

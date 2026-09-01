@@ -135,7 +135,7 @@ Use the `Auto` and `Manual` control in the header to set the Selection mode. `Au
 The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers read only Review and separate scoped Repair for that head commit.
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
 Use `Watch logs` from the System pane to open a read-only live event stream while automation continues.
-The System pane stays visible. It shows Agent provider limits, Reserves, and unresolved Incidents.
+The System chip stays in the header. It opens the System pane, which shows Agent provider limits, Reserves, and unresolved Incidents.
 It separates Harlan GitHub Agent from GitHub Actions. A runner failure never changes the Agent status.
 `max_open_pull_requests` stops new issue work while that many pull requests are open. `Manual` Selection mode ignores the limit, because you already select every pull request.
 

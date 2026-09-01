@@ -1,486 +1,236 @@
 <script setup lang="ts">
+/**
+ * How work moves through the service. Static documentation, reached from the
+ * overflow menu. Three marker styles, shown once in the heading row: a solid
+ * hairline is implemented, a warning hairline waits for Harlan, a dashed error
+ * hairline is a known gap.
+ */
+usePageTitle('How it works')
 useHead({
-  title: 'Workflow map | Harlan GitHub Agent',
-  meta: [
-    { name: 'description', content: 'How Harlan GitHub Agent handles pull requests, issues, recovery, and GitHub writes.' },
-  ],
+  meta: [{ name: 'description', content: 'How Harlan GitHub Agent handles pull requests, issues, recovery, and GitHub writes.' }],
 })
+
+type Marker = 'implemented' | 'decision'
+
+interface Branch {
+  title: string
+  text: string
+  marker: Marker
+}
+
+interface Step {
+  title: string
+  text?: string
+  branches?: Branch[]
+}
+
+const intake = [
+  { icon: 'i-octicon-mark-github-16', title: 'GitHub App', text: 'Only installed harlan-zw repositories enter the service.' },
+  { icon: 'i-octicon-repo-16', title: 'Repository checks', text: 'Match App access, Git origin, and a trusted checkout.' },
+  { icon: 'i-octicon-sync-16', title: 'Poll GitHub', text: 'Read open human issues and pull requests.' },
+  { icon: 'i-octicon-key-16', title: 'Exact state', text: 'Deduplicate each issue state and pull request head commit.' },
+]
+
+const pullRequestSteps: Step[] = [
+  {
+    title: 'Author gate',
+    text: 'Skip GitHub Apps and automated accounts before any Queue work or comment.',
+    branches: [
+      { title: 'harlan-zw', text: 'Review starts automatically.', marker: 'implemented' },
+      { title: 'Outside contributor', text: 'Wait for Review and repair Approval on the exact head commit.', marker: 'decision' },
+    ],
+  },
+  {
+    title: 'Merge state',
+    text: 'GitHub decides which path can run.',
+    branches: [
+      { title: 'Clean', text: 'Continue to Review.', marker: 'implemented' },
+      { title: 'Merge conflict, writable', text: 'Start Conflict resolution in a Git worktree.', marker: 'implemented' },
+      { title: 'Unknown', text: 'Wait for GitHub.', marker: 'implemented' },
+      { title: 'Not writable', text: 'Show the exact GitHub boundary.', marker: 'decision' },
+    ],
+  },
+  { title: 'Conflict resolution', text: 'Merge the current base into the pull request branch, resolve the conflicts, and push one fix commit.' },
+  { title: 'Adversarial review', text: 'The Review Agent reads the full diff and the surrounding code at high Reasoning effort.' },
+  { title: 'One automated comment', text: 'The controller keeps one self-identified comment and posts READY, PENDING, or BLOCKED.' },
+  { title: 'Rerun review', text: 'Harlan uses the dashboard or comments /harlan-agent rerun to queue the current head commit once.' },
+  { title: 'GitHub status', text: 'Open pull requests stay live, and a completed Review caches the closed or merged state once.' },
+]
+
+const issueSteps: Step[] = [
+  { title: 'Eligibility', text: 'Owned repositories enable Issue triage by default and ignore issues before the legacy cutoff.' },
+  { title: 'Issue triage', text: 'The triage Agent checks the default branch, reproduction, comments, scope, difficulty, and impact in a Git worktree.' },
+  {
+    title: 'Triage result',
+    branches: [
+      { title: 'Invalid', text: 'Record why.', marker: 'implemented' },
+      { title: 'Needs info', text: 'Record the missing evidence.', marker: 'implemented' },
+      { title: 'Valid', text: 'Record the next action.', marker: 'implemented' },
+    ],
+  },
+  {
+    title: 'Approval',
+    branches: [
+      { title: 'harlan-zw', text: 'Issue work continues automatically.', marker: 'implemented' },
+      { title: 'Outside contributor', text: 'Wait for Approval of that exact issue state.', marker: 'decision' },
+    ],
+  },
+  { title: 'Issue work', text: 'The triage Agent resumes its own session, makes the change, and runs focused checks.' },
+  { title: 'Draft pull request', text: 'The controller pushes the pinned commit to an allowed branch and opens one pull request.' },
+]
+
+const recovery = [
+  { icon: 'i-octicon-git-commit-16', title: 'Base branch moved', text: 'Refresh the current base and continue Conflict resolution.', result: 'Requeue' },
+  { icon: 'i-octicon-code-16', title: 'Invalid agent result', text: 'Use the strict response schema, then retry on the next GitHub poll.', result: 'Requeue' },
+  { icon: 'i-octicon-git-merge-16', title: 'Conflicts return', text: 'Restore the Conflict resolution Task for that pull request state.', result: 'Requeue' },
+  { icon: 'i-octicon-git-pull-request-closed-16', title: 'Head changed, closed, or merged', text: 'Stop old work within five seconds and follow the current GitHub state.', result: 'Stop old agent' },
+  { icon: 'i-octicon-x-circle-16', title: 'Task cancelled', text: 'Stop the Agent and keep that Task cancelled for the current commit.', result: 'Cancel' },
+]
+
+const gaps = [
+  { title: 'Claude review', text: 'The service starts Codex or opencode Agents only, so no Claude review runs.' },
+  { title: 'Take Ownership', text: 'The service does not watch a merge deployment or run production smoke checks.' },
+]
+
+const roles = [
+  { icon: 'i-octicon-hubot-16', title: 'Agents', text: 'Run in one Git worktree with the global agent context and authenticated GitHub reads.' },
+  { icon: 'i-octicon-shield-check-16', title: 'Controller', text: 'Checks the current head, repository policy, artifact, and App access before every GitHub write.' },
+  { icon: 'i-octicon-person-16', title: 'Harlan', text: 'Approves one Review and repair workflow, and controller-published repair commits continue that Approval.' },
+]
+
+const markerClass: Record<Marker | 'gap', string> = {
+  implemented: 'border-accented',
+  decision: 'border-warning',
+  gap: 'border-dashed border-error',
+}
+
+const stepNumber = (index: number): string => String(index + 1).padStart(2, '0')
 </script>
 
 <template>
-  <div>
-    <div class="mb-10 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,0.4fr)] lg:items-end">
-      <div>
-        <h1 class="max-w-3xl text-3xl font-semibold tracking-tight sm:text-4xl">
-          How GitHub work moves through the agent
-        </h1>
-        <p class="mt-4 max-w-2xl text-base text-muted">
-          This map shows what the service runs today, where it stops for your decision, and which paths are documented but not connected.
-        </p>
-      </div>
-
-      <ul class="grid overflow-hidden rounded-md border border-default bg-elevated sm:grid-cols-3 lg:grid-cols-1" role="list">
-        <li class="flex items-start gap-3 border-b border-default p-3 sm:border-b-0 sm:border-r sm:last:border-r-0 lg:border-b lg:border-r-0 lg:last:border-b-0">
-          <span class="mt-1.5 size-2 shrink-0 rounded-full bg-success" aria-hidden="true" />
-          <span><strong class="font-medium">Implemented</strong><span class="block text-sm text-muted">Runs in the service</span></span>
+  <div class="flex flex-col gap-10">
+    <div class="flex min-h-6 flex-wrap items-center gap-2">
+      <h1 class="field-label">
+        How it works
+      </h1>
+      <span class="h-px min-w-8 flex-1 bg-border" aria-hidden="true" />
+      <ul class="flex flex-wrap items-center gap-1.5" aria-label="Markers">
+        <li class="rounded-sm border px-1.5 py-0.5 text-sm text-toned" :class="markerClass.implemented">
+          Implemented
         </li>
-        <li class="flex items-start gap-3 border-b border-default p-3 sm:border-b-0 sm:border-r sm:last:border-r-0 lg:border-b lg:border-r-0 lg:last:border-b-0">
-          <span class="mt-1.5 size-2 shrink-0 rounded-full bg-warning" aria-hidden="true" />
-          <span><strong class="font-medium">Harlan decision</strong><span class="block text-sm text-muted">Exact approval required</span></span>
+        <li class="rounded-sm border px-1.5 py-0.5 text-sm status-warning" :class="markerClass.decision">
+          Harlan decision
         </li>
-        <li class="flex items-start gap-3 p-3">
-          <span class="mt-1 size-2.5 shrink-0 rounded-full border border-dashed border-error" aria-hidden="true" />
-          <span><strong class="font-medium">Not connected</strong><span class="block text-sm text-muted">A known missing path</span></span>
+        <li class="rounded-sm border px-1.5 py-0.5 text-sm status-error" :class="markerClass.gap">
+          Not connected
         </li>
       </ul>
     </div>
 
-    <section aria-labelledby="intake-heading" class="mb-12">
-      <div class="mb-4 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <h2 id="intake-heading" class="text-lg font-semibold">
-          GitHub intake
-        </h2>
-        <p class="text-sm text-muted">
-          One poll produces exact issue and pull request state.
-        </p>
-      </div>
-
-      <ol class="entry-flow" aria-label="GitHub intake steps">
-        <li class="flow-node">
-          <UIcon name="i-lucide-github" class="size-5 shrink-0 text-dimmed" aria-hidden="true" />
-          <span><strong>GitHub App</strong><span>Only installed <code>harlan-zw/*</code> repositories enter the service.</span></span>
-        </li>
-        <li class="flow-connector" aria-hidden="true">
-          <UIcon name="i-lucide-arrow-right" />
-        </li>
-        <li class="flow-node">
-          <UIcon name="i-lucide-folder-git-2" class="size-5 shrink-0 text-dimmed" aria-hidden="true" />
-          <span><strong>Repository checks</strong><span>Match App access, Git origin, and a trusted checkout.</span></span>
-        </li>
-        <li class="flow-connector" aria-hidden="true">
-          <UIcon name="i-lucide-arrow-right" />
-        </li>
-        <li class="flow-node">
-          <UIcon name="i-lucide-refresh-cw" class="size-5 shrink-0 text-dimmed" aria-hidden="true" />
-          <span><strong>Poll GitHub</strong><span>Read open human issues and pull requests.</span></span>
-        </li>
-        <li class="flow-connector" aria-hidden="true">
-          <UIcon name="i-lucide-arrow-right" />
-        </li>
-        <li class="flow-node">
-          <UIcon name="i-lucide-fingerprint" class="size-5 shrink-0 text-dimmed" aria-hidden="true" />
-          <span><strong>Exact state</strong><span>Deduplicate each issue state and pull request head commit.</span></span>
-        </li>
+    <section aria-labelledby="flow-intake" class="flex flex-col gap-3">
+      <ColumnHeading id="flow-intake" label="GitHub intake" />
+      <ol class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] md:items-stretch">
+        <template v-for="(node, index) in intake" :key="node.title">
+          <li v-if="index > 0" class="grid place-items-center text-dimmed" aria-hidden="true">
+            <UIcon name="i-octicon-arrow-right-16" class="size-4 rotate-90 md:rotate-0" />
+          </li>
+          <li class="flex items-start gap-3 rounded-md border border-default bg-elevated p-3">
+            <UIcon :name="node.icon" class="mt-0.5 size-4 shrink-0 text-dimmed" aria-hidden="true" />
+            <span class="min-w-0">
+              <span class="block font-medium">{{ node.title }}</span>
+              <span class="mt-0.5 block text-sm text-muted">{{ node.text }}</span>
+            </span>
+          </li>
+        </template>
       </ol>
     </section>
 
-    <div class="mb-12 grid items-start gap-6 md:grid-cols-2">
-      <section aria-labelledby="pull-request-heading" class="overflow-hidden rounded-md border border-default bg-elevated">
-        <header class="border-b border-default p-5">
-          <h2 id="pull-request-heading" class="flex items-center gap-2.5 text-lg font-semibold">
-            <UIcon name="i-lucide-git-pull-request" class="size-5 text-dimmed" aria-hidden="true" />
-            Pull request
-          </h2>
-        </header>
-
-        <ol class="lane-flow">
-          <li>
-            <span class="step-number">01</span>
-            <div>
-              <h3>Author gate</h3>
-              <p>Skip GitHub Apps and automated accounts before creating Queue work or comments.</p>
-              <div class="branch-grid">
-                <span><strong>@harlan-zw</strong>Review starts automatically.</span>
-                <span class="decision"><strong>Outside contributor</strong>Wait for Review and repair approval on the exact head commit.</span>
-              </div>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">02</span>
-            <div>
-              <h3>Merge state</h3>
-              <p>GitHub decides which path can run.</p>
-              <div class="branch-grid">
-                <span><strong>Clean</strong>Continue to review.</span>
-                <span><strong>Conflicting and writable</strong>Start conflict repair in a Git worktree.</span>
-                <span><strong>Unknown</strong>Wait for GitHub.</span>
-                <span class="decision"><strong>Not writable</strong>Show the exact GitHub boundary.</span>
-              </div>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">03</span>
-            <div>
-              <h3>Conflict repair</h3>
-              <p>Fetch the current base, merge it into the pull request branch, resolve conflicts, and verify the edit.</p>
-              <p>The controller pushes one fix commit. The new head commit returns to the start.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">04</span>
-            <div>
-              <h3>Adversarial review</h3>
-              <p>The review agent reads the full diff and surrounding code at high reasoning. The configured provider decides the model.</p>
-              <p>Green CI supplies broad test, lint, typecheck, and build evidence. The agent runs focused checks only for a finding or uncovered behavior.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">05</span>
-            <div>
-              <h3>One automated comment</h3>
-              <p>The controller creates one self-identified comment, updates progress in place, then posts READY, WAITING, or BLOCKED.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">06</span>
-            <div>
-              <h3>Rerun review</h3>
-              <p>Harlan can use the dashboard or comment <code>/harlan-agent rerun</code>. The service queues the current head commit once.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">07</span>
-            <div>
-              <h3>GitHub status</h3>
-              <p>Open pull requests stay live. Completed reviews fetch closed or merged status once, then cache the terminal result.</p>
+    <div class="grid items-start gap-6 md:grid-cols-2">
+      <section aria-labelledby="flow-pull-request" class="flex flex-col gap-3">
+        <ColumnHeading id="flow-pull-request" label="Pull request" />
+        <ol class="flex flex-col gap-2 rounded-lg bg-muted p-2">
+          <li v-for="(step, index) in pullRequestSteps" :key="step.title" class="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2 rounded-md border border-default bg-elevated p-3">
+            <span class="font-mono text-sm text-dimmed">{{ stepNumber(index) }}</span>
+            <div class="min-w-0">
+              <h3 class="font-medium">
+                {{ step.title }}
+              </h3>
+              <p v-if="step.text" class="mt-0.5 text-sm text-muted">
+                {{ step.text }}
+              </p>
+              <ul v-if="step.branches" class="mt-2 grid gap-1.5 sm:grid-cols-2" role="list">
+                <li v-for="branch in step.branches" :key="branch.title" class="rounded-sm border px-2 py-1.5 text-sm" :class="markerClass[branch.marker]">
+                  <span class="block font-medium" :class="branch.marker === 'decision' ? 'status-warning' : undefined">{{ branch.title }}</span>
+                  <span class="block text-muted">{{ branch.text }}</span>
+                </li>
+              </ul>
             </div>
           </li>
         </ol>
       </section>
 
-      <section aria-labelledby="issue-heading" class="overflow-hidden rounded-md border border-default bg-elevated">
-        <header class="border-b border-default p-5">
-          <h2 id="issue-heading" class="flex items-center gap-2.5 text-lg font-semibold">
-            <UIcon name="i-lucide-circle-dot" class="size-5 text-dimmed" aria-hidden="true" />
-            Issue
-          </h2>
-        </header>
+      <section aria-labelledby="flow-issue" class="flex flex-col gap-3">
+        <ColumnHeading id="flow-issue" label="Issue" />
 
-        <ol class="lane-flow">
-          <li>
-            <span class="step-number">01</span>
-            <div>
-              <h3>Eligibility</h3>
-              <p>Ignore issues before the fixed legacy cutoff. Owned repositories enable Issue triage by default.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">02</span>
-            <div>
-              <h3>Issue triage</h3>
-              <p>The triage agent checks the default branch, reproduction, comments, hidden scope, difficulty, and impact in a Git worktree.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">03</span>
-            <div>
-              <h3>Triage result</h3>
-              <div class="branch-grid">
-                <span><strong>Invalid</strong>Record why.</span>
-                <span><strong>Needs information</strong>Record the missing evidence.</span>
-                <span><strong>Valid</strong>Record the next action.</span>
-              </div>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">04</span>
-            <div>
-              <h3>Approval</h3>
-              <p>Harlan's valid issues continue automatically. An outside contributor's issue waits for approval of that exact issue state.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">05</span>
-            <div>
-              <h3>Issue work</h3>
-              <p>The triage agent resumes its own session, makes the change, and runs focused checks. The controller verifies and commits the result.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">06</span>
-            <div>
-              <h3>Draft pull request</h3>
-              <p>The controller pushes the pinned commit to an allowed branch, then opens one pull request ready for review.</p>
+        <ol class="flex flex-col gap-2 rounded-lg bg-muted p-2">
+          <li v-for="(step, index) in issueSteps" :key="step.title" class="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2 rounded-md border border-default bg-elevated p-3">
+            <span class="font-mono text-sm text-dimmed">{{ stepNumber(index) }}</span>
+            <div class="min-w-0">
+              <h3 class="font-medium">
+                {{ step.title }}
+              </h3>
+              <p v-if="step.text" class="mt-0.5 text-sm text-muted">
+                {{ step.text }}
+              </p>
+              <ul v-if="step.branches" class="mt-2 grid gap-1.5 sm:grid-cols-2" role="list">
+                <li v-for="branch in step.branches" :key="branch.title" class="rounded-sm border px-2 py-1.5 text-sm" :class="markerClass[branch.marker]">
+                  <span class="block font-medium" :class="branch.marker === 'decision' ? 'status-warning' : undefined">{{ branch.title }}</span>
+                  <span class="block text-muted">{{ branch.text }}</span>
+                </li>
+              </ul>
             </div>
           </li>
         </ol>
       </section>
     </div>
 
-    <section aria-labelledby="recovery-heading" class="mb-12">
-      <h2 id="recovery-heading" class="mb-4 text-lg font-semibold">
-        Automatic recovery
-      </h2>
-      <div class="overflow-hidden rounded-md border border-default bg-elevated">
-        <ul class="divide-y divide-default" role="list">
-          <li class="recovery-row">
-            <UIcon name="i-lucide-git-commit-horizontal" class="text-dimmed" aria-hidden="true" />
-            <span><strong>Base branch moved</strong><span>Refresh the current base and continue conflict repair.</span></span>
-            <UBadge color="success" variant="subtle" class="status-success">
-              Requeue
-            </UBadge>
-          </li>
-          <li class="recovery-row">
-            <UIcon name="i-lucide-braces" class="text-dimmed" aria-hidden="true" />
-            <span><strong>Invalid agent result</strong><span>Use the strict response schema, then retry on the next GitHub poll.</span></span>
-            <UBadge color="success" variant="subtle" class="status-success">
-              Requeue
-            </UBadge>
-          </li>
-          <li class="recovery-row">
-            <UIcon name="i-lucide-git-merge" class="text-dimmed" aria-hidden="true" />
-            <span><strong>Conflicts return</strong><span>Restore the conflict repair task for that pull request state.</span></span>
-            <UBadge color="success" variant="subtle" class="status-success">
-              Requeue
-            </UBadge>
-          </li>
-          <li class="recovery-row">
-            <UIcon name="i-lucide-git-pull-request-closed" class="text-dimmed" aria-hidden="true" />
-            <span><strong>Head changed, closed, or merged</strong><span>Stop old work within five seconds and follow the current GitHub state.</span></span>
-            <UBadge color="neutral" variant="subtle">
-              Stop old agent
-            </UBadge>
-          </li>
-          <li class="recovery-row">
-            <UIcon name="i-lucide-circle-x" class="text-dimmed" aria-hidden="true" />
-            <span><strong>Task cancelled</strong><span>Stop the agent and keep that task cancelled for the current commit.</span></span>
-            <UBadge color="neutral" variant="subtle">
-              Cancel
-            </UBadge>
-          </li>
-        </ul>
-      </div>
+    <section aria-labelledby="flow-recovery" class="flex flex-col gap-3">
+      <ColumnHeading id="flow-recovery" label="Automatic recovery" />
+      <ul class="divide-y divide-default" role="list">
+        <li v-for="row in recovery" :key="row.title" class="grid min-h-11 grid-cols-[1rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[1rem_minmax(0,1fr)_auto]">
+          <UIcon :name="row.icon" class="size-4 text-dimmed" aria-hidden="true" />
+          <span class="min-w-0">
+            <span class="font-medium">{{ row.title }}</span>
+            <span class="block text-sm text-muted">{{ row.text }}</span>
+          </span>
+          <UBadge color="neutral" variant="outline" class="col-start-2 justify-self-start sm:col-start-3">
+            {{ row.result }}
+          </UBadge>
+        </li>
+      </ul>
     </section>
 
-    <section aria-labelledby="gaps-heading" class="mb-12">
-      <h2 id="gaps-heading" class="mb-4 text-lg font-semibold">
-        Known gaps
-      </h2>
-      <div class="grid gap-3 md:grid-cols-2">
-        <details class="gap-disclosure">
-          <summary>
-            Claude review is not running
-            <UBadge color="error" variant="subtle" class="status-error">
-              Not connected
-            </UBadge>
-          </summary>
-          <p>The data model permits Claude evidence, but the service starts Codex or opencode agents only. No Claude CLI review is dispatched.</p>
-        </details>
-        <details class="gap-disclosure">
-          <summary>
-            Deployment ownership is not running
-            <UBadge color="error" variant="subtle" class="status-error">
-              Not connected
-            </UBadge>
-          </summary>
-          <p>Site deployment and smoke rules exist in configuration and skills. The service does not watch merge deployment or run production smoke checks.</p>
-        </details>
-      </div>
+    <section aria-labelledby="flow-gaps" class="flex flex-col gap-3">
+      <ColumnHeading id="flow-gaps" label="Known gaps" :count="gaps.length" tone="error" />
+      <ul class="grid gap-2 md:grid-cols-2" role="list">
+        <li v-for="gap in gaps" :key="gap.title" class="rounded-md border p-3" :class="markerClass.gap">
+          <span class="font-medium">{{ gap.title }}</span>
+          <span class="block text-sm text-muted">{{ gap.text }}</span>
+        </li>
+      </ul>
     </section>
 
-    <section aria-labelledby="boundary-heading">
-      <h2 id="boundary-heading" class="mb-4 text-lg font-semibold">
-        Who can do what
-      </h2>
-      <div class="grid divide-y divide-default overflow-hidden rounded-md border border-default bg-elevated md:grid-cols-3 md:divide-x md:divide-y-0">
-        <div class="p-5">
-          <UIcon name="i-lucide-bot" class="mb-3 size-5 text-dimmed" aria-hidden="true" />
-          <h3 class="font-medium">
-            Agents
-          </h3>
-          <p class="mt-2 text-sm text-muted">
-            Run with the global agent context in one Git worktree. They can use authenticated GitHub reads for project history.
-          </p>
-        </div>
-        <div class="p-5">
-          <UIcon name="i-lucide-shield-check" class="mb-3 size-5 text-dimmed" aria-hidden="true" />
-          <h3 class="font-medium">
-            Controller
-          </h3>
-          <p class="mt-2 text-sm text-muted">
-            Checks the current head, repository policy, artifact, and App access before every GitHub write.
-          </p>
-        </div>
-        <div class="p-5">
-          <UIcon name="i-lucide-user-check" class="mb-3 size-5 text-dimmed" aria-hidden="true" />
-          <h3 class="font-medium">
-            Harlan
-          </h3>
-          <p class="mt-2 text-sm text-muted">
-            Approves one review and repair workflow. Controller-published repair commits continue that approval.
-          </p>
-        </div>
-      </div>
+    <section aria-labelledby="flow-roles" class="flex flex-col gap-3">
+      <ColumnHeading id="flow-roles" label="Who can do what" />
+      <ul class="grid divide-y divide-default rounded-md border border-default bg-elevated md:grid-cols-3 md:divide-x md:divide-y-0" role="list">
+        <li v-for="role in roles" :key="role.title" class="p-3">
+          <span class="flex items-center gap-2 font-medium">
+            <UIcon :name="role.icon" class="size-4 text-dimmed" aria-hidden="true" />
+            {{ role.title }}
+          </span>
+          <span class="mt-1 block text-sm text-muted">{{ role.text }}</span>
+        </li>
+      </ul>
     </section>
   </div>
 </template>
-
-<style scoped>
-.entry-flow {
-  display: grid;
-  align-items: stretch;
-  gap: 0.5rem;
-}
-
-.flow-node {
-  display: flex;
-  min-height: 6rem;
-  align-items: flex-start;
-  gap: 0.75rem;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius);
-  background: var(--ui-bg-elevated);
-  padding: 1rem;
-}
-
-.flow-node strong {
-  font-weight: 500;
-}
-
-.flow-node span span {
-  display: block;
-  margin-top: 0.25rem;
-  color: var(--ui-text-muted);
-  font-size: 0.875rem;
-}
-
-.flow-connector {
-  display: grid;
-  min-height: 2rem;
-  place-items: center;
-  color: var(--ui-text-dimmed);
-  rotate: 90deg;
-}
-
-.lane-flow > li {
-  display: grid;
-  grid-template-columns: 1.75rem minmax(0, 1fr);
-  gap: 1rem;
-  padding: 1.25rem;
-}
-
-.lane-flow > li:not(:last-child) {
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.lane-flow h3 {
-  font-weight: 500;
-}
-
-.lane-flow p {
-  margin-top: 0.375rem;
-  color: var(--ui-text-muted);
-  font-size: 0.875rem;
-}
-
-.step-number {
-  padding-top: 0.15rem;
-  color: var(--ui-text-dimmed);
-  font-family: var(--font-mono);
-  font-size: 0.875rem;
-}
-
-.branch-grid {
-  display: grid;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-}
-
-/* Branches carry the legend dot, so they read the same here as in the key. */
-.branch-grid > span {
-  position: relative;
-  border-radius: var(--ui-radius);
-  background: var(--ui-bg-muted);
-  padding: 0.65rem 0.75rem 0.65rem 1.5rem;
-  color: var(--ui-text-muted);
-  font-size: 0.875rem;
-}
-
-.branch-grid > span::before {
-  position: absolute;
-  top: 1.05rem;
-  left: 0.7rem;
-  border-radius: 999px;
-  background: var(--ui-success);
-  block-size: 0.375rem;
-  content: '';
-  inline-size: 0.375rem;
-}
-
-.branch-grid > .decision::before {
-  background: var(--ui-warning);
-}
-
-.branch-grid strong {
-  display: block;
-  color: var(--ui-text);
-  font-weight: 500;
-}
-
-.recovery-row {
-  display: grid;
-  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.875rem;
-  padding: 1rem;
-}
-
-.recovery-row strong {
-  font-weight: 500;
-}
-
-.recovery-row span span {
-  display: block;
-  color: var(--ui-text-muted);
-  font-size: 0.875rem;
-}
-
-/* Dashed is reserved for documented but unconnected service paths. */
-.gap-disclosure {
-  border: 1px dashed color-mix(in oklab, var(--ui-error) 45%, var(--ui-border));
-  border-radius: var(--ui-radius);
-  background: var(--ui-bg-elevated);
-}
-
-.gap-disclosure summary {
-  display: flex;
-  cursor: pointer;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 1rem;
-  font-weight: 500;
-}
-
-.gap-disclosure p {
-  border-top: 1px dashed var(--ui-border);
-  padding: 1rem;
-  color: var(--ui-text-muted);
-  font-size: 0.875rem;
-}
-
-@media (min-width: 48rem) {
-  .entry-flow {
-    grid-template-columns: minmax(0, 1fr) 2rem minmax(0, 1fr) 2rem minmax(0, 1fr) 2rem minmax(0, 1fr);
-  }
-
-  .flow-connector {
-    rotate: 0deg;
-  }
-
-  .branch-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 47.999rem) {
-  .recovery-row {
-    grid-template-columns: 1.25rem minmax(0, 1fr);
-  }
-
-  .recovery-row > :last-child {
-    grid-column: 2;
-    justify-self: start;
-  }
-}
-</style>

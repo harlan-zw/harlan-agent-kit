@@ -167,14 +167,24 @@ export function activeProviderCircuits(circuits: ProviderCircuit[]): ProviderCir
   return circuits.filter(circuit => circuit.state._tag !== 'Closed')
 }
 
-export const agentRoleLabels: Array<[AgentRole, string]> = [
-  ['adversarial_review', 'Review'],
-  ['baseline_repair', 'Baseline repair'],
-  ['conflict_resolution', 'Conflict resolution'],
-  ['issue_triage', 'Issue triage'],
-  ['issue_work', 'Issue work'],
-  ['review_fix', 'Repair'],
-]
+/** One label per Agent role. The Record makes a missing role a type error, not a fallthrough. */
+const workLabels: Record<AgentRole, string> = {
+  adversarial_review: 'Review',
+  pull_request_triage: 'Pull request triage',
+  review_fix: 'Repair',
+  conflict_resolution: 'Conflict resolution',
+  baseline_repair: 'Baseline repair',
+  issue_triage: 'Issue triage',
+  issue_work: 'Issue work',
+  routine_scan: 'Routine scan',
+  routine_fix: 'Routine fix',
+}
+
+export const agentRoleLabels: Array<[AgentRole, string]> = Object.entries(workLabels) as Array<[AgentRole, string]>
+
+export function workLabel(work: AgentRole): string {
+  return workLabels[work]
+}
 
 const terminalTaskStates = new Set(['Completed', 'Failed', 'Superseded'])
 
@@ -222,18 +232,6 @@ export function repositoryState(repository: RepositoryStatus): { label: string, 
   return { label: 'Healthy', tone: 'success' }
 }
 
-export function activeAgentRole(agent: ActiveAgent): string {
-  if (agent.role === 'adversarial_review')
-    return 'Adversarial review'
-  if (agent.role === 'issue_triage')
-    return 'Issue triage'
-  if (agent.role === 'review_fix')
-    return 'Repair'
-  if (agent.role === 'baseline_repair')
-    return 'Baseline repair'
-  return 'Conflict resolution'
-}
-
 export function activeAgentProgress(agent: ActiveAgent): string {
   if (agent.state._tag === 'Publishing')
     return 'Fix verified. Waiting to push the commit.'
@@ -272,10 +270,11 @@ export function activeAgentActivity(agent: ActiveAgent): AgentActivityPresentati
     return { at: activity.at, text: conciseActivityText(text), tone: 'muted' }
   }
 
+  /* Percent never shows. The board reports phase and elapsed, not a progress number. */
   if (activity._tag === 'Progress') {
     return {
       at: activity.at,
-      text: conciseActivityText(`${activity.percent}% · ${activity.text}`),
+      text: conciseActivityText(activity.text) || 'Working',
       tone: 'muted',
     }
   }
@@ -285,18 +284,6 @@ export function activeAgentActivity(agent: ActiveAgent): AgentActivityPresentati
     text: conciseActivityText(activity.text) || 'Planning the next step',
     tone: 'muted',
   }
-}
-
-export function workLabel(work: AgentRole): string {
-  if (work === 'adversarial_review')
-    return 'Adversarial review'
-  if (work === 'issue_triage')
-    return 'Issue triage'
-  if (work === 'issue_work')
-    return 'Issue work'
-  if (work === 'baseline_repair')
-    return 'Baseline repair'
-  return work === 'review_fix' ? 'Repair' : 'Conflict resolution'
 }
 
 /** Whether the engine is currently allowed to start queued work. */
@@ -322,72 +309,137 @@ export function isIssueWorkThrottled(entry: QueueEntry, context: QueueContext): 
     && context.openPullRequests >= context.maxOpenPullRequests
 }
 
-export function queueStateLabel(entry: QueueEntry, context: QueueContext): string {
-  switch (entry.state._tag) {
-    case 'Active': return 'Active'
-    case 'ActionRequired': return 'Action required'
-    case 'AwaitingApproval': return entry.state.kind === 'issue_work'
-      ? 'Issue approval'
-      : 'Review and repair approval'
-    case 'Queued':
-      if (isIssueWorkThrottled(entry, context))
-        return 'Too many open pull requests'
-      if (context.agentStart._tag === 'Available')
-        return 'Queued'
-      if (context.agentStart._tag === 'Paused')
-        return 'Agents paused'
-      if (context.agentStart._tag === 'RestartRequested')
-        return 'Restart requested'
-      if (context.agentStart._tag === 'ReserveReached')
-        return 'Reserve reached'
-      return context.agentStart._tag === 'CapacityUnavailable' ? 'Agent provider unavailable' : 'Agents disabled'
-    case 'Pending': return 'Pending'
+function queueContextOf(snapshot: DashboardSnapshot): QueueContext {
+  return {
+    agentStart: agentStartState(snapshot),
+    openPullRequests: snapshot.openPullRequests,
+    maxOpenPullRequests: snapshot.maxOpenPullRequests,
+    selectionMode: snapshot.selectionMode,
   }
 }
 
-export function queueStateTone(entry: QueueEntry): StatusTone | 'neutral' {
-  switch (entry.state._tag) {
-    case 'Active': return 'success'
-    case 'ActionRequired': return 'error'
-    case 'AwaitingApproval': return 'warning'
-    case 'Queued': return 'primary'
-    case 'Pending': return 'neutral'
+/** Why queued work cannot start right now, in one sentence. Absent while it can. */
+function startBlockedLine(snapshot: DashboardSnapshot): string | undefined {
+  switch (agentStartState(snapshot)._tag) {
+    case 'Available': return undefined
+    case 'Paused': return 'Paused. Nothing starts until you select Resume.'
+    case 'RestartRequested': return 'A Restart request is finishing active work.'
+    case 'WritesDisabled': return 'GitHub writes are off, so no agent will start.'
+    case 'ReserveReached': return 'Every automatic Agent provider reached its Reserve.'
+    case 'CapacityUnavailable': return 'Agent provider limits could not load. The controller will retry.'
   }
 }
 
-export function queueDetail(entry: QueueEntry, context: QueueContext): string {
-  switch (entry.state._tag) {
-    case 'Active': return `${workLabel(entry.state.work)} is running.`
-    case 'ActionRequired': return entry.state.reason
-    case 'AwaitingApproval': return entry.state.kind === 'issue_work'
-      ? 'Issue work requires your approval.'
-      : 'Review and repairs require your approval.'
-    case 'Queued':
-      if (isIssueWorkThrottled(entry, context)) {
-        return `Issue work stops above ${context.maxOpenPullRequests} open pull requests, and ${context.openPullRequests} are open. Merge or close some to start it.`
-      }
-      if (context.agentStart._tag === 'Available')
-        return `${workLabel(entry.state.work)} will start when an agent is free.`
-      if (context.agentStart._tag === 'Paused')
-        return 'Pause is on. Select Resume to start this Task.'
-      if (context.agentStart._tag === 'RestartRequested')
-        return 'The Restart request will finish current work before this Task starts.'
-      if (context.agentStart._tag === 'ReserveReached')
-        return 'Every automatic Agent provider reached its Reserve. Work starts after a limit resets.'
-      if (context.agentStart._tag === 'CapacityUnavailable')
-        return 'Agent provider limits could not load. The controller will retry.'
-      return 'GitHub writes are off. Enable them in the configuration, then restart the service.'
-    case 'Pending': return entry.state.reason
+function throttledLine(snapshot: DashboardSnapshot): string {
+  return `Issue work stops above ${snapshot.maxOpenPullRequests} open pull requests, and ${snapshot.openPullRequests} are open.`
+}
+
+export type BoardColumn = 'needsYou' | 'upNext' | 'running' | 'done'
+
+/**
+ * What an empty column says, and whether it carries a control.
+ *
+ * `Paused` is the one cause the reader can clear from the board, so it is the
+ * one variant that renders a Resume button beside the line.
+ */
+export type ColumnEmptyReason
+  = | { _tag: 'Plain', text: string }
+    | { _tag: 'Paused', text: string }
+
+export function columnEmptyReason(column: BoardColumn, snapshot: DashboardSnapshot): ColumnEmptyReason {
+  switch (column) {
+    case 'needsYou': return { _tag: 'Plain', text: 'Nothing needs you.' }
+    case 'running': return { _tag: 'Plain', text: 'No agent is running.' }
+    case 'done': return { _tag: 'Plain', text: 'Nothing has finished yet.' }
+    case 'upNext': {
+      const start = agentStartState(snapshot)
+      if (start._tag === 'Paused')
+        return { _tag: 'Paused', text: 'Paused. Nothing will start.' }
+      const blocked = startBlockedLine(snapshot)
+      if (blocked !== undefined)
+        return { _tag: 'Plain', text: blocked }
+      if (snapshot.selectionMode === 'manual' && decisionEntries(snapshot.queue).length > 0)
+        return { _tag: 'Plain', text: 'Manual selection. Approve a pull request to queue it.' }
+      return { _tag: 'Plain', text: 'Nothing queued.' }
+    }
   }
 }
 
-/** Explains the consequence of approving, which the button label alone cannot. */
+export interface CardStateLine {
+  text: string
+  tone: 'muted' | 'warning' | 'error'
+}
+
+/**
+ * The one state line on a Queue card: why it needs you, why it waits, or what
+ * it is about to do. Present tense, one sentence, names the reason.
+ */
+export function cardStateLine(entry: QueueEntry, snapshot: DashboardSnapshot, now: Date): CardStateLine {
+  switch (entry.state._tag) {
+    case 'AwaitingApproval':
+      if (entry.state.kind === 'issue_work')
+        return { text: 'Outside contributor. Approval starts Issue work.', tone: 'warning' }
+      return snapshot.selectionMode === 'manual'
+        ? { text: 'Manual selection. Approval starts Review.', tone: 'warning' }
+        : { text: 'Outside contributor. Approval starts Review.', tone: 'warning' }
+    case 'ActionRequired':
+      return { text: entry.state.reason, tone: 'error' }
+    case 'Pending':
+      return { text: entry.state.reason, tone: 'muted' }
+    case 'Queued': {
+      if (isIssueWorkThrottled(entry, queueContextOf(snapshot)))
+        return { text: throttledLine(snapshot), tone: 'muted' }
+      const blocked = startBlockedLine(snapshot)
+      if (blocked !== undefined)
+        return { text: blocked, tone: 'muted' }
+      return { text: 'Starts when an agent is free.', tone: 'muted' }
+    }
+    case 'Active': {
+      const seconds = Math.floor(secondsSince(entry.updatedAt, now))
+      if (seconds > stalledProgressSeconds)
+        return { text: `Starting for ${Math.floor(seconds / 60)}m with nothing reported.`, tone: 'warning' }
+      return { text: 'Starting.', tone: 'muted' }
+    }
+  }
+}
+
+/**
+ * The phase text beside a Running card's chip, or nothing when the phase only
+ * repeats the chip. "Repair" next to a Repair chip says nothing twice.
+ */
+export function runningPhaseLine(agent: ActiveAgent): string | undefined {
+  const text = activeAgentProgress(agent)
+  const normalized = text.trim().toLowerCase()
+  if (normalized.length === 0 || normalized === workChip(agent.role).label.toLowerCase() || normalized === workLabel(agent.role).toLowerCase())
+    return undefined
+  return text
+}
+
+/** The one primary action a Needs you card can carry. Absent when the card only reports. */
+export function approvalActionLabel(entry: QueueEntry): 'Review and repair' | 'Approve' | undefined {
+  if (entry.state._tag !== 'AwaitingApproval')
+    return undefined
+  return entry.state.kind === 'issue_work' ? 'Approve' : 'Review and repair'
+}
+
+/** Consequence first, in one sentence, as the Dismiss modal states it. */
+export function dismissConsequence(kind: 'issue' | 'pull_request'): string {
+  return kind === 'issue'
+    ? 'This issue will never run again, and any running work on it stops now.'
+    : 'This pull request will never run again, and any running work on it stops now.'
+}
+
+export function cancelConsequence(work: AgentRole | undefined): string {
+  return work === undefined ? 'This task stops now.' : `${workLabel(work)} stops now.`
+}
+
+/** What follows the start the state line already named, which the button label alone cannot say. */
 export function approvalConsequence(entry: QueueEntry): string {
   if (entry.state._tag !== 'AwaitingApproval')
     return ''
   return entry.state.kind === 'issue_work'
-    ? 'Approving starts issue work: the agent implements the change, then the controller opens a draft pull request.'
-    : 'Approving starts adversarial review, and lets the controller push verified repair commits to this branch.'
+    ? 'The agent implements the change, then the controller opens a draft pull request.'
+    : 'The controller may then push verified repair commits to this branch.'
 }
 
 export function decisionKey(entry: QueueEntry): string {
@@ -445,11 +497,18 @@ const incidentKindLabels: Record<IncidentKind, string> = {
   policy: 'Repository policy',
   rate_limit: 'Rate limit',
   runner_lost: 'Runner lost',
-  subject_changed: 'Item changed',
+  subject_changed: 'Head commit moved',
   unknown: 'Unclassified',
 }
 
+/**
+ * `subject_changed` means the GitHub state moved under the work. The GLOSSARY
+ * never names an Item, so the label says which state: an issue changed, or a
+ * pull request's head commit moved. The operation is the only hint of which.
+ */
 export function incidentKindLabel(incident: Incident): string {
+  if (incident.kind === 'subject_changed' && /issue/i.test(incident.operation))
+    return 'Issue changed'
   return incidentKindLabels[incident.kind] ?? incident.kind
 }
 
@@ -460,7 +519,7 @@ export function incidentTone(incident: Incident): StatusTone {
 /** Says what the controller will do next, so the pane answers "do I act on this?". */
 export function incidentRecoveryLabel(incident: Incident): string {
   if (incident.recovery._tag === 'Retrying')
-    return incident.recovery.attempt > 0 ? `Retrying · attempt ${incident.recovery.attempt}` : 'Retrying'
+    return incident.recovery.attempt > 0 ? `Retrying · retry ${incident.recovery.attempt}` : 'Retrying'
   return incident.recovery._tag === 'Exhausted' ? 'Retries exhausted' : 'Action required'
 }
 
@@ -615,13 +674,6 @@ export function buildHistory(reviewAgents: ReviewAgent[], tasks: DashboardTask[]
   return [...reviews, ...settled, ...routines].sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
 }
 
-/** The System pane keeps only enough finished work to confirm recent movement. */
-export function recentlyFinished(reviewAgents: ReviewAgent[], tasks: DashboardTask[]): HistoryRecord[] {
-  return buildHistory(reviewAgents, tasks)
-    .filter(record => historyCategory(record) !== 'superseded')
-    .slice(0, 3)
-}
-
 /**
  * What a card is for, as an icon and a word.
  *
@@ -635,15 +687,15 @@ export interface WorkChip {
 }
 
 const workChips: Record<AgentRole, WorkChip> = {
-  adversarial_review: { label: 'Review', icon: 'i-lucide-scan-eye' },
-  pull_request_triage: { label: 'Pull request triage', icon: 'i-lucide-list-checks' },
-  review_fix: { label: 'Repair', icon: 'i-lucide-wrench' },
-  conflict_resolution: { label: 'Conflict', icon: 'i-lucide-git-merge' },
-  baseline_repair: { label: 'Baseline', icon: 'i-lucide-heart-pulse' },
-  issue_triage: { label: 'Triage', icon: 'i-lucide-inbox' },
-  issue_work: { label: 'Issue work', icon: 'i-lucide-hammer' },
-  routine_scan: { label: 'Routine scan', icon: 'i-lucide-radar' },
-  routine_fix: { label: 'Routine fix', icon: 'i-lucide-clock-arrow-up' },
+  adversarial_review: { label: 'Review', icon: 'i-octicon-code-review-16' },
+  pull_request_triage: { label: 'Pull request triage', icon: 'i-octicon-checklist-16' },
+  review_fix: { label: 'Repair', icon: 'i-octicon-tools-16' },
+  conflict_resolution: { label: 'Conflict resolution', icon: 'i-octicon-git-merge-16' },
+  baseline_repair: { label: 'Baseline', icon: 'i-octicon-pulse-16' },
+  issue_triage: { label: 'Triage', icon: 'i-octicon-inbox-16' },
+  issue_work: { label: 'Issue work', icon: 'i-octicon-code-16' },
+  routine_scan: { label: 'Routine scan', icon: 'i-octicon-telescope-16' },
+  routine_fix: { label: 'Routine fix', icon: 'i-octicon-workflow-16' },
 }
 
 export const workChipEntries: Array<[AgentRole, WorkChip]> = Object.entries(workChips) as Array<[AgentRole, WorkChip]>
@@ -700,4 +752,194 @@ export function waitingEntries(queue: QueueEntry[]): QueueEntry[] {
 export function activeEntries(queue: QueueEntry[], activeAgents: ActiveAgent[]): QueueEntry[] {
   const running = new Set(activeAgents.map(agent => `${agent.repository}#${agent.itemNumber}`))
   return queue.filter(entry => entry.state._tag === 'Active' && !running.has(`${entry.repository}#${entry.number}`))
+}
+
+/**
+ * One card on the board. The variant is the column, decided once from state,
+ * so an entry can never render in two places or in none.
+ */
+export type BoardCard
+  = | { _tag: 'NeedsYou', key: string, entry: QueueEntry }
+    | { _tag: 'Queued', key: string, entry: QueueEntry }
+    | { _tag: 'Waiting', key: string, entry: QueueEntry }
+    | { _tag: 'Running', key: string, agent: ActiveAgent }
+    | { _tag: 'Starting', key: string, entry: QueueEntry }
+    | { _tag: 'Done', key: string, record: HistoryRecord }
+
+export interface BoardColumns {
+  needsYou: BoardCard[]
+  queued: BoardCard[]
+  waiting: BoardCard[]
+  running: BoardCard[]
+  done: BoardCard[]
+  /** Everything finished, including the records past the Done cut. */
+  doneTotal: number
+}
+
+/** Done holds eight. The ninth is a link to History. */
+export const doneOnBoard = 8
+
+function entryKey(entry: QueueEntry): string {
+  return `${entry.repository}#${entry.number}:${entry.state._tag}`
+}
+
+/** The work a card is for, or undefined for a condition that names none. */
+export function boardCardWork(card: BoardCard): AgentRole | undefined {
+  switch (card._tag) {
+    case 'Running': return card.agent.role
+    case 'Done': return card.record._tag === 'Review'
+      ? 'adversarial_review'
+      : card.record._tag === 'Task' ? taskWork(card.record.task) : 'routine_scan'
+    default: return queueWork(card.entry)
+  }
+}
+
+function finishedRecords(snapshot: DashboardSnapshot): HistoryRecord[] {
+  const reviews = snapshot.agents.filter((agent): agent is ReviewAgent => agent._tag === 'ReviewAgent')
+  return buildHistory(reviews, snapshot.tasks).filter(record => historyCategory(record) !== 'superseded')
+}
+
+/**
+ * Every card, placed. Throttled issue work waits, because a free agent cannot
+ * start it. Active work with no agent session yet lands in Running as Starting.
+ */
+export function boardColumns(snapshot: DashboardSnapshot, filter: AgentRole | 'all' = 'all'): BoardColumns {
+  const context = queueContextOf(snapshot)
+  const activeAgents = snapshot.agents.filter((agent): agent is ActiveAgent => agent._tag === 'ActiveAgent')
+  const keep = (card: BoardCard): boolean => filter === 'all' || boardCardWork(card) === filter
+  const queued = queuedEntries(snapshot.queue)
+  const finished = finishedRecords(snapshot)
+  const done = finished.map((record): BoardCard => ({ _tag: 'Done', key: record.key, record })).filter(keep)
+  return {
+    needsYou: decisionEntries(snapshot.queue).map((entry): BoardCard => ({ _tag: 'NeedsYou', key: entryKey(entry), entry })).filter(keep),
+    queued: queued
+      .filter(entry => !isIssueWorkThrottled(entry, context))
+      .map((entry): BoardCard => ({ _tag: 'Queued', key: entryKey(entry), entry }))
+      .filter(keep),
+    waiting: [
+      ...queued.filter(entry => isIssueWorkThrottled(entry, context)),
+      ...waitingEntries(snapshot.queue),
+    ].map((entry): BoardCard => ({ _tag: 'Waiting', key: entryKey(entry), entry })).filter(keep),
+    running: [
+      ...activeAgents.map((agent): BoardCard => ({ _tag: 'Running', key: agent.id, agent })),
+      ...activeEntries(snapshot.queue, activeAgents).map((entry): BoardCard => ({ _tag: 'Starting', key: entryKey(entry), entry })),
+    ].filter(keep),
+    done: done.slice(0, doneOnBoard),
+    doneTotal: done.length,
+  }
+}
+
+/** The kinds of work on the board right now, in chip order. The filter hides until two exist. */
+export function presentWorkKinds(columns: BoardColumns): Array<[AgentRole, WorkChip]> {
+  const present = new Set<AgentRole>()
+  const collect = (cards: BoardCard[]): void => cards.forEach((card) => {
+    const work = boardCardWork(card)
+    if (work !== undefined)
+      present.add(work)
+  })
+  collect(columns.needsYou)
+  collect(columns.queued)
+  collect(columns.waiting)
+  collect(columns.running)
+  collect(columns.done)
+  return workChipEntries.filter(([role]) => present.has(role))
+}
+
+export type CardAction = 'open' | 'rerun' | 'cancel' | 'dismiss'
+
+export interface CardActionContext {
+  /** The controller would accept a review run now. */
+  canRunReview: boolean
+  /** A live Task exists for this card, which is what Cancel acts on. */
+  hasTask: boolean
+}
+
+/**
+ * What the overflow menu offers, in menu order. Dismiss is always last.
+ * Done cards only open, because their record is history and not an Item to act on.
+ */
+export function cardActions(card: BoardCard, context: CardActionContext): CardAction[] {
+  if (card._tag === 'Done')
+    return ['open']
+  const actions: CardAction[] = ['open']
+  if (card._tag !== 'Running' && context.canRunReview)
+    actions.push('rerun')
+  if (context.hasTask)
+    actions.push('cancel')
+  actions.push('dismiss')
+  return actions
+}
+
+export interface CardIdentity {
+  author: string
+  title: string
+  url: string
+  repository: string
+  kind: 'issue' | 'pull_request'
+  number: number
+}
+
+/**
+ * Who opened it and what it is, for any card.
+ *
+ * A finished Task record carries no title or author of its own, so it borrows
+ * them from the open Item when the snapshot still holds one. Absent otherwise,
+ * and the card falls back to a bare repository and number.
+ */
+export function boardCardIdentity(card: BoardCard, snapshot: DashboardSnapshot): CardIdentity | undefined {
+  if (card._tag === 'Running') {
+    const { agent } = card
+    return { author: agent.author, title: agent.title, url: agent.subjectUrl, repository: agent.repository, kind: agent.subjectKind, number: agent.itemNumber }
+  }
+  if (card._tag !== 'Done') {
+    const { entry } = card
+    return { author: entry.author, title: entry.title, url: entry.subjectUrl, repository: entry.repository, kind: entry.kind, number: entry.number }
+  }
+  if (card.record._tag === 'Review') {
+    const { agent } = card.record
+    return { author: agent.author, title: agent.title, url: agent.subjectUrl, repository: agent.repository, kind: 'pull_request', number: agent.pullRequestNumber }
+  }
+  if (card.record._tag === 'Routine')
+    return undefined
+  const { task } = card.record
+  const number = taskNumber(task)
+  const item = snapshot.items.find(candidate => candidate.repository === task.repository && candidate.number === number)
+  if (item === undefined)
+    return undefined
+  return { author: item.author, title: item.title, url: item.url, repository: task.repository, kind: item.kind, number }
+}
+
+export interface CardBadge {
+  label: string
+  tone: 'success' | 'warning' | 'error' | 'neutral'
+  confidence?: number | undefined
+  uppercase: boolean
+}
+
+/** The one state or outcome badge a card carries in its slideover, and on its face when Done. */
+export function boardCardBadge(card: BoardCard): CardBadge {
+  switch (card._tag) {
+    case 'NeedsYou': return card.entry.state._tag === 'ActionRequired'
+      ? { label: 'Action required', tone: 'error', uppercase: false }
+      : { label: 'Approval required', tone: 'warning', uppercase: false }
+    case 'Queued': return { label: 'Queued', tone: 'neutral', uppercase: false }
+    case 'Waiting': return { label: 'Waiting', tone: 'neutral', uppercase: false }
+    case 'Running': return { label: 'Running', tone: 'success', uppercase: false }
+    case 'Starting': return { label: 'Starting', tone: 'neutral', uppercase: false }
+    case 'Done':
+      if (card.record._tag === 'Review') {
+        const { agent } = card.record
+        return {
+          label: agent.outcome._tag.toUpperCase(),
+          tone: reviewOutcomeTone(agent),
+          confidence: agent.outcome._tag === 'Ready' ? agent.outcome.confidence : undefined,
+          uppercase: true,
+        }
+      }
+      if (card.record._tag === 'Routine') {
+        const presentation = routineRunPresentation(card.record.run)
+        return { label: presentation.label, tone: presentation.tone === 'primary' ? 'neutral' : presentation.tone, uppercase: false }
+      }
+      return { label: card.record.task.state._tag, tone: taskStateTone(card.record.task), uppercase: false }
+  }
 }

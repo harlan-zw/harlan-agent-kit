@@ -5,7 +5,7 @@ import type { ButtonProps } from '@nuxt/ui'
  * Arms on the first press, fires on the second, disarms after five seconds.
  *
  * Cancel and Eject both end minutes of agent work, so neither may fire on one
- * misclick.
+ * misclick. Colour arrives only once the button is armed.
  */
 const {
   label,
@@ -54,8 +54,8 @@ onBeforeUnmount(() => clearTimeout(timer))
 <template>
   <UButton
     :size="size"
-    :color="color"
-    :variant="armed ? 'solid' : 'ghost'"
+    :color="armed ? color : 'neutral'"
+    :variant="armed ? 'outline' : 'ghost'"
     :icon="icon"
     :loading="loading"
     :disabled="disabled"

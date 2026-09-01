@@ -1,118 +1,64 @@
 <script setup lang="ts">
 import type { StatsWork } from '../../../src/stats.ts'
+import { barWidth, historyQuery, medianText, workKey, workResultText, workRole } from '../utils/stats.ts'
 
-const props = defineProps<{
+/** One row per kind of work. Evidence opens History filtered to this range and kind. */
+const { work, from, to } = defineProps<{
   work: StatsWork[]
   from: string
   to: string
 }>()
 
-const taskLabels = {
-  review_fix: 'Repair',
-  conflict_resolution: 'Conflict resolution',
-  baseline_repair: 'Baseline repair',
-  issue_triage: 'Issue triage',
-  issue_work: 'Issue work',
-} as const
-const maximumRuns = computed(() => Math.max(1, ...props.work.map(entry => entry.runs)))
-
-function runWidth(runs: number): string {
-  return `${runs === 0 ? 0 : Math.max(3, runs / maximumRuns.value * 100)}%`
-}
-
-function label(entry: StatsWork): string {
-  if (entry._tag === 'PullRequestTriage')
-    return 'Pull request triage'
-  if (entry._tag === 'Review')
-    return 'Review'
-  if (entry._tag === 'Routine')
-    return 'Routine'
-  return taskLabels[entry.work]
-}
-
-function result(entry: StatsWork): string {
-  if (entry._tag === 'PullRequestTriage')
-    return `${entry.reviewRequired} sent to Review, ${entry.reviewSkipped} skipped, ${entry.reviewRequiredAfterFailure} could not decide`
-  if (entry._tag === 'Review')
-    return `${entry.ready} ready, ${entry.pending} pending, ${entry.blocked} blocked, ${entry.findings} issues found`
-  if (entry._tag === 'Routine')
-    return `${entry.completed} completed, ${entry.actionRequired} action required, ${entry.failed} failed, ${entry.skipped} skipped`
-  return `${entry.completed} completed, ${entry.actionRequired} action required, ${entry.failed} failed, ${entry.publishedCommits} commits published`
-}
-
-function duration(milliseconds: number | null): string {
-  if (milliseconds === null)
-    return 'No duration yet'
-  if (milliseconds < 60_000)
-    return `${Math.max(1, Math.round(milliseconds / 1_000))}s median`
-  return `${Math.round(milliseconds / 60_000)}m median`
-}
-
-function historyWork(entry: StatsWork): string {
-  if (entry._tag === 'PullRequestTriage')
-    return 'pull_request_triage'
-  if (entry._tag === 'Review')
-    return 'adversarial_review'
-  if (entry._tag === 'Routine')
-    return 'routine_scan'
-  return entry.work
-}
-
-function historyLink(entry: StatsWork): { path: string, query: Record<string, string> } {
-  return { path: '/history', query: { from: props.from, to: props.to, work: historyWork(entry) } }
-}
+const maximumRuns = computed(() => Math.max(...work.map(entry => entry.runs), 0))
 </script>
 
 <template>
   <section class="min-w-0" aria-labelledby="stats-work-heading">
-    <div class="zone-header">
-      <h2 id="stats-work-heading" class="text-sm font-medium uppercase tracking-wide text-dimmed sm:text-xs">
-        Work results
-      </h2>
-      <hr class="zone-rule">
-    </div>
-    <div class="mt-4 max-w-full overflow-x-auto">
-      <table class="w-full min-w-[46rem] text-left text-sm">
-        <thead class="border-b border-default text-sm text-dimmed sm:text-xs">
+    <ColumnHeading id="stats-work-heading" label="Work" />
+    <div class="mt-3 max-w-full overflow-x-auto">
+      <table class="w-full min-w-[46rem] text-start text-sm" aria-labelledby="stats-work-heading">
+        <thead class="border-b border-default">
           <tr>
-            <th scope="col" class="pb-2 pr-4 font-medium">
+            <th scope="col" class="field-label px-3 py-2.5 text-start whitespace-nowrap">
               Work
             </th>
-            <th scope="col" class="pb-2 pr-4 text-right font-medium">
+            <th scope="col" class="field-label px-3 py-2.5 text-end whitespace-nowrap">
               Runs
             </th>
-            <th scope="col" class="pb-2 px-4 font-medium">
+            <th scope="col" class="field-label px-3 py-2.5 text-start whitespace-nowrap">
               Results
             </th>
-            <th scope="col" class="pb-2 px-4 text-right font-medium">
+            <th scope="col" class="field-label px-3 py-2.5 text-end whitespace-nowrap">
               Time
             </th>
-            <th scope="col" class="pb-2 pl-4 text-right font-medium">
+            <th scope="col" class="field-label px-3 py-2.5 text-end whitespace-nowrap">
               Evidence
             </th>
           </tr>
         </thead>
         <tbody class="divide-y divide-default">
-          <tr v-for="entry in work" :key="entry._tag === 'Task' ? entry.work : entry._tag">
-            <th scope="row" class="py-3 pr-4 font-medium">
-              {{ label(entry) }}
+          <tr v-for="entry in work" :key="workKey(entry)" class="transition-colors hover:bg-muted">
+            <th scope="row" class="px-3 py-3 text-start font-normal whitespace-nowrap">
+              <WorkChip :work="workRole(entry)" />
             </th>
-            <td class="px-4 py-3 text-right font-mono tabular-nums">
-              {{ entry.runs }}
-              <div class="ml-auto mt-1 h-1 w-16 bg-muted" aria-hidden="true">
-                <div class="h-full bg-primary/75" :style="{ width: runWidth(entry.runs) }" />
-              </div>
+            <td class="px-3 py-3 text-end whitespace-nowrap">
+              <span class="inline-flex items-center justify-end gap-2">
+                <span class="h-1 w-16 bg-muted" aria-hidden="true">
+                  <span class="block h-full bg-inverted" :style="{ width: barWidth(entry.runs, maximumRuns) }" />
+                </span>
+                <span class="font-mono font-medium">{{ entry.runs }}</span>
+              </span>
             </td>
-            <td class="px-4 py-3 text-muted">
-              {{ result(entry) }}
+            <td class="px-3 py-3 text-muted">
+              {{ workResultText(entry) }}
             </td>
-            <td class="px-4 py-3 text-right font-mono text-sm text-dimmed sm:text-xs">
-              {{ duration(entry.medianDurationMs) }}
+            <td class="px-3 py-3 text-end font-mono whitespace-nowrap text-muted">
+              {{ medianText(entry.medianDurationMs) }}
             </td>
-            <td class="py-3 pl-4 text-right">
-              <NuxtLink :to="historyLink(entry)" class="entity-link">
-                History
-              </NuxtLink>
+            <td class="px-3 py-3 text-end whitespace-nowrap">
+              <UButton :to="{ path: '/history', query: historyQuery(entry, { from, to }) }" size="xs" color="neutral" variant="ghost" trailing-icon="i-octicon-arrow-right-16">
+                Evidence
+              </UButton>
             </td>
           </tr>
         </tbody>
