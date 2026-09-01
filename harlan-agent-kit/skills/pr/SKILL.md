@@ -270,6 +270,8 @@ A visible change earns a picture, in that same comment. GitHub only accepts a pa
 # https://pr.harlanzw.com/<repo>/<branch>/after-9f2c1a04.png
 ```
 
+Resolve that path relative to this `SKILL.md` when `CLAUDE_SKILL_DIR` is unavailable. The service host sets no such variable.
+
 The URL carries a hash of the file, so a changed screenshot is a new URL and the edge can never serve the old one. Re-upload after every change and put the new URL in the comment. `~/.config/harlan-agent-kit/pr-assets.env` holds the account, the token, and the public host. Without it the script exits 2 and says what is missing; post the comment without the image rather than blocking the PR.
 
 Take the picture before you need it: [nuxt-frontend-review](../nuxt-frontend-review/SKILL.md) already captures the running page. Two images beat one, labelled `Before` and `After`:
