@@ -23,9 +23,20 @@ interface PullRequestPurposeInput {
 
 const baselineBranch = /(?:^|\/)baseline-ci-([a-f\d]{12,64})$/i
 
+/**
+ * True when the repository's controller actor opened this pull request.
+ *
+ * The actor is per repository: a repository the GitHub App cannot reach answers
+ * to Harlan's own account instead. Read it once where the actor is known, so
+ * nothing downstream has to guess from a branch name.
+ */
+export function isControllerOwned(authorLogin: string, actorLogin: string): boolean {
+  return authorLogin.toLowerCase() === actorLogin.toLowerCase()
+}
+
 /** Derives controller-owned work from GitHub state alone. */
 export function pullRequestPurpose(input: PullRequestPurposeInput): PullRequestPurpose {
-  const controllerOwned = input.authorLogin.toLowerCase() === input.actorLogin.toLowerCase()
+  const controllerOwned = isControllerOwned(input.authorLogin, input.actorLogin)
     && input.headRepository.toLowerCase() === input.repository.toLowerCase()
   if (!controllerOwned)
     return { _tag: 'Change' }

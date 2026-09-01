@@ -56,6 +56,7 @@ import { createReviewStatusScheduler } from './review-status-scheduler.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
 import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
 import { createRoutineReportController } from './routine-report-controller.ts'
+import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 import { createRoutineScanWorker } from './routine-worker.ts'
 import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
@@ -806,6 +807,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           routineFailures.push(`${repository}: the Routine spec was refused. ${outcome.reason}`)
         if (outcome._tag === 'Unread')
           routineFailures.push(`${repository}: the Routine spec could not be read. ${outcome.reason}`)
+        // A repository that never declared a Routine has nothing to report. One
+        // whose spec disappeared just lost its schedule, so it does.
+        if (outcome._tag === 'Absent' && outcome.retired.length > 0)
+          routineFailures.push(`${repository}: ${ROUTINE_SPEC_PATH} is gone, so ${outcome.retired.length} routines were retired: ${outcome.retired.join(', ')}.`)
         if (outcome._tag === 'Synced' && outcome.routines.length > 0)
           options.logger.info(`${repository}: ${outcome.routines.length} routines declared.`)
       })

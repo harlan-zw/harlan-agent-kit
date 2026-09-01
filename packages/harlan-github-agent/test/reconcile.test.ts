@@ -141,7 +141,7 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
-  it('counts only open pull requests in enabled repositories', async () => {
+  it('counts only the controller pull requests open in enabled repositories', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
@@ -150,8 +150,11 @@ describe('gitHub reconciliation', () => {
     const github = {
       ...noPullRequestRead,
       listOpenItems: () => Promise.resolve(ok([
-        pullRequestItem({ number: 24 }),
-        pullRequestItem({ number: 25 }),
+        pullRequestItem({ number: 24, controllerOwned: true }),
+        pullRequestItem({ number: 25, controllerOwned: true }),
+        // Somebody else's pull request. The controller cannot close it, so
+        // counting it would throttle automated work behind work it never owned.
+        pullRequestItem({ number: 26, controllerOwned: false }),
         issueItem({ number: 12, author: 'harlan-zw' }),
       ])),
     }
@@ -162,11 +165,14 @@ describe('gitHub reconciliation', () => {
     await reconcileRepository(repository, {
       github: {
         getPullRequest: () => Promise.resolve(ok({
-          ...pullRequestItem({ number: 25 }),
+          ...pullRequestItem({ number: 25, controllerOwned: true }),
           state: 'closed' as const,
           mergedAt: null,
         })),
-        listOpenItems: () => Promise.resolve(ok([pullRequestItem({ number: 24 })])),
+        listOpenItems: () => Promise.resolve(ok([
+          pullRequestItem({ number: 24, controllerOwned: true }),
+          pullRequestItem({ number: 26, controllerOwned: false }),
+        ])),
       },
       store,
       now: () => new Date('2026-08-13T02:00:00.000Z'),
@@ -259,7 +265,7 @@ describe('gitHub reconciliation', () => {
       externalId: 'pull-request-before-read-failure',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: pullRequestItem(),
+      subject: pullRequestItem({ controllerOwned: true }),
     })
 
     const result = await reconcileRepository(repository, {

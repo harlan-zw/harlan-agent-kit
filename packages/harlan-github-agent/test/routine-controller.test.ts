@@ -49,7 +49,35 @@ describe('syncing one repository Routine spec', () => {
         store,
       })
 
-      expect(outcome).toEqual({ _tag: 'Absent' })
+      expect(outcome).toEqual({ _tag: 'Absent', retired: [] })
+      expect(store.listRoutines()).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('names the routines it retires when a declared spec disappears', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await syncRepositoryRoutines(repositoryMapping(), {
+        github: githubReturning(ok({
+          _tag: 'Present',
+          specSha: 'abc123',
+          text: 'version: 1\nroutines:\n  - name: sentry-checkin\n    on:\n      schedule:\n        - cron: "0 5 * * *"\n    timezone: Australia/Sydney\n    mode: propose\n    enabled: true\n',
+        })),
+        now: at(),
+        store,
+      })
+      expect(store.listRoutines().map(routine => routine.name)).toEqual(['sentry-checkin'])
+
+      const outcome = await syncRepositoryRoutines(repositoryMapping(), {
+        github: githubReturning(ok({ _tag: 'Absent', specSha: 'def456' })),
+        now: at(),
+        store,
+      })
+
+      expect(outcome).toEqual({ _tag: 'Absent', retired: ['sentry-checkin'] })
       expect(store.listRoutines()).toEqual([])
     }
     finally {

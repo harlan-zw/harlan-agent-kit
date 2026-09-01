@@ -2709,7 +2709,7 @@ function dashboardQueue(
                 kind: 'issue',
                 state: {
                   _tag: 'Pending',
-                  reason: `${subject.repository} reached its limit of ${limit} open ${pullRequest}. Merge or close one to start Issue work.`,
+                  reason: `${subject.repository} reached its limit of ${limit} open automated ${pullRequest}. Merge or close one to start Issue work.`,
                 },
               }]
             }
@@ -6887,6 +6887,7 @@ export function openJournalStore(
       WHERE subjects.kind = 'pull_request'
         AND repositories.enabled = 1
         AND json_extract(revisions.payload, '$.state') = 'open'
+        AND json_extract(revisions.payload, '$.controllerOwned') = 1
     `).get() as { total: number }
     return row.total
   }
@@ -7141,6 +7142,10 @@ export function openJournalStore(
                 AND pull_request_approvals.kind = 'fixes'
             )
           )
+          -- The throttle asks how much automated work already waits on Harlan,
+          -- so it counts only pull requests the controller opened. Counting
+          -- everybody's held every issue Task queued for a day behind thirty
+          -- open pull requests the controller could never close.
           AND (
             tasks.kind != 'issue_work'
             OR (SELECT selection_mode FROM agent_control WHERE singleton = 1) = 'manual'
@@ -7153,6 +7158,7 @@ export function openJournalStore(
                 WHERE open_subjects.kind = 'pull_request'
                   AND open_repositories.enabled = 1
                   AND json_extract(open_revisions.payload, '$.state') = 'open'
+                  AND json_extract(open_revisions.payload, '$.controllerOwned') = 1
               ) < ?
               AND (
                 json_extract(repositories.policy_json, '$.maxOpenPullRequests') IS NULL
@@ -7163,6 +7169,7 @@ export function openJournalStore(
                   WHERE repository_subjects.repository_id = subjects.repository_id
                     AND repository_subjects.kind = 'pull_request'
                     AND json_extract(repository_revisions.payload, '$.state') = 'open'
+                    AND json_extract(repository_revisions.payload, '$.controllerOwned') = 1
                 ) < json_extract(repositories.policy_json, '$.maxOpenPullRequests')
               )
             )
@@ -10419,11 +10426,21 @@ export function openJournalStore(
       ...reviewAgents,
     ]
     const mappings = new Map(subjectRows.map(row => [row.repository, JSON.parse(row.policy_json) as RepositoryMapping]))
-    const openPullRequestsByRepository = new Map<string, number>()
-    items.forEach((item) => {
-      if (item.kind === 'pull_request' && item.state === 'open')
-        openPullRequestsByRepository.set(item.repository, (openPullRequestsByRepository.get(item.repository) ?? 0) + 1)
-    })
+    // Asks the Revision payload the same question the claim gate asks, so the
+    // reason the dashboard shows for a held issue matches the reason the
+    // scheduler acted on. The subject projection has no controller-owned
+    // column, and a second rule here would drift from the gate.
+    const openPullRequestsByRepository = new Map((database.prepare(`
+      SELECT repositories.github AS repository, COUNT(*) AS total
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE subjects.kind = 'pull_request'
+        AND json_extract(revisions.payload, '$.state') = 'open'
+        AND json_extract(revisions.payload, '$.controllerOwned') = 1
+      GROUP BY repositories.github
+    `).all() as unknown as Array<{ repository: string, total: number }>)
+      .map(row => [row.repository, row.total] as const))
     const currentSelectionMode = selectionMode(database)
     const reviewResolutionRows = database.prepare(`
       SELECT repositories.github AS repository, subjects.github_number, review_resolutions.revision_id,

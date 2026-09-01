@@ -168,6 +168,16 @@ export interface GitHubPullRequestItem extends GitHubItemBase {
   mergeState: 'clean' | 'conflicting' | 'unknown'
   /** Why this pull request exists, derived from marked GitHub state. */
   purpose: PullRequestPurpose
+  /**
+   * True when the controller opened this pull request.
+   *
+   * The open pull request throttle asks how much automated work is already
+   * waiting on Harlan. Only a pull request the controller opened answers that,
+   * so the author is compared to the repository actor once here, at the
+   * observation boundary, where the actor is known. Absent on Revisions
+   * observed before the controller recorded it.
+   */
+  controllerOwned?: boolean
   priorAutomatedReview: PriorAutomatedReview
 }
 

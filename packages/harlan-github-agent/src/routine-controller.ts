@@ -9,7 +9,8 @@ import { parseRoutineSpec } from './routine-spec.ts'
 /** What syncing one repository's spec decided, for the caller to report. */
 export type RoutineSyncOutcome
   = | { _tag: 'Synced', routines: Routine[] }
-    | { _tag: 'Absent' }
+    /** `retired` names the Routines this repository declared until the spec went. */
+    | { _tag: 'Absent', retired: string[] }
     | { _tag: 'Refused', reason: string }
     | { _tag: 'Unread', reason: string }
 
@@ -17,7 +18,7 @@ export interface RoutineSyncDependencies {
   github: Pick<GitHubSource, 'readRoutineSpec'>
   now: () => Date
   signal?: AbortSignal
-  store: Pick<JournalStore, 'getRoutineRun' | 'listCandidates' | 'stageCandidateIssues' | 'syncRoutines'>
+  store: Pick<JournalStore, 'getRoutineRun' | 'listCandidates' | 'listRoutines' | 'stageCandidateIssues' | 'syncRoutines'>
 }
 
 /**
@@ -41,13 +42,19 @@ export async function syncRepositoryRoutines(
 
   const at = dependencies.now().toISOString()
   if (source.value._tag === 'Absent') {
+    // A spec nobody can read retires every Routine it declared. That is right
+    // when somebody deleted the file, and it is wrong to do it quietly: a
+    // release that moves the spec path reads as Absent everywhere at once, and
+    // the whole fleet's schedule went with no log and no Incident. Name what
+    // this call retired so the caller can report it.
+    const retired = dependencies.store.listRoutines(repository.github).map(routine => routine.name)
     dependencies.store.syncRoutines({
       repository: repository.github,
       specSha: source.value.specSha,
       entries: [],
       at,
     })
-    return { _tag: 'Absent' }
+    return { _tag: 'Absent', retired }
   }
 
   const spec = parseRoutineSpec(source.value.text)

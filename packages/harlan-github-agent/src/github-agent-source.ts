@@ -6,7 +6,7 @@ import type { PriorAutomatedReview } from './review-comment.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
-import { pullRequestPurpose } from './baseline-repair-state.ts'
+import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
@@ -285,6 +285,11 @@ async function resolveFailedJobs(
   return new Map(resolved)
 }
 
+/** The label names in one GitHub answer, which mixes plain strings and objects. */
+function labelNames(labels: Array<string | { name?: string }>): string[] {
+  return labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])
+}
+
 function errorStatus(error: unknown): number | undefined {
   return typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
     ? error.status
@@ -328,6 +333,7 @@ function pullRequestItem(
       labels,
       repository: repository.github,
     }),
+    controllerOwned: isControllerOwned(pull.user?.login ?? 'ghost', actorLogin),
     priorAutomatedReview: { _tag: 'None' },
   }
 }
@@ -392,7 +398,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const { owner, repo } = repositoryParts(repository.github)
       const request = { owner, repo, issue_number: pullRequestNumber, request: { signal } }
       const current = await octokit.value.rest.issues.get(request)
-        .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
+        .then(response => ok(labelNames(response.data.labels)))
         .catch((error: unknown): Result<string[], string> => err(message(error)))
       if (current._tag === 'Err')
         return current
@@ -451,13 +457,18 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const { owner, repo } = repositoryParts(repository.github)
       const request = { owner, repo, issue_number: itemNumber, request: { signal } }
       const current = await octokit.value.rest.issues.get(request)
-        .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
+        .then(response => ok(labelNames(response.data.labels)))
         .catch((error: unknown): Result<string[], string> => err(message(error)))
       if (current._tag === 'Err')
         return current
       const plan = planAgentLabels(state, current.value)
       if (plan.add === null && plan.remove.length === 0)
         return ok(undefined)
+      // Every label write answers with the labels GitHub then held, so the last
+      // write confirms this call. A fresh read does not: the Running label is
+      // taken off the moment a Task settles, and a Task that settles at once
+      // reported a failed write for a write that had landed.
+      let held = current.value
       if (plan.add !== null) {
         const created = await octokit.value.rest.issues.createLabel({
           owner,
@@ -472,29 +483,28 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         if (created._tag === 'Err')
           return created
         const added = await octokit.value.rest.issues.addLabels({ ...request, labels: [plan.add.name] })
-          .then((): Result<void, string> => ok(undefined))
-          .catch((error: unknown): Result<void, string> => err(message(error)))
+          .then((response): Result<string[], string> => ok(labelNames(response.data)))
+          .catch((error: unknown): Result<string[], string> => err(message(error)))
         if (added._tag === 'Err')
           return added
+        held = added.value
       }
-      // A label another writer already removed answers this call. Only a label
-      // GitHub still reports after the write is a failure.
-      const removals = await Promise.all(plan.remove.map(label =>
-        octokit.value.rest.issues.removeLabel({ ...request, name: label })
-          .then((): Result<void, string> => ok(undefined))
-          .catch((error: unknown): Result<void, string> => errorStatus(error) === 404 ? ok(undefined) : err(message(error)))))
-      const failed = removals.find(removal => removal._tag === 'Err')
-      if (failed !== undefined)
-        return failed
-      const confirmed = await octokit.value.rest.issues.get(request)
-        .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
-        .catch((error: unknown): Result<string[], string> => err(message(error)))
-      if (confirmed._tag === 'Err')
-        return confirmed
-      const settled = planAgentLabels(state, confirmed.value)
+      // One at a time, so the last answer names every label GitHub still holds.
+      for (const label of plan.remove) {
+        // A label another writer already removed answers this call.
+        const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
+          .then((response): Result<string[], string> => ok(labelNames(response.data)))
+          .catch((error: unknown): Result<string[], string> => errorStatus(error) === 404
+            ? ok(held.filter(value => value.toLowerCase() !== label.toLowerCase()))
+            : err(message(error)))
+        if (removed._tag === 'Err')
+          return removed
+        held = removed.value
+      }
+      const settled = planAgentLabels(state, held)
       return settled.add === null && settled.remove.length === 0
         ? ok(undefined)
-        : err(`GitHub did not stamp the ${AGENT_LABELS[state].name} label.`)
+        : err(`GitHub did not stamp the ${AGENT_LABELS[state].name} label. GitHub answered with ${held.length === 0 ? 'no labels' : held.join(', ')}.`)
     },
 
     async ensureApprovalLabel(repository, label, signal) {
