@@ -5077,6 +5077,17 @@ const reviewGateProjectionMigration = `
   PRAGMA user_version = 56;
 `
 
+/** Clears Publication Incidents that existed before they belonged to a repository. */
+const repositoryScopedReviewStatusIncidentMigration = `
+  UPDATE incidents
+  SET resolved_at = last_seen_at
+  WHERE resolved_at IS NULL
+    AND scope_tag = 'Service'
+    AND operation = 'review_status_publication';
+
+  PRAGMA user_version = 57;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -5325,9 +5336,13 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 55) {
     applyForeignKeyMigration(database, reviewGateProjectionMigration)
+    version = 56
+  }
+  if (version === 56) {
+    applyMigration(database, repositoryScopedReviewStatusIncidentMigration)
     return
   }
-  if (version === 56)
+  if (version === 57)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }

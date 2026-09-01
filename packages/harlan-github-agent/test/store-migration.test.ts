@@ -492,6 +492,47 @@ describe('provider session recovery migration', () => {
   })
 })
 
+describe('review status Incident recovery migration', () => {
+  it('clears only Service Incidents that predate repository-scoped Publication recovery', () => {
+    const path = join(directory, 'state.sqlite')
+    const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    store.recordIncident({
+      scope: { _tag: 'Service' },
+      kind: 'unknown',
+      severity: 'error',
+      operation: 'review_status_publication',
+      message: 'GitHub did not stamp the harlan-agent-ready label.',
+      recovery: { _tag: 'ActionRequired' },
+      at: '2026-08-31T14:18:11.426Z',
+    })
+    store.recordIncident({
+      scope: { _tag: 'Service' },
+      kind: 'network',
+      severity: 'warning',
+      operation: 'review_rerun',
+      message: 'GitHub timed out.',
+      recovery: { _tag: 'Retrying', attempt: 1, nextAttemptAt: '2026-08-31T14:19:11.426Z' },
+      at: '2026-08-31T14:18:11.426Z',
+    })
+    store.close()
+
+    const oldJournal = new DatabaseSync(path)
+    oldJournal.exec('PRAGMA user_version = 56')
+    oldJournal.close()
+
+    const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    try {
+      expect(migrated.listIncidents()).toMatchObject([{
+        operation: 'review_rerun',
+        message: 'GitHub timed out.',
+      }])
+    }
+    finally {
+      migrated.close()
+    }
+  })
+})
+
 describe('gitHub vocabulary migration', () => {
   it('carries a version 22 journal across without losing a row', () => {
     const path = join(directory, 'state.sqlite')
@@ -509,7 +550,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(56)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(57)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
