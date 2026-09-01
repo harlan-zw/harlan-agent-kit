@@ -7,7 +7,7 @@ import type { GitHubUserAccess } from './github-user-access.ts'
 import type { Result } from './result.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { JournalStore } from './store.ts'
-import type { ClaimedAgentTask, DashboardSnapshot, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
+import type { ClaimedAgentTask, DashboardSnapshot, IncidentScope, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createAgentActivityLog } from './agent-activity.ts'
@@ -113,15 +113,24 @@ export function dashboardSnapshotForTriggers(
     : { ...snapshot, routines: [], routineRuns: [] }
 }
 
+/**
+ * Records one Incident the controller raised outside a poll pass.
+ *
+ * The scope decides who can clear it later. An Incident about one repository
+ * takes that repository's scope, so the next success there resolves it. A
+ * Service-scoped one about a single repository has no way back out of the
+ * System pane, and two sat there for a day after their defect was fixed.
+ */
 function recordServiceIncident(
   store: Pick<JournalStore, 'recordIncident'>,
   at: string,
   operation: string,
   message: string,
+  scope: IncidentScope = { _tag: 'Service' },
 ): void {
   const failure = classifyFailure({ message })
   store.recordIncident({
-    scope: { _tag: 'Service' },
+    scope,
     kind: failure.kind,
     severity: failure._tag === 'Transient' ? 'warning' : 'error',
     operation,
@@ -536,14 +545,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         report: (event) => {
           if (event._tag === 'AutoMergeEnabled') {
             options.logger.info(`${event.repository}#${event.pullRequestNumber}: GitHub auto-merge is enabled. GitHub merges it when its checks pass.`)
+            store.resolveIncidents({ _tag: 'Repository', repository: event.repository }, now().toISOString(), 'auto_merge')
             return
           }
           if (event._tag === 'Merged') {
             options.logger.info(`${event.repository}#${event.pullRequestNumber}: merged ${event.sha.slice(0, 12)}, because GitHub had nothing left to wait for.`)
+            store.resolveIncidents({ _tag: 'Repository', repository: event.repository }, now().toISOString(), 'auto_merge')
             return
           }
           options.logger.error(`${event.repository}#${event.pullRequestNumber}: GitHub refused auto-merge: ${event.reason}`)
-          recordServiceIncident(store, now().toISOString(), 'auto_merge', event.reason)
+          recordServiceIncident(store, now().toISOString(), 'auto_merge', event.reason, { _tag: 'Repository', repository: event.repository })
         },
         store,
       }),
@@ -643,7 +654,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onError: error => options.logger.error(error),
         onFailure: (repository, pullRequestNumber, reason) => {
           options.logger.error(`${repository}#${pullRequestNumber}: terminal Review Publication failed: ${reason}`)
-          recordServiceIncident(store, now().toISOString(), 'review_status_publication', reason)
+          recordServiceIncident(store, now().toISOString(), 'review_status_publication', reason, { _tag: 'Repository', repository })
+        },
+        // A repository that publishes again is publishing, so its earlier
+        // refusal is over. Another pull request still failing there raises its
+        // own Incident on its next attempt, seconds later.
+        onPublished: (repository) => {
+          store.resolveIncidents({ _tag: 'Repository', repository }, now().toISOString(), 'review_status_publication')
         },
         store,
         workerId: randomUUID(),

@@ -15,6 +15,14 @@ export interface ReviewStatusSchedulerOptions {
   now: () => Date
   onError: (error: unknown) => void
   onFailure: (repository: string, pullRequestNumber: number, reason: string) => void
+  /**
+   * One terminal comment that reached GitHub.
+   *
+   * A failure here raises an Incident, and without a success signal that
+   * Incident had no way back out of the System pane. One stayed open for a day
+   * after the defect behind it was fixed.
+   */
+  onPublished: (repository: string, pullRequestNumber: number) => void
   store: Pick<JournalStore, 'claimNextTerminalReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt'>
   workerId: string
 }
@@ -37,8 +45,12 @@ export function createReviewStatusScheduler(options: ReviewStatusSchedulerOption
 
     controller = new AbortController()
     const published = await publishClaimedReviewStatus(options, command, true, controller.signal)
-    if (published._tag === 'Err' && !controller.signal.aborted)
-      options.onFailure(command.repository, command.pullRequestNumber, published.error)
+    if (published._tag === 'Err') {
+      if (!controller.signal.aborted)
+        options.onFailure(command.repository, command.pullRequestNumber, published.error)
+      return
+    }
+    options.onPublished(command.repository, command.pullRequestNumber)
   }
 
   function runNow(): Promise<void> {

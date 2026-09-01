@@ -41,6 +41,40 @@ describe('incident log', () => {
     })
   })
 
+  it('resolves one repository publication failure without touching another repository', () => {
+    const store = createStore()
+    store.syncRepositories([
+      repositoryMapping(),
+      repositoryMapping({ github: 'harlan-zw/other', checkout: '/home/harlan/sites/other' }),
+    ], '2026-08-18T00:00:00.000Z')
+    const failure = (repository: string, at: string): void => {
+      store.recordIncident({
+        scope: { _tag: 'Repository', repository },
+        kind: 'unknown',
+        severity: 'error',
+        operation: 'review_status_publication',
+        message: 'GitHub did not stamp the harlan-agent-ready label.',
+        recovery: { _tag: 'ActionRequired' },
+        at,
+      })
+    }
+    failure('harlan-zw/example', '2026-08-18T00:01:00.000Z')
+    failure('harlan-zw/other', '2026-08-18T00:01:30.000Z')
+
+    // The success signal for one repository. It answers only for that one, so
+    // the other repository keeps the Incident nobody has fixed yet.
+    const resolved = store.resolveIncidents(
+      { _tag: 'Repository', repository: 'harlan-zw/example' },
+      '2026-08-18T00:02:00.000Z',
+      'review_status_publication',
+    )
+
+    expect(resolved).toBe(1)
+    expect(store.listIncidents().map(incident => incident.scope)).toEqual([
+      { _tag: 'Repository', repository: 'harlan-zw/other' },
+    ])
+  })
+
   it('separates two different failures on the same repository', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
