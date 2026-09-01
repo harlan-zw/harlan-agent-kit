@@ -49,6 +49,42 @@ describe('configuration boundary', () => {
     expect(parsed._tag === 'Ok' && parsed.value.server.allowedOrigin).toBe('https://harlan-github-agent.localhost')
   })
 
+  it('keeps the Agent provider default when the file names no agent count', () => {
+    const parsed = parseConfigText(configText)
+
+    expect(parsed._tag === 'Ok' && parsed.value.agent.maximumActiveAgents).toBeNull()
+  })
+
+  it('reads how many Agents may hold a Task at once', () => {
+    const parsed = parseConfigText(`${configText}
+agent:
+  provider: opencode
+  maximum_active_agents: 6
+`)
+
+    expect(parsed._tag === 'Ok' && parsed.value.agent.maximumActiveAgents).toBe(6)
+  })
+
+  it('refuses an agent count that would spend the whole host', () => {
+    const parsed = parseConfigText(`${configText}
+agent:
+  provider: opencode
+  maximum_active_agents: 40
+`)
+
+    expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain('$.agent.maximum_active_agents')
+  })
+
+  it('refuses an agent count below one, which would start nothing', () => {
+    const parsed = parseConfigText(`${configText}
+agent:
+  provider: opencode
+  maximum_active_agents: 0
+`)
+
+    expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain('$.agent.maximum_active_agents')
+  })
+
   it('accepts an HTTPS Tailscale dashboard origin', () => {
     const parsed = parseConfigText(configText.replace(
       'https://harlan-github-agent.localhost',
