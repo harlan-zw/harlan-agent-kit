@@ -5174,6 +5174,148 @@ describe('journal store', () => {
     expect(store.listReviewGateRefreshes()).toHaveLength(1)
   })
 
+  it('deduplicates a reconciled gate status with the same published body', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'gate-status-deduplication',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    finishReviewTask(store, '2026-08-13T01:00:30.000Z')
+    const gates = passedReviewGates()
+    store.recordReviewRun({
+      id: 'gate-status-review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates,
+      confidence: 96,
+      findings: [],
+    })
+    const input = {
+      reviewRunId: 'gate-status-review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      expectedHeadSha: 'abc123',
+      gates,
+      body: '### 🤖 READY',
+      desiredOutcome: 'READY' as const,
+      at: '2026-08-13T01:03:00.000Z',
+    }
+    const staged = store.stageReviewGateStatus(input)
+    if (staged._tag !== 'Staged')
+      throw new Error(`Expected a staged gate status, not ${staged._tag}.`)
+
+    expect(store.stageReviewGateStatus({
+      ...input,
+      reconciliationId: 'github-comment-drifted',
+      at: '2026-08-13T01:04:00.000Z',
+    })).toEqual({ _tag: 'Duplicate', commandId: staged.commandId })
+  })
+
+  it('requeues a Published gate status when its GitHub comment drifted', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'gate-status-drift-repair',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    finishReviewTask(store, '2026-08-13T01:00:30.000Z')
+    const gates = passedReviewGates()
+    store.recordReviewRun({
+      id: 'gate-status-drift-review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates,
+      confidence: 96,
+      findings: [],
+    })
+    const input = {
+      reviewRunId: 'gate-status-drift-review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      expectedHeadSha: 'abc123',
+      gates,
+      body: '### 🤖 READY',
+      desiredOutcome: 'READY' as const,
+      at: '2026-08-13T01:03:00.000Z',
+    }
+    const staged = store.stageReviewGateStatus(input)
+    if (staged._tag !== 'Staged')
+      throw new Error(`Expected a staged gate status, not ${staged._tag}.`)
+    const published = store.claimReviewStatus(staged.commandId, 'publisher-1', '2026-08-13T01:03:10.000Z', 60_000)
+    if (published === null)
+      throw new Error('Expected the first publication claim.')
+    expect(store.completeReviewStatus({
+      commandId: published.id,
+      workerId: published.workerId,
+      fence: published.fence,
+      at: '2026-08-13T01:03:20.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+
+    // The sweep restaged the identical body after GitHub lost the comment.
+    expect(store.stageReviewGateStatus({
+      ...input,
+      reconciliationId: 'github-comment-deleted:42:2026-08-13T01:05:00.000Z',
+      at: '2026-08-13T01:05:00.000Z',
+    })).toEqual({ _tag: 'Staged', commandId: staged.commandId })
+
+    const repaired = store.claimReviewStatus(staged.commandId, 'publisher-2', '2026-08-13T01:05:10.000Z', 60_000)
+    expect(repaired).toEqual(expect.objectContaining({
+      id: staged.commandId,
+      outcomeUnknown: true,
+      commentId: 42,
+    }))
+    if (repaired === null)
+      throw new Error('Expected the drift repair claim.')
+
+    expect(store.completeReviewStatus({
+      commandId: repaired.id,
+      workerId: repaired.workerId,
+      fence: repaired.fence,
+      at: '2026-08-13T01:05:20.000Z',
+      commentId: 43,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-43',
+    })).toBe(true)
+
+    // The repair published a replacement comment. The next sweep pass must
+    // target the replacement, or every pass requeues the command and creates
+    // another duplicate gate comment forever.
+    expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({
+      reviewRunId: 'gate-status-drift-review',
+      commentId: 43,
+    })])
+  })
+
   it('records comment publication failures for later analysis', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

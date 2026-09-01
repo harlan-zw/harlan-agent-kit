@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildRepositoryMappings, discoverLocalCheckouts, installedWithoutCheckout, isAllowedRepository } from '../src/repository-discovery.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { canRepairPullRequestHead } from '../src/repository-policy.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -186,5 +187,20 @@ describe('repository discovery', () => {
     }], [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }], [], ['harlan-zw'])
 
     expect(mappings[0]?.enabled).toBe(false)
+  })
+
+  it('lets the controller repair a CI branch without explicit policy', () => {
+    const mappings = buildRepositoryMappings([{
+      github: 'harlan-zw/example',
+      defaultBranch: 'main',
+      archived: false,
+      topics: [],
+      authentication: 'app' as const,
+      owner: { login: 'harlan-zw', type: 'User' },
+    }], [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }], [], ['harlan-zw'])
+
+    expect(canRepairPullRequestHead(mappings[0]!, pullRequestItem({
+      headRef: 'ci/self-hosted-runners',
+    }))).toBe(true)
   })
 })
