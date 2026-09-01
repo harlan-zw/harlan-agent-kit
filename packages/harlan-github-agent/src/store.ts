@@ -3856,14 +3856,23 @@ function planAdversarialReview(
     && (localAttempt.head_review_run_id !== null || (priorComplete && localAttempt.any_attempt === 0))
     && !rerunRequested
     && !(manualReviewRequested && localAttempt.revision_attempt === 0)
-  const eligible = subject.kind === 'pull_request'
+  const reviewable = subject.kind === 'pull_request'
     && subject.state === 'open'
     && !subject.draft
-    && subject.mergeState === 'clean'
     && mapping.enabled
     && mapping.pullRequestReview
     && !alreadyReviewed
     && (!approvalRequired || reviewApproved)
+
+  // GitHub computes mergeability lazily, so a poll seconds after a push reads
+  // unknown on a pull request that is otherwise ready. That is not yet, not
+  // never: superseding here turns a transient GitHub state into a stopped
+  // review that only a human rerun can restart. Leave the tasks alone and let
+  // the next observation decide.
+  if (reviewable && subject.mergeState === 'unknown')
+    return
+
+  const eligible = reviewable && subject.mergeState === 'clean'
 
   if (alreadyReviewed && subject.kind === 'pull_request' && subject.priorAutomatedReview._tag === 'Found') {
     const stored = database.prepare(`
