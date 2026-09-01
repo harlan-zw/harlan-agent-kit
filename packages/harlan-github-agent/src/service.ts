@@ -21,7 +21,7 @@ import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
 import { createBaselineRepairWorker } from './baseline-repair-worker.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
-import { resolveAgentStartState } from './capacity.ts'
+import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
@@ -905,9 +905,22 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }
       })
       recordPassIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+      const snapshot = store.getDashboardSnapshot(now().toISOString())
+      // A Reserve or an unreadable provider stops every claim by design, and
+      // said so nowhere outside the Dashboard. Twenty seven Tasks waited seven
+      // hours behind one with no log line and no Incident to read.
+      const blocked = agentStartBlockedReason({
+        startState: resolveAgentStartState(snapshot),
+        queuedTasks: snapshot.tasks.filter(task => task.state._tag === 'Queued').length,
+        agentSelection: snapshot.agentSelection,
+        providerCapacities: snapshot.providerCapacities,
+      })
+      if (blocked !== null)
+        options.logger.info(blocked)
+      recordPassIncidents('agent_capacity', blocked === null ? [] : [blocked])
       const statusSync = await guarded(
         'Pull request status sync',
-        () => pullRequestStatuses.sync(store.getDashboardSnapshot(now().toISOString()), signal),
+        () => pullRequestStatuses.sync(snapshot, signal),
         { checked: 0, errors: [] },
       )
       statusSync.errors.forEach((error) => {

@@ -2,7 +2,7 @@ import type { AgentProviderName } from '../src/agent-provider.ts'
 import type { ProviderCapacity } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentRuntimeSource, parseAgentSelection, resolveAgentSelection } from '../src/agent-profile.ts'
-import { resolveAgentStartState } from '../src/capacity.ts'
+import { agentStartBlockedReason, resolveAgentStartState } from '../src/capacity.ts'
 import {
   chooseAgentProvider,
   createProviderCapacitySource,
@@ -151,6 +151,27 @@ describe('resolving Agent start state', () => {
     })).toEqual({ _tag: 'ReserveReached' })
   })
 
+  it('blames the Reserve, not the unread provider, when one provider did publish', () => {
+    // One unreadable provider used to name the whole state CapacityUnavailable,
+    // which reads as a broken provider API. The Reserve is the actionable half.
+    expect(resolveAgentStartState({
+      ...input,
+      agentSelection: { _tag: 'Automatic' as const, order: ['opencode', 'codex'] as const },
+      providerCapacities: [
+        {
+          provider: 'opencode',
+          reservePercent: 50,
+          capacity: { _tag: 'Available', usedPercent: 50.36, resetsAt: '2026-09-04T14:33:32.989Z' },
+        },
+        {
+          provider: 'codex',
+          reservePercent: 20,
+          capacity: { _tag: 'Unavailable', reason: 'Codex refused to report its rate limits.' },
+        },
+      ],
+    })).toEqual({ _tag: 'ReserveReached' })
+  })
+
   it('keeps an unread limit distinct from a reached Reserve', () => {
     expect(resolveAgentStartState({
       ...input,
@@ -160,6 +181,58 @@ describe('resolving Agent start state', () => {
         capacity: { _tag: 'Unavailable', reason: 'timed out' },
       }],
     })).toEqual({ _tag: 'CapacityUnavailable' })
+  })
+})
+
+describe('naming why no Agent may start', () => {
+  const selection = { _tag: 'Automatic' as const, order: ['opencode', 'codex'] as const }
+  const reserved = {
+    provider: 'opencode' as const,
+    reservePercent: 25,
+    capacity: { _tag: 'Available' as const, usedPercent: 50.36, resetsAt: '2026-09-04T14:33:32.989Z' },
+  }
+  const unreadable = {
+    provider: 'codex' as const,
+    reservePercent: 20,
+    capacity: { _tag: 'Unavailable' as const, reason: 'Codex refused to report its rate limits.' },
+  }
+
+  it('says nothing while an Agent may start', () => {
+    expect(agentStartBlockedReason({
+      startState: { _tag: 'Available' },
+      queuedTasks: 27,
+      agentSelection: selection,
+      providerCapacities: [reserved, unreadable],
+    })).toBeNull()
+  })
+
+  it('says nothing when no Task is waiting, because nothing is held', () => {
+    expect(agentStartBlockedReason({
+      startState: { _tag: 'ReserveReached' },
+      queuedTasks: 0,
+      agentSelection: selection,
+      providerCapacities: [reserved, unreadable],
+    })).toBeNull()
+  })
+
+  it('names the Reserve, the usage, and the reset a person needs to act', () => {
+    expect(agentStartBlockedReason({
+      startState: { _tag: 'ReserveReached' },
+      queuedTasks: 27,
+      agentSelection: selection,
+      providerCapacities: [reserved, unreadable],
+    })).toBe('Every Agent provider reached its Reserve, so 27 queued Tasks cannot start. opencode used 50.4% and reserves 25%, resetting 2026-09-04T14:33:32.989Z. codex did not report a limit: Codex refused to report its rate limits.')
+  })
+
+  it('reads one waiting Task as one Task', () => {
+    const reason = agentStartBlockedReason({
+      startState: { _tag: 'CapacityUnavailable' },
+      queuedTasks: 1,
+      agentSelection: selection,
+      providerCapacities: [unreadable],
+    })
+
+    expect(reason).toContain('so 1 queued Task cannot start.')
   })
 })
 
