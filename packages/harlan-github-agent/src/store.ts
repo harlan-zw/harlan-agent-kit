@@ -897,6 +897,7 @@ export interface JournalStore {
   beginRestart: (input: { id: string, processId: string, at: string }) => RestartRequest | null
   completeRestart: (at: string) => RestartRequest | null
   requireRestartAction: (input: { id: string, at: string, reason: string }) => RestartRequest | null
+  prepareForRestart: (at: string) => boolean
   isSafeToRestart: () => boolean
   pauseAgents: (at: string) => StoredAgentControl
   setRepositoryPaused: (github: string, paused: boolean) => boolean
@@ -9957,6 +9958,58 @@ export function openJournalStore(
     return row.busy === 0
   }
 
+  const prepareForRestart: JournalStore['prepareForRestart'] = (at) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const terminalRows = database.prepare(`
+        SELECT id, fence FROM review_status_commands
+        WHERE state_tag = 'Running' AND phase = 'terminal' AND lease_expires_at <= ?
+      `).all(at) as unknown as Array<{ id: string, fence: number }>
+      const progressRows = database.prepare(`
+        SELECT id, fence FROM review_status_commands
+        WHERE state_tag = 'Running' AND phase != 'terminal' AND lease_expires_at <= ?
+      `).all(at) as unknown as Array<{ id: string, fence: number }>
+      database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Pending', outcome_unknown = 1,
+          reason = 'The automated review did not finish before the Restart request.',
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE state_tag = 'Running' AND phase = 'terminal' AND lease_expires_at <= ?
+      `).run(at, at)
+      terminalRows.forEach(row => recordReviewStatusEvent(database, {
+        commandId: row.id,
+        event: 'LeaseRecovered',
+        from: 'Running',
+        to: 'Pending',
+        reason: 'The automated review did not finish before the Restart request.',
+        fence: row.fence,
+        at,
+      }))
+      database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Superseded',
+          reason = 'The automated review did not finish before the Restart request.',
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE state_tag = 'Running' AND phase != 'terminal' AND lease_expires_at <= ?
+      `).run(at, at)
+      progressRows.forEach(row => recordReviewStatusEvent(database, {
+        commandId: row.id,
+        event: 'RestartSuperseded',
+        from: 'Running',
+        to: 'Superseded',
+        reason: 'The automated review did not finish before the Restart request.',
+        fence: row.fence,
+        at,
+      }))
+      database.exec('COMMIT')
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    return isSafeToRestart()
+  }
+
   const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
     const limit = Math.max(1, Math.min(1_000, input.limit ?? 200))
     const rows = input.stream === undefined
@@ -12612,6 +12665,7 @@ export function openJournalStore(
     beginRestart,
     completeRestart,
     requireRestartAction,
+    prepareForRestart,
     isSafeToRestart,
     dismissItem,
     restoreItem,

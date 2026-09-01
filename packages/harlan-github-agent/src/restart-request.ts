@@ -4,7 +4,7 @@ import type { RestartRequest } from './types.ts'
 const DEFAULT_INTERVAL_MILLISECONDS = 2_000
 const DEFAULT_MAXIMUM_WAIT_MILLISECONDS = 50 * 60_000
 
-type RestartStore = Pick<JournalStore, 'beginRestart' | 'getRestartRequest' | 'isSafeToRestart' | 'requireRestartAction'>
+type RestartStore = Pick<JournalStore, 'beginRestart' | 'getRestartRequest' | 'prepareForRestart' | 'requireRestartAction'>
 
 export interface RestartController {
   start: () => void
@@ -47,7 +47,7 @@ export function createRestartController(options: {
       return
     }
 
-    if (!options.store.isSafeToRestart())
+    if (!options.store.prepareForRestart(at))
       return
     const restarting = options.store.beginRestart({ id: request.id, processId: options.processId, at })
     if (restarting?._tag === 'Restarting')
