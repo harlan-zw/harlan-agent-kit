@@ -4,25 +4,37 @@
   </a>
 </p>
 
-# harlan-agent-kit
+<h1>harlan-agent-kit</h1>
 
-Personal agent plugin for Nuxt/Vue/TypeScript workflows. It ships as a
-[Claude Code](https://claude.com/code) plugin and can also be installed locally
-as a Codex plugin for its skills.
+> 🤖 Personal agent plugin for Nuxt, Vue, and TypeScript workflows. Skills, hooks, and a local GitHub maintenance service.
+
+Ships as a [Claude Code](https://claude.com/code) plugin. The nested plugin
+directory also installs into Codex for its Skills.
+
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
 
 > [!IMPORTANT]
-> This is a personal plugin with opinionated defaults. Use as inspiration or fork for your own setup.
+> This is a personal plugin with opinionated defaults. Use it as inspiration, or fork it for your own setup.
 
 ## Features
 
-- **Nuxt/Vue workflows**: Design, review, and improve frontend implementation
-- **Architecture review**: Find deeper seams in Nuxt apps and TypeScript packages
-- **Package conformance**: Sync package, module, test, and release conventions
-- **PR and release writing**: Draft PRs, release notes, tweets, and launch copy
-- **Issue and email triage**: Rank [GitHub](https://github.com) issues and process inboxes
-- **Claude hooks**: Enforce [pnpm](https://pnpm.io), lint changed files, block risky git actions, and show session context
+- 🎨 **Nuxt and Vue workflows**: Design, review, and improve frontend work
+- 🧠 **Architecture review**: Find deeper seams in Nuxt apps and TypeScript packages
+- 📦 **Package conformance**: Sync package, module, test, and release conventions
+- ✍️ **Delivery writing**: Draft PRs, release notes, tweets, and launch copy
+- 📋 **Triage**: Rank [GitHub](https://github.com) issues, PRs, [Sentry](https://sentry.io) errors, and inboxes
+- 🪝 **Hooks**: Enforce [pnpm](https://pnpm.io), lint changed files, block risky Git actions, show session context
+- 🤖 **GitHub agent**: A local service that monitors owned repositories and works them autonomously
 
-## Quick Start
+## Get Started
 
 ### Claude Code
 
@@ -31,19 +43,26 @@ as a Codex plugin for its skills.
 /plugin install harlan-agent-kit
 ```
 
+For local development:
+
+```bash
+/plugin install /path/to/harlan-agent-kit
+```
+
 ### Codex
 
-Codex support uses the nested plugin directory at `harlan-agent-kit/`.
-
-For local development, expose that directory under `~/plugins` and install from
-the personal marketplace:
+Codex installs the nested plugin directory at `harlan-agent-kit/`.
 
 ```bash
 mkdir -p ~/.agents/plugins ~/plugins
-ln -sfnT /home/harlan/pkg/harlan-agent-kit/harlan-agent-kit ~/plugins/harlan-agent-kit
+ln -sfnT "$PWD/harlan-agent-kit" ~/plugins/harlan-agent-kit
+codex plugin add harlan-agent-kit@personal
 ```
 
-Create `~/.agents/plugins/marketplace.json` if it does not already exist:
+<details>
+<summary><b>Personal marketplace config</b></summary>
+
+Create `~/.agents/plugins/marketplace.json` if it does not exist:
 
 ```json
 {
@@ -68,13 +87,7 @@ Create `~/.agents/plugins/marketplace.json` if it does not already exist:
 }
 ```
 
-Then install:
-
-```bash
-codex plugin add harlan-agent-kit@personal
-```
-
-Validate before reinstalling:
+Validate before you reinstall:
 
 ```bash
 claude plugin validate ~/plugins/harlan-agent-kit
@@ -82,52 +95,70 @@ jq empty ~/plugins/harlan-agent-kit/hooks/codex.json
 codex plugin add harlan-agent-kit@personal
 ```
 
-Start a new Codex thread after reinstalling so newly installed skills are loaded.
-
-## Hooks
-
-Claude Code loads hooks from `.claude-plugin/plugin.json`. Codex loads its hook
-config from `hooks/codex.json` through `.codex-plugin/plugin.json`.
-
-| Event | Hook | Description |
-|-------|------|-------------|
-| SessionStart | `session-start.sh` | Detect project type, show git status |
-| PreToolUse | `merged-branch-guard.sh` | Block commits on merged branches |
-| PreToolUse | `pnpm-only.sh` | Block npm/yarn commands |
-| PreToolUse | `pr-skill-only.sh` | Require the PR skill for creation and description changes |
-| PreToolUse | `wt-only.sh` | Keep worktrees under `wt` and off `.claude/worktrees` |
-| PreToolUse | `pre-commit-push.sh` | Run lint/typecheck/test before commit/push |
-| PostToolUse | `eslint.sh` | Auto-lint + fix after file changes |
-| PostToolUse | `command-not-found.sh` | Help recover from missing shell commands |
-| Manual | `check.sh` | Run configured project checks |
-| Manual | `check-config.sh` | Inspect hook/check configuration |
+Start a new Codex thread after a reinstall so new Skills load.
+</details>
 
 ## Skills
 
 | Skill | Description |
 |-------|-------------|
-| `adversarial-review` | Review and repair one PR, then post its bot status |
-| `close-off` | Finish loose ends, verify delivery, and clean task-owned Git state |
-| `email-triage` | Triage inbox email with himalaya |
+| `adversarial-review` | Review one PR adversarially, hand defects to Repair, publish the bot status |
+| `agent-feedback` | Improve one Agent Skill from explicit Review feedback |
+| `close-off` | Finish loose ends, verify delivery, clean task-owned Git state |
+| `email-triage` | Triage inbox email with Himalaya |
+| `glossary` | Create or audit `GLOSSARY.md` and catch vocabulary drift |
+| `harlan-github-agent` | Manage or diagnose the local GitHub maintenance service |
 | `humanize-writing` | Strip AI tells from prose before publishing |
-| `improve-ts-pkg-architecture` | Find architecture improvements in TS packages and monorepos |
-| `issue-triage` | Rank open issues by difficulty and impact |
-| `nuxt-frontend-design` | Build and polish Nuxt UI v4+ frontend work |
-| `nuxt-frontend-review` | Adversarially review frontend work against a build contract |
+| `improve-ts-pkg-architecture` | Find architecture improvements in TypeScript packages |
+| `issue-triage` | Rank open issues by impact and difficulty |
+| `nuxt-frontend-design` | Build and polish Nuxt UI v4+ pages and design systems |
+| `nuxt-frontend-review` | Review a Nuxt frontend by running it and verifying its contract |
 | `nuxt-improve-codebase-architecture` | Find Nuxt-native architecture improvements |
-| `pkg-conform` | Conform or scaffold [npm](https://npmjs.com) package and Nuxt module architecture |
-| `plan-ceo` | Produce CEO-level planning artifacts |
-| `pr` | Create, update, or sync pull requests |
-| `pr-triage` | Review and rank the owned PR backlog |
-| `release-notes` | Draft changelogs, release notes, and upgrade guidance |
-| `ripast` | Perform AST-aware TS/JS/Vue refactors |
+| `pkg-conform` | Conform or scaffold TypeScript packages and Nuxt modules |
+| `plan-ceo` | Challenge product scope and strategy before implementation |
+| `pr` | Create or update a pull request from current work |
+| `pr-triage` | Repair, rank, and order the owned PR backlog |
+| `release-notes` | Draft changelogs, release notes, and upgrade guides |
+| `ripast` | Run AST-aware TypeScript, JavaScript, and Vue refactors |
+| `sentry-checkin` | Triage and repair open Sentry issues with verified PRs |
 | `social-presence` | Plan social content and launch posts |
-| `take-ownership` | Finish current work through delivery and smoke verification |
+| `take-ownership` | Own current work through merge, CI, deploy, and smoke checks |
+| `ts-design-patterns` | Apply the Effect-inspired TypeScript design principles |
 | `tweet` | Draft and polish tweets with visual direction |
+| `unit-tests` | Write or review unit tests through exported behavior |
+
+## Hooks
+
+Claude Code loads hooks from `.claude-plugin/plugin.json`. Codex loads them from
+`hooks/codex.json` through `.codex-plugin/plugin.json`.
+
+| Event | Hook | Description |
+|-------|------|-------------|
+| SessionStart | `session-start.sh` | Detect project type, show Git status |
+| PreToolUse | `merged-branch-guard.sh` | Block commits on merged branches |
+| PreToolUse | `pnpm-only.sh` | Block [npm](https://npmjs.com) and yarn commands |
+| PreToolUse | `pr-skill-only.sh` | Require the `pr` Skill for PR creation and description edits |
+| PreToolUse | `wt-only.sh` | Keep worktrees owned by `wt` |
+| PreToolUse | `pre-commit-push.sh` | Run lint, typecheck, and test before commit or push |
+| PostToolUse | `eslint.sh` | Autofix lint on changed files |
+| PostToolUse | `command-not-found.sh` | Recover from a missing shell command |
+| Manual | `check.sh` | Run the configured project checks |
+| Manual | `check-config.sh` | Inspect hook and check configuration |
+
+## GitHub Agent
+
+`packages/harlan-github-agent` is a local service. It monitors owned
+repositories, runs Agents against issues and pull requests, and reports through
+a dashboard. Ask Claude for the `harlan-github-agent` Skill to operate it.
+
+```bash
+pnpm service:status    # Show service state
+pnpm service:update    # Rebuild and restart
+```
 
 ## Configuration
 
-Disable specific hooks per-project by creating `.claude/hooks.json`:
+Disable hooks for one project with `.claude/hooks.json`:
 
 ```json
 {
@@ -135,6 +166,24 @@ Disable specific hooks per-project by creating `.claude/hooks.json`:
 }
 ```
 
+## Development
+
+```bash
+pnpm install
+check                 # Parallel lint, typecheck, and test
+pnpm lint:fix         # ESLint autofix
+pnpm check:context    # Verify the shared agent context has not drifted
+pnpm release patch    # Bump version, tag, and push
+```
+
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg'/>
+  </a>
+</p>
+
 ## License
 
-Licensed under the [MIT license](https://github.com/harlan-zw/harlan-agent-kit/blob/main/LICENSE).
+MIT License © 2024-PRESENT [Harlan Wilton](https://github.com/harlan-zw)
