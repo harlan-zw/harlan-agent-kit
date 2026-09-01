@@ -64,12 +64,19 @@ export function resolveAgentStartState(input: {
 export function agentStartBlockedReason(input: {
   startState: AgentStartState
   queuedTasks: number
+  runningTasks: number
   agentSelection: AgentSelection
   providerCapacities: readonly ProviderCapacityStatus[]
 }): string | null {
   if (input.startState._tag !== 'ReserveReached' && input.startState._tag !== 'CapacityUnavailable')
     return null
   if (input.queuedTasks === 0)
+    return null
+  // A capacity reading can miss a provider or fail for one pass, and that read
+  // alone named the whole fleet blocked while six Agents were working. An Agent
+  // holding a Task is proof that claims are not blocked, whatever one reading
+  // of a provider limit says.
+  if (input.runningTasks > 0)
     return null
   const order = new Set<AgentProviderName>(input.agentSelection._tag === 'Automatic'
     ? input.agentSelection.order
