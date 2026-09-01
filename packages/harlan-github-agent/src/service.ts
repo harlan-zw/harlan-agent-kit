@@ -912,6 +912,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const blocked = agentStartBlockedReason({
         startState: resolveAgentStartState(snapshot),
         queuedTasks: snapshot.tasks.filter(task => task.state._tag === 'Queued').length,
+        runningTasks: snapshot.tasks.filter(task => task.state._tag === 'Running' || task.state._tag === 'Publishing').length,
         agentSelection: snapshot.agentSelection,
         providerCapacities: snapshot.providerCapacities,
       })

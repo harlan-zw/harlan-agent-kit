@@ -201,6 +201,7 @@ describe('naming why no Agent may start', () => {
     expect(agentStartBlockedReason({
       startState: { _tag: 'Available' },
       queuedTasks: 27,
+      runningTasks: 0,
       agentSelection: selection,
       providerCapacities: [reserved, unreadable],
     })).toBeNull()
@@ -210,6 +211,7 @@ describe('naming why no Agent may start', () => {
     expect(agentStartBlockedReason({
       startState: { _tag: 'ReserveReached' },
       queuedTasks: 0,
+      runningTasks: 0,
       agentSelection: selection,
       providerCapacities: [reserved, unreadable],
     })).toBeNull()
@@ -219,15 +221,29 @@ describe('naming why no Agent may start', () => {
     expect(agentStartBlockedReason({
       startState: { _tag: 'ReserveReached' },
       queuedTasks: 27,
+      runningTasks: 0,
       agentSelection: selection,
       providerCapacities: [reserved, unreadable],
     })).toBe('Every Agent provider reached its Reserve, so 27 queued Tasks cannot start. opencode used 50.4% and reserves 25%, resetting 2026-09-04T14:33:32.989Z. codex did not report a limit: Codex refused to report its rate limits.')
+  })
+
+  it('says nothing while an Agent holds a Task, because a stall means nothing runs', () => {
+    // One capacity reading missed a provider and named the whole fleet blocked
+    // while six Agents were working. A held Task disproves the reading.
+    expect(agentStartBlockedReason({
+      startState: { _tag: 'CapacityUnavailable' },
+      queuedTasks: 14,
+      runningTasks: 6,
+      agentSelection: selection,
+      providerCapacities: [reserved, unreadable],
+    })).toBeNull()
   })
 
   it('reads one waiting Task as one Task', () => {
     const reason = agentStartBlockedReason({
       startState: { _tag: 'CapacityUnavailable' },
       queuedTasks: 1,
+      runningTasks: 0,
       agentSelection: selection,
       providerCapacities: [unreadable],
     })
