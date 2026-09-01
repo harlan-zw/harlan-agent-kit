@@ -34,7 +34,6 @@ These are the well-known signatures. Fix them, but know they are the easy half.
 This is what actually separates human from AI prose. Editing these requires real rewrites, not find-and-replace.
 
 - **Over-explains the takeaway.** AI spells out the moral far more than humans do. Cut the sentence that says "the lesson here is...". Trust the reader to infer it from the example.
-- **Progressive disclosure.** Keep information light by default. Lead with what the reader needs now. Add detail only when it helps the next question or decision. Go deep only when the text explicitly intends a deep dive.
 - **Vague allusions instead of specific references.** Humans name real tools, versions, people, repos, numbers; AI stays generic. Replace "a popular framework" with "Nuxt 4", "studies show" with the actual source, "significantly faster" with the real figure.
 - **Writes as though no one is watching.** Humans address the reader directly and break the fourth wall ("you've probably hit this"). AI narrates into the void. Add direct address where natural.
 - **Tidy, single-track structure.** AI marches clue to reveal in a straight line with no loose ends. Humans digress, backtrack, leave threads open. Allow an aside or a non-linear jump.
