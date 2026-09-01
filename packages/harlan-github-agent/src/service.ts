@@ -258,7 +258,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     options.logger.info(`${unmapped.length} granted repositories have no local checkout under a trusted root, so no agent can see them${names}. Clone one to include it.`)
   }
 
-  const configuredProfile = agentProfile(config.agent.provider)
+  // The configuration decides how many Agents run, and the provider profile
+  // decides everything else about them. One permit pool serves every Task kind,
+  // so this number is the whole service's throughput.
+  const providerProfile = agentProfile(config.agent.provider)
+  const configuredProfile = {
+    ...providerProfile,
+    maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
+  }
   const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests)
   const processId = randomUUID()
   const restartController = createRestartController({

@@ -205,7 +205,7 @@ function isDashboardOrigin(value: string): boolean {
 function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfig['agent'] | undefined {
   const agent = source.agent
   if (agent === undefined)
-    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: DEFAULT_PROVIDER_ORDER }
+    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: DEFAULT_PROVIDER_ORDER, maximumActiveAgents: null }
   if (!isRecord(agent)) {
     issues.push({ path: '$.agent', message: 'Expected an object.' })
     return undefined
@@ -228,9 +228,20 @@ function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfi
   if (order === undefined)
     issues.push({ path: '$.agent.order', message: 'Expected each Agent provider once, in preference order.' })
 
-  if (provider === undefined || reserve === undefined || order === undefined)
+  // Absent keeps the Agent provider's own default, so an existing file changes
+  // nothing. The ceiling is a guard against a typo, not a measured limit.
+  const activeValue = agent.maximum_active_agents
+  const maximumActiveAgents = activeValue === undefined
+    ? null
+    : typeof activeValue === 'number' && Number.isInteger(activeValue) && activeValue >= 1 && activeValue <= 16
+      ? activeValue
+      : undefined
+  if (maximumActiveAgents === undefined)
+    issues.push({ path: '$.agent.maximum_active_agents', message: 'Expected a whole number from 1 to 16.' })
+
+  if (provider === undefined || reserve === undefined || order === undefined || maximumActiveAgents === undefined)
     return undefined
-  return { provider, reservePercent: reserve, order }
+  return { provider, reservePercent: reserve, order, maximumActiveAgents }
 }
 
 /** The webhook listener is off unless the configuration turns it on. */

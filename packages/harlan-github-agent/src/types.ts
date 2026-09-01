@@ -73,6 +73,16 @@ export interface AgentConfig {
     reservePercent: Record<AgentProviderName, number>
     /** Agent providers automatic selection walks, in preference order. */
     order: readonly AgentProviderName[]
+    /**
+     * How many Agents may hold a Task at once, or null to keep the provider's
+     * own default.
+     *
+     * One pool serves every Task kind, so this number is the whole service's
+     * throughput. Four left eleven Reviews and eighteen Issue work Tasks
+     * waiting on a 24 core host at 6GB of an 18GB cap. Raise it against memory,
+     * not against core count: each Agent runs a whole coding session.
+     */
+    maximumActiveAgents: number | null
   }
   github: {
     appId: number
