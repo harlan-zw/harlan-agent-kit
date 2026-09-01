@@ -282,6 +282,8 @@ Take the picture before you need it: [nuxt-frontend-review](../nuxt-frontend-rev
 
 Only for a change someone can see: a page, a component, a CLI frame, a rendered email. Never a screenshot of passing tests or a green terminal.
 
+The bucket expires objects after 90 days, so a picture on a very old pull request goes blank. Nothing to clean up by hand, and [close-off](../close-off/SKILL.md) leaves the bucket alone: a merged pull request stays readable while anyone is still likely to open it.
+
 ## Step 6: Monitor CI & Review Comments
 
 After creating or updating a PR, enter a **fix loop** -- keep watching until CI is green and all review comments are addressed.
