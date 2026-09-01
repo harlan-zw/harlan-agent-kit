@@ -37,7 +37,7 @@ skipped=()
 if should_skip eslint; then
   skipped+=("eslint")
 elif [ -f "node_modules/.bin/eslint" ]; then
-  run_check eslint ./node_modules/.bin/eslint . --fix
+  run_check eslint ./node_modules/.bin/eslint .
 else
   skipped+=("eslint")
 fi
@@ -137,6 +137,19 @@ for label in "${labels[@]}"; do
     echo ""
   fi
 done
+
+# Most lint failures are mechanical. Name the command that clears them, so the
+# next step is not a hand edit the fixer would have done anyway.
+if [ -f "$tmpdir/eslint.fail" ] && grep -q 'potentially fixable' "$tmpdir/eslint.log" 2>/dev/null; then
+  echo "Some lint problems are fixable."
+  echo "To fix the files this task changed, run:"
+  echo "  ./node_modules/.bin/eslint --fix \$(git diff --name-only HEAD)"
+  if has_script lint:fix; then
+    echo "To fix the whole repository, run \`pnpm lint:fix\`. Only do that on purpose."
+  fi
+  echo "Never hand edit a file this task does not own."
+  echo ""
+fi
 
 [ ${#skipped[@]} -gt 0 ] && echo "SKIPPED: ${skipped[*]}"
 
