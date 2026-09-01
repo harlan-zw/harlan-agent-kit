@@ -1418,7 +1418,16 @@ describe('journal store', () => {
       evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
 
-    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    // Somebody else's open pull request is not work waiting on Harlan, so the
+    // limit ignores it and Issue work still starts.
+    store.recordObservation({
+      externalId: 'human-pull-request',
+      observedAt: '2026-08-13T01:02:00.500Z',
+      source: 'poll',
+      subject: pullRequestItem({ number: 99, mergeState: 'clean', controllerOwned: false }),
+    })
+
+    const pullRequest = pullRequestItem({ mergeState: 'clean', controllerOwned: true })
     store.recordObservation({
       externalId: 'open-pull-request',
       observedAt: '2026-08-13T01:02:01.000Z',
@@ -1431,7 +1440,7 @@ describe('journal store', () => {
       number: 12,
       state: {
         _tag: 'Pending',
-        reason: 'harlan-zw/example reached its limit of 1 open pull request. Merge or close one to start Issue work.',
+        reason: 'harlan-zw/example reached its limit of 1 open automated pull request. Merge or close one to start Issue work.',
       },
     }))
 

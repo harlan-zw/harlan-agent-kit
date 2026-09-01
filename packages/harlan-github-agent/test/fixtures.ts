@@ -69,6 +69,7 @@ export function pullRequestItem(overrides: Partial<GitHubPullRequestItem> = {}):
     maintainerCanModify: true,
     mergeState: 'conflicting',
     purpose: { _tag: 'Change' },
+    controllerOwned: false,
     priorAutomatedReview: { _tag: 'None' },
     ...overrides,
   }

@@ -7,7 +7,7 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
-import { pullRequestPurpose } from './baseline-repair-state.ts'
+import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
@@ -177,6 +177,7 @@ function pullRequestItem(
       labels,
       repository: repository.github,
     }),
+    controllerOwned: isControllerOwned(pull.user?.login ?? 'ghost', actorLogin),
     priorAutomatedReview: { _tag: 'None' },
   }
 }
