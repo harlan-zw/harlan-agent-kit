@@ -480,6 +480,10 @@ interface QueuedReviewStatusRow {
   total: number | null
   github_comment_id: number
   published_body: string
+  prior_head_sha: string | null
+  prior_outcome: string | null
+  prior_findings: number | null
+  head_from_repair: number
 }
 
 /**
@@ -510,6 +514,22 @@ export type ReviewVerdictState
   = | { _tag: 'Answered' }
     | { _tag: 'Unanswered' }
 
+/**
+ * What already happened on this pull request, for a Task that has not started.
+ *
+ * A Review of the controller's own Repair looked exactly like a first Review:
+ * a bare QUEUED comment, no defect count, no sign that anything had run. A
+ * reader could not tell whether the Queue was making progress at all.
+ */
+export type QueuedReviewHistory
+  = | { _tag: 'FirstReview' }
+    | {
+      _tag: 'AfterRepair' | 'AfterPush'
+      priorHeadSha: string
+      priorOutcome: string
+      findings: number
+    }
+
 export interface QueuedReviewStatus {
   taskId: string
   taskKind: 'adversarial_review' | 'review_fix'
@@ -519,6 +539,8 @@ export interface QueuedReviewStatus {
   headSha: string
   queue: ReviewQueueState
   verdict: ReviewVerdictState
+  /** The Review that answered the previous head, and how this head arrived. */
+  history: QueuedReviewHistory
   commentId: number
   /** What the canonical comment holds now, so an unchanged position writes nothing. */
   publishedBody: string
@@ -10692,7 +10714,21 @@ export function openJournalStore(
         WHERE candidates.paused = 0 AND peer.task_kind = candidates.task_kind
       ) AS total,
       COALESCE(published.github_comment_id, prompt.github_comment_id) AS github_comment_id,
-      COALESCE(published.body, prompt.body) AS published_body
+      COALESCE(published.body, prompt.body) AS published_body,
+      -- The newest Review that answered an earlier head of this pull request.
+      prior_run.head_sha AS prior_head_sha,
+      prior_run.outcome_tag AS prior_outcome,
+      prior_run.finding_count AS prior_findings,
+      -- A head the controller pushed itself. It is the difference between
+      -- waiting on somebody's new commit and waiting on our own Repair.
+      EXISTS (
+        SELECT 1 FROM publication_commands
+        JOIN tasks AS repair ON repair.id = publication_commands.task_id
+        WHERE repair.subject_id = candidates.subject_id
+          AND repair.kind = 'review_fix'
+          AND publication_commands.state_tag = 'Published'
+          AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
+      ) AS head_from_repair
     FROM candidates
     JOIN subjects ON subjects.id = candidates.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
@@ -10700,6 +10736,15 @@ export function openJournalStore(
     -- The Approval prompt is the canonical comment until a Task publishes one.
     LEFT JOIN approval_prompt_comments AS prompt
       ON prompt.subject_id = candidates.subject_id AND prompt.revision_id = candidates.revision_id
+    LEFT JOIN (
+      SELECT subject_id, revision_id, head_sha, outcome_tag,
+        json_array_length(findings) AS finding_count, completed_at,
+        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY completed_at DESC, id DESC) AS run_rank
+      FROM review_runs
+    ) AS prior_run
+      ON prior_run.subject_id = candidates.subject_id
+      AND prior_run.run_rank = 1
+      AND prior_run.revision_id != candidates.revision_id
     LEFT JOIN review_status_commands AS published ON published.id = COALESCE(
       (
         SELECT candidate.id FROM review_status_commands AS candidate
@@ -10748,6 +10793,14 @@ export function openJournalStore(
       ? { _tag: 'Paused' as const }
       : { _tag: 'Waiting' as const, position: row.position, total: row.total },
     verdict: row.answered === 1 ? { _tag: 'Answered' as const } : { _tag: 'Unanswered' as const },
+    history: row.prior_head_sha === null || row.prior_outcome === null
+      ? { _tag: 'FirstReview' as const }
+      : {
+          _tag: row.head_from_repair === 1 ? 'AfterRepair' as const : 'AfterPush' as const,
+          priorHeadSha: row.prior_head_sha,
+          priorOutcome: row.prior_outcome,
+          findings: row.prior_findings ?? 0,
+        },
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
   }))

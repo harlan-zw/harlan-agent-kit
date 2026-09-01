@@ -1,6 +1,6 @@
 import type { QueuedReviewStatus } from '../src/store.ts'
 import { describe, expect, it } from 'vitest'
-import { publishQueuePositions, queuePositionComment } from '../src/queue-position-sweep.ts'
+import { publishQueuePositions, queuedReviewHistoryLine, queuePositionComment } from '../src/queue-position-sweep.ts'
 import { err, ok } from '../src/result.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -14,6 +14,7 @@ function queuedRepair(overrides: Partial<QueuedReviewStatus> = {}): QueuedReview
     headSha: 'abc123',
     queue: { _tag: 'Waiting', position: 3, total: 7 },
     verdict: { _tag: 'Answered' },
+    history: { _tag: 'FirstReview' },
     commentId: 42,
     publishedBody: '### 🤖 REVIEWING · Repair queued',
     ...overrides,
@@ -32,6 +33,55 @@ function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
     reviews: [],
   })
 }
+
+describe('the queued review history line', () => {
+  it('says nothing before any Review has run', () => {
+    expect(queuedReviewHistoryLine({ _tag: 'FirstReview' })).toBeNull()
+  })
+
+  it('names the Repair when the controller pushed the commit under review', () => {
+    const line = queuedReviewHistoryLine({
+      _tag: 'AfterRepair',
+      priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8',
+      priorOutcome: 'Blocked',
+      findings: 4,
+    })
+
+    expect(line).toBe('The last Review of `eb2933b2d12a` answered blocked on 4 defects. A Repair pushed this commit, so this Review answers the Repair.')
+  })
+
+  it('names a new commit when somebody else pushed it', () => {
+    const line = queuedReviewHistoryLine({
+      _tag: 'AfterPush',
+      priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8',
+      priorOutcome: 'Blocked',
+      findings: 1,
+    })
+
+    expect(line).toBe('The last Review of `eb2933b2d12a` answered blocked on 1 defect. A new commit replaced it, so this Review answers the new commit.')
+  })
+
+  it('leaves the defect count out when the prior Review found none', () => {
+    const line = queuedReviewHistoryLine({
+      _tag: 'AfterPush',
+      priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8',
+      priorOutcome: 'Ready',
+      findings: 0,
+    })
+
+    expect(line).toBe('The last Review of `eb2933b2d12a` answered ready. A new commit replaced it, so this Review answers the new commit.')
+  })
+
+  it('puts the history into the comment a waiting pull request carries', () => {
+    const body = queuePositionComment(queuedRepair({
+      taskKind: 'adversarial_review',
+      history: { _tag: 'AfterRepair', priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', priorOutcome: 'Blocked', findings: 4 },
+    }))
+
+    expect(body).toContain('A Repair pushed this commit, so this Review answers the Repair.')
+    expect(body).toContain('Next: Review starts when an Agent is free.')
+  })
+})
 
 describe('queuePositionComment', () => {
   it('keeps exact position in the Dashboard', () => {
