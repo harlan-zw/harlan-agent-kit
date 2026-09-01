@@ -323,6 +323,58 @@ describe('filing the issues Candidates propose', () => {
     }
   })
 
+  it('stops asking a repository that answers 410, because issues are switched off there', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      const refusing = {
+        findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+        createComment: async () => ok({ id: 1 }),
+        createIssue: async () => ({
+          _tag: 'Err' as const,
+          error: { repository: 'harlan-zw/example', message: 'Issues has been disabled in this repository.', status: 410 },
+        }),
+      }
+      const controller = createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })
+
+      await controller.publishPending(new AbortController().signal)
+
+      expect(store.claimNextCandidateIssue('controller-2', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('stops a proposal that spends its attempts on the same refusal', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      const refusing = {
+        findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+        createComment: async () => ok({ id: 1 }),
+        createIssue: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
+      }
+      const controller = createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })
+      await controller.publishPending(new AbortController().signal)
+      await controller.publishPending(new AbortController().signal)
+      await controller.publishPending(new AbortController().signal)
+
+      expect(store.claimNextCandidateIssue('controller-2', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('files nothing when the repository has writes turned off', async () => {
     const store = openJournalStore(':memory:')
     try {
