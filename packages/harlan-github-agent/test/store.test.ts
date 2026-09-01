@@ -344,6 +344,53 @@ describe('journal store', () => {
     })
   })
 
+  it('supersedes an expired progress Publication before restart', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'restart-expired-progress-status',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:01.000Z',
+      revisionId: observed.revisionId,
+      expectedHeadSha: task.pullRequest.headSha,
+      phase: 'review',
+      body: '<!-- harlan-agent-kit:pr-triage -->\nReview in progress.',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    expect(store.claimReviewStatus(staged.commandId, 'publisher-1', '2026-08-13T01:01:02.000Z', 60_000)).not.toBeNull()
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:01:03.000Z',
+      evidence: 'review-1',
+    })
+
+    expect(store.prepareForRestart('2026-08-13T01:02:01.000Z')).toBe(false)
+    expect(store.prepareForRestart('2026-08-13T01:02:02.000Z')).toBe(true)
+    expect(store.listWorkflowEvents({ stream: 'review_status', limit: 1 })[0]).toMatchObject({
+      entityId: staged.commandId,
+      event: 'RestartSuperseded',
+      from: 'Running',
+      to: 'Superseded',
+      reason: 'The automated review did not finish before the Restart request.',
+    })
+  })
+
   it('keeps restart unsafe until a pending terminal Review Publication finishes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

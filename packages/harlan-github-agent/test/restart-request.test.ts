@@ -155,7 +155,7 @@ describe('restart request', () => {
       maximumWaitMilliseconds: 50 * 60_000,
       store: {
         getRestartRequest: () => request,
-        isSafeToRestart: () => safe,
+        prepareForRestart: () => safe,
         beginRestart(input) {
           request = {
             _tag: 'Restarting',
@@ -205,7 +205,7 @@ describe('restart request', () => {
       maximumWaitMilliseconds: 50 * 60_000,
       store: {
         getRestartRequest: () => request,
-        isSafeToRestart: () => false,
+        prepareForRestart: () => false,
         beginRestart: () => null,
         requireRestartAction(input) {
           request = {
