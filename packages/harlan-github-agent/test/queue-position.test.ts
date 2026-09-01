@@ -132,6 +132,76 @@ describe('listQueuedReviewStatuses', () => {
     ])
   })
 
+  it('names the Repair a queued Review is answering, so a re-review is not a bare QUEUED', () => {
+    const store = createStore()
+    queuedRepair(store, 30, '2026-08-13T01:00:00.000Z')
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    const repairCommit = 'd'.repeat(40)
+    const stagedPublication = store.stagePublication({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      publication: {
+        _tag: 'UpdatePullRequest',
+        taskKind: 'review_fix',
+        baseRef: 'main',
+        pullRequestNumber: repair.pullRequestNumber,
+        commitSha: repairCommit,
+        baseSha: repair.pullRequest.baseSha,
+        expectedHeadSha: repair.pullRequest.headSha,
+        headRef: repair.pullRequest.headRef,
+        artifactRef: 'refs/harlan-github-agent/publications/queued-history',
+        patchDigest: 'repair-patch',
+        changedFiles: 1,
+      },
+    })
+    if (stagedPublication._tag !== 'Staged')
+      throw new Error(`stagePublication: ${JSON.stringify(stagedPublication)}`)
+    const publication = store.claimNextPublication('publisher', '2026-08-13T01:03:00.000Z', 60_000)
+    if (publication === null)
+      throw new Error('Expected the Repair Publication.')
+    expect(store.completePublication({
+      commandId: publication.id,
+      workerId: publication.workerId,
+      fence: publication.fence,
+      at: '2026-08-13T01:04:00.000Z',
+      evidence: 'Published Repair commit.',
+    })).toBe(true)
+
+    // The Repair push becomes the next head, which queues a fresh Review.
+    const repaired = store.recordObservation({
+      externalId: 'queued-history-repaired-head',
+      observedAt: '2026-08-13T01:05:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({
+        number: 30,
+        headRef: 'fix/thing-30',
+        headSha: repairCommit,
+        mergeState: 'clean',
+        url: 'https://github.com/harlan-zw/example/pull/30',
+        updatedAt: '2026-08-13T01:05:00.000Z',
+      }),
+    })
+    if (repaired._tag !== 'Inserted')
+      throw new Error('Expected the Repair push to create a new Revision.')
+
+    expect(store.listQueuedReviewStatuses()).toEqual([
+      expect.objectContaining({
+        pullRequestNumber: 30,
+        taskKind: 'adversarial_review',
+        history: {
+          _tag: 'AfterRepair',
+          priorHeadSha: 'head30',
+          priorOutcome: 'Blocked',
+          findings: 1,
+        },
+      }),
+    ])
+  })
+
   it('agrees with the claim, so position 1 is the Task the next agent takes', () => {
     const store = createStore()
     queuedRepair(store, 24, '2026-08-13T01:00:00.000Z')

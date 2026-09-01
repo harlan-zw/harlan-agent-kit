@@ -1,6 +1,6 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
-import type { JournalStore, QueuedReviewStatus, ReviewQueueState } from './store.ts'
+import type { JournalStore, QueuedReviewHistory, QueuedReviewStatus, ReviewQueueState } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
@@ -8,6 +8,26 @@ import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.t
 const workLabel: Record<QueuedReviewStatus['taskKind'], string> = {
   adversarial_review: 'Review',
   review_fix: 'Repair',
+}
+
+/**
+ * What ran before this Task, in one sentence, or nothing on a first Review.
+ *
+ * A Review of the controller's own Repair used to read as a bare QUEUED
+ * comment. Nothing said a Review had already run, found defects, and pushed a
+ * fix, so the pull request looked untouched while the Queue worked through it.
+ */
+export function queuedReviewHistoryLine(history: QueuedReviewHistory): string | null {
+  if (history._tag === 'FirstReview')
+    return null
+  const defects = history.findings === 1 ? '1 defect' : `${history.findings} defects`
+  const outcome = history.priorOutcome.toLowerCase()
+  const prior = history.findings === 0
+    ? `The last Review of \`${history.priorHeadSha.slice(0, 12)}\` answered ${outcome}.`
+    : `The last Review of \`${history.priorHeadSha.slice(0, 12)}\` answered ${outcome} on ${defects}.`
+  return history._tag === 'AfterRepair'
+    ? `${prior} A Repair pushed this commit, so this Review answers the Repair.`
+    : `${prior} A new commit replaced it, so this Review answers the new commit.`
 }
 
 /**
@@ -22,12 +42,13 @@ export function queuePositionComment(status: QueuedReviewStatus): string {
   const next = status.queue._tag === 'Paused'
     ? `${work} starts when this repository resumes.`
     : `${work} starts when an Agent is free.`
+  const history = queuedReviewHistoryLine(status.history)
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${status.headSha} -->
 ### 🤖 ${heading}
 
 ${automatedDisclosure({ kind: 'review', notes: ['The Dashboard shows the exact Queue position.'] })}
-
+${history === null ? '' : `\n${history}\n`}
 Next: ${next}`
 }
 
