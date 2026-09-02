@@ -10,6 +10,7 @@ export interface InstalledRepository {
   github: string
   defaultBranch: string
   archived: boolean
+  fork: boolean
   topics: string[]
   /** How the controller reached this repository: the App, or Harlan's own token. */
   authentication: RepositoryAuthentication
@@ -84,10 +85,13 @@ export async function discoverGitHubAppRepositories(options: GitHubAppRepository
       continue
     if (!isAllowedRepository(repository.full_name, options.allowedOwners))
       continue
+    if (repository.fork)
+      continue
     repositories.push({
       github: repository.full_name,
       defaultBranch: repository.default_branch,
       archived: repository.archived,
+      fork: false,
       topics: repository.topics ?? [],
       authentication: 'app',
       owner: { login: repository.owner.login, type: ownerType },
@@ -168,7 +172,7 @@ export async function discoverUserRepositories(options: UserRepositoryDiscoveryO
       // An unreadable repository is one Harlan cannot reach either, so it stays untracked.
       return undefined
     })))
-  return repositories.flatMap(repository => repository === undefined || repository.archived ? [] : [repository])
+  return repositories.flatMap(repository => repository === undefined || repository.archived || repository.fork ? [] : [repository])
 }
 
 /**
@@ -185,6 +189,7 @@ export function installedWithoutCheckout(
   const checkoutByRepository = new Set(checkouts.map(checkout => checkout.github.toLowerCase()))
   return repositories
     .filter(repository => !repository.archived
+      && !repository.fork
       && isAllowedRepository(repository.github, allowedOwners)
       && !checkoutByRepository.has(repository.github.toLowerCase()))
     .map(repository => repository.github)
@@ -201,6 +206,8 @@ export function buildRepositoryMappings(
   const overrideByRepository = new Map(overrides.map(mapping => [mapping.github.toLowerCase(), mapping]))
 
   return repositories.flatMap((repository) => {
+    if (repository.fork)
+      return []
     if (!isAllowedRepository(repository.github, allowedOwners))
       return []
     const checkout = checkoutByRepository.get(repository.github.toLowerCase())

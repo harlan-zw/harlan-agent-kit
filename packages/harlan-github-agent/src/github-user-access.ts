@@ -48,7 +48,7 @@ export function createGitHubUserAccess(options: GitHubUserAccessOptions = {}): G
         'api',
         `repos/${owner}/${repo}`,
         '--jq',
-        '{github: .full_name, defaultBranch: .default_branch, archived: .archived, topics: .topics, owner: {login: .owner.login, type: .owner.type}}',
+        '{github: .full_name, defaultBranch: .default_branch, archived: .archived, fork: .fork, topics: .topics, owner: {login: .owner.login, type: .owner.type}}',
       ])
         .then((output) => {
           const repository = JSON.parse(output) as Omit<InstalledRepository, 'authentication'>
