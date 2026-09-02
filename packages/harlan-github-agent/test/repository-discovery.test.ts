@@ -14,10 +14,10 @@ afterEach(() => temporaryDirectories.splice(0).forEach(path => rmSync(path, { re
 
 describe('installedWithoutCheckout', () => {
   const installed = [
-    { github: 'harlan-zw/example', defaultBranch: 'main', archived: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
-    { github: 'harlan-zw/unlighthouse.dev', defaultBranch: 'main', archived: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
-    { github: 'harlan-zw/retired', defaultBranch: 'main', archived: true, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
-    { github: 'someone-else/tool', defaultBranch: 'main', archived: false, topics: [], authentication: 'app' as const, owner: { login: 'someone-else', type: 'User' as const } },
+    { github: 'harlan-zw/example', defaultBranch: 'main', archived: false, fork: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
+    { github: 'harlan-zw/unlighthouse.dev', defaultBranch: 'main', archived: false, fork: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
+    { github: 'harlan-zw/retired', defaultBranch: 'main', archived: true, fork: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } },
+    { github: 'someone-else/tool', defaultBranch: 'main', archived: false, fork: false, topics: [], authentication: 'app' as const, owner: { login: 'someone-else', type: 'User' as const } },
   ]
 
   it('names every granted repository that no agent can see', () => {
@@ -62,6 +62,7 @@ describe('repository discovery', () => {
         github: 'harlan-zw/example',
         defaultBranch: 'main',
         archived: false,
+        fork: false,
         topics: [],
         authentication: 'app' as const,
         owner: { login: 'harlan-zw', type: 'User' },
@@ -70,6 +71,7 @@ describe('repository discovery', () => {
         github: 'skilld-dev/shared',
         defaultBranch: 'main',
         archived: false,
+        fork: false,
         topics: ['harlan-agent-issues', 'harlan-agent-conflicts'],
         authentication: 'app' as const,
         owner: { login: 'skilld-dev', type: 'Organization' },
@@ -78,6 +80,7 @@ describe('repository discovery', () => {
         github: 'harlan-zw/remote-only',
         defaultBranch: 'main',
         archived: false,
+        fork: false,
         topics: [],
         authentication: 'app' as const,
         owner: { login: 'harlan-zw', type: 'User' },
@@ -100,6 +103,20 @@ describe('repository discovery', () => {
     expect(mappings[0]?.writablePullRequestAuthors).toEqual(['harlan-zw', 'harlan-github-agent[bot]'])
   })
 
+  it('does not map a fork', () => {
+    const mappings = buildRepositoryMappings([{
+      github: 'harlan-zw/skills',
+      defaultBranch: 'main',
+      archived: false,
+      fork: true,
+      topics: [],
+      authentication: 'app' as const,
+      owner: { login: 'harlan-zw', type: 'User' },
+    }], [{ github: 'harlan-zw/skills', checkout: '/home/harlan/pkg/skills' }], [], ['harlan-zw'])
+
+    expect(mappings).toEqual([])
+  })
+
   it('admits one repository without admitting its owner', () => {
     const allowed = ['harlan-zw', 'nuxt/scripts']
 
@@ -118,6 +135,7 @@ describe('repository discovery', () => {
       github: `nuxt/${name}`,
       defaultBranch: 'main',
       archived: false,
+      fork: false,
       topics: [],
       authentication: 'user',
       owner: { login: 'nuxt', type: 'Organization' },
@@ -141,6 +159,7 @@ describe('repository discovery', () => {
       github: 'nuxt/scripts',
       defaultBranch: 'main',
       archived: false,
+      fork: false,
       topics: [],
       authentication: 'user' as const,
       owner: { login: 'nuxt', type: 'Organization' },
@@ -164,6 +183,7 @@ describe('repository discovery', () => {
       github: 'harlan-zw/example',
       defaultBranch: 'main',
       archived: false,
+      fork: false,
       topics: [],
       authentication: 'app' as const,
       owner: { login: 'harlan-zw', type: 'User' },
@@ -181,6 +201,7 @@ describe('repository discovery', () => {
       github: 'harlan-zw/example',
       defaultBranch: 'main',
       archived: true,
+      fork: false,
       topics: [],
       authentication: 'app' as const,
       owner: { login: 'harlan-zw', type: 'User' },
@@ -194,6 +215,7 @@ describe('repository discovery', () => {
       github: 'harlan-zw/example',
       defaultBranch: 'main',
       archived: false,
+      fork: false,
       topics: [],
       authentication: 'app' as const,
       owner: { login: 'harlan-zw', type: 'User' },
