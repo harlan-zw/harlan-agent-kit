@@ -7,6 +7,7 @@ Review the entire base-to-head diff and its surrounding code. Disprove correctne
 Check:
 
 - Behavior against the linked issue and PR description.
+- Every image in the PR description, with visual inspection for UI defects.
 - Boundary inputs, malformed data, empty states, and unexpected ordering.
 - Error propagation, silent catches, partial writes, retries, and cleanup.
 - Security boundaries, secrets, injection, authorization, and unsafe parsing.
@@ -18,7 +19,9 @@ Check:
 - Code comments against `../../../references/code-comments.md`.
 - Repository architecture and local instructions.
 
-Treat style-only preferences as non-blocking. Treat correctness, security, data loss, public API breakage, and missing regression coverage as material.
+Treat style-only preferences as non-blocking. Treat visible UI defects as material. This includes clipping, overlap, overflow, unreadable contrast, and missing content.
+
+Treat a clearly labelled `Before` image as historical evidence. Verify the current head before recording a finding.
 
 ## Outcome gates
 

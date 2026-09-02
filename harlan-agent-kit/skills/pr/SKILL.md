@@ -273,6 +273,16 @@ HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
 
 Use `--attach` for images and videos. Repeat the flag for up to 50 files. GitHub hosts the files with the pull request. Never upload pull request media to another service.
 
+Visually inspect every screenshot before attaching it. Check the full-resolution image and the intended display size.
+
+Look for clipping, overlap, overflow, alignment, contrast, missing content, and broken responsive layouts. Treat every visible defect as task scope.
+
+If inspection finds a defect, do not upload that screenshot. Repair the UI in the task worktree. Run Step 4 and a focused browser check.
+
+Commit and push the repair without amending. Recapture the same view and inspect it again. Repeat until the attached result is clean.
+
+Keep a labelled `Before` image only when it explains the repaired defect. Its matching `After` image must show the same area.
+
 Take the picture before you need it. [nuxt-frontend-review](../nuxt-frontend-review/SKILL.md) already captures the running page. Two images beat one, labelled `Before` and `After`:
 
 ```bash

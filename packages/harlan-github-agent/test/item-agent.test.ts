@@ -138,6 +138,11 @@ describe('subject Workers', () => {
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
     expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
     expect(capture.requests[0]?.prompt).toContain('Limit local commands to changed files, their direct dependants, and focused behavior')
+    expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
+    expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
+    expect(capture.requests[0]?.prompt).toContain('private-user-images.githubusercontent.com')
+    expect(capture.requests[0]?.prompt).toContain('Authorization')
+    expect(capture.requests[0]?.prompt).toContain('stays inaccessible after authenticated retrieval')
   })
 
   it('runs Review directly without pull request triage', async () => {
