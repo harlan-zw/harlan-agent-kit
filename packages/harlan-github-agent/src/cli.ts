@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
+import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateRepositoryMappings } from './config.ts'
 import { createControlClient } from './control-client.ts'
@@ -341,15 +342,17 @@ const combineState = defineCommand({
   },
 })
 
+const rootArguments = {
+  config: configArgument,
+}
+
 const command = defineCommand({
   meta: {
     name: 'harlan-github-agent',
     version: '0.0.0',
     description: 'Run the local GitHub maintenance control plane.',
   },
-  args: {
-    config: configArgument,
-  },
+  args: rootArguments,
   subCommands: {
     'combine-service-state': combineState,
     'sweep-worktrees': sweepWorktrees,
@@ -357,8 +360,9 @@ const command = defineCommand({
   },
   async run({ args, rawArgs }) {
     // citty runs this after it ran the subcommand, so stop before the service
-    // starts and binds the dashboard port.
-    if (invokesSubCommand(rawArgs, ['combine-service-state', 'sweep-worktrees', 'control']))
+    // starts and binds the dashboard port. citty dispatches on the first
+    // positional argument, so look there, even when options precede the name.
+    if (invokesSubCommand(rawArgs, ['combine-service-state', 'sweep-worktrees', 'control'], rootArguments))
       return
     const configPath = resolve(args.config)
     const parsed = await loadConfig(configPath)
@@ -447,11 +451,17 @@ function parseControlCliInvocation(rawArgs: readonly string[]): ControlCliInvoca
   return { _tag: 'Run' }
 }
 
-const controlCliInvocation = parseControlCliInvocation(process.argv.slice(2))
+const controlValueOptionFlags = ['--config', '-c', '--url', '--password-file']
+
+const cliArguments = process.argv.slice(2)
+// A leading `--config` binds to the root command in citty, so forward the
+// control connection options to the end, where the subcommand parses them.
+const normalizedCliArguments = forwardLeadingOptions(cliArguments, controlValueOptionFlags, 'control')
+const controlCliInvocation = parseControlCliInvocation(normalizedCliArguments)
 if (controlCliInvocation._tag === 'Fail') {
   writeJson(controlCliInvocation.error, process.stderr)
   process.exitCode = 1
 }
 else {
-  void runMain(command)
+  void runMain(command, { rawArgs: normalizedCliArguments })
 }
