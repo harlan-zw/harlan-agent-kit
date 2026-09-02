@@ -261,28 +261,35 @@ EOF
 
 Keep it to the checks a reviewer would otherwise have to repeat. Prose lines, not ticked boxes.
 
-### Screenshots
+### Screenshots and video
 
-A visible change earns a picture, in that same comment. GitHub only accepts a pasted image through the web UI, so upload the file first and embed the URL it prints:
+A visible change earns media in the same comment. GitHub CLI 2.99.0 or later uploads it to the pull request:
 
 ```bash
-"${CLAUDE_SKILL_DIR}/../../scripts/pr-asset.sh" .playwright/after.png
-# https://pr.harlanzw.com/<repo>/<branch>/after-9f2c1a04.png
+HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
+  --body "Checked the visible change in the running app." \
+  --attach './.playwright/after.png#The updated page'
 ```
 
-The URL carries a hash of the file, so a changed screenshot is a new URL and the edge can never serve the old one. Re-upload after every change and put the new URL in the comment. `~/.config/harlan-agent-kit/pr-assets.env` holds the account, the token, and the public host. Without it the script exits 2 and says what is missing; post the comment without the image rather than blocking the PR.
+Use `--attach` for images and videos. Repeat the flag for up to 50 files. GitHub hosts the files with the pull request. Never upload pull request media to another service.
 
-Take the picture before you need it: [nuxt-frontend-review](../nuxt-frontend-review/SKILL.md) already captures the running page. Two images beat one, labelled `Before` and `After`:
+Take the picture before you need it. [nuxt-frontend-review](../nuxt-frontend-review/SKILL.md) already captures the running page. Two images beat one, labelled `Before` and `After`:
 
-```markdown
+```bash
+HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
+  --body "$(cat <<'EOF'
 | Before | After |
 | --- | --- |
-| ![before](https://pr.harlanzw.com/nuxt-seo/fix-og-image/before-3d81be77.png) | ![after](https://pr.harlanzw.com/nuxt-seo/fix-og-image/after-9f2c1a04.png) |
+| ![Before](./.playwright/before.png) | ![After](./.playwright/after.png) |
+EOF
+)" \
+  --attach ./.playwright/before.png \
+  --attach ./.playwright/after.png
 ```
 
-Only for a change someone can see: a page, a component, a CLI frame, a rendered email. Never a screenshot of passing tests or a green terminal.
+GitHub CLI replaces each local Markdown path with its uploaded URL. If every upload fails, it posts no comment. If a later upload fails, it posts the successful files and exits with an error. Check the printed comment URL before retrying.
 
-The bucket expires objects after 90 days, so a picture on a very old pull request goes blank. That is also what clears the superseded uploads. Nothing to clean up by hand, and [close-off](../close-off/SKILL.md) leaves the bucket alone: a merged pull request stays readable while anyone is still likely to open it.
+Only attach media for a visible change: a page, a component, a CLI frame, or a rendered email. Never attach a screenshot of passing tests or a green terminal.
 
 ## Step 6: Monitor CI & Review Comments
 
