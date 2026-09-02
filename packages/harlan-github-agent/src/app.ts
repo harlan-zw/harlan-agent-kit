@@ -354,8 +354,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       // Validation below reports malformed JSON as a bad request.
       return undefined
     }) as { source?: unknown } | undefined
-    if (body?.source !== 'dashboard')
-      throw createError({ status: 400, statusText: 'Bad Request', message: 'Update source must be dashboard.' })
+    if (body?.source !== 'dashboard' && body?.source !== 'helper')
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Update source must be dashboard or helper.' })
     const update = options.store.getDashboardSnapshot(options.now().toISOString()).serviceUpdate
     if (update._tag !== 'Available')
       throw createError({ status: 409, statusText: 'Conflict', message: 'No service update is available.' })

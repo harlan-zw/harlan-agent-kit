@@ -113,6 +113,43 @@ Register the dashboard with `./bin/install-portless-alias`.
 
 Open `https://harlan-github-agent.localhost/`. Use `agent` as the dashboard username.
 
+## Control API and CLI
+
+The dashboard and CLI use the same authenticated Control API.
+Every CLI command prints one JSON value.
+Expected failures print one tagged JSON error and exit with status 1.
+
+Use the configuration file on the service host:
+
+```bash
+harlan-github-agent control status --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
+```
+
+Target another instance with its URL and password file:
+
+```bash
+harlan-github-agent control pause --url https://harlan-github-agent.localhost --password-file /absolute/path/to/dashboard-password
+harlan-github-agent control resume --url https://harlan-github-agent.localhost --password-file /absolute/path/to/dashboard-password
+harlan-github-agent control restart --url https://harlan-github-agent.localhost --password-file /absolute/path/to/dashboard-password
+harlan-github-agent control update --url https://harlan-github-agent.localhost --password-file /absolute/path/to/dashboard-password
+harlan-github-agent control cancel --task TASK_ID --url https://harlan-github-agent.localhost --password-file /absolute/path/to/dashboard-password
+```
+
+The package exports the typed Control API client:
+
+```ts
+import { createControlClient } from 'harlan-github-agent'
+
+const client = createControlClient({
+  authentication: { _tag: 'Basic', password },
+  baseUrl: 'https://harlan-github-agent.localhost',
+  fetch,
+})
+```
+
 ## Webhooks
 
 Set `webhook.enabled` to start a second listener on its own port. It carries one route, `POST /webhook`, and nothing else. Keep the dashboard port on loopback: it can pause agents, approve pull requests, cancel tasks, and eject sessions, so it must never be exposed.

@@ -361,6 +361,49 @@ describe('dashboard HTTP app', () => {
     })])
   })
 
+  it('pins the available commit in a CLI Update request', async () => {
+    const latestCommit = 'b'.repeat(40)
+    const requests: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot({
+          serviceUpdate: {
+            _tag: 'Available',
+            deployedCommit: 'a'.repeat(40),
+            latestCommit,
+            checkedAt: now().toISOString(),
+          },
+        }),
+        listReviewRuns: () => [],
+        requestRestart(input) {
+          requests.push(input)
+          return { _tag: 'Requested', id: input.id, source: input.source, operation: input.operation, requestedAt: input.at }
+        },
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { 'authorization': authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'helper' }),
+    })
+
+    expect(response.status).toBe(202)
+    expect(requests).toEqual([expect.objectContaining({
+      source: 'helper',
+      operation: { _tag: 'Update', targetCommit: latestCommit },
+    })])
+  })
+
   it('reports read-only health', async () => {
     const response = await createApp().request(`http://${allowedHost}/health`, { headers: { authorization, host: allowedHost } })
 
