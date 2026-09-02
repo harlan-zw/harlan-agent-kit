@@ -101,6 +101,7 @@ For each finding, write the named failing regression test first. Confirm it fail
 Fix every finding. Run focused checks that cover every changed behavior.
 For a visual finding, read the pull request image and reproduce the defect at the shown viewport.
 Download images only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths).
+If a private-user-images URL returns 404 or 401, refetch it with an Authorization header carrying the repository-scoped token from the authenticated GitHub CLI.
 Record any other image host in the summary without downloading it.
 Store verification media outside the worktree. Capture and inspect the repaired view before returning repaired.
 Do not mark a UI repair complete while a visible defect remains.
