@@ -11,11 +11,61 @@ import { dashboardSnapshot } from './fixtures.ts'
 const executeFile = promisify(execFile)
 const temporaryDirectories: string[] = []
 
+interface CliRun {
+  code: number
+  stdout: string
+  stderr: string
+}
+
+function runControlCli(args: string[]): Promise<CliRun> {
+  return executeFile(process.execPath, ['--experimental-strip-types', 'src/cli.ts', ...args], { cwd: join(import.meta.dirname, '..') })
+    .then(({ stdout, stderr }) => ({ code: 0, stdout, stderr }))
+    .catch((error: NodeJS.ErrnoException & { stdout: string, stderr: string }) => ({
+      code: typeof error.code === 'number' ? error.code : 1,
+      stdout: error.stdout,
+      stderr: error.stderr,
+    }))
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(path => rm(path, { recursive: true })))
 })
 
 describe('harlan GitHub Agent control CLI', () => {
+  it('prints one tagged JSON error and exits 1 when the configuration file is missing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
+    temporaryDirectories.push(directory)
+
+    const run = await runControlCli(['control', 'status', '--config', join(directory, 'missing.yml')])
+
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr)).toEqual({ _tag: 'ConfigurationFailure', message: expect.any(String) })
+  })
+
+  it('prints one tagged JSON error and exits 1 when the password file is missing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
+    temporaryDirectories.push(directory)
+
+    const run = await runControlCli([
+      'control',
+      'status',
+      '--url',
+      'http://127.0.0.1:9',
+      '--password-file',
+      join(directory, 'missing-dashboard-password'),
+    ])
+
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr)).toEqual({ _tag: 'ConfigurationFailure', message: expect.any(String) })
+  })
+
+  it('prints one tagged JSON error and exits 1 when the event stream is unknown', async () => {
+    const run = await runControlCli(['control', 'events', '--stream', 'nope', '--url', 'http://127.0.0.1:9'])
+
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr)).toEqual({ _tag: 'InvalidStream', message: expect.any(String) })
+  })
+
   it('prints machine-readable service status without starting another service', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
     temporaryDirectories.push(directory)

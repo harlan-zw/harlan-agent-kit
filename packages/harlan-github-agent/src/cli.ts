@@ -11,6 +11,7 @@ import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
+import { err } from './result.ts'
 import { combineServiceState } from './service-state.ts'
 import { createGitServiceUpdateSource } from './service-update.ts'
 import { startAgentService } from './service.ts'
@@ -55,6 +56,7 @@ type ControlCommandError
   = | { _tag: 'ConfigurationFailure', message: string }
     | { _tag: 'InvalidTaskId', message: string }
     | { _tag: 'InvalidEventLimit', message: string }
+    | { _tag: 'InvalidStream', message: string }
     | { _tag: 'InvalidBaseUrl', message: string }
 
 const workflowEventStreams = [
@@ -76,7 +78,9 @@ async function loadControlClient(args: ControlConnectionArguments): Promise<Resu
   const configPath = resolve(args.config)
   let baseUrl = args.url
   if (baseUrl === undefined) {
-    const configuration = await loadConfig(configPath)
+    const configuration = await loadConfig(configPath).catch((error: unknown) =>
+      err([{ path: '$', message: error instanceof Error ? error.message : 'The configuration file could not be read.' }]),
+    )
     if (configuration._tag === 'Err') {
       return {
         _tag: 'Err',
@@ -90,7 +94,9 @@ async function loadControlClient(args: ControlConnectionArguments): Promise<Resu
   }
 
   const passwordPath = resolve(args['password-file'] ?? join(dirname(configPath), 'dashboard-password'))
-  const password = await loadDashboardPassword(passwordPath)
+  const password = await loadDashboardPassword(passwordPath).catch((error: unknown) =>
+    err(error instanceof Error ? error.message : 'The dashboard password file could not be read.'),
+  )
   if (password._tag === 'Err')
     return { _tag: 'Err' as const, error: { _tag: 'ConfigurationFailure' as const, message: password.error } }
 
@@ -182,9 +188,8 @@ const controlCommand = defineCommand({
       args: {
         ...controlConnectionArguments,
         stream: {
-          type: 'enum',
-          description: 'One workflow event stream.',
-          options: [...workflowEventStreams],
+          type: 'string',
+          description: `One workflow event stream: ${workflowEventStreams.join(', ')}.`,
         },
         limit: {
           type: 'string',
@@ -193,6 +198,12 @@ const controlCommand = defineCommand({
         },
       },
       async run({ args }) {
+        const stream = workflowEventStreams.find(candidate => candidate === args.stream)
+        if (args.stream !== undefined && stream === undefined) {
+          writeJson({ _tag: 'InvalidStream', message: 'Select a valid workflow event stream.' } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
         const limit = Number(args.limit)
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
           writeJson({ _tag: 'InvalidEventLimit', message: 'Set the event limit from 1 to 1000.' } satisfies ControlCommandError, process.stderr)
@@ -201,7 +212,7 @@ const controlCommand = defineCommand({
         }
         await runControl(args as unknown as ControlConnectionArguments, client => client.workflowEvents({
           limit,
-          ...(args.stream === undefined ? {} : { stream: args.stream }),
+          ...(stream === undefined ? {} : { stream }),
         }).then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { events: result.value } }))
       },
     }),
