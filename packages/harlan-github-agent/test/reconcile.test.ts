@@ -547,6 +547,7 @@ describe('gitHub reconciliation', () => {
     const issue = issueItem({ approvalLabels: ['review'] })
     const approved: Array<{ kind: string, revisionId: string }> = []
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
 
     const result = await reconcileRepository(repository, {
       approvals: {
@@ -562,6 +563,37 @@ describe('gitHub reconciliation', () => {
 
     expect(result._tag).toBe('Ok')
     expect(approved).toEqual([{ kind: 'issue', revisionId: expect.stringMatching(/^[a-f\d]{64}$/) }])
+    store.close()
+  })
+
+  it('observes a repository without running mutation controllers while writes are disabled', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = repositoryMapping()
+    const issue = issueItem({ approvalLabels: ['review'] })
+    let mutationCalls = 0
+    store.syncRepositories([repository], '2026-09-02T00:00:00.000Z')
+
+    const result = await reconcileRepository(repository, {
+      approvals: {
+        reconcile: () => {
+          mutationCalls += 1
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      autoMerge: {
+        reconcile: () => {
+          mutationCalls += 1
+          return Promise.resolve()
+        },
+      },
+      github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([issue])) },
+      store,
+      now: () => new Date('2026-09-02T00:01:00.000Z'),
+    })
+
+    expect(result._tag).toBe('Ok')
+    expect(mutationCalls).toBe(0)
+    expect(store.getDashboardSnapshot('2026-09-02T00:01:00.000Z').items).toHaveLength(1)
     store.close()
   })
 

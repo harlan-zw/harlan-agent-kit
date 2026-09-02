@@ -6,14 +6,21 @@ import { err, ok } from './result.ts'
 export interface GitHubWriteGateOptions {
   /** True when a person has trusted the controller to write to this repository. */
   mayWrite: (github: string) => boolean
-  /** Called once for each refused write, so a person sees why nothing happened. */
-  onRefused: (github: string) => void
   source: GitHubTokenProvider
 }
 
 /** The reason every write credential is refused for one quarantined repository. */
 export function repositoryQuarantineReason(github: string): string {
   return `The controller has never been trusted to write to ${github}. Enable writes for it first.`
+}
+
+export function isRepositoryWriteQuarantineReason(message: string): boolean {
+  const prefix = 'The controller has never been trusted to write to '
+  const suffix = '. Enable writes for it first.'
+  const start = message.indexOf(prefix)
+  return start >= 0
+    && message.endsWith(suffix)
+    && message.length > start + prefix.length + suffix.length
 }
 
 const writeAccess = new Set<GitHubRepositoryAccess>(['contents_write', 'item_write', 'workflows_write'])
@@ -30,7 +37,6 @@ export function createGitHubWriteGate(options: GitHubWriteGateOptions): GitHubTo
     getToken(repository, access, signal) {
       if (!writeAccess.has(access) || options.mayWrite(repository))
         return options.source.getToken(repository, access, signal)
-      options.onRefused(repository)
       return Promise.resolve(err({
         repository,
         message: repositoryQuarantineReason(repository),

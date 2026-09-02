@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { agentProfile, CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { repositoryQuarantineReason } from '../src/github-write-gate.ts'
 import { routineReportCommand } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -68,6 +69,130 @@ function settlementPublication(id: string) {
 }
 
 describe('journal store', () => {
+  it('holds write-dependent Tasks until repository writes are enabled', () => {
+    const repository = repositoryMapping()
+    const mutationStore = openJournalStore(':memory:', true)
+    stores.push(mutationStore)
+    mutationStore.syncRepositories([repository], '2026-09-02T00:00:00.000Z')
+    mutationStore.recordObservation({
+      externalId: 'quarantined-conflict',
+      observedAt: '2026-09-02T00:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+
+    expect(mutationStore.claimNextConflictTask('conflict-worker', '2026-09-02T00:02:00.000Z', 60_000)).toBeNull()
+
+    mutationStore.setRepositoryWritesEnabled(repository.github, true)
+
+    expect(mutationStore.claimNextConflictTask('conflict-worker', '2026-09-02T00:03:00.000Z', 60_000)).not.toBeNull()
+
+    const reviewStore = openJournalStore(':memory:', true)
+    stores.push(reviewStore)
+    reviewStore.syncRepositories([repository], '2026-09-02T00:00:00.000Z')
+    reviewStore.recordObservation({
+      externalId: 'quarantined-review',
+      observedAt: '2026-09-02T00:01:01.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+
+    expect(reviewStore.claimNextAdversarialReviewTask('review-worker', '2026-09-02T00:02:00.000Z', 60_000)).toBeNull()
+
+    reviewStore.setRepositoryWritesEnabled(repository.github, true)
+
+    expect(reviewStore.claimNextAdversarialReviewTask('review-worker', '2026-09-02T00:03:00.000Z', 60_000)).not.toBeNull()
+  })
+
+  it('defers a running Task without an Incident when repository writes are disabled', () => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-09-02T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordObservation({
+      externalId: 'disabled-during-review',
+      observedAt: '2026-09-02T00:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const task = store.claimNextAdversarialReviewTask('review-worker', '2026-09-02T00:02:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+
+    store.setRepositoryWritesEnabled(repository.github, false)
+
+    expect(store.failWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-09-02T00:02:01.000Z',
+      reason: repositoryQuarantineReason(repository.github),
+    })).toBe('Retrying')
+    expect(store.getDashboardSnapshot('2026-09-02T00:02:02.000Z').tasks)
+      .toContainEqual(expect.objectContaining({ id: task.id, state: { _tag: 'Queued' } }))
+    expect(store.listIncidents()).toEqual([])
+  })
+
+  it('defers a running Publication without an Incident when repository writes are disabled', () => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-09-02T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordObservation({
+      externalId: 'disabled-during-publication',
+      observedAt: '2026-09-02T00:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    const task = store.claimNextConflictTask('conflict-worker', '2026-09-02T00:02:00.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a conflict resolution Task.')
+    if (task.pullRequest.baseRef === undefined)
+      throw new Error('Expected a base branch.')
+    const staged = store.stagePublication({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-09-02T00:02:01.000Z',
+      publication: {
+        _tag: 'UpdatePullRequest',
+        taskKind: 'resolve_conflict',
+        pullRequestNumber: task.pullRequestNumber,
+        commitSha: 'resolved-commit',
+        baseSha: task.pullRequest.baseSha,
+        baseRef: task.pullRequest.baseRef,
+        expectedHeadSha: task.pullRequest.headSha,
+        headRef: task.pullRequest.headRef,
+        artifactRef: 'resolved-artifact',
+        patchDigest: 'resolved-patch',
+        changedFiles: 1,
+      },
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimNextPublication('publisher', '2026-09-02T00:02:02.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected a Publication.')
+
+    store.setRepositoryWritesEnabled(repository.github, false)
+
+    expect(store.failPublication({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-09-02T00:02:03.000Z',
+      reason: repositoryQuarantineReason(repository.github),
+    })).toBe('Retrying')
+    expect(store.claimNextPublication('publisher', '2026-09-02T00:02:04.000Z', 60_000)).toBeNull()
+    expect(store.listIncidents()).toEqual([])
+
+    store.setRepositoryWritesEnabled(repository.github, true)
+
+    expect(store.claimNextPublication('publisher', '2026-09-02T00:02:05.000Z', 60_000)).not.toBeNull()
+  })
+
   it('includes Routines and their recent runs in the dashboard snapshot', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-28T00:00:00.000Z')

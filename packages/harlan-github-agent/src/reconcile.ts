@@ -49,6 +49,7 @@ function countResults(results: RecordObservationResult[]): Pick<ReconciliationSu
 
 export async function reconcileRepository(repository: RepositoryMapping, dependencies: ReconciliationDependencies): Promise<Result<ReconciliationSummary, ReconciliationError>> {
   const observedAt = dependencies.now().toISOString()
+  const writesEnabled = dependencies.store.mayWriteRepository(repository.github)
   dependencies.store.recordPollAttempt(repository.github, observedAt)
   const result = await dependencies.github.listOpenItems(repository, dependencies.signal)
   if (result._tag === 'Err') {
@@ -129,7 +130,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     return err({ repository: repository.github, message })
   }
 
-  if (dependencies.approvals !== undefined) {
+  if (writesEnabled && dependencies.approvals !== undefined) {
     const approvals = await Promise.all(eligibleItems.map((subject, index) => {
       const write = writes[index]
       if (write === undefined || write._tag === 'Conflict' || write._tag === 'Stale')
@@ -144,7 +145,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     }
   }
 
-  if (dependencies.autoMerge !== undefined) {
+  if (writesEnabled && dependencies.autoMerge !== undefined) {
     const merges = dependencies.autoMerge
     await Promise.all(eligibleItems.map(subject => merges.reconcile(
       repository,
