@@ -78,6 +78,18 @@ describe('harlan GitHub Agent control CLI', () => {
     expect(JSON.parse(errorLine ?? '')).toEqual({ _tag: 'ConfigurationFailure', message: expect.stringContaining(configPath) })
   })
 
+  it('loads the requested configuration file when --config precedes sweep-worktrees', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
+    temporaryDirectories.push(directory)
+    const configPath = join(directory, 'requested-missing.yml')
+
+    const run = await runControlCli(['--config', configPath, 'sweep-worktrees', '--dry-run'])
+
+    expect(run.code).toBe(1)
+    expect(run.stderr).toContain(configPath)
+    expect(run.stderr).not.toContain('harlan-github-agent.yml')
+  })
+
   it('prints one tagged JSON error and exits 1 when the configuration file is missing', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
     temporaryDirectories.push(directory)

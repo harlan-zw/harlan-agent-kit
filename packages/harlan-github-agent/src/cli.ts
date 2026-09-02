@@ -346,6 +346,8 @@ const rootArguments = {
   config: configArgument,
 }
 
+const rootSubCommandNames = ['combine-service-state', 'sweep-worktrees', 'control']
+
 const command = defineCommand({
   meta: {
     name: 'harlan-github-agent',
@@ -362,7 +364,7 @@ const command = defineCommand({
     // citty runs this after it ran the subcommand, so stop before the service
     // starts and binds the dashboard port. citty dispatches on the first
     // positional argument, so look there, even when options precede the name.
-    if (invokesSubCommand(rawArgs, ['combine-service-state', 'sweep-worktrees', 'control'], rootArguments))
+    if (invokesSubCommand(rawArgs, rootSubCommandNames, rootArguments))
       return
     const configPath = resolve(args.config)
     const parsed = await loadConfig(configPath)
@@ -476,8 +478,8 @@ function parseControlCliInvocation(rawArgs: readonly string[]): ControlCliInvoca
 
 const cliArguments = process.argv.slice(2)
 // A leading `--config` binds to the root command in citty, so forward the
-// control connection options to the end, where the subcommand parses them.
-const normalizedCliArguments = forwardLeadingOptions(cliArguments, controlValueOptionFlags, 'control')
+// connection options behind every subcommand name, where they parse them.
+const normalizedCliArguments = forwardLeadingOptions(cliArguments, controlValueOptionFlags, rootSubCommandNames)
 const controlCliInvocation = parseControlCliInvocation(normalizedCliArguments)
 if (controlCliInvocation._tag === 'Fail') {
   writeJson(controlCliInvocation.error, process.stderr)
