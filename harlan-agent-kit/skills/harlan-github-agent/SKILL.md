@@ -69,6 +69,19 @@ pnpm --filter harlan-github-agent exec node --experimental-strip-types src/cli.t
 
 Use `https://harlan-github-agent.localhost/`. Inspect `/health` first, then `/api/state`.
 
+Prefer the Control API CLI for agent-readable monitoring and durable service controls.
+It reads the URL and password from the configuration file by default.
+
+```bash
+harlan-github-agent control status --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
+```
+
+Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
+Every command prints one JSON value. A tagged JSON error exits with status 1.
+
 Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and authenticated `gh` client.
 
 `agent.provider` names the Agent provider the service starts with. It defaults to `codex`.

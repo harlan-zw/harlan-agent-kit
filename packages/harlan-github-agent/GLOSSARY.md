@@ -27,6 +27,7 @@ did not cover it.
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
+| Control API | authenticated HTTP routes | Controller | One per service, used by the dashboard and CLI | Control API |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
 | Restart request | `restart_requests` | Controller | N per service, one active | Restart after current work |
 | Service update | `origin/main`, `restart_requests.operation_tag` | Controller | One check, optional Restart request | Update available; Update after current work |
@@ -259,6 +260,14 @@ The dashboard view of completed work and its useful outcomes for one date range.
 Stats derives facts from the Journal. It never replaces the records that support them.
 
 Use Stats for the page and route. Do not use analytics, insights, value score, or impact score.
+
+### Control API
+
+The authenticated HTTP interface for reading service state and requesting durable controls.
+
+The dashboard and `harlan-github-agent control` use the same routes. A Control API request never edits the Journal directly.
+
+Use Control API. Do not use dashboard API, admin API, management API, or runner API.
 
 ### Pause
 

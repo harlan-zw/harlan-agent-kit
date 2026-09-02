@@ -13,6 +13,8 @@ export { candidateIssueBody, candidateIssueCommands, createCandidateIssueControl
 export { createCodexProvider } from './codex-provider.ts'
 export { loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, normalizeGitHubRemote, parseConfigText, validateRepositoryMappings } from './config.ts'
 export { createConflictWorker } from './conflict-worker.ts'
+export { createControlClient } from './control-client.ts'
+export type { ControlApiError, ControlClient, ControlClientConfigurationError, ControlClientError, ControlClientOptions, ControlHealth, ControlStatus, WorkflowEventQuery } from './control-client.ts'
 export { createExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 export { createGitHubAgentSource } from './github-agent-source.ts'
 export { createGitHubAppTokenProvider, createRepositoryTokenProvider } from './github-auth.ts'

@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+import type { ControlClient } from './control-client.ts'
+import type { Result } from './result.ts'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
 import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateRepositoryMappings } from './config.ts'
+import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
@@ -29,6 +32,202 @@ const configArgument = {
   description: 'Configuration file path.',
   default: 'harlan-github-agent.yml',
 } as const
+
+const controlConnectionArguments = {
+  'config': configArgument,
+  'url': {
+    type: 'string',
+    description: 'Service URL. Defaults to server.allowed_origin in the configuration file.',
+  },
+  'password-file': {
+    type: 'string',
+    description: 'Password file. Defaults to dashboard-password beside the configuration file.',
+  },
+} as const
+
+interface ControlConnectionArguments {
+  'config': string
+  'url': string | undefined
+  'password-file': string | undefined
+}
+
+type ControlCommandError
+  = | { _tag: 'ConfigurationFailure', message: string }
+    | { _tag: 'InvalidTaskId', message: string }
+    | { _tag: 'InvalidEventLimit', message: string }
+    | { _tag: 'InvalidBaseUrl', message: string }
+
+const workflowEventStreams = [
+  'task',
+  'worker_task',
+  'publication',
+  'review_run',
+  'review_gate',
+  'review_resolution',
+  'review_status',
+  'issue_triage_status',
+  'routine_run',
+  'candidate_issue',
+  'routine_report',
+  'provider_circuit',
+] as const
+
+async function loadControlClient(args: ControlConnectionArguments): Promise<Result<ControlClient, ControlCommandError>> {
+  const configPath = resolve(args.config)
+  let baseUrl = args.url
+  if (baseUrl === undefined) {
+    const configuration = await loadConfig(configPath)
+    if (configuration._tag === 'Err') {
+      return {
+        _tag: 'Err',
+        error: {
+          _tag: 'ConfigurationFailure',
+          message: configuration.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'),
+        },
+      }
+    }
+    baseUrl = configuration.value.server.allowedOrigin
+  }
+
+  const passwordPath = resolve(args['password-file'] ?? join(dirname(configPath), 'dashboard-password'))
+  const password = await loadDashboardPassword(passwordPath)
+  if (password._tag === 'Err')
+    return { _tag: 'Err' as const, error: { _tag: 'ConfigurationFailure' as const, message: password.error } }
+
+  return createControlClient({
+    authentication: { _tag: 'Basic', password: password.value },
+    baseUrl,
+    fetch: globalThis.fetch,
+  })
+}
+
+function writeJson(value: unknown, stream: NodeJS.WriteStream): void {
+  stream.write(`${JSON.stringify(value)}\n`)
+}
+
+async function runControl<ErrorValue>(
+  args: ControlConnectionArguments,
+  action: (client: ControlClient) => Promise<Result<unknown, ErrorValue>>,
+): Promise<void> {
+  const client = await loadControlClient(args)
+  if (client._tag === 'Err') {
+    writeJson(client.error, process.stderr)
+    process.exitCode = 1
+    return
+  }
+  const result = await action(client.value)
+  if (result._tag === 'Err') {
+    writeJson(result.error, process.stderr)
+    process.exitCode = 1
+    return
+  }
+  writeJson(result.value, process.stdout)
+}
+
+function taskId(value: string): { _tag: 'Ok', value: string } | { _tag: 'Err', error: ControlCommandError } {
+  return /^[a-f\d]{64}$/.test(value)
+    ? { _tag: 'Ok', value }
+    : { _tag: 'Err', error: { _tag: 'InvalidTaskId', message: 'The Task ID must contain 64 lowercase hexadecimal characters.' } }
+}
+
+function controlTaskCommand(input: { name: 'activity' | 'cancel', description: string }) {
+  return defineCommand({
+    meta: { name: input.name, description: input.description },
+    args: {
+      ...controlConnectionArguments,
+      task: {
+        type: 'string',
+        description: 'Task ID.',
+        required: true,
+      },
+    },
+    async run({ args }) {
+      const parsedTaskId = taskId(args.task)
+      if (parsedTaskId._tag === 'Err') {
+        writeJson(parsedTaskId.error, process.stderr)
+        process.exitCode = 1
+        return
+      }
+      await runControl(args, client => input.name === 'activity'
+        ? client.activity(parsedTaskId.value).then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { taskId: parsedTaskId.value, activity: result.value } })
+        : client.cancelTask(parsedTaskId.value))
+    },
+  })
+}
+
+const controlCommand = defineCommand({
+  meta: {
+    name: 'control',
+    description: 'Read and control one running Harlan GitHub Agent service.',
+  },
+  subCommands: {
+    status: defineCommand({
+      meta: { name: 'status', description: 'Read service health and the shared dashboard state.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.status()),
+    }),
+    tasks: defineCommand({
+      meta: { name: 'tasks', description: 'List current Tasks.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.tasks().then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { tasks: result.value } })),
+    }),
+    incidents: defineCommand({
+      meta: { name: 'incidents', description: 'List unresolved Incidents.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.incidents().then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { incidents: result.value } })),
+    }),
+    activity: controlTaskCommand({ name: 'activity', description: 'Read the redacted activity for one active Task.' }),
+    events: defineCommand({
+      meta: { name: 'events', description: 'List durable workflow events.' },
+      args: {
+        ...controlConnectionArguments,
+        stream: {
+          type: 'enum',
+          description: 'One workflow event stream.',
+          options: [...workflowEventStreams],
+        },
+        limit: {
+          type: 'string',
+          description: 'Maximum events from 1 to 1000.',
+          default: '200',
+        },
+      },
+      async run({ args }) {
+        const limit = Number(args.limit)
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+          writeJson({ _tag: 'InvalidEventLimit', message: 'Set the event limit from 1 to 1000.' } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args as unknown as ControlConnectionArguments, client => client.workflowEvents({
+          limit,
+          ...(args.stream === undefined ? {} : { stream: args.stream }),
+        }).then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { events: result.value } }))
+      },
+    }),
+    pause: defineCommand({
+      meta: { name: 'pause', description: 'Pause new agent Tasks.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.pause()),
+    }),
+    resume: defineCommand({
+      meta: { name: 'resume', description: 'Resume new agent Tasks.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.resume()),
+    }),
+    restart: defineCommand({
+      meta: { name: 'restart', description: 'Request Restart after current work.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.restart()),
+    }),
+    update: defineCommand({
+      meta: { name: 'update', description: 'Request Update after current work.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.update()),
+    }),
+    cancel: controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
+  },
+})
 
 const sweepWorktrees = defineCommand({
   meta: {
@@ -141,11 +340,12 @@ const command = defineCommand({
   subCommands: {
     'combine-service-state': combineState,
     'sweep-worktrees': sweepWorktrees,
+    'control': controlCommand,
   },
   async run({ args, rawArgs }) {
     // citty runs this after it ran the subcommand, so stop before the service
     // starts and binds the dashboard port.
-    if (invokesSubCommand(rawArgs, ['combine-service-state', 'sweep-worktrees']))
+    if (invokesSubCommand(rawArgs, ['combine-service-state', 'sweep-worktrees', 'control']))
       return
     const configPath = resolve(args.config)
     const parsed = await loadConfig(configPath)
