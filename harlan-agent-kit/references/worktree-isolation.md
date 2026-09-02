@@ -35,6 +35,11 @@ A successful creation means that `node_modules` is ready for repository checks.
 Do not repeat the install only to initialise that worktree.
 Run another install when the task changes the dependency graph.
 
+The global hook copies the primary worktree's root `.env` once.
+It copies only a regular file that Git ignores in both worktrees.
+It never overwrites a file or follows a symlink.
+Later changes stay private to each worktree.
+
 The global hook also seeds ignored `.data` and `.wrangler/state` directories.
 It copies only from the primary worktree when the destination has no state.
 Each worktree receives a private writable copy.
