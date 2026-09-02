@@ -203,18 +203,25 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     if (response._tag === 'Err')
       return response
 
+    const accepted = input.acceptedStatuses ?? [200]
+    if (!accepted.includes(response.value.status)) {
+      // The body is best effort: a non-JSON error body only loses the extracted message, the status is kept.
+      const body = await response.value.json().catch(() => {
+        // Ignorable: the fallback message below already carries the HTTP status.
+        return undefined
+      })
+      return err({
+        _tag: 'HttpFailure',
+        status: response.value.status,
+        message: body === undefined
+          ? `The service returned HTTP ${response.value.status}.`
+          : errorMessage(body, `The service returned HTTP ${response.value.status}.`),
+      })
+    }
     const body = await response.value.json()
       .then(value => ok(value), () => err({ _tag: 'InvalidResponse' as const, message: 'The service returned invalid JSON.' }))
     if (body._tag === 'Err')
       return body
-    const accepted = input.acceptedStatuses ?? [200]
-    if (!accepted.includes(response.value.status)) {
-      return err({
-        _tag: 'HttpFailure',
-        status: response.value.status,
-        message: errorMessage(body.value, `The service returned HTTP ${response.value.status}.`),
-      })
-    }
     const parsed = input.parse(body.value)
     return parsed._tag === 'Ok'
       ? parsed

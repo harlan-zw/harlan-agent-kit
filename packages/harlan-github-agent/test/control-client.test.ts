@@ -85,4 +85,20 @@ describe('harlan GitHub Agent control client', () => {
       error: { _tag: 'HttpFailure', status: 409, message: 'The task already finished.' },
     })
   })
+
+  it('returns an HTTP failure with the status for a non-JSON error body', async () => {
+    const created = clientWith([
+      new Response('<html>Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } }),
+    ], [])
+
+    expect(created._tag).toBe('Ok')
+    if (created._tag === 'Err')
+      return
+    const result = await created.value.cancelTask('a'.repeat(64))
+
+    expect(result).toEqual({
+      _tag: 'Err',
+      error: { _tag: 'HttpFailure', status: 502, message: 'The service returned HTTP 502.' },
+    })
+  })
 })
