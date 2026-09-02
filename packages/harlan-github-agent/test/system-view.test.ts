@@ -7,6 +7,7 @@ import {
   faviconTone,
   nextRoutineInstant,
   restartNotice,
+  serviceUpdatePresentation,
   systemChipState,
 } from '../dashboard/app/utils/system.ts'
 import { dashboardSnapshot } from './fixtures.ts'
@@ -175,7 +176,7 @@ describe('circuitNotice', () => {
 })
 
 describe('restartNotice', () => {
-  const base = { id: 'restart-1', source: 'dashboard' as const, requestedAt: '2026-08-14T11:00:00.000Z' }
+  const base = { id: 'restart-1', source: 'dashboard' as const, operation: { _tag: 'Restart' as const }, requestedAt: '2026-08-14T11:00:00.000Z' }
 
   it('renders nothing for no request or a finished one', () => {
     expect(restartNotice(null)).toBeUndefined()
@@ -187,6 +188,53 @@ describe('restartNotice', () => {
     expect(restartNotice({ ...base, _tag: 'Restarting', restartingAt: '2026-08-14T11:05:00.000Z' })?._tag).toBe('Restarting')
     expect(restartNotice({ ...base, _tag: 'ActionRequired', actionRequiredAt: '2026-08-14T11:07:00.000Z', reason: 'The new process never answered /health.' }))
       .toEqual({ _tag: 'ActionRequired', text: 'Restart did not complete: The new process never answered /health.' })
+  })
+
+  it('names an Update separately from a plain restart', () => {
+    const request = {
+      ...base,
+      _tag: 'Requested' as const,
+      operation: { _tag: 'Update' as const, targetCommit: 'b'.repeat(40) },
+    }
+    expect(restartNotice(request)).toEqual({ _tag: 'Requested', text: 'Update requested. Active work finishes first.' })
+  })
+})
+
+describe('serviceUpdatePresentation', () => {
+  const deployedCommit = 'a'.repeat(40)
+  const latestCommit = 'b'.repeat(40)
+
+  it('makes an available Update the exception', () => {
+    expect(serviceUpdatePresentation({
+      _tag: 'Available',
+      deployedCommit,
+      latestCommit,
+      checkedAt: '2026-09-02T03:00:00.000Z',
+    })).toEqual({
+      label: 'Update available',
+      tone: 'warning',
+      deployedCommit: 'aaaaaaa',
+      latestCommit: 'bbbbbbb',
+      checkedAt: '2026-09-02T03:00:00.000Z',
+      detail: undefined,
+    })
+  })
+
+  it('keeps current and unavailable checks explicit', () => {
+    expect(serviceUpdatePresentation({
+      _tag: 'Current',
+      deployedCommit,
+      latestCommit: deployedCommit,
+      checkedAt: '2026-09-02T03:00:00.000Z',
+    }).label).toBe('Current')
+    const unavailable = serviceUpdatePresentation({
+      _tag: 'Unavailable',
+      deployedCommit,
+      checkedAt: '2026-09-02T03:00:00.000Z',
+      reason: 'The latest commit could not be checked. Retry later.',
+    })
+    expect(unavailable).toMatchObject({ label: 'Check failed', tone: 'warning' })
+    expect(unavailable.latestCommit).toBeUndefined()
   })
 })
 

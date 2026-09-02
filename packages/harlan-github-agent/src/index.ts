@@ -40,6 +40,8 @@ export { CANDIDATE_SCHEMA, createRoutineScanWorker, DEFAULT_MAXIMUM_CHANGED_FILE
 export { startAgentServer } from './server.ts'
 export { combineServiceState } from './service-state.ts'
 export type { CombinedServiceState, CombineServiceStateError, CombineServiceStateInput } from './service-state.ts'
+export { createGitServiceUpdateSource, createServiceUpdateSource } from './service-update.ts'
+export type { ServiceUpdateSource } from './service-update.ts'
 export { createPassIncidentRecorder, replaceServiceIncidents, startAgentService } from './service.ts'
 export { openJournalStore } from './store.ts'
 export { createTaskScheduler } from './task-scheduler.ts'

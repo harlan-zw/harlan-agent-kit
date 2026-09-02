@@ -6,6 +6,7 @@ import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { Result } from './result.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
+import type { ServiceUpdateSource } from './service-update.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAgentTask, DashboardSnapshot, IncidentScope, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
@@ -82,6 +83,7 @@ export interface StartAgentServiceOptions {
   githubPrivateKey: string
   gitIdentity: GitIdentity
   logger: Pick<ConsolaInstance, 'error' | 'info'>
+  serviceUpdate: ServiceUpdateSource
   now?: () => Date
 }
 
@@ -266,7 +268,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ...providerProfile,
     maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
   }
-  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests)
+  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read)
   const processId = randomUUID()
   const restartController = createRestartController({
     store,
@@ -285,6 +287,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         at,
       })
     },
+    prepareUpdate: options.serviceUpdate.prepare,
   })
   // Capacity is normal System state now. Clear the legacy Incident once, so a
   // service upgraded while every provider was at its Reserve does not keep it.
@@ -1125,6 +1128,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     options.logger.info(`Completed Restart request ${completedRestart.id}.`)
   }
   restartController.start()
+  options.serviceUpdate.start()
   capacity.start()
   // A delivery says "read GitHub again", never what changed. Reconciliation
   // stays the only writer, so a missed, duplicated, or forged delivery can at
@@ -1205,6 +1209,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       restartController.stop()
       await Promise.all([
         capacity.stop(),
+        options.serviceUpdate.stop(),
         reconcileHint.stop(),
         poller.stop(),
         externalPoller.stop(),

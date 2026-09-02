@@ -342,6 +342,27 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const request = options.store.requestRestart({
       id: randomUUID(),
       source: body.source,
+      operation: { _tag: 'Restart' },
+      at: options.now().toISOString(),
+    })
+    setResponseStatus(event, 202)
+    return request
+  })
+
+  app.post('/api/service/update', async (event) => {
+    const body = await event.req.json().catch(() => {
+      // Validation below reports malformed JSON as a bad request.
+      return undefined
+    }) as { source?: unknown } | undefined
+    if (body?.source !== 'dashboard')
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Update source must be dashboard.' })
+    const update = options.store.getDashboardSnapshot(options.now().toISOString()).serviceUpdate
+    if (update._tag !== 'Available')
+      throw createError({ status: 409, statusText: 'Conflict', message: 'No service update is available.' })
+    const request = options.store.requestRestart({
+      id: randomUUID(),
+      source: body.source,
+      operation: { _tag: 'Update', targetCommit: update.latestCommit },
       at: options.now().toISOString(),
     })
     setResponseStatus(event, 202)
