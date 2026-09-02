@@ -30,7 +30,7 @@ import { classifyFailure } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
-import { createGitHubWriteGate, preflightGitHubWriteAccess, repositoryQuarantineReason, withGitHubWritePreflight } from './github-write-gate.ts'
+import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker } from './issue-work-worker.ts'
@@ -128,6 +128,8 @@ function recordServiceIncident(
   message: string,
   scope: IncidentScope = { _tag: 'Service' },
 ): void {
+  if (isRepositoryWriteQuarantineReason(message))
+    return
   const failure = classifyFailure({ message })
   store.recordIncident({
     scope,
@@ -170,7 +172,7 @@ export function replaceServiceIncidents(
   operation: string,
   messages: readonly string[],
 ): void {
-  const currentMessages = [...new Set(messages)]
+  const currentMessages = [...new Set(messages)].filter(message => !isRepositoryWriteQuarantineReason(message))
   currentMessages.forEach(message => recordServiceIncident(store, at, operation, message))
   store.resolveIncidents({ _tag: 'Service' }, at, operation, currentMessages)
 }
@@ -367,17 +369,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // future mutation needs one of these write credentials before it can leave.
   const gatedTokens = (source: GitHubTokenProvider): GitHubTokenProvider => createGitHubWriteGate({
     mayWrite: github => store.mayWriteRepository(github),
-    onRefused: (github) => {
-      store.recordIncident({
-        scope: { _tag: 'Repository', repository: github },
-        kind: 'policy',
-        severity: 'warning',
-        message: repositoryQuarantineReason(github),
-        operation: 'write',
-        recovery: { _tag: 'ActionRequired' },
-        at: now().toISOString(),
-      })
-    },
     source,
   })
   const tokens = gatedTokens(routedTokens)
@@ -508,6 +499,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       now,
       onProgressPublishFailure: (task: ClaimedAgentTask, reason: string) => {
         options.logger.error(`${task.repository}: status update failed, the review continues: ${reason}`)
+        if (!store.mayWriteRepository(task.repository))
+          return
         const failure = classifyFailure({ message: reason })
         store.recordIncident({
           scope: { _tag: 'Task', taskId: task.id, repository: task.repository, itemNumber: null },

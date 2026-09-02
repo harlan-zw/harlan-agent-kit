@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { repositoryQuarantineReason } from '../src/github-write-gate.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -75,6 +76,7 @@ function restoreExpectedUpdatedAt(database: DatabaseSync): void {
 function journalAtVersion22(path: string): void {
   const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
   store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+  store.setRepositoryWritesEnabled('harlan-zw/example', true)
   store.recordObservation({
     externalId: 'legacy-pr',
     observedAt: '2026-08-18T00:00:00.000Z',
@@ -132,6 +134,7 @@ function journalAtVersion22(path: string): void {
 function journalAtVersion25(path: string): void {
   const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
   store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+  store.setRepositoryWritesEnabled('harlan-zw/example', true)
   store.recordObservation({
     externalId: 'migrated-pr',
     observedAt: '2026-08-18T00:00:00.000Z',
@@ -208,6 +211,7 @@ function journalAtVersion25(path: string): void {
 function journalAtVersion30(path: string): void {
   const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
   store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+  store.setRepositoryWritesEnabled('harlan-zw/example', true)
   const observed = store.recordObservation({
     externalId: 'review-usage-migration',
     observedAt: '2026-08-18T00:00:00.000Z',
@@ -286,6 +290,7 @@ describe('pull request closure verification migration', () => {
     const repository = repositoryMapping()
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     store.syncRepositories([repository], '2026-08-18T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
     const observed = store.recordObservation({
       externalId: 'review-before-legacy-closure',
       observedAt: '2026-08-18T00:00:00.000Z',
@@ -389,6 +394,7 @@ describe('installation permission recovery migration', () => {
     const path = join(directory, 'state.sqlite')
     const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.setRepositoryWritesEnabled('harlan-zw/example', true)
     store.recordObservation({
       externalId: 'old-workflow-permission',
       observedAt: '2026-08-18T00:00:00.000Z',
@@ -443,6 +449,7 @@ describe('provider session recovery migration', () => {
     const path = join(directory, 'state.sqlite')
     const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.setRepositoryWritesEnabled('harlan-zw/example', true)
     store.recordObservation({
       externalId: 'stalled-issue',
       observedAt: '2026-08-18T00:00:00.000Z',
@@ -533,6 +540,67 @@ describe('review status Incident recovery migration', () => {
   })
 })
 
+describe('write quarantine Incident recovery migration', () => {
+  it('clears every legacy quarantine scope and preserves genuine policy Incidents', () => {
+    const path = join(directory, 'state.sqlite')
+    const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    const repository = 'harlan-zw/example'
+    const message = repositoryQuarantineReason(repository)
+    store.recordIncident({
+      scope: { _tag: 'Repository', repository },
+      kind: 'policy',
+      severity: 'warning',
+      operation: 'write',
+      message,
+      recovery: { _tag: 'ActionRequired' },
+      at: '2026-09-02T00:00:00.000Z',
+    })
+    store.recordIncident({
+      scope: { _tag: 'Task', taskId: 'legacy-task', repository, itemNumber: 24 },
+      kind: 'policy',
+      severity: 'error',
+      operation: 'adversarial_review',
+      message,
+      recovery: { _tag: 'ActionRequired' },
+      at: '2026-09-02T00:00:01.000Z',
+    })
+    store.recordIncident({
+      scope: { _tag: 'Service' },
+      kind: 'policy',
+      severity: 'warning',
+      operation: 'running_label',
+      message: `${repository}: ${message}`,
+      recovery: { _tag: 'ActionRequired' },
+      at: '2026-09-02T00:00:02.000Z',
+    })
+    store.recordIncident({
+      scope: { _tag: 'Repository', repository },
+      kind: 'policy',
+      severity: 'error',
+      operation: 'configuration',
+      message: 'The repository mapping is invalid.',
+      recovery: { _tag: 'ActionRequired' },
+      at: '2026-09-02T00:00:03.000Z',
+    })
+    store.close()
+
+    const oldJournal = new DatabaseSync(path)
+    oldJournal.exec('PRAGMA user_version = 57')
+    oldJournal.close()
+
+    const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    try {
+      expect(migrated.listIncidents()).toMatchObject([{
+        operation: 'configuration',
+        message: 'The repository mapping is invalid.',
+      }])
+    }
+    finally {
+      migrated.close()
+    }
+  })
+})
+
 describe('gitHub vocabulary migration', () => {
   it('carries a version 22 journal across without losing a row', () => {
     const path = join(directory, 'state.sqlite')
@@ -550,7 +618,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(57)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(58)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

@@ -100,6 +100,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { buildStats } from './stats.ts'
@@ -233,6 +234,8 @@ function recordTaskIncident(database: DatabaseSync, taskId: string, reason: stri
   // A Task has one current failure. A later failure replaces the earlier cause
   // instead of leaving several contradictory recovery instructions visible.
   resolveTaskIncidents(database, taskId, at)
+  if (isRepositoryWriteQuarantineReason(reason))
+    return
   const failure = classifyFailure({ message: reason })
   const providerWillRetry = failure._tag === 'Transient' && failure.kind === 'agent_provider'
   const exhausted = row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS && !providerWillRetry
@@ -5100,6 +5103,17 @@ const repositoryScopedReviewStatusIncidentMigration = `
   PRAGMA user_version = 57;
 `
 
+/** Clears Incidents created when write quarantine was treated as a failure. */
+const writeQuarantineIncidentMigration = `
+  UPDATE incidents
+  SET resolved_at = last_seen_at
+  WHERE resolved_at IS NULL
+    AND kind = 'policy'
+    AND message LIKE '%The controller has never been trusted to write to %. Enable writes for it first.';
+
+  PRAGMA user_version = 58;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -5352,9 +5366,13 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 56) {
     applyMigration(database, repositoryScopedReviewStatusIncidentMigration)
+    version = 57
+  }
+  if (version === 57) {
+    applyMigration(database, writeQuarantineIncidentMigration)
     return
   }
-  if (version === 57)
+  if (version === 58)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -5613,6 +5631,7 @@ export function openJournalStore(
 ): JournalStore {
   const database = openDatabase(path)
   const configuredSelection = providerAgentSelection(profile.provider)
+  const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
 
   const getAgentSelection = (): AgentSelection => {
     const row = database.prepare('SELECT tag, provider, model, reasoning_effort, provider_order FROM agent_selection WHERE singleton = 1').get() as {
@@ -7200,6 +7219,7 @@ export function openJournalStore(
           AND (? IS NULL OR tasks.id = ?)
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND repositories.paused = 0
           AND (
             (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1)
@@ -7600,6 +7620,7 @@ export function openJournalStore(
         WHERE worker_tasks.kind = ? AND worker_tasks.state_tag = 'Queued'
           AND worker_tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND repositories.paused = 0
           AND (
             (worker_tasks.kind = 'adversarial_review' AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1)
@@ -7873,10 +7894,14 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       const row = database.prepare(`
-        SELECT attempts, max_attempts FROM worker_tasks
-        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-          AND lease_expires_at > ?
-      `).get(input.taskId, input.workerId, input.fence, input.at) as { attempts: number, max_attempts: number } | undefined
+        SELECT worker_tasks.attempts, worker_tasks.max_attempts, repositories.writes_enabled
+        FROM worker_tasks
+        JOIN subjects ON subjects.id = worker_tasks.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE worker_tasks.id = ? AND worker_tasks.state_tag = 'Running'
+          AND worker_tasks.worker_id = ? AND worker_tasks.fence = ?
+          AND worker_tasks.lease_expires_at > ?
+      `).get(input.taskId, input.workerId, input.fence, input.at) as { attempts: number, max_attempts: number, writes_enabled: number } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return 'Rejected'
@@ -7885,7 +7910,8 @@ export function openJournalStore(
       // attempt is one whole agent turn that reads the same policy, and fails
       // the same way, seven minutes later.
       const providerPaused = isProviderCircuitPause(input.reason)
-      const retry = providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason }))
+      const writesDisabled = mutationsEnabled && row.writes_enabled === 0
+      const retry = writesDisabled || providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason }))
       const nextTag = retry ? 'Queued' : 'Failed'
       database.prepare(`
         UPDATE worker_tasks
@@ -7893,9 +7919,11 @@ export function openJournalStore(
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-      `).run(nextTag, retry ? null : input.reason, providerPaused ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
+      `).run(nextTag, retry ? null : input.reason, writesDisabled || providerPaused ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
       recordWorkerTransition(database, { taskId: input.taskId, from: 'Running', to: nextTag, reason: input.reason, fence: input.fence, at: input.at })
-      if (!retry)
+      if (writesDisabled)
+        resolveTaskIncidents(database, input.taskId, input.at)
+      else if (!retry)
         recordTaskIncident(database, input.taskId, input.reason, input.at)
       database.exec('COMMIT')
       return retry ? 'Retrying' : 'Failed'
@@ -8194,6 +8222,7 @@ export function openJournalStore(
           AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
           AND worker_tasks.revision_id = ? AND subjects.current_revision_id = ?
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND json_extract(repositories.policy_json, '$.issueWork') = 1
       `).get(
         input.taskId,
@@ -8298,19 +8327,20 @@ export function openJournalStore(
           AND worker_tasks.revision_id = subjects.current_revision_id
           AND issue_triage_comment_commands.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND json_extract(repositories.policy_json, '$.issueWork') = 1
       `).get(commandId, now) as {
-        id: string
-        task_id: string
-        repository: string
-        github_number: number
-        revision_id: string
-        body: string
-        outcome_unknown: number
-        github_comment_id: number | null
-        fence: number
-        policy_json: string
-      } | undefined
+            id: string
+            task_id: string
+            repository: string
+            github_number: number
+            revision_id: string
+            body: string
+            outcome_unknown: number
+            github_comment_id: number | null
+            fence: number
+            policy_json: string
+          } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -8449,6 +8479,7 @@ export function openJournalStore(
           AND ${taskTable}.revision_id = ? AND subjects.current_revision_id = ?
           AND json_extract(revisions.payload, '$.headSha') = ?
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       `).get(
         input.taskId,
@@ -8776,24 +8807,25 @@ export function openJournalStore(
           AND COALESCE(worker_tasks.revision_id, tasks.revision_id) = subjects.current_revision_id
           AND review_status_commands.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       `).get(commandId, now, now) as {
-        id: string
-        task_kind: 'adversarial_review' | 'review_fix'
-        task_id: string
-        repository: string
-        github_number: number
-        revision_id: string
-        expected_head_sha: string
-        phase: 'snapshot' | 'review' | 'repair' | 'terminal'
-        body: string
-        review_run_id: string | null
-        desired_outcome: ReviewDesiredOutcome | null
-        outcome_unknown: number
-        github_comment_id: number | null
-        fence: number
-        policy_json: string
-      } | undefined
+            id: string
+            task_kind: 'adversarial_review' | 'review_fix'
+            task_id: string
+            repository: string
+            github_number: number
+            revision_id: string
+            expected_head_sha: string
+            phase: 'snapshot' | 'review' | 'repair' | 'terminal'
+            body: string
+            review_run_id: string | null
+            desired_outcome: ReviewDesiredOutcome | null
+            outcome_unknown: number
+            github_comment_id: number | null
+            fence: number
+            policy_json: string
+          } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -8907,6 +8939,7 @@ export function openJournalStore(
         AND COALESCE(worker_tasks.revision_id, tasks.revision_id) = subjects.current_revision_id
         AND COALESCE(worker_tasks.state_tag, tasks.state_tag) != 'Running'
         AND repositories.enabled = 1
+        ${repositoryWriteAuthoritySql}
         AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       ORDER BY review_status_commands.updated_at, review_status_commands.id
       LIMIT 1
@@ -9194,10 +9227,14 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       const row = database.prepare(`
-        SELECT attempts, max_attempts FROM tasks
-        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-          AND lease_expires_at > ?
-      `).get(input.taskId, input.workerId, input.fence, input.at) as { attempts: number, max_attempts: number } | undefined
+        SELECT tasks.attempts, tasks.max_attempts, repositories.writes_enabled
+        FROM tasks
+        JOIN subjects ON subjects.id = tasks.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE tasks.id = ? AND tasks.state_tag = 'Running'
+          AND tasks.worker_id = ? AND tasks.fence = ?
+          AND tasks.lease_expires_at > ?
+      `).get(input.taskId, input.workerId, input.fence, input.at) as { attempts: number, max_attempts: number, writes_enabled: number } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return 'Rejected'
@@ -9205,7 +9242,8 @@ export function openJournalStore(
       // An agent Task pays for a retry with a whole agent turn, so a reason no
       // retry can satisfy ends the Task now and names an Incident instead.
       const providerPaused = isProviderCircuitPause(input.reason)
-      const retry = providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason }))
+      const writesDisabled = mutationsEnabled && row.writes_enabled === 0
+      const retry = writesDisabled || providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason }))
       const nextTag = retry ? 'Queued' : 'Failed'
       database.prepare(`
         UPDATE tasks SET state_tag = ?, reason = ?,
@@ -9213,7 +9251,7 @@ export function openJournalStore(
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-      `).run(nextTag, retry ? null : input.reason, providerPaused ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
+      `).run(nextTag, retry ? null : input.reason, writesDisabled || providerPaused ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
       recordTransition(database, {
         taskId: input.taskId,
         from: 'Running',
@@ -9225,7 +9263,9 @@ export function openJournalStore(
       // Conflict resolution, repair, Baseline repair, and issue work all fail
       // through here. Without this they never reached the System pane, so half
       // the Task kinds could die silently.
-      if (!retry)
+      if (writesDisabled)
+        resolveTaskIncidents(database, input.taskId, input.at)
+      else if (!retry)
         recordTaskIncident(database, input.taskId, input.reason, input.at)
       database.exec('COMMIT')
       return retry ? 'Retrying' : 'Failed'
@@ -9286,6 +9326,7 @@ export function openJournalStore(
           AND tasks.lease_expires_at > ?
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND ${PUBLICATION_AUTHORITY_SQL}
       `).get(input.taskId, input.workerId, input.fence, input.at) as { payload: string, kind: AgentTask['kind'] } | undefined
       if (task === undefined) {
@@ -9433,6 +9474,7 @@ export function openJournalStore(
           AND tasks.command_id = publication_commands.id
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND ${PUBLICATION_AUTHORITY_SQL}
         ORDER BY publication_commands.updated_at, publication_commands.id
         LIMIT 1
@@ -9526,6 +9568,7 @@ export function openJournalStore(
       AND tasks.state_tag = 'Publishing' AND tasks.command_id = publication_commands.id
       AND tasks.revision_id = subjects.current_revision_id
       AND repositories.enabled = 1
+      ${repositoryWriteAuthoritySql}
       AND ${PUBLICATION_AUTHORITY_SQL}
   `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
 
@@ -9676,24 +9719,30 @@ export function openJournalStore(
     try {
       const row = database.prepare(`
         SELECT publication_commands.task_id, publication_commands.attempts,
-          publication_commands.max_attempts, tasks.fence AS task_fence
+          publication_commands.max_attempts, tasks.fence AS task_fence,
+          repositories.writes_enabled
         FROM publication_commands
         JOIN tasks ON tasks.id = publication_commands.task_id
+        JOIN subjects ON subjects.id = tasks.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
         WHERE publication_commands.id = ? AND publication_commands.state_tag = 'Running'
           AND publication_commands.worker_id = ? AND publication_commands.fence = ?
           AND publication_commands.lease_expires_at > ?
-      `).get(input.commandId, input.workerId, input.fence, input.at) as { task_id: string, attempts: number, max_attempts: number, task_fence: number } | undefined
+      `).get(input.commandId, input.workerId, input.fence, input.at) as { task_id: string, attempts: number, max_attempts: number, task_fence: number, writes_enabled: number } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return 'Rejected'
       }
-      const retry = row.attempts < row.max_attempts
+      const writesDisabled = mutationsEnabled && row.writes_enabled === 0
+      const retry = writesDisabled || row.attempts < row.max_attempts
       database.prepare(`
         UPDATE publication_commands
-        SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        SET state_tag = ?, reason = ?,
+          attempts = CASE WHEN ? THEN MAX(0, attempts - 1) ELSE attempts END,
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-      `).run(retry ? 'Pending' : 'Failed', input.reason, input.at, input.commandId, input.workerId, input.fence, input.at)
+      `).run(retry ? 'Pending' : 'Failed', writesDisabled ? null : input.reason, writesDisabled ? 1 : 0, input.at, input.commandId, input.workerId, input.fence, input.at)
       recordPublicationEvent(database, {
         commandId: input.commandId,
         from: 'Running',
@@ -9702,7 +9751,10 @@ export function openJournalStore(
         fence: input.fence,
         at: input.at,
       })
-      if (!retry) {
+      if (writesDisabled) {
+        resolveTaskIncidents(database, row.task_id, input.at)
+      }
+      else if (!retry) {
         const task = database.prepare(`
           UPDATE tasks
           SET state_tag = 'Failed', reason = ?, command_id = NULL, updated_at = ?
@@ -10741,6 +10793,7 @@ export function openJournalStore(
       WHERE worker_tasks.kind = 'adversarial_review' AND worker_tasks.state_tag = 'Queued'
         AND worker_tasks.revision_id = subjects.current_revision_id
         AND repositories.enabled = 1
+        ${repositoryWriteAuthoritySql}
         AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       UNION ALL
       SELECT
@@ -10756,6 +10809,7 @@ export function openJournalStore(
       WHERE tasks.kind = 'review_fix' AND tasks.state_tag = 'Queued'
         AND tasks.revision_id = subjects.current_revision_id
         AND repositories.enabled = 1
+        ${repositoryWriteAuthoritySql}
         AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
         AND EXISTS (
           SELECT 1 FROM pull_request_approvals
@@ -10989,6 +11043,7 @@ export function openJournalStore(
       AND json_extract(ranked.gates, '$.review._tag') = 'Passed'
       AND published.result_tag = 'Published'
       AND repositories.enabled = 1
+      ${repositoryWriteAuthoritySql}
       AND repositories.paused = 0
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       AND ranked.revision_id = subjects.current_revision_id
@@ -11165,6 +11220,7 @@ export function openJournalStore(
         )
       )
       AND repositories.enabled = 1
+      ${repositoryWriteAuthoritySql}
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       -- Repair owns the canonical comment after Review hands work to it.
       AND NOT (

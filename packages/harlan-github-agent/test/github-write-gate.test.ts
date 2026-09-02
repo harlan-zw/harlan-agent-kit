@@ -1,15 +1,19 @@
 import type { GitHubRepositoryAccess } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { createGitHubWriteGate, repositoryQuarantineReason, withGitHubWritePreflight } from '../src/github-write-gate.ts'
+import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, repositoryQuarantineReason, withGitHubWritePreflight } from '../src/github-write-gate.ts'
 import { err, ok } from '../src/result.ts'
 
 describe('gitHub write gate', () => {
+  it('recognizes only the write quarantine reason', () => {
+    expect(isRepositoryWriteQuarantineReason(repositoryQuarantineReason('harlan-zw/example'))).toBe(true)
+    expect(isRepositoryWriteQuarantineReason(`harlan-zw/example: ${repositoryQuarantineReason('harlan-zw/example')}`)).toBe(true)
+    expect(isRepositoryWriteQuarantineReason('Repository policy does not authorize this write.')).toBe(false)
+  })
+
   it('refuses every write credential to a repository nobody enabled', async () => {
     const requested: GitHubRepositoryAccess[] = []
-    const refused: string[] = []
     const gate = createGitHubWriteGate({
       mayWrite: () => false,
-      onRefused: github => refused.push(github),
       source: {
         getToken: (_repository, access) => {
           requested.push(access)
@@ -32,14 +36,12 @@ describe('gitHub write gate', () => {
       },
     })))
     expect(requested).toEqual([])
-    expect(refused).toEqual(['harlan-zw/example', 'harlan-zw/example'])
   })
 
   it('passes reads and trusted writes through unchanged', async () => {
     const requested: GitHubRepositoryAccess[] = []
     const gate = createGitHubWriteGate({
       mayWrite: github => github === 'harlan-zw/example',
-      onRefused: () => { throw new Error('An enabled repository must not be refused.') },
       source: {
         getToken: (_repository, access) => {
           requested.push(access)

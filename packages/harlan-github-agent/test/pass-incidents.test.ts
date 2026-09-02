@@ -1,10 +1,31 @@
 import { describe, expect, it } from 'vitest'
+import { repositoryQuarantineReason } from '../src/github-write-gate.ts'
 import { createPassIncidentRecorder } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
 
 const now = () => new Date('2026-08-27T06:00:00.000Z')
 
 describe('recording one poll pass failures', () => {
+  it('does not project write quarantine as an Incident', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      const record = createPassIncidentRecorder({ now, signal: new AbortController().signal, store })
+
+      record('running_label', [
+        `harlan-zw/example: ${repositoryQuarantineReason('harlan-zw/example')}`,
+        'harlan-zw/other: GitHub returned 502.',
+      ])
+
+      expect(store.listIncidents()).toMatchObject([{
+        operation: 'running_label',
+        message: 'harlan-zw/other: GitHub returned 502.',
+      }])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('records what a finished pass failed at', () => {
     const store = openJournalStore(':memory:')
     try {

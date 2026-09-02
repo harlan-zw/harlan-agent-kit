@@ -18,6 +18,7 @@ describe('explicit Review resolution', () => {
     const repository = repositoryMapping()
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     store.syncRepositories([repository], '2026-08-13T01:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
     const observed = store.recordObservation({
       externalId: 'review-resolution',
       observedAt: '2026-08-13T01:00:00.000Z',
@@ -80,6 +81,7 @@ describe('explicit Review resolution', () => {
   it('rejects a stale Review completion without recording a resolution', () => {
     const store = openJournalStore(':memory:', true)
     store.syncRepositories([repositoryMapping()], '2026-08-13T01:00:00.000Z')
+    store.setRepositoryWritesEnabled('harlan-zw/example', true)
     store.recordObservation({
       externalId: 'stale-review-resolution',
       observedAt: '2026-08-13T01:00:00.000Z',
@@ -104,6 +106,7 @@ describe('explicit Review resolution', () => {
   it('supersedes a terminal Publication when a new head replaces its Revision', () => {
     const store = openJournalStore(':memory:', true)
     store.syncRepositories([repositoryMapping()], '2026-08-13T01:00:00.000Z')
+    store.setRepositoryWritesEnabled('harlan-zw/example', true)
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const observed = store.recordObservation({
       externalId: 'terminal-before-new-head',

@@ -6,7 +6,13 @@ import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 function createStore() {
-  return openJournalStore(':memory:', true, CODEX_AGENT_PROFILE)
+  const store = openJournalStore(':memory:', true, CODEX_AGENT_PROFILE)
+  const syncRepositories = store.syncRepositories
+  store.syncRepositories = (repositories, at) => {
+    syncRepositories(repositories, at)
+    repositories.forEach(repository => store.setRepositoryWritesEnabled(repository.github, true))
+  }
+  return store
 }
 
 describe('incident log', () => {
