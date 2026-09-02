@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import type { AutoMergeMethod } from './auto-merge.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { Result } from './result.ts'
-import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping, RoutineName } from './types.ts'
+import type { GitHubIssueItem, GitHubItem, GitHubPullRequestItem, RepositoryMapping, RoutineName } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { approvalLabels } from './approval-labels.ts'
@@ -34,6 +34,7 @@ export interface GitHubReviewRerunRequest {
 export interface GitHubSource {
   isBranchProtected: (repository: RepositoryMapping, branch: string, signal?: AbortSignal) => Promise<Result<boolean, GitHubReadError>>
   hasOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal?: AbortSignal) => Promise<Result<boolean, GitHubReadError>>
+  getIssue: (repository: RepositoryMapping, number: number, signal?: AbortSignal) => Promise<Result<GitHubIssueItem, GitHubReadError>>
   getPullRequest: (repository: RepositoryMapping, number: number, signal?: AbortSignal) => Promise<Result<GitHubPullRequestItem, GitHubReadError>>
   listOpenItems: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<GitHubItem[], GitHubReadError>>
   listReviewRerunRequests: (repository: RepositoryMapping, signal?: AbortSignal) => Promise<Result<GitHubReviewRerunRequest[], GitHubReadError>>
@@ -124,6 +125,9 @@ function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.flatMap(label => typeof label === 'string' ? [label] : label.name === undefined ? [] : [label.name])
 }
 
+type GitHubIssue = Awaited<ReturnType<Octokit['rest']['issues']['get']>>['data']
+type GitHubIssueComment = Awaited<ReturnType<Octokit['rest']['issues']['listComments']>>['data'][number]
+
 function issueContentDigest(input: {
   body: string
   comments: readonly { id: number, author: string, body: string, updatedAt: string }[]
@@ -136,6 +140,47 @@ function issueContentDigest(input: {
     comments: [...input.comments].sort((left, right) => left.id - right.id),
     labels: [...input.labels].map(label => label.toLowerCase()).sort(),
   })).digest('hex')
+}
+
+function issueItem(
+  repository: RepositoryMapping,
+  issue: GitHubIssue,
+  comments: GitHubIssueComment[],
+  labels: string[],
+  routineFiled: boolean,
+  routineTracking: boolean,
+  actorLogin: string,
+): GitHubIssueItem {
+  const controllerLogin = actorLogin.toLowerCase()
+  return {
+    kind: 'issue',
+    approvalLabels: approvalLabels(labels),
+    contentDigest: issueContentDigest({
+      title: issue.title,
+      body: issue.body ?? '',
+      comments: comments.flatMap(comment =>
+        comment.user?.login === undefined || comment.body === undefined || comment.body === null
+        || (comment.user.login.toLowerCase() === controllerLogin && comment.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
+          ? []
+          : [{
+              id: comment.id,
+              author: comment.user.login,
+              body: comment.body,
+              updatedAt: comment.updated_at,
+            }]),
+      labels: labels.filter(label => !label.toLowerCase().startsWith('harlan-agent-')),
+    }),
+    repository: repository.github,
+    number: issue.number,
+    state: issue.state === 'closed' ? 'closed' : 'open',
+    title: issue.title,
+    author: issue.user?.login ?? 'ghost',
+    url: issue.html_url,
+    createdAt: issue.created_at,
+    updatedAt: issue.updated_at,
+    routineFiled,
+    routineTracking,
+  }
 }
 
 function pullRequestItem(
@@ -301,6 +346,35 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           })
         })
     },
+    getIssue: async (repository, number, signal) => {
+      const { owner, repo } = repositoryParts(repository.github)
+      const octokit = await client(repository.github, signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const request = signal === undefined ? {} : { request: { signal } }
+      return Promise.all([
+        octokit.value.rest.issues.get({ owner, repo, issue_number: number, ...request }),
+        octokit.value.paginate(octokit.value.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100, ...request }),
+      ]).then(([response, comments]) => {
+        const labels = labelNames(response.data.labels)
+        return ok(issueItem(
+          repository,
+          response.data,
+          comments,
+          labels,
+          hasRoutineIssueLabel(labels),
+          isRoutineTrackingIssue({ repository: repository.github, title: response.data.title, body: response.data.body, labels }),
+          options.actorLogin(repository),
+        ))
+      }).catch((error: unknown): Result<GitHubIssueItem, GitHubReadError> => {
+        const status = errorStatus(error)
+        return err({
+          repository: repository.github,
+          message: error instanceof Error ? error.message : 'GitHub request failed.',
+          ...(status === undefined ? {} : { status }),
+        })
+      })
+    },
     getPullRequest: async (repository, number, signal) => {
       const { owner, repo } = repositoryParts(repository.github)
       const octokit = await client(repository.github, signal)
@@ -395,7 +469,6 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             return [{ issue, labels, routineFiled, routineTracking }]
           })
         const issues: GitHubItem[] = await mapConcurrent(eligibleIssueRows, 4, async ({ issue, labels, routineFiled, routineTracking }) => {
-          const controllerLogin = options.actorLogin(repository).toLowerCase()
           const comments = await octokit.value.paginate(octokit.value.rest.issues.listComments, {
             owner,
             repo,
@@ -403,36 +476,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             per_page: 100,
             ...requestOptions,
           })
-          const contentDigest = issueContentDigest({
-            title: issue.title,
-            body: issue.body ?? '',
-            comments: comments.flatMap(comment =>
-              comment.user?.login === undefined || comment.body === undefined || comment.body === null
-              || (comment.user.login.toLowerCase() === controllerLogin && comment.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
-                ? []
-                : [{
-                    id: comment.id,
-                    author: comment.user.login,
-                    body: comment.body,
-                    updatedAt: comment.updated_at,
-                  }]),
-            labels: labels.filter(label => !label.toLowerCase().startsWith('harlan-agent-')),
-          })
-          return {
-            kind: 'issue',
-            approvalLabels: approvalLabels(labels),
-            contentDigest,
-            repository: repository.github,
-            number: issue.number,
-            state: issue.state === 'closed' ? 'closed' : 'open',
-            title: issue.title,
-            author: issue.user?.login ?? 'ghost',
-            url: issue.html_url,
-            createdAt: issue.created_at,
-            updatedAt: issue.updated_at,
-            routineFiled,
-            routineTracking,
-          }
+          return issueItem(repository, issue, comments, labels, routineFiled, routineTracking, options.actorLogin(repository))
         })
 
         const eligiblePullRows = pullRows.filter(pull => isEligibleGitHubSubjectAuthor({

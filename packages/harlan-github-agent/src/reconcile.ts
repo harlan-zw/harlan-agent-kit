@@ -25,7 +25,7 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
-  github: Pick<GitHubSource, 'getPullRequest' | 'listOpenItems'>
+  github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
   store: JournalStore
   now: () => Date
   signal?: AbortSignal
@@ -63,34 +63,46 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       ? { kind: 'issue', routineFiled: subject.routineFiled }
       : { kind: 'pull_request', allowedAuthors: repository.writablePullRequestAuthors },
   ))
+  const seenIssues = new Set(eligibleItems.flatMap(subject => subject.kind === 'issue' ? [subject.number] : []))
+  const missingIssueNumbers = dependencies.store.listOpenIssueNumbers(repository.github)
+    .filter(number => !seenIssues.has(number))
   const seenPullRequests = new Set(eligibleItems.flatMap(subject => subject.kind === 'pull_request' ? [subject.number] : []))
   const missingPullRequestNumbers = dependencies.store.listOpenPullRequestNumbers(repository.github)
     .filter(number => !seenPullRequests.has(number))
   const unverifiedClosedPullRequestNumbers = dependencies.store.listUnverifiedClosedPullRequestNumbers(repository.github)
     .filter(number => !seenPullRequests.has(number))
   const finalPullRequestNumbers = [...new Set([...missingPullRequestNumbers, ...unverifiedClosedPullRequestNumbers])]
-  const finalPullRequestReads = await Promise.all(finalPullRequestNumbers.map(number =>
-    dependencies.github.getPullRequest(repository, number, dependencies.signal)))
-  const failedFinalRead = finalPullRequestReads.find(read => read._tag === 'Err')
+  const [finalIssueReads, finalPullRequestReads] = await Promise.all([
+    Promise.all(missingIssueNumbers.map(number => dependencies.github.getIssue(repository, number, dependencies.signal))),
+    Promise.all(finalPullRequestNumbers.map(number => dependencies.github.getPullRequest(repository, number, dependencies.signal))),
+  ])
+  const failedFinalRead = [...finalIssueReads, ...finalPullRequestReads].find(read => read._tag === 'Err')
   if (failedFinalRead?._tag === 'Err') {
     if (dependencies.signal?.aborted !== true)
       dependencies.store.recordPollFailure(repository.github, observedAt, failedFinalRead.error.message, failedFinalRead.error.status)
     return err({ repository: repository.github, message: failedFinalRead.error.message })
   }
+  const finalIssues = finalIssueReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const finalPullRequests = finalPullRequestReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
-  const observedItems = [...eligibleItems, ...finalPullRequests]
+  const observedItems = [...eligibleItems, ...finalIssues, ...finalPullRequests]
   const eligibleWrites = eligibleItems.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
     source: 'poll',
     subject,
   }))
-  const finalWrites = finalPullRequests.map(subject => dependencies.store.recordExactPullRequestObservation({
+  const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordObservation({
+    externalId: observationId(repository.github, subject),
+    observedAt,
+    source: 'poll',
+    subject,
+  }))
+  const finalPullRequestWrites = finalPullRequests.map(subject => dependencies.store.recordExactPullRequestObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
     subject,
   }))
-  const writes = [...eligibleWrites, ...finalWrites]
+  const writes = [...eligibleWrites, ...finalIssueWrites, ...finalPullRequestWrites]
   const conflict = writes.find(write => write._tag === 'Conflict')
   if (conflict?._tag === 'Conflict') {
     const message = `GitHub state hash collision: ${conflict.existingRevisionId} and ${conflict.receivedRevisionId}.`
@@ -98,7 +110,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     return err({ repository: repository.github, message })
   }
   const closureVerificationFailed = finalPullRequests.some((pullRequest, index) => {
-    const write = finalWrites[index]
+    const write = finalPullRequestWrites[index]
     if (pullRequest.state !== 'closed' || write === undefined || write._tag === 'Stale' || write._tag === 'Conflict')
       return false
     return !dependencies.store.recordVerifiedPullRequestClosure({
@@ -141,9 +153,15 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     )))
   }
 
+  const missingIssues = new Set(missingIssueNumbers)
   const missingPullRequests = new Set(missingPullRequestNumbers)
-  const closed = finalPullRequests.filter((pullRequest, index) => {
-    const write = finalWrites[index]
+  const closed = finalIssues.filter((issue, index) => {
+    const write = finalIssueWrites[index]
+    return missingIssues.has(issue.number)
+      && issue.state === 'closed'
+      && (write?._tag === 'Inserted' || write?._tag === 'Duplicate')
+  }).length + finalPullRequests.filter((pullRequest, index) => {
+    const write = finalPullRequestWrites[index]
     return missingPullRequests.has(pullRequest.number)
       && pullRequest.state === 'closed'
       && (write?._tag === 'Inserted' || write?._tag === 'Duplicate')
