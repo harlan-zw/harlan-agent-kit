@@ -4,7 +4,7 @@ description: "Apply Harlan's Effect-inspired TypeScript design principles. Use f
 user_invocable: true
 ---
 
-<!-- The six principles below are mirrored verbatim in ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md. Run scripts/check-agent-context.sh after editing them. -->
+<!-- The six principles below are mirrored in agent-context/context.md. Run scripts/check-agent-context.sh after editing them. -->
 
 
 # TypeScript Design Patterns

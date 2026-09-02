@@ -1,52 +1,41 @@
 #!/usr/bin/env bash
-# Verifies the global agent context files have not drifted.
-#
-# Two invariants:
-#   1. ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md differ only where they must
-#      (tooling differences). Any new divergence is unintended drift.
-#   2. The six TypeScript design principles are identical in both context files
-#      and in the ts-design-patterns skill.
+# Verifies installed Agent instructions match their tracked sources.
 set -uo pipefail
 
-CLAUDE="${HOME}/.claude/CLAUDE.md"
-CODEX="${HOME}/.codex/AGENTS.md"
-SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/harlan-agent-kit/skills/ts-design-patterns/SKILL.md"
-
-# Divergences that are intentional. Update this when you deliberately add one.
-# Today: Artifacts, AskUserQuestion, skill paths, file search tools, skill loading,
-# and the Codex-only Reference material section.
-EXPECTED_HUNKS=6
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TARGET_HOME="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
+CLAUDE="$TARGET_HOME/.claude/CLAUDE.md"
+CODEX="$TARGET_HOME/.codex/AGENTS.md"
+SKILL="$REPO_ROOT/harlan-agent-kit/skills/ts-design-patterns/SKILL.md"
+EXPECTED_HOME=$(mktemp -d)
+trap 'rm -rf "$EXPECTED_HOME"' EXIT
+EXPECTED_CLAUDE="$EXPECTED_HOME/.claude/CLAUDE.md"
+EXPECTED_CODEX="$EXPECTED_HOME/.codex/AGENTS.md"
 
 fail=0
 note() { printf '%s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
-for f in "$CLAUDE" "$CODEX" "$SKILL"; do
-  [ -f "$f" ] || { bad "missing $f"; }
+for f in "$REPO_ROOT/agent-context/context.md" "$REPO_ROOT/agent-context/CLAUDE.md" "$REPO_ROOT/agent-context/AGENTS.md" "$CLAUDE" "$CODEX" "$SKILL"; do
+  [ -f "$f" ] || { bad "Missing file: $f"; }
 done
 [ "$fail" -eq 0 ] || exit 1
 
-# 1. Divergence count
-hunks=$(diff -u "$CODEX" "$CLAUDE" | grep -c '^@@' || true)
-if [ "$hunks" -gt "$EXPECTED_HUNKS" ]; then
-  bad "context files diverge in $hunks places, expected $EXPECTED_HUNKS"
-  note "      run: diff -u $CODEX $CLAUDE"
-elif [ "$hunks" -lt "$EXPECTED_HUNKS" ]; then
-  note "note  context files diverge in $hunks places, fewer than the expected $EXPECTED_HUNKS"
-  note "      if that was deliberate, lower EXPECTED_HUNKS in $0"
-fi
+HARLAN_AGENT_CONTEXT_HOME="$EXPECTED_HOME" bash "$REPO_ROOT/scripts/sync-agent-context.sh" local >/dev/null
 
-# 2. Design principles match across all three files.
+cmp -s "$EXPECTED_CLAUDE" "$CLAUDE" || bad "Claude instructions differ. Run pnpm sync:context."
+cmp -s "$EXPECTED_CODEX" "$CODEX" || bad "Codex instructions differ. Run pnpm sync:context."
+
 # Each principle is a bullet opening with a bold clause; compare the whole set.
 principles() { grep -E '^- \*\*(Make illegal|Errors as|No silent|Parse, don|Explicit dep|Pure core)' "$1" | sort; }
 
-c_p=$(principles "$CLAUDE")
-x_p=$(principles "$CODEX")
+c_p=$(principles "$EXPECTED_CLAUDE")
+x_p=$(principles "$EXPECTED_CODEX")
 s_p=$(principles "$SKILL")
 
-[ -n "$c_p" ] || bad "no design principles found in $CLAUDE"
-[ "$c_p" = "$x_p" ] || { bad "design principles differ between the two context files"; diff <(echo "$c_p") <(echo "$x_p") | sed 's/^/      /'; }
-[ "$c_p" = "$s_p" ] || { bad "design principles differ between context files and the skill"; diff <(echo "$c_p") <(echo "$s_p") | sed 's/^/      /'; }
+[ -n "$c_p" ] || bad "No design principles found in rendered Claude instructions."
+[ "$c_p" = "$x_p" ] || { bad "design principles differ between tracked files"; diff <(echo "$c_p") <(echo "$x_p") | sed 's/^/      /'; }
+[ "$c_p" = "$s_p" ] || { bad "design principles differ from the skill"; diff <(echo "$c_p") <(echo "$s_p") | sed 's/^/      /'; }
 
-[ "$fail" -eq 0 ] && note "ok    agent context in sync ($hunks intentional divergences)"
+[ "$fail" -eq 0 ] && note 'ok    Agent instructions match tracked sources'
 exit "$fail"
