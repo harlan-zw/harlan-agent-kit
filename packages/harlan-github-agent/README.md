@@ -118,6 +118,9 @@ Open `https://harlan-github-agent.localhost/`. Use `agent` as the dashboard user
 The dashboard and CLI use the same authenticated Control API.
 Every CLI command prints one JSON value.
 Expected failures print one tagged JSON error and exit with status 1.
+Agents should use the CLI for monitoring and supported service controls.
+Use the dashboard for visual inspection.
+Call the Control API directly only when no matching subcommand exists.
 
 Use the configuration file on the service host:
 
@@ -125,6 +128,7 @@ Use the configuration file on the service host:
 harlan-github-agent control status --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
 ```
 
@@ -175,7 +179,7 @@ Use the Agent provider control in the header to switch the Agent provider, model
 Select `Restart after current work` to restart the service. The Restart request stops new Task claims and lets active Agents finish.
 The service owns the request after acceptance. Manual Pause stays unchanged.
 
-Read one pull request's local review history from:
+The CLI does not expose Review runs yet. Read one pull request's local review history from:
 
 ```text
 /api/reviews?repository=OWNER%2FREPOSITORY&pull_request=NUMBER

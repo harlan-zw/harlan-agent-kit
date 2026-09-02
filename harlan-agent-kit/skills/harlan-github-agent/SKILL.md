@@ -67,15 +67,16 @@ pnpm --filter harlan-github-agent dashboard:build
 pnpm --filter harlan-github-agent exec node --experimental-strip-types src/cli.ts --config /absolute/path/to/harlan-github-agent.yml
 ```
 
-Use `https://harlan-github-agent.localhost/`. Inspect `/health` first, then `/api/state`.
-
-Prefer the Control API CLI for agent-readable monitoring and durable service controls.
-It reads the URL and password from the configuration file by default.
+Use `https://harlan-github-agent.localhost/` for visual inspection.
+Agents should use `harlan-github-agent control` for monitoring and supported service controls.
+Call the Control API directly only when no matching subcommand exists.
+The command reads the URL and password from the configuration file by default.
 
 ```bash
 harlan-github-agent control status --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
 ```
 
@@ -86,7 +87,7 @@ Workers run as normal local agent sessions inside disposable Git worktrees. They
 
 `agent.provider` names the Agent provider the service starts with. It defaults to `codex`.
 
-A pinned Agent selection overrides it. Harlan switches the Agent provider, model, and Reasoning effort from the dashboard header or the tray, and the switch survives a restart. Read it from `/api/state` as `agentSelection`, which is `{"_tag":"FollowsConfiguration"}`, `{"_tag":"Pinned", ...}`, or `{"_tag":"Automatic","order":[...]}`.
+A pinned Agent selection overrides it. Harlan switches the Agent provider, model, and Reasoning effort from the dashboard header or the tray, and the switch survives a restart. Read it from `harlan-github-agent control status` as `state.agentSelection`, which is `{"_tag":"FollowsConfiguration"}`, `{"_tag":"Pinned", ...}`, or `{"_tag":"Automatic","order":[...]}`.
 
 Automatic selection picks the Agent provider by remaining capacity. It walks `order` and takes the first provider whose window has more than its own Reserve left. `order` defaults to opencode first, because opencode answers on the GLM Coding Plan. Codex publishes a seven-day window. opencode publishes the GLM Coding Plan five-hour and weekly windows, and the fuller window decides. When no provider may spend, the service stops claiming new agent Tasks and shows `Reserve reached` in the System pane. Active agents and Publications finish. Reaching a Reserve is normal state, not an Incident.
 
@@ -96,7 +97,7 @@ For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effo
 
 A saved session belongs to the Agent provider that created it. Switching providers starts new sessions.
 
-Switch the Agent selection with an authenticated request. Send the whole selection. A null model or Reasoning effort keeps that provider's own per-role default. A switch starts the next agent turn, and an agent already running keeps the model it started with.
+Agent selection has no matching CLI subcommand. Switch it with an authenticated Control API request. Send the whole selection. A null model or Reasoning effort keeps that provider's own per-role default. A switch starts the next agent turn, and an agent already running keeps the model it started with.
 
 ```bash
 curl --fail --silent --user "agent:$agent_password" --header 'Origin: https://harlan-github-agent.localhost' --header 'Content-Type: application/json' --request POST https://harlan-github-agent.localhost/api/agents/select --data '{"_tag":"Pinned","provider":"opencode","model":null,"reasoningEffort":null}'
@@ -135,7 +136,7 @@ Nuxt's current build cache remains local to one worktree path.
 
 Limit reviews, issue triage, and conflict fixes to three active agents in total. Show that limit in the dashboard profile.
 
-Inspect one pull request's review Attempts and Publications through
+The CLI does not expose Review runs yet. Inspect them through
 `/api/reviews?repository=OWNER%2FREPOSITORY&pull_request=NUMBER`.
 
 Use `Eject` to cancel one active automated Task and open its saved agent session in Ghostty. The terminal resumes after the active turn stops.
@@ -150,15 +151,8 @@ Restart through a durable Restart request. The service stops new Task claims, le
 
 ```bash
 agent_config=/absolute/path/to/harlan-github-agent.yml
-agent_password=$(< "$(dirname "$agent_config")/dashboard-password")
-curl --fail --silent --user "agent:$agent_password" \
-  --header 'Origin: https://harlan-github-agent.localhost' \
-  --header 'Content-Type: application/json' \
-  --request POST \
-  --data '{"source":"helper"}' \
-  https://harlan-github-agent.localhost/api/service/restart
-curl --fail --silent --user "agent:$agent_password" \
-  https://harlan-github-agent.localhost/api/state | jq '.restartRequest'
+harlan-github-agent control restart --config "$agent_config"
+harlan-github-agent control status --config "$agent_config" | jq '.state.restartRequest'
 ```
 
 `conflict_resolution: true` permits a repository to queue conflict work. `mutations_enabled: true` lets the controller run and publish it.
