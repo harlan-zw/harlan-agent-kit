@@ -609,6 +609,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   app.get('/_payload.json', () => staticAsset(dashboardRoot, '_payload.json'))
   app.get('/_nuxt/**', event => staticAsset(dashboardRoot, new URL(event.req.url).pathname.slice(1)))
   app.get('/_fonts/**', event => staticAsset(dashboardRoot, new URL(event.req.url).pathname.slice(1)))
+  app.get('/_nuxt-skew-sw.js', () => staticAsset(dashboardRoot, '_nuxt-skew-sw.js'))
   app.get('/', event => dashboardHtml(dashboardRoot, 'index.html', String(event.context.dashboardNonce)))
   DASHBOARD_PAGES.forEach((page) => {
     app.get(`/${page}`, event => dashboardHtml(dashboardRoot, `${page}/index.html`, String(event.context.dashboardNonce)))
