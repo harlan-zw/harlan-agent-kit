@@ -19,6 +19,7 @@ afterEach(() => {
 })
 
 function dropReviewResolutionAdditions(database: DatabaseSync): void {
+  dropRestartOperationAdditions(database)
   database.exec('DROP TABLE IF EXISTS review_gate_projections')
   database.exec('DROP INDEX IF EXISTS routines_active')
   const routineRunColumns = database.prepare('PRAGMA table_info(routine_runs)').all() as unknown as Array<{ name: string }>
@@ -34,6 +35,14 @@ function dropReviewResolutionAdditions(database: DatabaseSync): void {
     database.exec('ALTER TABLE review_status_commands DROP COLUMN desired_outcome')
   if (reviewStatusColumns.some(column => column.name === 'review_run_id'))
     database.exec('ALTER TABLE review_status_commands DROP COLUMN review_run_id')
+}
+
+function dropRestartOperationAdditions(database: DatabaseSync): void {
+  const columns = database.prepare('PRAGMA table_info(restart_requests)').all() as unknown as Array<{ name: string }>
+  if (columns.some(column => column.name === 'target_commit'))
+    database.exec('ALTER TABLE restart_requests DROP COLUMN target_commit')
+  if (columns.some(column => column.name === 'operation_tag'))
+    database.exec('ALTER TABLE restart_requests DROP COLUMN operation_tag')
 }
 
 /** Rewinds past the Routine tables, which every version below 38 predates. */
@@ -524,6 +533,7 @@ describe('review status Incident recovery migration', () => {
     store.close()
 
     const oldJournal = new DatabaseSync(path)
+    dropRestartOperationAdditions(oldJournal)
     oldJournal.exec('PRAGMA user_version = 56')
     oldJournal.close()
 
@@ -585,7 +595,7 @@ describe('write quarantine Incident recovery migration', () => {
     store.close()
 
     const oldJournal = new DatabaseSync(path)
-    oldJournal.exec('PRAGMA user_version = 57')
+    oldJournal.exec('PRAGMA user_version = 58')
     oldJournal.close()
 
     const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
@@ -618,7 +628,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(58)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(59)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

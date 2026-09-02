@@ -1274,6 +1274,7 @@ export interface DashboardSnapshot {
   mutationsEnabled: boolean
   agentControl: AgentControl
   restartRequest: RestartRequest | null
+  serviceUpdate: ServiceUpdateStatus
   selectionMode: SelectionMode
   /** Open pull requests across every enabled repository. */
   openPullRequests: number
@@ -1313,11 +1314,22 @@ export type AgentControl
   = | { _tag: 'Running' }
     | { _tag: 'Paused', pausedAt: string, safeToRestart: boolean }
 
+export type ServiceUpdateStatus
+  = | { _tag: 'Checking', deployedCommit: string }
+    | { _tag: 'Current', deployedCommit: string, latestCommit: string, checkedAt: string }
+    | { _tag: 'Available', deployedCommit: string, latestCommit: string, checkedAt: string }
+    | { _tag: 'Unavailable', deployedCommit: string, checkedAt: string, reason: string }
+
 export type RestartRequestSource = 'dashboard' | 'tray' | 'helper'
+
+export type RestartOperation
+  = | { _tag: 'Restart' }
+    | { _tag: 'Update', targetCommit: string }
 
 interface RestartRequestBase {
   id: string
   source: RestartRequestSource
+  operation: RestartOperation
   requestedAt: string
 }
 

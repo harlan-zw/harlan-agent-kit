@@ -51,6 +51,12 @@ function fixture(): DashboardSnapshot {
   return dashboardSnapshot({
     status: 'degraded',
     mutationsEnabled: true,
+    serviceUpdate: {
+      _tag: 'Available',
+      deployedCommit: '4f57e66b7d1c2e3f4a5b6c7d8e9f001122334455',
+      latestCommit: 'e98866d07987ca2390299382c1a8352bd016e741',
+      checkedAt: minutesAgo(2),
+    },
     agentStart: { _tag: 'Available' },
     openPullRequests: 5,
     providerCapacities: [

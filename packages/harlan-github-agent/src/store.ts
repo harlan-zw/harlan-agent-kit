@@ -62,6 +62,7 @@ import type {
   RecordReviewRunResult,
   RepositoryMapping,
   RepositoryStatus,
+  RestartOperation,
   RestartRequest,
   RestartRequestSource,
   ReviewDesiredOutcome,
@@ -85,6 +86,7 @@ import type {
   RoutineRunState,
   RoutineSpecEntry,
   SelectionMode,
+  ServiceUpdateStatus,
   StoredAgentControl,
   SupersedeReviewRunInput,
   SupersedeReviewRunResult,
@@ -136,6 +138,8 @@ interface IncidentRow {
 interface RestartRequestRow {
   id: string
   source_tag: RestartRequestSource
+  operation_tag: RestartOperation['_tag']
+  target_commit: string | null
   state_tag: RestartRequest['_tag']
   requested_at: string
   restarting_at: string | null
@@ -897,7 +901,7 @@ export interface JournalStore {
   /** Open pull requests across enabled repositories, which is the work waiting on Harlan. */
   countOpenPullRequests: () => number
   needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string, usage?: AgentTokenUsage }) => boolean
-  requestRestart: (input: { id: string, source: RestartRequestSource, at: string }) => RestartRequest
+  requestRestart: (input: { id: string, source: RestartRequestSource, operation: RestartOperation, at: string }) => RestartRequest
   getRestartRequest: () => RestartRequest | null
   beginRestart: (input: { id: string, processId: string, at: string }) => RestartRequest | null
   completeRestart: (at: string) => RestartRequest | null
@@ -5103,6 +5107,19 @@ const repositoryScopedReviewStatusIncidentMigration = `
   PRAGMA user_version = 57;
 `
 
+/** Distinguishes a plain restart from one that prepares a pinned service commit. */
+const restartOperationMigration = `
+  ALTER TABLE restart_requests
+  ADD COLUMN operation_tag TEXT NOT NULL DEFAULT 'Restart'
+    CHECK (operation_tag IN ('Restart', 'Update'));
+
+  ALTER TABLE restart_requests
+  ADD COLUMN target_commit TEXT
+    CHECK (target_commit IS NULL OR (length(target_commit) = 40 AND target_commit NOT GLOB '*[^0-9a-f]*'));
+
+  PRAGMA user_version = 58;
+`
+
 /** Clears Incidents created when write quarantine was treated as a failure. */
 const writeQuarantineIncidentMigration = `
   UPDATE incidents
@@ -5111,7 +5128,7 @@ const writeQuarantineIncidentMigration = `
     AND kind = 'policy'
     AND message LIKE '%The controller has never been trusted to write to %. Enable writes for it first.';
 
-  PRAGMA user_version = 58;
+  PRAGMA user_version = 59;
 `
 
 function applyMigration(database: DatabaseSync, migration: string): void {
@@ -5369,10 +5386,14 @@ function installSchema(database: DatabaseSync): void {
     version = 57
   }
   if (version === 57) {
+    applyMigration(database, restartOperationMigration)
+    version = 58
+  }
+  if (version === 58) {
     applyMigration(database, writeQuarantineIncidentMigration)
     return
   }
-  if (version === 58)
+  if (version === 59)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -5628,6 +5649,7 @@ export function openJournalStore(
   profile: AgentProfile = CODEX_AGENT_PROFILE,
   /** Issue work stops when open pull requests reach this limit. Matches the configuration default. */
   maxOpenPullRequests = 8,
+  serviceUpdate: () => ServiceUpdateStatus = () => ({ _tag: 'Checking', deployedCommit: '' }),
 ): JournalStore {
   const database = openDatabase(path)
   const configuredSelection = providerAgentSelection(profile.provider)
@@ -9790,7 +9812,12 @@ export function openJournalStore(
   }
 
   const restartRequestFromRow = (row: RestartRequestRow): RestartRequest => {
-    const base = { id: row.id, source: row.source_tag, requestedAt: row.requested_at }
+    const operation: RestartOperation = row.operation_tag === 'Restart'
+      ? { _tag: 'Restart' }
+      : row.target_commit !== null
+        ? { _tag: 'Update', targetCommit: row.target_commit }
+        : (() => { throw new Error('An Update request needs its target commit.') })()
+    const base = { id: row.id, source: row.source_tag, operation, requestedAt: row.requested_at }
     switch (row.state_tag) {
       case 'Requested':
         return { _tag: 'Requested', ...base }
@@ -9811,7 +9838,7 @@ export function openJournalStore(
 
   const restartRequestById = (id: string): RestartRequest | null => {
     const row = database.prepare(`
-      SELECT id, source_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      SELECT id, source_tag, operation_tag, target_commit, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
       FROM restart_requests WHERE id = ?
     `).get(id) as RestartRequestRow | undefined
     return row === undefined ? null : restartRequestFromRow(row)
@@ -9819,7 +9846,7 @@ export function openJournalStore(
 
   const getRestartRequest = (): RestartRequest | null => {
     const row = database.prepare(`
-      SELECT id, source_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      SELECT id, source_tag, operation_tag, target_commit, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
       FROM restart_requests ORDER BY rowid DESC LIMIT 1
     `).get() as RestartRequestRow | undefined
     return row === undefined ? null : restartRequestFromRow(row)
@@ -9827,7 +9854,7 @@ export function openJournalStore(
 
   const activeRestartRequest = (): RestartRequest | null => {
     const row = database.prepare(`
-      SELECT id, source_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      SELECT id, source_tag, operation_tag, target_commit, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
       FROM restart_requests WHERE state_tag IN ('Requested', 'Restarting') LIMIT 1
     `).get() as RestartRequestRow | undefined
     return row === undefined ? null : restartRequestFromRow(row)
@@ -9842,9 +9869,15 @@ export function openJournalStore(
         return active
       }
       database.prepare(`
-        INSERT INTO restart_requests (id, source_tag, state_tag, requested_at)
-        VALUES (?, ?, 'Requested', ?)
-      `).run(input.id, input.source, input.at)
+        INSERT INTO restart_requests (id, source_tag, operation_tag, target_commit, state_tag, requested_at)
+        VALUES (?, ?, ?, ?, 'Requested', ?)
+      `).run(
+        input.id,
+        input.source,
+        input.operation._tag,
+        input.operation._tag === 'Update' ? input.operation.targetCommit : null,
+        input.at,
+      )
       const created = restartRequestById(input.id)
       if (created === null)
         throw new Error('The Restart request was not stored.')
@@ -10694,6 +10727,7 @@ export function openJournalStore(
       mutationsEnabled,
       agentControl,
       restartRequest,
+      serviceUpdate: serviceUpdate(),
       selectionMode: currentSelectionMode,
       openPullRequests: countOpenPullRequests(),
       maxOpenPullRequests,

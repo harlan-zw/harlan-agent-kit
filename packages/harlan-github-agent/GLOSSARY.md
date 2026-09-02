@@ -29,6 +29,7 @@ did not cover it.
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
 | Restart request | `restart_requests` | Controller | N per service, one active | Restart after current work |
+| Service update | `origin/main`, `restart_requests.operation_tag` | Controller | One check, optional Restart request | Update available; Update after current work |
 | Selection mode | `agent_control.selection_mode` | Controller | One per service | Selection mode |
 | Dismissal | `item_dismissals` | Controller | One per Item | Dismiss |
 | Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
@@ -276,6 +277,18 @@ A Restart request stops new agent Tasks from starting. Active agents and control
 Pause remains unchanged. A service that was Paused stays Paused after the restart.
 
 Use Restart request for the record and `Restart after current work` for the control. Do not use restart queue or drain mode.
+
+### Service update
+
+A newer service commit on `origin/main`, and the safe action that deploys it.
+
+The controller checks without changing the deployed checkout. It shows the deployed commit, the latest commit, and the last check time.
+
+`Update after current work` pins the latest commit in a Restart request. New Tasks stop. Active work finishes before the service prepares that commit.
+
+A Service update never starts automatically.
+
+Use `Update available` for the state and `Update after current work` for the control. Do not use upgrade, refresh, or sync.
 
 ### Selection mode
 
@@ -570,6 +583,7 @@ Evidence that a skill, policy, or workflow should change.
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |
 | risk level, skip review, review waiver, review exemption | Auto merge | Auto merge never affects whether review runs |
 | restart queue, drain mode | Restart request | Queue and Pause already name different service concepts |
+| upgrade, refresh, sync | Service update | These words name different package and data operations |
 | journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | rewrite the sentence | Internal machinery, never user-visible |
 
 ## Open questions

@@ -16,19 +16,21 @@ import {
   formatHogwildServiceMetrics,
   formatHogwildTemperature,
 } from '../utils/hogwild-status.ts'
-import { capacityRow, circuitNotice, nextRoutineInstant } from '../utils/system.ts'
+import { capacityRow, circuitNotice, nextRoutineInstant, serviceUpdatePresentation } from '../utils/system.ts'
 
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.
  *
  * Nothing here acts on a Task. Watch logs and Eject live on the running card.
  */
-const { snapshot, incidents, relativeTime, now } = useDashboard()
+const { snapshot, incidents, relativeTime, now, requestUpdate, controlPending } = useDashboard()
 const { open } = useSystemPane()
 const { connection: host, history: hostHistory } = useHogwildStatus()
 
 const capacity = computed(() => snapshot.value.providerCapacities.map(capacityRow))
 const circuits = computed(() => activeProviderCircuits(snapshot.value.providerCircuits).flatMap(circuit => circuitNotice(circuit) ?? []))
+const update = computed(() => serviceUpdatePresentation(snapshot.value.serviceUpdate))
+const updatePending = computed(() => snapshot.value.restartRequest?._tag === 'Requested' || snapshot.value.restartRequest?._tag === 'Restarting')
 
 /** Coarse clock, so the next instant is not recomputed every second. */
 const minute = computed(() => Math.floor(now.value.getTime() / 60_000))
@@ -67,6 +69,56 @@ function activityLine(item: AgentActivityItem): string {
 <template>
   <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10' }">
     <template #body>
+      <section aria-labelledby="system-service">
+        <h3 id="system-service" class="field-label flex items-center gap-2">
+          Service
+          <span class="h-px flex-1 bg-border" aria-hidden="true" />
+        </h3>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <StateBadge :tone="update.tone" :label="update.label" />
+          <UButton
+            v-if="snapshot.serviceUpdate._tag === 'Available'"
+            color="neutral"
+            variant="outline"
+            size="sm"
+            icon="i-octicon-sync-16"
+            :disabled="controlPending || updatePending"
+            @click="requestUpdate"
+          >
+            Update after current work
+          </UButton>
+        </div>
+        <dl class="mt-3 divide-y divide-default border-t border-default">
+          <div class="flex items-center justify-between gap-4 py-2.5">
+            <dt class="field-label">
+              Deployed commit
+            </dt>
+            <dd class="break-all font-mono text-sm text-muted">
+              {{ update.deployedCommit || 'Unknown' }}
+            </dd>
+          </div>
+          <div v-if="update.latestCommit" class="flex items-center justify-between gap-4 py-2.5">
+            <dt class="field-label">
+              Latest commit
+            </dt>
+            <dd class="break-all font-mono text-sm text-muted">
+              {{ update.latestCommit }}
+            </dd>
+          </div>
+          <div class="flex items-center justify-between gap-4 py-2.5">
+            <dt class="field-label">
+              Last checked
+            </dt>
+            <dd class="text-sm text-muted">
+              {{ update.checkedAt ? relativeTime(update.checkedAt) : 'Checking now' }}
+            </dd>
+          </div>
+        </dl>
+        <p v-if="update.detail" class="mt-2 text-sm status-warning">
+          {{ update.detail }}
+        </p>
+      </section>
+
       <section aria-labelledby="system-capacity">
         <h3 id="system-capacity" class="field-label flex items-center gap-2">
           Capacity
