@@ -99,6 +99,9 @@ Apply the unit-tests skill before every bug or validation fix.
 Treat the findings below as the complete Repair scope.
 For each finding, write the named failing regression test first. Confirm it fails for the stated reason.
 Fix every finding. Run focused checks that cover every changed behavior.
+For a visual finding, read the pull request image and reproduce the defect at the shown viewport.
+Store verification media outside the worktree. Capture and inspect the repaired view before returning repaired.
+Do not mark a UI repair complete while a visible defect remains.
 Do not expand scope. Return disputed only when a regression test or exact source behavior proves the finding false at this head commit.
 Return blocked when the requested scope is unsafe or cannot be verified.
 Do not stage, commit, push, approve, merge, or post comments. The controller owns those operations.

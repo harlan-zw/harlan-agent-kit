@@ -91,6 +91,7 @@ describe('review fix Worker', () => {
       model: 'gpt-5.6-terra',
       prompt: expect.stringContaining('Split one UTF-8 sequence across two chunks'),
     })])
+    expect(capture.requests[0]?.prompt).toContain('Capture and inspect the repaired view before returning repaired')
   })
 
   it('queues one fresh Review when Repair disproves a finding', async () => {

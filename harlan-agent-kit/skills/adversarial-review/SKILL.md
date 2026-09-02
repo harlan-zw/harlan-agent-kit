@@ -69,6 +69,8 @@ Set it to `REVIEWING · Pull request loaded`. Edit this comment after each phase
 
 Fetch the PR, base and head SHAs, complete base-to-head diff, checks, reviews, issue comments, inline comments, and every review thread.
 
+Extract every image embedded in the PR description. Retrieve each image for visual inspection. Never send repository credentials to an external host.
+
 Record the initial head SHA. Never review only the latest commit.
 
 ### 4. Establish authority
@@ -97,6 +99,14 @@ Apply every adversarial check in the review contract to the complete diff and su
 
 Trace changed inputs through public boundaries, failures, cleanup, concurrency, persistence, and tests.
 
+Visually inspect every PR-description image. Use the pixels as evidence. Alt text and surrounding prose do not replace inspection.
+
+Treat visible UI defects as material. Check clipping, overlap, overflow, alignment, contrast, missing content, and broken responsive layouts.
+
+Trace each visual defect to the affected implementation. Treat a clearly labelled `Before` image as historical evidence. Verify the current head separately.
+
+Do not complete Review while an image remains uninspected. Record an inaccessible or corrupt image as a material documentation finding.
+
 Treat required CI as the only source for repository-wide test, lint, typecheck, and build results.
 
 Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. Continue the review when CI is missing or unavailable. The controller owns that gate. Never recreate CI locally.
@@ -122,6 +132,8 @@ When the premise is sound and findings remain, queue one fresh Repair Agent with
 For an outside contributor, use the existing Approval. A new external Revision invalidates Approval. The exact controller repair commit continues the workflow.
 
 The Repair Agent writes each failing regression test first. It fixes every finding, then runs focused checks. The controller verifies and publishes the artifact.
+
+For a visual finding, reproduce the defect at the shown viewport when known. Capture and inspect the repaired view before pushing.
 
 When a required check fails on the head commit and the same check passes on the current base, treat that failure as one material finding with resolution `Repair`. Queue it in the same handoff. Its next action names the failing check and its job logs. The Repair Agent reads those logs, fixes the cause, and runs only focused checks. Never recreate the full CI suite locally. When Repair authority is missing, record the permission boundary instead.
 
