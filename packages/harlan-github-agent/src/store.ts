@@ -907,7 +907,7 @@ export interface JournalStore {
   completeRestart: (at: string) => RestartRequest | null
   requireRestartAction: (input: { id: string, at: string, reason: string }) => RestartRequest | null
   prepareForRestart: (at: string) => boolean
-  isSafeToRestart: () => boolean
+  isSafeToRestart: (at?: string) => boolean
   pauseAgents: (at: string) => StoredAgentControl
   setRepositoryPaused: (github: string, paused: boolean) => boolean
   /** True when a person has trusted the controller to write to this repository. */
@@ -10029,22 +10029,46 @@ export function openJournalStore(
     return getAgentControl()
   }
 
-  const isSafeToRestart: JournalStore['isSafeToRestart'] = () => {
+  const isSafeToRestart: JournalStore['isSafeToRestart'] = (at = '') => {
     const row = database.prepare(`
       SELECT (
-        EXISTS (SELECT 1 FROM tasks WHERE state_tag IN ('Running', 'Publishing'))
-        OR EXISTS (SELECT 1 FROM worker_tasks WHERE state_tag = 'Running')
-        OR EXISTS (SELECT 1 FROM routine_runs WHERE state_tag = 'Running')
-        OR EXISTS (SELECT 1 FROM publication_commands WHERE state_tag IN ('Pending', 'Running'))
+        EXISTS (
+          SELECT 1 FROM tasks
+          WHERE state_tag = 'Publishing'
+            OR (state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?))
+        )
+        OR EXISTS (
+          SELECT 1 FROM worker_tasks
+          WHERE state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?)
+        )
+        OR EXISTS (
+          SELECT 1 FROM routine_runs
+          WHERE state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?)
+        )
+        OR EXISTS (
+          SELECT 1 FROM publication_commands
+          WHERE state_tag = 'Pending'
+            OR (state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?))
+        )
         OR EXISTS (
           SELECT 1 FROM review_status_commands
-          WHERE state_tag = 'Running' OR (state_tag = 'Pending' AND phase = 'terminal')
+          WHERE (state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?))
+            OR (state_tag = 'Pending' AND phase = 'terminal')
         )
-        OR EXISTS (SELECT 1 FROM issue_triage_comment_commands WHERE state_tag = 'Running')
-        OR EXISTS (SELECT 1 FROM candidate_issue_commands WHERE state_tag = 'Running')
-        OR EXISTS (SELECT 1 FROM routine_report_commands WHERE state_tag = 'Running')
+        OR EXISTS (
+          SELECT 1 FROM issue_triage_comment_commands
+          WHERE state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?)
+        )
+        OR EXISTS (
+          SELECT 1 FROM candidate_issue_commands
+          WHERE state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?)
+        )
+        OR EXISTS (
+          SELECT 1 FROM routine_report_commands
+          WHERE state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?)
+        )
       ) AS busy
-    `).get() as { busy: number }
+    `).get(at, at, at, at, at, at, at, at) as { busy: number }
     return row.busy === 0
   }
 
@@ -10097,7 +10121,7 @@ export function openJournalStore(
       database.exec('ROLLBACK')
       throw error
     }
-    return isSafeToRestart()
+    return isSafeToRestart(at)
   }
 
   const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
