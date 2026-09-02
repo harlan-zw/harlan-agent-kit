@@ -66,6 +66,7 @@ describe('issue work worker', () => {
     const repository = repositoryMapping({ authentication: 'user', ownership: 'maintained', conflictResolution: false })
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
+    let snapshotReads = 0
     const worker = createIssueWorkWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
@@ -84,7 +85,16 @@ Fixed the parser.
 Closes #12.`,
       }), capture)),
       github: {
-        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
+        getIssueTriageSnapshot: () => {
+          snapshotReads += 1
+          return Promise.resolve(ok({
+            body: 'Reproduction',
+            comments: [],
+            state: 'open',
+            title: issue.title,
+            updatedAt: snapshotReads === 1 ? '2026-08-13T01:00:00.000Z' : '2026-08-13T01:05:00.000Z',
+          }))
+        },
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
       },
@@ -125,6 +135,7 @@ Closes #12.`,
       sessionId: 'triage-session',
       workspace: '/tmp/issue-work',
     })])
+    expect(snapshotReads).toBe(2)
     expect(result).toEqual(ok({
       _tag: 'Publish',
       usage: { _tag: 'Unavailable' },
@@ -145,6 +156,64 @@ Closes #12.`,
       }),
     })))
     expect(JSON.stringify(result)).not.toContain('[Codex]')
+  })
+
+  it('rejects issue work when a human comment changes its meaning', async () => {
+    const repository = repositoryMapping()
+    const issue = issueItem()
+    const snapshots = [
+      { body: 'Reproduction', comments: [], state: 'open' as const, title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' },
+      { body: 'Reproduction', comments: ['Use a different fix.'], state: 'open' as const, title: issue.title, updatedAt: '2026-08-13T01:05:00.000Z' },
+    ]
+    let snapshotReads = 0
+    let committed = false
+    const worker = createIssueWorkWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'implemented',
+        summary: 'Fixed the parser.',
+        checks: ['pnpm test'],
+        commitMessage: 'fix(parser): preserve valid input',
+        pullRequestTitle: 'fix: broken thing',
+        pullRequestBody: '### Description\n\nFixed the parser.\n\n### Linked Issues\n\nCloses #12.',
+      }))),
+      github: {
+        getIssueTriageSnapshot: () => Promise.resolve(ok(snapshots[Math.min(snapshotReads++, 1)]!)),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+      },
+      now: () => new Date('2026-08-13T01:06:00.000Z'),
+      store: {
+        getWorkerSession: () => 'triage-session',
+        listOpenAgentPullRequests: () => [],
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(repository)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/issue-work', headSha: 'base-sha', baseSha: 'base-sha', defaultBranchSha: 'base-sha' })),
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 2, changedPaths: ['src/parser.ts', 'test/parser.test.ts'] })),
+        restack: () => Promise.reject(new Error('Issue work must not restack without a stack base.')),
+        commit: () => {
+          committed = true
+          return Promise.resolve(ok({ commitSha: 'commit-sha', baseSha: 'base-sha', artifactRef: 'artifact-ref', digest: 'patch-digest', changedFiles: 2 }))
+        },
+      },
+    })
+
+    const result = await worker.run({
+      id: 'issue-work-task',
+      kind: 'issue_work',
+      repository: repository.github,
+      issueNumber: issue.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      issue,
+    }, new AbortController().signal)
+
+    expect(result).toEqual({ _tag: 'Err', error: 'The issue changed before the controller committed the fix.' })
+    expect(committed).toBe(false)
   })
 
   it('publishes the patch with safe metadata when Agent output is malformed', async () => {

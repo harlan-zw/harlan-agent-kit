@@ -197,6 +197,48 @@ describe('gitHub subjects', () => {
     expect(changedByHuman.contentDigest).not.toBe(initialIssue.contentDigest)
   })
 
+  it('reads one exact issue with the same semantic state as the open list', async () => {
+    const listComments = () => undefined
+    const issue = {
+      number: 12,
+      state: 'open',
+      title: 'Broken thing',
+      body: 'Please fix it.',
+      user: { login: 'harlan-github-agent[bot]', type: 'Bot' },
+      html_url: 'https://github.com/harlan-zw/example/issues/12',
+      created_at: '2026-08-01T00:00:00.000Z',
+      updated_at: '2026-08-13T00:00:00.000Z',
+      labels: [{ name: 'routine:sentry-checkin' }, { name: 'harlan-agent-running' }],
+    }
+    const client = {
+      paginate: (method: unknown) => Promise.resolve(method === listComments
+        ? [{ id: 1, body: 'Human detail.', updated_at: '2026-08-13T00:01:00.000Z', user: { login: 'harlan-zw' } }]
+        : []),
+      rest: {
+        issues: {
+          get: () => Promise.resolve({ data: issue }),
+          listComments,
+        },
+      },
+    } as unknown as Octokit
+    const source = createGitHubSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      issueCutoff: '2026-07-01',
+      tokens: {
+        getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T02:00:00.000Z' })),
+        invalidate: () => undefined,
+      },
+    })
+
+    expect(await source.getIssue(repositoryMapping(), 12)).toEqual(ok(expect.objectContaining({
+      number: 12,
+      state: 'open',
+      routineFiled: true,
+      contentDigest: expect.stringMatching(/^[a-f\d]{64}$/),
+    })))
+  })
+
   it('uses one fixed inclusive issue cutoff', () => {
     expect(isIssueAtOrAfterCutoff('2026-07-13T23:59:59.999Z', '2026-07-14')).toBe(false)
     expect(isIssueAtOrAfterCutoff('2026-07-14T00:00:00.000Z', '2026-07-14')).toBe(true)

@@ -363,7 +363,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const frozen = await options.github.getIssueTriageSnapshot(validated.value, task.issueNumber, signal)
       if (frozen._tag === 'Err')
         return frozen
-      if (frozen.value.state !== 'open' || frozen.value.updatedAt !== snapshot.value.updatedAt)
+      if (issueSnapshotDigest({ ...frozen.value, baseSha: prepared.value.defaultBranchSha }) !== scopeDigest)
         return err('The issue changed before the controller committed the fix.')
 
       const committed = await options.worktrees.commit(task, stacked.value.workspace, stacked.value.patch, response.commitMessage, signal)

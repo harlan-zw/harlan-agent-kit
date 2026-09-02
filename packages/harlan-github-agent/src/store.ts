@@ -686,6 +686,8 @@ export interface JournalStore {
   updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
   completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string, usage?: AgentTokenUsage }) => boolean
   failRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
+  /** Issues absent from the next open snapshot need one exact final GitHub read. */
+  listOpenIssueNumbers: (github: string) => number[]
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
   listOpenPullRequestNumbers: (github: string) => number[]
   /** Old inferred closures need one exact read before GitHub becomes final truth. */
@@ -6241,16 +6243,19 @@ export function openJournalStore(
       AND json_extract(revisions.payload, '$.state') = 'open'
   `).get(repository, pullRequestNumber, revisionId, revisionId, kind) !== undefined
 
-  const listOpenPullRequestNumbers: JournalStore['listOpenPullRequestNumbers'] = github => (database.prepare(`
+  const listOpenItemNumbers = (github: string, kind: GitHubItem['kind']): number[] => (database.prepare(`
     SELECT subjects.github_number
     FROM subjects
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = subjects.current_revision_id
     WHERE repositories.github = ?
-      AND subjects.kind = 'pull_request'
+      AND subjects.kind = ?
       AND json_extract(revisions.payload, '$.state') = 'open'
     ORDER BY subjects.github_number
-  `).all(github) as unknown as Array<{ github_number: number }>).map(row => row.github_number)
+  `).all(github, kind) as unknown as Array<{ github_number: number }>).map(row => row.github_number)
+
+  const listOpenIssueNumbers: JournalStore['listOpenIssueNumbers'] = github => listOpenItemNumbers(github, 'issue')
+  const listOpenPullRequestNumbers: JournalStore['listOpenPullRequestNumbers'] = github => listOpenItemNumbers(github, 'pull_request')
 
   const listUnverifiedClosedPullRequestNumbers: JournalStore['listUnverifiedClosedPullRequestNumbers'] = (github, limit = 5) => {
     const safeLimit = Math.max(0, Math.min(20, Math.trunc(limit)))
@@ -12589,6 +12594,7 @@ export function openJournalStore(
     completeRoutineRun,
     failRoutineRun,
     isIssueWorkApprovalReady,
+    listOpenIssueNumbers,
     listOpenPullRequestNumbers,
     listUnverifiedClosedPullRequestNumbers,
     recordExactPullRequestObservation,
