@@ -69,7 +69,7 @@ Set it to `REVIEWING · Pull request loaded`. Edit this comment after each phase
 
 Fetch the PR, base and head SHAs, complete base-to-head diff, checks, reviews, issue comments, inline comments, and every review thread.
 
-Extract every image embedded in the PR description. Retrieve each image for visual inspection. Never send repository credentials to an external host.
+Extract every image embedded in the PR description. Retrieve each image only from GitHub-hosted media URLs (github.com/user-attachments and user-images.githubusercontent.com). Record any other image host as a material documentation finding without retrieving it. Never send repository credentials to an external host.
 
 Record the initial head SHA. Never review only the latest commit.
 
@@ -105,7 +105,7 @@ Treat visible UI defects as material. Check clipping, overlap, overflow, alignme
 
 Trace each visual defect to the affected implementation. Treat a clearly labelled `Before` image as historical evidence. Verify the current head separately.
 
-Do not complete Review while an image remains uninspected. Record an inaccessible or corrupt image as a material documentation finding.
+Do not complete Review while an image remains uninspected. Record an inaccessible, corrupt, or non-GitHub-hosted image as a material documentation finding.
 
 Treat required CI as the only source for repository-wide test, lint, typecheck, and build results.
 

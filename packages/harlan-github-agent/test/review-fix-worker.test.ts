@@ -92,6 +92,7 @@ describe('review fix Worker', () => {
       prompt: expect.stringContaining('Split one UTF-8 sequence across two chunks'),
     })])
     expect(capture.requests[0]?.prompt).toContain('Capture and inspect the repaired view before returning repaired')
+    expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
   })
 
   it('queues one fresh Review when Repair disproves a finding', async () => {
