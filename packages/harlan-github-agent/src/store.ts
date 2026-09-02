@@ -10051,9 +10051,6 @@ export function openJournalStore(
   const prepareForRestart: JournalStore['prepareForRestart'] = (at) => {
     database.exec('BEGIN IMMEDIATE')
     try {
-      recoverExpiredTasks(at)
-      recoverExpiredWorkerTasks(at)
-      recoverExpiredRoutineRuns(at)
       const terminalRows = database.prepare(`
         SELECT id, fence FROM review_status_commands
         WHERE state_tag = 'Running' AND phase = 'terminal' AND lease_expires_at <= ?
