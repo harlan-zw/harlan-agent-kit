@@ -69,8 +69,8 @@ HARLAN_REPOSITORY_ENV_MANIFEST="$manifest" \
   bash "$tool" seed "$source_repository" "$worktree" >/dev/null
 grep -Fx 'SECRET=worktree' "$worktree/.env" >/dev/null
 
-unlisted_primary="$test_root/unlisted"
-unlisted_worktree="$test_root/unlisted.feature"
+unlisted_primary="$source_home/pkg/unlisted"
+unlisted_worktree="$source_home/pkg/unlisted.feature"
 for repository in "$unlisted_primary" "$unlisted_worktree"; do
   git init --quiet --initial-branch=main "$repository"
   git -C "$repository" -c user.name=Fixture -c user.email=fixture@example.com commit --quiet --allow-empty -m fixture
