@@ -6,14 +6,11 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 HOGWILD_HOST="${HARLAN_GITHUB_AGENT_HOGWILD_HOST:-hogwild}"
 HOGWILD_ORIGIN="${HARLAN_GITHUB_AGENT_HOGWILD_ORIGIN:-https://hogwild.tailcad325.ts.net}"
 REMOTE_HOME="${HARLAN_GITHUB_AGENT_HOGWILD_HOME:-/home/harlan}"
-CONTEXT_FILE="${HARLAN_GITHUB_AGENT_CONTEXT_FILE:-$HOME/.codex/AGENTS.md}"
 PASSWORD_FILE="${HARLAN_GITHUB_AGENT_PASSWORD_FILE:-$HOME/.config/harlan-github-agent/dashboard-password}"
 REPOSITORY_ENV_HOME="${HARLAN_REPOSITORY_ENV_HOME:-$HOME}"
 readonly RESTART_POLL_SECONDS=2
 readonly MAXIMUM_RESTART_SECONDS=$((55 * 60))
 REMOTE_CHECKOUT="$REMOTE_HOME/.local/share/harlan-github-agent/service"
-REMOTE_CONTEXT="$REMOTE_HOME/.codex/AGENTS.md"
-REMOTE_CONTEXT_NEXT="$REMOTE_CONTEXT.next"
 SERVICE_OVERRIDE_FILE="$SCRIPT_DIR/hogwild-service.conf"
 REMOTE_OVERRIDE_DIR="$REMOTE_HOME/.config/systemd/user/harlan-github-agent.service.d"
 REMOTE_OVERRIDE="$REMOTE_OVERRIDE_DIR/hogwild.conf"
@@ -36,10 +33,6 @@ require_inputs() {
   fi
   if [[ ! "$REPOSITORY_ENV_HOME" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
     echo "The repository environment home path contains unsupported characters." >&2
-    exit 1
-  fi
-  if [ ! -f "$CONTEXT_FILE" ]; then
-    echo "The global Agent instructions do not exist: $CONTEXT_FILE" >&2
     exit 1
   fi
   if [ ! -f "$PASSWORD_FILE" ]; then
@@ -225,7 +218,9 @@ sync_verified_file() {
 }
 
 sync_context() {
-  sync_verified_file "$CONTEXT_FILE" "$REMOTE_CONTEXT" 644 'global Agent instruction file'
+  HARLAN_AGENT_CONTEXT_HOGWILD_HOST="$HOGWILD_HOST" \
+    HARLAN_AGENT_CONTEXT_HOGWILD_HOME="$REMOTE_HOME" \
+    bash "$SCRIPT_DIR/sync-agent-context.sh" hogwild
 }
 
 sync_service_override() {

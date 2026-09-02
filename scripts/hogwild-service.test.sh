@@ -7,10 +7,11 @@ test_root=$(mktemp -d)
 trap 'rm -rf "$test_root"' EXIT
 
 test_home="$test_root/home"
-export HARLAN_GITHUB_AGENT_CONTEXT_FILE="$test_home/.codex/AGENTS.md"
+rendered_home="$test_root/rendered"
 export HARLAN_GITHUB_AGENT_PASSWORD_FILE="$test_home/.config/harlan-github-agent/dashboard-password"
 export HOGWILD_SERVICE_TEST_CALLS="$test_root/calls"
-export HOGWILD_SERVICE_TEST_HASH=''
+export HOGWILD_SERVICE_TEST_CLAUDE_HASH=''
+export HOGWILD_SERVICE_TEST_CODEX_HASH=''
 export HOGWILD_SERVICE_TEST_OVERRIDE_HASH=''
 export HOGWILD_SERVICE_TEST_WORKTRUNK_HASH=''
 export HOGWILD_SERVICE_TEST_ENV_TOOL_HASH=''
@@ -24,8 +25,7 @@ export HOGWILD_SERVICE_TEST_LEGACY_STATE="$test_root/legacy-state"
 export HARLAN_REPOSITORY_ENV_HOME="$test_home"
 export HARLAN_REPOSITORY_ENV_MANIFEST="$test_root/repository-env-files"
 
-mkdir -p "$test_home/.codex" "$test_home/.config/harlan-github-agent" "$test_home/sites/example" "$test_root/bin"
-printf '%s\n' '# Global Agent instructions' > "$HARLAN_GITHUB_AGENT_CONTEXT_FILE"
+mkdir -p "$test_home/.config/harlan-github-agent" "$test_home/sites/example" "$test_root/bin"
 printf '%s\n' 'password' > "$HARLAN_GITHUB_AGENT_PASSWORD_FILE"
 git init --quiet --initial-branch=main "$test_home/sites/example"
 printf '%s\n' '.env' > "$test_home/sites/example/.gitignore"
@@ -34,12 +34,15 @@ git -C "$test_home/sites/example" add .gitignore
 git -C "$test_home/sites/example" -c user.name=Fixture -c user.email=fixture@example.com commit --quiet -m fixture
 git -C "$test_home/sites/example" remote add origin git@github.com:fixture/example.git
 printf '%s\n' 'fixture/example sites/example/.env' > "$HARLAN_REPOSITORY_ENV_MANIFEST"
-expected_hash=$(/usr/bin/sha256sum "$HARLAN_GITHUB_AGENT_CONTEXT_FILE" | cut -d' ' -f1)
+HARLAN_AGENT_CONTEXT_HOME="$rendered_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
+expected_claude_hash=$(/usr/bin/sha256sum "$rendered_home/.claude/CLAUDE.md" | cut -d' ' -f1)
+expected_codex_hash=$(/usr/bin/sha256sum "$rendered_home/.codex/AGENTS.md" | cut -d' ' -f1)
 expected_override_hash=$(/usr/bin/sha256sum "$script_dir/hogwild-service.conf" | cut -d' ' -f1)
 expected_worktrunk_hash=$(/usr/bin/sha256sum "$script_dir/worktrunk.toml" | cut -d' ' -f1)
 expected_env_tool_hash=$(/usr/bin/sha256sum "$script_dir/repository-env.sh" | cut -d' ' -f1)
 expected_env_manifest_hash=$(/usr/bin/sha256sum "$HARLAN_REPOSITORY_ENV_MANIFEST" | cut -d' ' -f1)
-export HOGWILD_SERVICE_TEST_HASH="$expected_hash"
+export HOGWILD_SERVICE_TEST_CLAUDE_HASH="$expected_claude_hash"
+export HOGWILD_SERVICE_TEST_CODEX_HASH="$expected_codex_hash"
 export HOGWILD_SERVICE_TEST_OVERRIDE_HASH="$expected_override_hash"
 export HOGWILD_SERVICE_TEST_WORKTRUNK_HASH="$expected_worktrunk_hash"
 export HOGWILD_SERVICE_TEST_ENV_TOOL_HASH="$expected_env_tool_hash"
@@ -51,7 +54,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''ssh %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
   'if [[ "$*" == *mktemp*-d* ]]; then printf '\''%s\n'\'' "$HOGWILD_SERVICE_TEST_ENV_STAGE"; exit; fi' \
-  'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_HASH"; fi' \
+  'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; fi' \
   > "$test_root/bin/ssh"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
@@ -93,7 +96,8 @@ chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
 
-copy_line=$(grep -n '^scp .*AGENTS.md .*hogwild:/home/harlan/.codex/AGENTS.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+claude_copy_line=$(grep -n '^scp .*CLAUDE.md hogwild:/home/harlan/.claude/CLAUDE.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+codex_copy_line=$(grep -n '^scp .*AGENTS.md hogwild:/home/harlan/.codex/AGENTS.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 install_line=$(grep -nF "mv '/home/harlan/.codex/AGENTS.md.next' '/home/harlan/.codex/AGENTS.md'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 limits_copy_line=$(grep -n '^scp .*hogwild-service.conf .*hogwild:/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 limits_install_line=$(grep -nF "mv '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next' '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
@@ -105,7 +109,7 @@ env_install_line=$(grep -nF "install-staged '/home/harlan/.cache/harlan-reposito
 prepare_line=$(grep -nF "bash -s -- 'prepare-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 restart_line=$(grep -n '/api/service/restart' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 
-if ! ((copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line && prepare_line < restart_line)); then
+if ! ((claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line && prepare_line < restart_line)); then
   printf '%s\n' 'Hogwild update did not prepare files before its Restart request.' >&2
   exit 1
 fi
@@ -143,7 +147,7 @@ fi
 export HOGWILD_SERVICE_TEST_ENV_STAGE=/home/harlan/.cache/harlan-repository-env.fixture
 
 : > "$HOGWILD_SERVICE_TEST_CALLS"
-export HOGWILD_SERVICE_TEST_HASH='different'
+export HOGWILD_SERVICE_TEST_CODEX_HASH='different'
 if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null 2>&1; then
   printf '%s\n' 'Hogwild update accepted a context hash mismatch.' >&2
   exit 1
@@ -155,7 +159,7 @@ fi
 
 : > "$HOGWILD_SERVICE_TEST_CALLS"
 printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
-export HOGWILD_SERVICE_TEST_HASH="$expected_hash"
+export HOGWILD_SERVICE_TEST_CODEX_HASH="$expected_codex_hash"
 export HOGWILD_SERVICE_TEST_RESTART_AFTER=61
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" restart >/dev/null
 if [ "$(cat "$HOGWILD_SERVICE_TEST_STATE_POLLS")" -lt 61 ]; then
