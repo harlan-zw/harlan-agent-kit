@@ -7,6 +7,7 @@ import type {
   ProviderCircuit,
   RestartRequest,
   Routine,
+  ServiceUpdateStatus,
 } from '../../../src/types.ts'
 import { hasSpendableCapacity } from '../../../src/capacity.ts'
 import { matchesCron, parseCron, wallClockParts } from '../../../src/routine-schedule.ts'
@@ -71,8 +72,12 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
   const counts: SystemChipCounts = { active, maximum: snapshot.agentProfile.maximumActiveAgents, live: active > 0 }
   if (snapshot.incidents.length > 0)
     return { _tag: 'Incident', incidents: snapshot.incidents.length, ...counts }
-  if (snapshot.agentStart._tag !== 'Available')
-    return { _tag: 'CannotStart', reason: cannotStartReasons[snapshot.agentStart._tag], ...counts }
+  if (snapshot.agentStart._tag !== 'Available') {
+    const reason = snapshot.agentStart._tag === 'RestartRequested' && snapshot.restartRequest?.operation._tag === 'Update'
+      ? 'Updating after current work'
+      : cannotStartReasons[snapshot.agentStart._tag]
+    return { _tag: 'CannotStart', reason, ...counts }
+  }
   if (manualHoldsQueue(snapshot))
     return { _tag: 'CannotStart', reason: 'Manual', ...counts }
   return { _tag: 'Normal', ...counts }
@@ -131,11 +136,43 @@ export type RestartNotice
 export function restartNotice(request: RestartRequest | null): RestartNotice | undefined {
   if (request === null || request._tag === 'Completed')
     return undefined
+  const updating = request.operation._tag === 'Update'
   if (request._tag === 'Requested')
-    return { _tag: 'Requested', text: 'Restart requested. Active work finishes first.' }
+    return { _tag: 'Requested', text: updating ? 'Update requested. Active work finishes first.' : 'Restart requested. Active work finishes first.' }
   if (request._tag === 'Restarting')
-    return { _tag: 'Restarting', text: 'Restarting.' }
-  return { _tag: 'ActionRequired', text: `Restart did not complete: ${request.reason}` }
+    return { _tag: 'Restarting', text: updating ? 'Starting the updated service.' : 'Restarting.' }
+  return { _tag: 'ActionRequired', text: `${updating ? 'Update' : 'Restart'} did not complete: ${request.reason}` }
+}
+
+export interface ServiceUpdatePresentation {
+  label: string
+  tone: 'neutral' | 'warning'
+  deployedCommit: string
+  latestCommit?: string
+  checkedAt: string | null
+  detail?: string
+}
+
+export function serviceUpdatePresentation(status: ServiceUpdateStatus): ServiceUpdatePresentation {
+  const deployedCommit = status.deployedCommit.slice(0, 7)
+  if (status._tag === 'Checking')
+    return { label: 'Checking', tone: 'neutral', deployedCommit, checkedAt: null }
+  if (status._tag === 'Unavailable') {
+    return {
+      label: 'Check failed',
+      tone: 'warning',
+      deployedCommit,
+      checkedAt: status.checkedAt,
+      detail: status.reason,
+    }
+  }
+  return {
+    label: status._tag === 'Available' ? 'Update available' : 'Current',
+    tone: status._tag === 'Available' ? 'warning' : 'neutral',
+    deployedCommit,
+    latestCommit: status.latestCommit.slice(0, 7),
+    checkedAt: status.checkedAt,
+  }
 }
 
 const MINUTE = 60_000

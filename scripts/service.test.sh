@@ -11,10 +11,12 @@ export HOME="$test_root/home"
 export HARLAN_GITHUB_AGENT_CHECKOUT="$test_root/service"
 export SERVICE_TEST_CALLS="$test_root/curl.calls"
 export SERVICE_TEST_PNPM_CALLS="$test_root/pnpm.calls"
+export SERVICE_TEST_SYNC_CALLS="$test_root/sync.calls"
 
 mkdir -p \
   "$HARLAN_GITHUB_AGENT_CHECKOUT/.git" \
   "$HARLAN_GITHUB_AGENT_CHECKOUT/packages/harlan-github-agent" \
+  "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts" \
   "$HOME/.config/harlan-github-agent" \
   "$HOME/.local/bin" \
   "$test_root/bin"
@@ -26,6 +28,10 @@ printf '%s\n' \
   'printf '\''%s\n'\'' "$*" >> "$SERVICE_TEST_PNPM_CALLS"' \
   > "$HOME/.local/bin/pnpm"
 chmod +x "$HOME/.local/bin/pnpm"
+printf '%s\n' '#!/usr/bin/env bash' 'printf '\''context %s\n'\'' "$*" >> "$SERVICE_TEST_SYNC_CALLS"' \
+  > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/sync-agent-context.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'printf '\''worktrunk %s\n'\'' "$*" >> "$SERVICE_TEST_SYNC_CALLS"' \
+  > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/worktrunk-config.sh"
 
 git() {
   case "$*" in
@@ -79,6 +85,16 @@ fi
 
 if ! grep -F -- 'dashboard:build' "$SERVICE_TEST_PNPM_CALLS" >/dev/null; then
   printf '%s\n' 'service did not build the dashboard with the installed pnpm fallback' >&2
+  exit 1
+fi
+
+if ! grep -Fx -- 'context local' "$SERVICE_TEST_SYNC_CALLS" >/dev/null; then
+  printf '%s\n' 'service did not sync Agent instructions from the deployed commit' >&2
+  exit 1
+fi
+
+if ! grep -Fx -- 'worktrunk update' "$SERVICE_TEST_SYNC_CALLS" >/dev/null; then
+  printf '%s\n' 'service did not install Worktrunk settings from the deployed commit' >&2
   exit 1
 fi
 

@@ -1,6 +1,6 @@
 import type { AgentSelection } from '../src/agent-profile.ts'
 import type { StatsRange, StatsSnapshot } from '../src/stats.ts'
-import type { SelectionMode } from '../src/types.ts'
+import type { RestartOperation, SelectionMode } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -35,10 +35,11 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
 const agentControls = {
   getStats: (range: StatsRange, generatedAt: string) => statsSnapshot(range, generatedAt),
   pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
-  requestRestart: (input: { id: string, source: 'dashboard' | 'tray' | 'helper', at: string }) => ({
+  requestRestart: (input: { id: string, source: 'dashboard' | 'tray' | 'helper', operation: RestartOperation, at: string }) => ({
     _tag: 'Requested' as const,
     id: input.id,
     source: input.source,
+    operation: input.operation,
     requestedAt: input.at,
   }),
   resumeAgents: (_at: string) => ({ _tag: 'Running' as const }),
@@ -300,7 +301,7 @@ describe('dashboard HTTP app', () => {
         listReviewRuns: () => [],
         requestRestart(input) {
           requests.push(input)
-          return { _tag: 'Requested', id: input.id, source: input.source, requestedAt: input.at }
+          return { _tag: 'Requested', id: input.id, source: input.source, operation: input.operation, requestedAt: input.at }
         },
         requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       },
@@ -315,6 +316,49 @@ describe('dashboard HTTP app', () => {
     expect(response.status).toBe(202)
     expect(await response.json()).toEqual(expect.objectContaining({ _tag: 'Requested', source: 'dashboard' }))
     expect(requests).toEqual([expect.objectContaining({ source: 'dashboard', at: now().toISOString() })])
+  })
+
+  it('pins the available commit in a dashboard Update request', async () => {
+    const latestCommit = 'b'.repeat(40)
+    const requests: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot({
+          serviceUpdate: {
+            _tag: 'Available',
+            deployedCommit: 'a'.repeat(40),
+            latestCommit,
+            checkedAt: now().toISOString(),
+          },
+        }),
+        listReviewRuns: () => [],
+        requestRestart(input) {
+          requests.push(input)
+          return { _tag: 'Requested', id: input.id, source: input.source, operation: input.operation, requestedAt: input.at }
+        },
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { 'authorization': authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'dashboard' }),
+    })
+
+    expect(response.status).toBe(202)
+    expect(requests).toEqual([expect.objectContaining({
+      source: 'dashboard',
+      operation: { _tag: 'Update', targetCommit: latestCommit },
+    })])
   })
 
   it('reports read-only health', async () => {

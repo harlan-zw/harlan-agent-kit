@@ -9,6 +9,7 @@ import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { combineServiceState } from './service-state.ts'
+import { createGitServiceUpdateSource } from './service-update.ts'
 import { startAgentService } from './service.ts'
 import { stopWithin } from './shutdown.ts'
 import { openJournalStore } from './store.ts'
@@ -172,6 +173,11 @@ const command = defineCommand({
     if (gitIdentity._tag === 'Err')
       throw new Error(gitIdentity.error)
 
+    const serviceUpdate = createGitServiceUpdateSource({
+      repositoryRoot: process.cwd(),
+      now: () => new Date(),
+      onError: error => consola.error(error),
+    })
     const service = await startAgentService({
       config: validated.value,
       dashboardPassword: dashboardPassword.value,
@@ -179,6 +185,7 @@ const command = defineCommand({
       githubPrivateKey: privateKey.value,
       ...(webhookSecret === null ? {} : { webhookSecret: webhookSecret.value }),
       logger: consola,
+      serviceUpdate,
     })
     consola.success(`Dashboard: ${validated.value.server.allowedOrigin}`)
     if (webhook._tag === 'Enabled')

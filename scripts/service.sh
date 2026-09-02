@@ -119,6 +119,10 @@ prepare_update() {
   fi
   echo "Installing dependencies"
   (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
+  echo "Syncing Agent instructions"
+  bash "$SERVICE_CHECKOUT/scripts/sync-agent-context.sh" local >/dev/null
+  echo "Installing Worktrunk settings"
+  bash "$SERVICE_CHECKOUT/scripts/worktrunk-config.sh" update >/dev/null
   echo "Building the dashboard"
   (cd "$SERVICE_CHECKOUT/packages/harlan-github-agent" && "$pnpm_bin" dashboard:build >/dev/null 2>&1)
 }
