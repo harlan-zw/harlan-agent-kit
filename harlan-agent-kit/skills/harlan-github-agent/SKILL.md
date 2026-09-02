@@ -106,6 +106,13 @@ It also seeds ignored `.data` and `.wrangler/state` from the Repository mapping.
 Each worktree receives a private writable copy.
 If the Repository mapping has an open state file, setup fails before the Agent starts.
 
+The committed Worktrunk configuration also seeds the ignored files in
+`scripts/repository-env-files`. The Hogwild update copies those files one way
+from the desktop checkouts before the service restarts. Use
+`pnpm service:hogwild:sync-env` to run that sync without updating the service.
+Missing files, unsafe symlinks, untrusted paths, and files that Git does not
+ignore must stop the sync or worktree creation.
+
 If setup fails, start no Agent.
 Keep the Task failure and its Incident visible with the exact Worktrunk error.
 

@@ -7,13 +7,20 @@ HOGWILD_HOST="${HARLAN_GITHUB_AGENT_HOGWILD_HOST:-hogwild}"
 HOGWILD_ORIGIN="${HARLAN_GITHUB_AGENT_HOGWILD_ORIGIN:-https://hogwild.tailcad325.ts.net}"
 REMOTE_HOME="${HARLAN_GITHUB_AGENT_HOGWILD_HOME:-/home/harlan}"
 PASSWORD_FILE="${HARLAN_GITHUB_AGENT_PASSWORD_FILE:-$HOME/.config/harlan-github-agent/dashboard-password}"
+REPOSITORY_ENV_HOME="${HARLAN_REPOSITORY_ENV_HOME:-$HOME}"
 readonly RESTART_POLL_SECONDS=2
 readonly MAXIMUM_RESTART_SECONDS=$((55 * 60))
 REMOTE_CHECKOUT="$REMOTE_HOME/.local/share/harlan-github-agent/service"
 SERVICE_OVERRIDE_FILE="$SCRIPT_DIR/hogwild-service.conf"
 REMOTE_OVERRIDE_DIR="$REMOTE_HOME/.config/systemd/user/harlan-github-agent.service.d"
 REMOTE_OVERRIDE="$REMOTE_OVERRIDE_DIR/hogwild.conf"
-REMOTE_OVERRIDE_NEXT="$REMOTE_OVERRIDE.next"
+WORKTRUNK_CONFIG_FILE="$SCRIPT_DIR/worktrunk.toml"
+REPOSITORY_ENV_TOOL_FILE="$SCRIPT_DIR/repository-env.sh"
+REPOSITORY_ENV_MANIFEST_FILE="${HARLAN_REPOSITORY_ENV_MANIFEST:-$SCRIPT_DIR/repository-env-files}"
+REMOTE_WORKTRUNK_CONFIG="$REMOTE_HOME/.config/worktrunk/config.toml"
+REMOTE_REPOSITORY_ENV_TOOL="$REMOTE_HOME/.local/bin/harlan-repository-env"
+REMOTE_REPOSITORY_ENV_MANIFEST="$REMOTE_HOME/.config/harlan-agent-kit/repository-env-files"
+REMOTE_REPOSITORY_ENV_STAGE=''
 
 require_inputs() {
   if [[ ! "$HOGWILD_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
@@ -24,12 +31,28 @@ require_inputs() {
     echo "The Hogwild home path contains unsupported characters." >&2
     exit 1
   fi
+  if [[ ! "$REPOSITORY_ENV_HOME" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+    echo "The repository environment home path contains unsupported characters." >&2
+    exit 1
+  fi
   if [ ! -f "$PASSWORD_FILE" ]; then
     echo "The dashboard password does not exist: $PASSWORD_FILE" >&2
     exit 1
   fi
   if [ ! -f "$SERVICE_OVERRIDE_FILE" ]; then
     echo "The Hogwild service settings do not exist: $SERVICE_OVERRIDE_FILE" >&2
+    exit 1
+  fi
+  if [ ! -f "$WORKTRUNK_CONFIG_FILE" ]; then
+    echo "The Worktrunk configuration does not exist: $WORKTRUNK_CONFIG_FILE" >&2
+    exit 1
+  fi
+  if [ ! -f "$REPOSITORY_ENV_TOOL_FILE" ]; then
+    echo "The repository environment helper does not exist: $REPOSITORY_ENV_TOOL_FILE" >&2
+    exit 1
+  fi
+  if [ ! -f "$REPOSITORY_ENV_MANIFEST_FILE" ]; then
+    echo "The repository environment manifest does not exist: $REPOSITORY_ENV_MANIFEST_FILE" >&2
     exit 1
   fi
 }
@@ -175,6 +198,25 @@ safe_restart() {
   legacy_safe_restart
 }
 
+sync_verified_file() {
+  local source=$1
+  local target=$2
+  local mode=$3
+  local label=$4
+  local next local_hash remote_hash
+  next="$target.next"
+  local_hash=$(sha256sum "$source" | cut -d' ' -f1)
+  ssh -o BatchMode=yes "$HOGWILD_HOST" "mkdir -p '$(dirname "$target")'"
+  scp -q "$source" "$HOGWILD_HOST:$next"
+  remote_hash=$(ssh -o BatchMode=yes "$HOGWILD_HOST" "sha256sum '$next'" | cut -d' ' -f1)
+  if [ "$local_hash" != "$remote_hash" ]; then
+    ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$next'"
+    echo "Hogwild received a different $label." >&2
+    exit 1
+  fi
+  ssh -o BatchMode=yes "$HOGWILD_HOST" "chmod '$mode' '$next' && mv '$next' '$target'"
+}
+
 sync_context() {
   HARLAN_AGENT_CONTEXT_HOGWILD_HOST="$HOGWILD_HOST" \
     HARLAN_AGENT_CONTEXT_HOGWILD_HOME="$REMOTE_HOME" \
@@ -182,18 +224,65 @@ sync_context() {
 }
 
 sync_service_override() {
-  local local_hash remote_hash
-  local_hash=$(sha256sum "$SERVICE_OVERRIDE_FILE" | cut -d' ' -f1)
-  ssh -o BatchMode=yes "$HOGWILD_HOST" "mkdir -p '$REMOTE_OVERRIDE_DIR'"
-  scp -q "$SERVICE_OVERRIDE_FILE" "$HOGWILD_HOST:$REMOTE_OVERRIDE_NEXT"
-  remote_hash=$(ssh -o BatchMode=yes "$HOGWILD_HOST" "sha256sum '$REMOTE_OVERRIDE_NEXT'" | cut -d' ' -f1)
-  if [ "$local_hash" != "$remote_hash" ]; then
-    ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$REMOTE_OVERRIDE_NEXT'"
-    echo "Hogwild received different service settings." >&2
+  sync_verified_file "$SERVICE_OVERRIDE_FILE" "$REMOTE_OVERRIDE" 644 'service setting file'
+  ssh -o BatchMode=yes "$HOGWILD_HOST" 'systemctl --user daemon-reload'
+}
+
+sync_worktrunk() {
+  sync_verified_file "$REPOSITORY_ENV_TOOL_FILE" "$REMOTE_REPOSITORY_ENV_TOOL" 755 'repository environment helper'
+  sync_verified_file "$REPOSITORY_ENV_MANIFEST_FILE" "$REMOTE_REPOSITORY_ENV_MANIFEST" 644 'repository environment manifest'
+  sync_verified_file "$WORKTRUNK_CONFIG_FILE" "$REMOTE_WORKTRUNK_CONFIG" 644 'Worktrunk configuration'
+}
+
+cleanup_repository_environment_stage() {
+  local suffix
+  [ -n "$REMOTE_REPOSITORY_ENV_STAGE" ] || return
+  suffix=${REMOTE_REPOSITORY_ENV_STAGE#"$REMOTE_HOME/.cache/harlan-repository-env."}
+  if [ "$suffix" = "$REMOTE_REPOSITORY_ENV_STAGE" ] || [[ ! "$suffix" =~ ^[A-Za-z0-9]+$ ]]; then
+    echo "The Hogwild repository environment stage is unsafe: $REMOTE_REPOSITORY_ENV_STAGE" >&2
+    return 1
+  fi
+  ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -rf -- '$REMOTE_REPOSITORY_ENV_STAGE'"
+  REMOTE_REPOSITORY_ENV_STAGE=''
+}
+
+require_safe_repository_environment_stage() {
+  local suffix
+  suffix=${REMOTE_REPOSITORY_ENV_STAGE#"$REMOTE_HOME/.cache/harlan-repository-env."}
+  if [ "$suffix" = "$REMOTE_REPOSITORY_ENV_STAGE" ] || [[ ! "$suffix" =~ ^[A-Za-z0-9]+$ ]]; then
+    echo "Hogwild returned an unsafe repository environment stage: $REMOTE_REPOSITORY_ENV_STAGE" >&2
+    REMOTE_REPOSITORY_ENV_STAGE=''
     exit 1
   fi
-  ssh -o BatchMode=yes "$HOGWILD_HOST" \
-    "chmod 644 '$REMOTE_OVERRIDE_NEXT' && mv '$REMOTE_OVERRIDE_NEXT' '$REMOTE_OVERRIDE' && systemctl --user daemon-reload"
+}
+
+sync_repository_environment() {
+  HARLAN_REPOSITORY_ENV_HOME="$REPOSITORY_ENV_HOME" \
+  HARLAN_REPOSITORY_ENV_MANIFEST="$REPOSITORY_ENV_MANIFEST_FILE" \
+    bash "$REPOSITORY_ENV_TOOL_FILE" validate-source >/dev/null
+
+  if ! REMOTE_REPOSITORY_ENV_STAGE=$(ssh -o BatchMode=yes "$HOGWILD_HOST" \
+    "umask 077; mkdir -p '$REMOTE_HOME/.cache'; mktemp -d '$REMOTE_HOME/.cache/harlan-repository-env.XXXXXX'"); then
+    echo "Hogwild could not create the repository environment stage." >&2
+    exit 1
+  fi
+  require_safe_repository_environment_stage
+  if ! rsync --archive --relative --checksum --chmod=F600,D700 \
+    --files-from=<(HARLAN_REPOSITORY_ENV_HOME="$REPOSITORY_ENV_HOME" \
+      HARLAN_REPOSITORY_ENV_MANIFEST="$REPOSITORY_ENV_MANIFEST_FILE" \
+      bash "$REPOSITORY_ENV_TOOL_FILE" list-paths) \
+    "$REPOSITORY_ENV_HOME/" "$HOGWILD_HOST:$REMOTE_REPOSITORY_ENV_STAGE/"; then
+    cleanup_repository_environment_stage || true
+    echo "Hogwild could not receive the repository environment." >&2
+    exit 1
+  fi
+  if ! ssh -o BatchMode=yes "$HOGWILD_HOST" \
+    "HARLAN_REPOSITORY_ENV_HOME='$REMOTE_HOME' HARLAN_REPOSITORY_ENV_MANIFEST='$REMOTE_REPOSITORY_ENV_MANIFEST' '$REMOTE_REPOSITORY_ENV_TOOL' install-staged '$REMOTE_REPOSITORY_ENV_STAGE'"; then
+    cleanup_repository_environment_stage || true
+    echo "Hogwild could not install the repository environment." >&2
+    exit 1
+  fi
+  cleanup_repository_environment_stage
 }
 
 remote_service() {
@@ -216,6 +305,8 @@ case "$command" in
     fi
     sync_context
     sync_service_override
+    sync_worktrunk
+    sync_repository_environment
     remote_service prepare-update "$ref"
     safe_restart
     remote_service status
@@ -223,6 +314,7 @@ case "$command" in
   restart)
     sync_context
     sync_service_override
+    sync_worktrunk
     safe_restart
     remote_service status
     ;;
@@ -232,9 +324,16 @@ case "$command" in
   sync-context)
     sync_context
     ;;
+  sync-worktrunk)
+    sync_worktrunk
+    ;;
+  sync-env)
+    sync_worktrunk
+    sync_repository_environment
+    ;;
   *)
     echo "Unknown command: $command" >&2
-    echo "Use update, restart, status, or sync-context." >&2
+    echo "Use update, restart, status, sync-context, sync-worktrunk, or sync-env." >&2
     exit 1
     ;;
 esac

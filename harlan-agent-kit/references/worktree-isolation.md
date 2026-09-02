@@ -35,6 +35,12 @@ A successful creation means that `node_modules` is ready for repository checks.
 Do not repeat the install only to initialise that worktree.
 Run another install when the task changes the dependency graph.
 
+The global hook seeds files listed in `scripts/repository-env-files` once.
+The manifest may include `.env`, `.dev.vars`, nested files, and safe relative symlinks.
+Every path must stay inside a trusted repository and Git must ignore it.
+Regular files receive mode `600`.
+Existing worktree files never change.
+
 The global hook also seeds ignored `.data` and `.wrangler/state` directories.
 It copies only from the primary worktree when the destination has no state.
 Each worktree receives a private writable copy.
@@ -44,6 +50,10 @@ The copy uses filesystem reflinks when available and a normal copy otherwise.
 
 A failed hook stops the worktree handoff.
 Do not start an Agent in a partly prepared worktree.
+
+`pnpm worktrunk:update` installs the committed Worktrunk configuration locally.
+`pnpm service:hogwild:sync-env` sends the listed desktop files to Hogwild.
+The Hogwild service update runs both operations before it restarts the service.
 
 pnpm shares immutable package data through its content-addressable store.
 Each worktree keeps its own `node_modules` topology.
