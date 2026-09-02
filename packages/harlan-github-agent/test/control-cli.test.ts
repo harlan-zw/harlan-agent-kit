@@ -63,6 +63,21 @@ describe('harlan GitHub Agent control CLI', () => {
     expect(JSON.parse(errorLine ?? '')).toEqual({ _tag: 'ConfigurationFailure', message: expect.stringContaining(configPath) })
   })
 
+  it('forwards connection options between control and the nested command and exits 1 with one tagged JSON error', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
+    temporaryDirectories.push(directory)
+    const configPath = join(directory, 'missing.yml')
+
+    const run = await runControlCli(['control', '--config', configPath, 'status'])
+
+    expect(run.code).toBe(1)
+    expect(run.stdout).toBe('')
+    const errorLines = run.stderr.split('\n').filter(line => line.trim() !== '')
+    expect(errorLines).toHaveLength(1)
+    const [errorLine] = errorLines
+    expect(JSON.parse(errorLine ?? '')).toEqual({ _tag: 'ConfigurationFailure', message: expect.stringContaining(configPath) })
+  })
+
   it('prints one tagged JSON error and exits 1 when the configuration file is missing', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
     temporaryDirectories.push(directory)

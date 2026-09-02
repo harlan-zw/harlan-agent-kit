@@ -417,8 +417,10 @@ const command = defineCommand({
 })
 
 type ControlCliInvocation
-  = | { _tag: 'Run' }
+  = | { _tag: 'Run', rawArgs: string[] }
     | { _tag: 'Fail', error: ControlCommandError }
+
+const controlValueOptionFlags = ['--config', '-c', '--url', '--password-file']
 
 function hasTaskArgument(rawArgs: readonly string[]): boolean {
   return rawArgs.some((argument, index) => {
@@ -430,28 +432,47 @@ function hasTaskArgument(rawArgs: readonly string[]): boolean {
 
 function parseControlCliInvocation(rawArgs: readonly string[]): ControlCliInvocation {
   if (rawArgs[0] !== 'control' || rawArgs.some(argument => argument === '--help' || argument === '-h'))
-    return { _tag: 'Run' }
+    return { _tag: 'Run', rawArgs: [...rawArgs] }
 
-  const commandName = rawArgs[1]
   const subCommands = controlCommand.subCommands
-  if (commandName === undefined || typeof subCommands !== 'object' || subCommands === null || !Object.hasOwn(subCommands, commandName)) {
+  if (typeof subCommands !== 'object' || subCommands === null)
+    return { _tag: 'Run', rawArgs: [...rawArgs] }
+
+  // citty dispatches on the first positional argument, so connection options
+  // between `control` and the nested command name must not hide the name.
+  // Skip value-taking option tokens, then forward those options to the end,
+  // where the subcommand parses them.
+  const leading: string[] = []
+  let index = 1
+  let argument = rawArgs[index]
+  while (argument !== undefined && argument.startsWith('-') && argument !== '--') {
+    const nextArgument = rawArgs[index + 1]
+    const takesValue = !argument.includes('=') && controlValueOptionFlags.includes(argument)
+      && nextArgument !== undefined && !nextArgument.startsWith('-')
+    leading.push(...takesValue ? [argument, nextArgument] : [argument])
+    index += takesValue ? 2 : 1
+    argument = rawArgs[index]
+  }
+  const commandName = rawArgs[index]
+  if (commandName === undefined || !Object.hasOwn(subCommands, commandName)) {
     return {
       _tag: 'Fail',
       error: { _tag: 'UnknownControlCommand', message: 'Select a valid control command.' },
     }
   }
 
-  if ((commandName === 'activity' || commandName === 'cancel') && !hasTaskArgument(rawArgs.slice(2))) {
+  const nestedRawArgs = leading.length === 0
+    ? [...rawArgs]
+    : ['control', ...rawArgs.slice(index), ...leading]
+  if ((commandName === 'activity' || commandName === 'cancel') && !hasTaskArgument(nestedRawArgs.slice(2))) {
     return {
       _tag: 'Fail',
       error: { _tag: 'MissingTaskId', message: 'Set --task to one Task ID.' },
     }
   }
 
-  return { _tag: 'Run' }
+  return { _tag: 'Run', rawArgs: nestedRawArgs }
 }
-
-const controlValueOptionFlags = ['--config', '-c', '--url', '--password-file']
 
 const cliArguments = process.argv.slice(2)
 // A leading `--config` binds to the root command in citty, so forward the
@@ -463,5 +484,5 @@ if (controlCliInvocation._tag === 'Fail') {
   process.exitCode = 1
 }
 else {
-  void runMain(command, { rawArgs: normalizedCliArguments })
+  void runMain(command, { rawArgs: controlCliInvocation.rawArgs })
 }
