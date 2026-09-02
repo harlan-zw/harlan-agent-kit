@@ -910,16 +910,11 @@ async function projectReviewRun(
       fence: task.state.fence,
       at: options.now().toISOString(),
     })
-    if (queued._tag === 'Queued') {
-      const reported = await reportReviewProgress(options, task, 'review', { percent: 95, label: 'Repair queued' }, signal)
-      if (reported._tag === 'Err')
-        return reported
-      await stampAgentLabel(options, task, 'BLOCKED', signal)
-      return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
+    if (queued._tag !== 'Queued') {
+      findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
+        ? { ...finding, nextAction: queued.reason }
+        : finding)
     }
-    findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
-      ? { ...finding, nextAction: queued.reason }
-      : finding)
   }
   else if (repairable && !recommendsDismissal && preflight._tag === 'ActionRequired') {
     findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0

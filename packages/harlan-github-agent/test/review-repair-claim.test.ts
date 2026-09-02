@@ -82,6 +82,58 @@ function recordOpenFinding(
 }
 
 describe('review Repair queue', () => {
+  it('starts Repair after the terminal Review status reaches GitHub', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/publish-review-first')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
+    const queued = store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })
+    if (queued._tag !== 'Queued')
+      throw new Error(queued.reason)
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:05.000Z',
+      revisionId,
+      expectedHeadSha: review.pullRequest.headSha,
+      body: '### 🤖 BLOCKED\n\nUnsafe parser input.',
+      desiredOutcome: 'BLOCKED',
+      reviewRunId: `review-run-${revisionId}`,
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    expect(store.completeReviewTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:06.000Z',
+      evidence: `review-run-${revisionId}`,
+      resolution: { _tag: 'Reviewed', reviewRunId: `review-run-${revisionId}` },
+    })).toBe(true)
+
+    expect(store.listQueuedReviewStatuses()).toEqual([])
+    expect(store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:07.000Z', 60_000)).toBeNull()
+    const status = store.claimNextTerminalReviewStatus('status-agent', '2026-08-13T01:00:08.000Z', 60_000)
+    if (status === null)
+      throw new Error('Expected the terminal Review status.')
+    expect(store.completeReviewStatus({
+      commandId: status.id,
+      workerId: status.workerId,
+      fence: status.fence,
+      at: '2026-08-13T01:00:09.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    expect(store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:10.000Z', 60_000)?.kind).toBe('review_fix')
+  })
+
   it('queues exact findings for a separate Repair Agent', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'fix/broken-thing')

@@ -7263,6 +7263,16 @@ export function openJournalStore(
                 AND pull_request_approvals.kind = 'fixes'
             )
           )
+          -- Repair waits until the terminal Review status reaches GitHub.
+          AND (
+            tasks.kind != 'review_fix'
+            OR NOT EXISTS (
+              SELECT 1 FROM review_status_commands
+              WHERE review_status_commands.revision_id = tasks.revision_id
+                AND review_status_commands.phase = 'terminal'
+                AND review_status_commands.state_tag IN ('Pending', 'Running')
+            )
+          )
           -- The throttle asks how much automated work already waits on Harlan,
           -- so it counts only pull requests the controller opened. Counting
           -- everybody's held every issue Task queued for a day behind thirty
@@ -10975,6 +10985,14 @@ export function openJournalStore(
         WHERE final.phase = 'terminal' AND final.state_tag = 'Published'
           AND final.revision_id = candidates.revision_id
           AND final.expected_head_sha = json_extract(revisions.payload, '$.headSha')
+      )
+      -- A pending terminal status owns the comment until Publication finishes.
+      AND NOT EXISTS (
+        SELECT 1 FROM review_status_commands AS finalizing
+        WHERE finalizing.phase = 'terminal'
+          AND finalizing.state_tag IN ('Pending', 'Running')
+          AND finalizing.revision_id = candidates.revision_id
+          AND finalizing.expected_head_sha = json_extract(revisions.payload, '$.headSha')
       )
   `).all() as unknown as QueuedReviewStatusRow[]).map(row => ({
     taskId: row.task_id,
