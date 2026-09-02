@@ -52,6 +52,7 @@
     "@types/node": "catalog:",
     "@vueuse/nuxt": "catalog:",
     "nuxt": "catalog:",
+    "nuxt-skew-protection": "catalog:",
     "obuild": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
