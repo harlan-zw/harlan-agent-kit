@@ -434,6 +434,24 @@ describe('journal store', () => {
     })
   })
 
+  it('requeues an expired Task before restart', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'restart-expired-task',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    const running = store.claimNextConflictTask('worker-1', '2026-08-13T01:01:00.000Z', 10_000)
+    if (running === null)
+      throw new Error('Expected a conflict resolution Task.')
+
+    expect(store.prepareForRestart('2026-08-13T01:01:09.000Z')).toBe(false)
+    expect(store.prepareForRestart('2026-08-13T01:01:11.000Z')).toBe(true)
+    expect(store.claimNextConflictTask('worker-2', '2026-08-13T01:01:12.000Z', 10_000)?.id).toBe(running.id)
+  })
+
   it('ignores unowned pending progress updates when deciding restart safety', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

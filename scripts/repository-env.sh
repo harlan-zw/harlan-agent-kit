@@ -220,7 +220,7 @@ seed_worktree() {
       "$primary_relative/"*) matching_indices+=("$index") ;;
     esac
   done
-  [ "${#matching_indices[@]}" -gt 0 ] || return
+  [ "${#matching_indices[@]}" -gt 0 ] || return 0
 
   for index in "${matching_indices[@]}"; do
     relative_path=${repository_files[$index]}
