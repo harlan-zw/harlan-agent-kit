@@ -516,6 +516,24 @@ describe('journal store', () => {
     })
   })
 
+  it('allows restart after a dead Task lease expires', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'restart-expired-task',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    expect(store.claimNextConflictTask('conflict-1', '2026-08-13T01:01:00.000Z', 60_000)).not.toBeNull()
+
+    expect(store.prepareForRestart('2026-08-13T01:01:59.999Z')).toBe(false)
+    expect(store.prepareForRestart('2026-08-13T01:02:00.000Z')).toBe(true)
+
+    expect(store.recoverInterruptedAgentTasks('2026-08-13T01:02:01.000Z')).toBe(1)
+    expect(store.claimNextConflictTask('conflict-2', '2026-08-13T01:02:02.000Z', 60_000)?.state.fence).toBe(2)
+  })
+
   it('keeps restart unsafe until a pending terminal Review Publication finishes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
