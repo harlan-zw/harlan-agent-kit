@@ -489,7 +489,8 @@ describe('review resilience', () => {
 
     expect(result._tag).toBe('Ok')
     expect(test.queued).toBe(1)
-    expect(test.comments.at(-1)).toContain('REVIEWING · 95% · Repair queued')
+    expect(test.comments.at(-1)).toContain('### 🤖 BLOCKED')
+    expect(test.comments.at(-1)).toContain('Malformed input crosses the parser boundary.')
   })
 
   it('keeps a stable finding identity when its code moves', async () => {

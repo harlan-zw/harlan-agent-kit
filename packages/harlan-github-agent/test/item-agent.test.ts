@@ -345,6 +345,7 @@ describe('subject Workers', () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let attempt: RecordReviewRunInput | undefined
     let queued = false
+    let terminal = ''
     let worktreeVerified = false
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
@@ -408,7 +409,11 @@ describe('subject Workers', () => {
         updateAgentProgress: () => true,
       },
       status: {
-        publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+        publish: (_task, phase, body) => {
+          if (phase === 'terminal')
+            terminal = body
+          return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
       },
       triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
       workspaces: {
@@ -445,6 +450,8 @@ describe('subject Workers', () => {
       }),
     })])
     expect(queued).toBe(true)
+    expect(terminal).toContain('### 🤖 BLOCKED')
+    expect(terminal).toContain('The parser drops data.')
     expect(worktreeVerified).toBe(true)
   })
 
