@@ -69,7 +69,7 @@ Set it to `REVIEWING · Pull request loaded`. Edit this comment after each phase
 
 Fetch the PR, base and head SHAs, complete base-to-head diff, checks, reviews, issue comments, inline comments, and every review thread.
 
-Extract every image embedded in the PR description. Retrieve each image only from GitHub-hosted media URLs (github.com/user-attachments and user-images.githubusercontent.com). Record any other image host as a material documentation finding without retrieving it. Never send repository credentials to an external host.
+Extract every image embedded in the PR description. Retrieve each image only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths). Record any other image host as a material documentation finding without retrieving it. Never send repository credentials to an external host.
 
 Record the initial head SHA. Never review only the latest commit.
 

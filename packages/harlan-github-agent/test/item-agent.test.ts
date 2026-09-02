@@ -140,6 +140,7 @@ describe('subject Workers', () => {
     expect(capture.requests[0]?.prompt).toContain('Limit local commands to changed files, their direct dependants, and focused behavior')
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
     expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
+    expect(capture.requests[0]?.prompt).toContain('private-user-images.githubusercontent.com')
   })
 
   it('runs Review directly without pull request triage', async () => {
