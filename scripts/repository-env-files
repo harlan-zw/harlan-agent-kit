@@ -1,0 +1,9 @@
+# Each line binds one trusted home path to its expected GitHub repository.
+harlan-zw/nuxtseo.com sites/nuxtseo.com/.env
+harlan-zw/nuxtseo.com sites/nuxtseo.com/.dev.vars
+harlan-zw/nuxtseo.com sites/nuxtseo.com/apps/pro/.env
+harlan-zw/nuxtseo.com sites/nuxtseo.com/apps/site/.env
+harlan-zw/nuxtseo.com sites/nuxtseo.com/apps/admin/.env
+skilld-dev/skilld.dev sites/skilld.dev/.env
+skilld-dev/skilld.dev sites/skilld.dev/.dev.vars
+harlan-zw/scripts.nuxt.com sites/scripts.nuxt.com/.env

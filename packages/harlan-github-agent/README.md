@@ -48,6 +48,20 @@ pnpm --filter harlan-github-agent dashboard:build
 pnpm --filter harlan-github-agent exec node --experimental-strip-types src/cli.ts --config /absolute/path/to/harlan-github-agent.yml
 ```
 
+The repository owns the Worktrunk configuration and the safe environment file manifest.
+Use these commands from the repository root:
+
+```bash
+pnpm worktrunk:update                  # Install Worktrunk configuration locally
+pnpm service:hogwild:sync-worktrunk   # Install it on Hogwild
+pnpm service:hogwild:sync-env         # Copy declared environment files to Hogwild
+pnpm service:hogwild:update           # Sync everything, update, then restart
+```
+
+Environment files move one way from the desktop checkouts.
+Git stores only their paths.
+The sync rejects missing files, unsafe symlinks, untrusted paths, and files that Git does not ignore.
+
 Save the dashboard password in `dashboard-password` beside the config file. Use at least 32 bytes and restrict the file to mode `600`.
 
 Configure your normal global Git profile before starting. The controller uses its identity and commit-signing settings for every commit it creates.
