@@ -54,6 +54,8 @@ interface ControlConnectionArguments {
 
 type ControlCommandError
   = | { _tag: 'ConfigurationFailure', message: string }
+    | { _tag: 'MissingTaskId', message: string }
+    | { _tag: 'UnknownControlCommand', message: string }
     | { _tag: 'InvalidTaskId', message: string }
     | { _tag: 'InvalidEventLimit', message: string }
     | { _tag: 'InvalidStream', message: string }
@@ -410,4 +412,46 @@ const command = defineCommand({
   },
 })
 
-void runMain(command)
+type ControlCliInvocation
+  = | { _tag: 'Run' }
+    | { _tag: 'Fail', error: ControlCommandError }
+
+function hasTaskArgument(rawArgs: readonly string[]): boolean {
+  return rawArgs.some((argument, index) => {
+    const nextArgument = rawArgs[index + 1]
+    return argument.startsWith('--task=')
+      || (argument === '--task' && nextArgument !== undefined && !nextArgument.startsWith('-'))
+  })
+}
+
+function parseControlCliInvocation(rawArgs: readonly string[]): ControlCliInvocation {
+  if (rawArgs[0] !== 'control' || rawArgs.some(argument => argument === '--help' || argument === '-h'))
+    return { _tag: 'Run' }
+
+  const commandName = rawArgs[1]
+  const subCommands = controlCommand.subCommands
+  if (commandName === undefined || typeof subCommands !== 'object' || subCommands === null || !Object.hasOwn(subCommands, commandName)) {
+    return {
+      _tag: 'Fail',
+      error: { _tag: 'UnknownControlCommand', message: 'Select a valid control command.' },
+    }
+  }
+
+  if ((commandName === 'activity' || commandName === 'cancel') && !hasTaskArgument(rawArgs.slice(2))) {
+    return {
+      _tag: 'Fail',
+      error: { _tag: 'MissingTaskId', message: 'Set --task to one Task ID.' },
+    }
+  }
+
+  return { _tag: 'Run' }
+}
+
+const controlCliInvocation = parseControlCliInvocation(process.argv.slice(2))
+if (controlCliInvocation._tag === 'Fail') {
+  writeJson(controlCliInvocation.error, process.stderr)
+  process.exitCode = 1
+}
+else {
+  void runMain(command)
+}

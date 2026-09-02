@@ -32,6 +32,22 @@ afterEach(async () => {
 })
 
 describe('harlan GitHub Agent control CLI', () => {
+  it('prints one tagged JSON error and exits 1 when a Task ID is missing', async () => {
+    const run = await runControlCli(['control', 'cancel'])
+
+    expect(run.code).toBe(1)
+    expect(run.stdout).toBe('')
+    expect(JSON.parse(run.stderr)).toEqual({ _tag: 'MissingTaskId', message: 'Set --task to one Task ID.' })
+  })
+
+  it('prints one tagged JSON error and exits 1 when the control command is unknown', async () => {
+    const run = await runControlCli(['control', 'unknown'])
+
+    expect(run.code).toBe(1)
+    expect(run.stdout).toBe('')
+    expect(JSON.parse(run.stderr)).toEqual({ _tag: 'UnknownControlCommand', message: 'Select a valid control command.' })
+  })
+
   it('prints one tagged JSON error and exits 1 when the configuration file is missing', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'harlan-control-cli-'))
     temporaryDirectories.push(directory)
