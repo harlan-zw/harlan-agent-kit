@@ -137,7 +137,7 @@ describe('subject Workers', () => {
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
     expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
-    expect(capture.requests[0]?.prompt).toContain('Limit local commands to changed files, their direct dependants, and focused behavior')
+    expect(capture.requests[0]?.prompt).toContain('Read only the changed hunks plus the symbols they call.')
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
     expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
     expect(capture.requests[0]?.prompt).toContain('private-user-images.githubusercontent.com')
@@ -458,6 +458,112 @@ describe('subject Workers', () => {
     expect(terminal).toContain('### 🤖 BLOCKED')
     expect(terminal).toContain('The parser drops data.')
     expect(worktreeVerified).toBe(true)
+  })
+
+  it('hands Repair the whole proof, regression test, and next action', async () => {
+    const repository = repositoryMapping({ ownership: 'maintained' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const longProof = `Byte 0x80 opens a sequence at line 42.\n${'The buffer drops it when the chunk ends there. '.repeat(21)}`.trim()
+    const longRegressionTest = `Split one sequence across two chunks.\n- assert the original string\n${'x'.repeat(300)}`
+    const longNextAction = `Preserve the buffered bytes.\t${'Carry the tail into the next chunk. '.repeat(10)}`.trim()
+    let attempt: RecordReviewRunInput | undefined
+    let queued = false
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
+        findings: [{
+          identity: 'buffered-byte-loss',
+          path: 'src/parser.ts',
+          line: 42,
+          proof: longProof,
+          regressionTest: longRegressionTest,
+          summary: 'The parser drops data.',
+          nextAction: longNextAction,
+        }],
+        confidence: 90,
+      }))),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
+        clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
+        listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          body: 'Fixes the parser.',
+          checks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      store: {
+        queueReviewFixTaskForReview: () => {
+          queued = true
+          return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
+        },
+        getRepairedHeadFindings: () => [],
+        getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
+        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        recordReviewRun: (input) => {
+          attempt = input
+          return { _tag: 'Inserted', reviewRunId: input.id }
+        },
+        recordReviewPublication: () => { throw new Error('A repaired head must not publish the old terminal review.') },
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      status: {
+        publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verifyReview: () => Promise.resolve(ok(undefined)),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
+    expect(longProof.length).toBeGreaterThan(1_000)
+    expect(attempt?.findings).toEqual([expect.objectContaining({
+      _tag: 'Open',
+      nextAction: longNextAction,
+      details: expect.objectContaining({
+        proof: longProof,
+        regressionTest: longRegressionTest,
+      }),
+    })])
+    expect(queued).toBe(true)
   })
 
   it('stamps a wrong premise for Dismissal without queuing Repair', async () => {

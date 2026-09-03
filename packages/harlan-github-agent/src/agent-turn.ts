@@ -79,6 +79,43 @@ Use no tool. Return no prose, no explanation, and no Markdown code fence.`
 }
 
 /**
+ * The JSON object inside an answer, without the Markdown a model adds around it.
+ *
+ * A model that was told to return bare JSON still fences it or opens with a
+ * sentence. The work behind such an answer is complete, so paying a repair
+ * turn for the wrapper is waste. Prose before the object is accepted only when
+ * the remainder parses, so a garbled answer still reaches the parser unchanged
+ * and fails with its own tagged error.
+ */
+function stripCodeFence(text: string): string {
+  if (!text.startsWith('```') || !text.endsWith('```'))
+    return text
+  const open = text.indexOf('\n')
+  if (open === -1)
+    return text
+  return text.slice(open + 1, text.length - 3).trim()
+}
+
+export function unwrapJsonResponse(response: string): string {
+  const body = stripCodeFence(response.trim())
+  if (body.startsWith('{'))
+    return body
+  const start = body.indexOf('{')
+  if (start === -1)
+    return response
+  const remainder = body.slice(start)
+  try {
+    JSON.parse(remainder)
+    return remainder
+  }
+  catch {
+    // The remainder is not JSON either, so the original answer goes to the
+    // parser and its own error names the failure.
+    return response
+  }
+}
+
+/**
  * Runs one agent turn against the configured provider.
  *
  * Owns session reuse, activity, and progress so every worker role behaves the
@@ -189,7 +226,7 @@ export async function runParsedAgentTurn<Value>(
   const turn = await runAgentTurn(frozen, input, signal)
   if (turn._tag === 'Err')
     return turn
-  const parsed = await options.parse(turn.value.response)
+  const parsed = await options.parse(unwrapJsonResponse(turn.value.response))
   if (parsed._tag === 'Ok')
     return ok({ value: parsed.value, sessionId: turn.value.sessionId, usage: turn.value.usage })
 
@@ -201,7 +238,7 @@ export async function runParsedAgentTurn<Value>(
   }, signal)
   if (repaired._tag === 'Err')
     return err(parsed.error)
-  const reparsed = await options.parse(repaired.value.response)
+  const reparsed = await options.parse(unwrapJsonResponse(repaired.value.response))
   return reparsed._tag === 'Ok'
     ? ok({
         value: reparsed.value,
