@@ -931,6 +931,7 @@ async function triagePullRequest(
 
   let outcome: RecordPullRequestTriageRunInput['outcome']
   let skipped: PullRequestTriageResult | null = null
+  let overridden = false
   if (triage._tag === 'Err') {
     outcome = { _tag: 'ReviewRequiredAfterFailure', reason: triage.error }
   }
@@ -940,10 +941,12 @@ async function triagePullRequest(
   else {
     // A person may add the manual override while the low-cost Agent runs.
     // Re-read the labels before settling so that late authority always wins.
+    // A failed re-read could hide a fresh override, so only a successful read
+    // without the label settles on a skip: the safe direction is always Review.
     const current = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal)
-    const overridden = current._tag === 'Ok'
-      && current.value.pullRequest.headSha === task.pullRequest.headSha
-      && current.value.pullRequest.approvalLabels.includes('review')
+    overridden = current._tag === 'Err'
+      || (current.value.pullRequest.headSha === task.pullRequest.headSha
+        && current.value.pullRequest.approvalLabels.includes('review'))
     outcome = overridden
       ? { _tag: 'ReviewRequired', reason: `rule: The ${APPROVAL_LABELS.review} label requires Review for this head commit.` }
       : { _tag: 'ReviewSkipped', reason: triage.value.reason }
@@ -964,6 +967,19 @@ async function triagePullRequest(
     return err('The pull request changed before its triage decision was recorded.')
   if (skipped === null || recorded._tag === 'Conflict') {
     await stampAgentLabel(options, task, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
+    if (overridden) {
+      // The review label approves one head only, so consume it here exactly
+      // like the manualReview branch: a later head must not inherit it.
+      const consumed = await options.github.consumeApprovalLabel(
+        task.repositoryMapping,
+        'pull_request',
+        task.pullRequestNumber,
+        APPROVAL_LABELS.review,
+        signal,
+      )
+      if (consumed._tag === 'Err')
+        options.onProgressPublishFailure?.(task, consumed.error)
+    }
     return ok({ _tag: 'ReviewRequired' })
   }
 

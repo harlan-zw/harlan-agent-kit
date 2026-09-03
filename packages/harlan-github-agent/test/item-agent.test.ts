@@ -160,6 +160,8 @@ describe('subject Workers', () => {
     providerReply: unknown
     title: string
     triageFailure?: string
+    lateApprovalLabels?: GitHubPullRequestItem['approvalLabels']
+    rereadFailure?: string
   }) {
     const pullRequest = pullRequestItem({
       approvalLabels: input.approvalLabels ?? [],
@@ -171,9 +173,27 @@ describe('subject Workers', () => {
     const stamped: string[] = []
     const triageRuns: RecordPullRequestTriageRunInput[] = []
     const worktrees: string[] = []
-    const runtime = agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(input.providerReply), capture))
+    const consumedApprovalLabels: string[] = []
+    let snapshotReads = 0
+    const replies = Array.isArray(input.providerReply) ? input.providerReply : [input.providerReply]
+    let providerCalls = 0
+    const runtime = agentRuntime(CODEX_AGENT_PROFILE, {
+      name: 'codex',
+      runTurn: (request) => {
+        capture.requests.push(request)
+        const reply = replies[Math.min(providerCalls, replies.length - 1)]
+        providerCalls += 1
+        async function* replay() {
+          yield* turnEvents(reply)
+        }
+        return replay()
+      },
+    })
     const github: Parameters<typeof createReviewWorker>[0]['github'] = {
-      consumeApprovalLabel: () => Promise.resolve(ok(undefined)),
+      consumeApprovalLabel: (_repository, _subjectKind, _number, label) => {
+        consumedApprovalLabels.push(label)
+        return Promise.resolve(ok(undefined))
+      },
       editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
@@ -188,16 +208,24 @@ describe('subject Workers', () => {
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
       listPullRequestFiles: () => Promise.resolve(input.triageFailure === undefined ? ok(input.changedFiles) : err(input.triageFailure)),
-      getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-        baseChecks: { _tag: 'Available', checks: [] },
-        body: 'Pull request body.',
-        checks: { _tag: 'Available', checks: [] },
-        comments: [],
-        priorAutomatedReview: { _tag: 'None' },
-        pullRequest,
-        requiredChecks: { _tag: 'None' },
-        reviews: [],
-      })),
+      getPullRequestReviewSnapshot: () => {
+        snapshotReads += 1
+        if (snapshotReads === 2 && input.rereadFailure !== undefined)
+          return Promise.resolve(err(input.rereadFailure))
+        const readPullRequest = snapshotReads === 2 && input.lateApprovalLabels !== undefined
+          ? { ...pullRequest, approvalLabels: input.lateApprovalLabels }
+          : pullRequest
+        return Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [] },
+          body: 'Pull request body.',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest: readPullRequest,
+          requiredChecks: { _tag: 'None' },
+          reviews: [],
+        }))
+      },
       upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
       upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
     }
@@ -262,7 +290,7 @@ describe('subject Workers', () => {
       pullRequest,
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
-    return { capture, comments, run, stamped, triageRuns, worktrees }
+    return { capture, comments, consumedApprovalLabels, run, stamped, triageRuns, worktrees }
   }
 
   const cleanReview = {
@@ -329,6 +357,46 @@ describe('subject Workers', () => {
     expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-sol'])
     expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
     expect(harness.triageRuns).toEqual([])
+  })
+
+  it('reviews the pull request when the late override re-read fails', async () => {
+    const harness = triagedReviewWorker({
+      changedFiles: ['README.md'],
+      providerReply: [
+        { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
+        cleanReview,
+      ],
+      rereadFailure: 'GitHub rate limited the label re-read.',
+      title: 'docs: fix a typo in the guide',
+    })
+
+    const result = await harness.run()
+
+    expect(result._tag).toBe('Ok')
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(harness.triageRuns).toEqual([expect.objectContaining({
+      outcome: { _tag: 'ReviewRequired', reason: 'rule: The harlan-agent-review label requires Review for this head commit.' },
+    })])
+  })
+
+  it('consumes the override label that arrives while triage runs', async () => {
+    const harness = triagedReviewWorker({
+      changedFiles: ['README.md'],
+      lateApprovalLabels: ['review'],
+      providerReply: [
+        { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
+        cleanReview,
+      ],
+      title: 'docs: fix a typo in the guide',
+    })
+
+    const result = await harness.run()
+
+    expect(result._tag).toBe('Ok')
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(harness.consumedApprovalLabels).toEqual(['harlan-agent-review'])
   })
 
   it('reviews the pull request anyway when triage fails', async () => {
