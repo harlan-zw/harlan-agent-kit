@@ -22,6 +22,10 @@ export const CANDIDATE_SCHEMA = {
   additionalProperties: false,
   required: ['candidates'],
   properties: {
+    report: {
+      type: 'string',
+      description: 'The full Markdown report a check-in Routine wrote, from its verdict line through its proposed actions. Leave it out for other Routines.',
+    },
     candidates: {
       type: 'array',
       items: {
@@ -44,6 +48,7 @@ export const CANDIDATE_SCHEMA = {
 } as const
 
 interface ScanResponse {
+  report?: string
   candidates: Array<{
     fingerprint: string
     target: string
@@ -67,7 +72,23 @@ const ROUTINE_SKILLS = {
   'sentry-checkin': 'harlan-agent-kit:sentry-checkin',
   'pr-triage': 'harlan-agent-kit:pr-triage',
   'agent-feedback': 'harlan-agent-kit/skills/agent-feedback/SKILL.md',
+  /** A site owns its own check-in. The service runs whatever the repository declares there. */
+  'daily-checkin': '.claude/skills/daily-checkin/SKILL.md',
 } as const
+
+/**
+ * What a check-in turn may do with the worktree.
+ *
+ * A check-in skill archives evidence and writes its report as files, and its
+ * data script needs the repository's tooling. Refusing every write would refuse
+ * the skill. The worktree is disposable, so the writes cost nothing, and the
+ * report survives only through the answer.
+ */
+const DAILY_CHECKIN_TURN = `Apply the daily-checkin skill at .claude/skills/daily-checkin/SKILL.md in this repository. Read it before you start.
+
+Follow its workflow completely, including running its data script and writing its report and ledger files. This worktree is disposable and nothing in it is kept, so copy the whole Markdown report, from the verdict line through the proposed actions, into \`report\`. Do not commit or push anything. Keep production access read only.
+
+Return each proposed action as one Candidate. Use the ledger fingerprint as the Candidate fingerprint when the action has one. Put the action in \`claim\`, the file or system it changes in \`target\`, and the check that proves it in \`verification\`.`
 
 const agentFeedbackSkillTarget = /^harlan-agent-kit\/skills\/[^/]+\/SKILL\.md$/
 
@@ -105,12 +126,16 @@ export function routineScanPrompt(input: {
         })
         .join('\n')
 
-  return `Run the ${input.name} routine against ${input.repository}.
-
-Apply the ${ROUTINE_SKILLS[input.name]} skill. Read it before you start.
+  const turn = input.name === 'daily-checkin'
+    ? DAILY_CHECKIN_TURN
+    : `Apply the ${ROUTINE_SKILLS[input.name]} skill. Read it before you start.
 
 This turn is read only. The worktree is the default branch. Do not edit, commit,
-or push anything. Report what you find and stop.
+or push anything. Report what you find and stop.`
+
+  return `Run the ${input.name} routine against ${input.repository}.
+
+${turn}
 
 Return every proposal you would make as a Candidate. Give each one a fingerprint
 that stays the same next time you find it. Use a file path or a symbol path.
@@ -252,6 +277,9 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       }
       if (!Array.isArray(response.candidates))
         return err('The scan agent answered without a candidate list.')
+      // The run log is the only place a check-in report lives once the
+      // worktree is gone, so the whole report travels with the evidence line.
+      const detail = typeof response.report === 'string' ? response.report.trim() : ''
 
       // Oversized proposals are dropped here rather than recorded and skipped
       // later, so the ledger never holds a Candidate nothing will ever open.
@@ -304,7 +332,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           routineId: task.routineId,
           routineName: task.name,
           run: { id: task.id, scheduledFor: task.scheduledFor },
-          report: { _tag: 'Completed', evidence },
+          report: { _tag: 'Completed', evidence, ...(detail === '' ? {} : { detail }) },
         }),
         at: options.now().toISOString(),
       })

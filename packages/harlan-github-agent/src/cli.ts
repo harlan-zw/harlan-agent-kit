@@ -170,23 +170,23 @@ const controlCommand = defineCommand({
     description: 'Read and control one running Harlan GitHub Agent service.',
   },
   subCommands: {
-    status: defineCommand({
+    'status': defineCommand({
       meta: { name: 'status', description: 'Read service health and the shared dashboard state.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.status()),
     }),
-    tasks: defineCommand({
+    'tasks': defineCommand({
       meta: { name: 'tasks', description: 'List current Tasks.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.tasks().then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { tasks: result.value } })),
     }),
-    incidents: defineCommand({
+    'incidents': defineCommand({
       meta: { name: 'incidents', description: 'List unresolved Incidents.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.incidents().then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { incidents: result.value } })),
     }),
-    activity: controlTaskCommand({ name: 'activity', description: 'Read the redacted activity for one active Task.' }),
-    events: defineCommand({
+    'activity': controlTaskCommand({ name: 'activity', description: 'Read the redacted activity for one active Task.' }),
+    'events': defineCommand({
       meta: { name: 'events', description: 'List durable workflow events.' },
       args: {
         ...controlConnectionArguments,
@@ -219,27 +219,39 @@ const controlCommand = defineCommand({
         }).then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { events: result.value } }))
       },
     }),
-    pause: defineCommand({
+    'pause': defineCommand({
       meta: { name: 'pause', description: 'Pause new agent Tasks.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.pause()),
     }),
-    resume: defineCommand({
+    'resume': defineCommand({
       meta: { name: 'resume', description: 'Resume new agent Tasks.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.resume()),
     }),
-    restart: defineCommand({
+    'restart': defineCommand({
       meta: { name: 'restart', description: 'Request Restart after current work.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.restart()),
     }),
-    update: defineCommand({
+    'update': defineCommand({
       meta: { name: 'update', description: 'Request Update after current work.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.update()),
     }),
-    cancel: controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
+    'cancel': controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
+    'routine-run': defineCommand({
+      meta: { name: 'routine-run', description: 'Open one Routine run now, ahead of its schedule.' },
+      args: {
+        ...controlConnectionArguments,
+        routine: {
+          type: 'string',
+          description: 'Routine ID, as OWNER/REPOSITORY:NAME.',
+          required: true,
+        },
+      },
+      run: ({ args }) => runControl(args, client => client.runRoutine(args.routine)),
+    }),
   },
 })
 

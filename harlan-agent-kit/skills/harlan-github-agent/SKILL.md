@@ -78,7 +78,10 @@ harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent
 harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config /absolute/path/to/harlan-github-agent.yml
 ```
+
+`routine-run` opens one Routine run for the current minute, ahead of its cron. Use it to prove a new Routine end to end. The next cron instant still opens on its own.
 
 Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
 Every command prints one JSON value. A tagged JSON error exits with status 1.

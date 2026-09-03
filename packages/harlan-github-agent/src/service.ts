@@ -1075,6 +1075,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       approveIssueWork: store.approveIssueWork,
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
+      listRoutines: store.listRoutines,
+      openRoutineRun: store.openRoutineRun,
       getDashboardSnapshot: (at) => {
         const snapshot = dashboardSnapshotForTriggers(
           pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),

@@ -113,6 +113,14 @@ describe('building the scan prompt', () => {
     expect(prompt).toContain('harlan-agent-kit:sentry-checkin')
   })
 
+  it('points a check-in at the repository skill and lets it write its report files', () => {
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'daily-checkin', rejected: [], repository: 'skilld-dev/skilld.dev' })
+
+    expect(prompt).toContain('.claude/skills/daily-checkin/SKILL.md')
+    expect(prompt).toContain('writing its report and ledger files')
+    expect(prompt).not.toContain('This turn is read only')
+  })
+
   it('says the turn is read only', () => {
     const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', rejected: [], repository: 'harlan-zw/example' })
 
@@ -246,6 +254,37 @@ describe('running one scan', () => {
       expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]).toMatchObject({
         candidates: [{ fingerprint: candidate.fingerprint }],
       })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('carries a check-in report into the run log', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      store.syncRoutines({
+        repository: 'harlan-zw/example',
+        specSha: 'abc123',
+        entries: [{ name: 'daily-checkin', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+        at: '2026-08-27T00:00:00.000Z',
+      })
+      store.openRoutineRun({ routineId: 'harlan-zw/example:daily-checkin', scheduledFor: '2026-08-27T07:00:00.000Z', specSha: 'abc123', at: '2026-08-27T07:00:05.000Z' })
+      const task = claimStoredRun(store)
+      const worker = workerFor(store, scanning({
+        report: 'AMBER. One probe failed.\n\n## Broken\n\n- d1 unreachable',
+        candidates: [candidate],
+      }))
+
+      const result = await worker.run(task, new AbortController().signal)
+
+      expect(result._tag).toBe('Ok')
+      const report = store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)
+      expect(report?.body).toContain('1 found | 1 new')
+      expect(report?.body).toContain('AMBER. One probe failed.')
+      expect(report?.body).toContain('- d1 unreachable')
     }
     finally {
       store.close()
