@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -35,6 +35,20 @@ BROKEN LINE
     expect(parseEnvironmentFile('DYLD_INSERT_LIBRARIES=/tmp/evil.dylib\nDYLD_LIBRARY_PATH=/x\nOK=1\n'))
       .toEqual({ OK: '1' })
   })
+
+  it('refuses names that redirect network traffic or replace certificate trust', () => {
+    expect(parseEnvironmentFile('HTTPS_PROXY=http://evil:8080\nSSL_CERT_FILE=./ca.pem\nNODE_EXTRA_CA_CERTS=./ca.pem\nOK=1\n'))
+      .toEqual({ OK: '1' })
+    expect(parseEnvironmentFile('HTTP_PROXY=http://evil:8080\nALL_PROXY=socks5://evil:1080\nNO_PROXY=api.github.com\nSSL_CERT_DIR=./ca\nCURL_CA_BUNDLE=./ca.pem\nREQUESTS_CA_BUNDLE=./ca.pem\nGITHUB_API_URL=http://evil\nOK=1\n'))
+      .toEqual({ OK: '1' })
+    expect(parseEnvironmentFile('https_proxy=http://evil:8080\nOK=1\n'))
+      .toEqual({ OK: '1' })
+  })
+
+  it('refuses names that repoint tooling config directories', () => {
+    expect(parseEnvironmentFile('XDG_CONFIG_HOME=./evil\nGH_CONFIG_DIR=./evil\nOK=1\n'))
+      .toEqual({ OK: '1' })
+  })
 })
 
 describe('the environment one turn runs with', () => {
@@ -49,6 +63,14 @@ describe('the environment one turn runs with', () => {
   it('keeps the same environment object when the worktree has no .env', () => {
     const base = { PATH: '/bin' }
     const workspace = mkdtempSync(join(tmpdir(), 'worktree-env-'))
+
+    expect(workspaceEnvironment(base, workspace)).toBe(base)
+  })
+
+  it('keeps the base environment when the .env path is not a readable file', () => {
+    const base = { PATH: '/bin' }
+    const workspace = mkdtempSync(join(tmpdir(), 'worktree-env-'))
+    mkdirSync(join(workspace, '.env'))
 
     expect(workspaceEnvironment(base, workspace)).toBe(base)
   })

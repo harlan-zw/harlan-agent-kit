@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
@@ -6,20 +6,33 @@ import { join } from 'node:path'
  *
  * A seeded `.env` carries the tokens a repository's own tooling reads. It is
  * not a place to change which binaries run, how shells start (BASH_ENV, ENV),
- * or how Node starts, and a checkout that commits one of these could otherwise
- * steer the controller's child process. Everything else passes through as the
- * repository wrote it.
+ * how Node starts, where child processes send their traffic (proxies,
+ * certificate trust, provider endpoints), or which config directories the
+ * Agent's tools read. Everything else passes through as the repository wrote
+ * it.
  */
 const REFUSED_NAMES = new Set([
+  'ALL_PROXY',
   'BASH_ENV',
+  'CURL_CA_BUNDLE',
   'ENV',
+  'GH_CONFIG_DIR',
+  'GITHUB_API_URL',
   'HOME',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'NODE_EXTRA_CA_CERTS',
   'NODE_OPTIONS',
   'NODE_PATH',
   'PATH',
   'PNPM_HOME',
+  'REQUESTS_CA_BUNDLE',
   'SHELL',
+  'SSL_CERT_DIR',
+  'SSL_CERT_FILE',
   'USER',
+  'XDG_CONFIG_HOME',
 ])
 
 const REFUSED_PREFIXES = ['DYLD_', 'GIT_', 'LD_', 'OPENCODE_', 'CODEX_']
@@ -48,7 +61,8 @@ export function parseEnvironmentFile(text: string): Record<string, string> {
     else {
       value = value.replace(/\s+#.*$/, '').trim()
     }
-    if (REFUSED_NAMES.has(name) || REFUSED_PREFIXES.some(prefix => name.startsWith(prefix)))
+    const upperName = name.toUpperCase()
+    if (REFUSED_NAMES.has(upperName) || REFUSED_PREFIXES.some(prefix => upperName.startsWith(prefix)))
       continue
     values[name] = value
   }
@@ -66,12 +80,20 @@ export function parseEnvironmentFile(text: string): Record<string, string> {
  * repository's configuration and the service has no better answer.
  *
  * Answers the same object when the worktree has no `.env`, so a provider that
- * shares one environment across turns keeps sharing it.
+ * shares one environment across turns keeps sharing it. A `.env` path that is
+ * unreadable or not a regular file (a tracked `.env/` directory, for example)
+ * falls back to the base environment rather than failing the turn.
  */
 export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string): NodeJS.ProcessEnv {
   const path = join(workspace, '.env')
-  if (!existsSync(path))
+  let values: Record<string, string>
+  try {
+    if (!statSync(path).isFile())
+      return base
+    values = parseEnvironmentFile(readFileSync(path, 'utf8'))
+  }
+  catch {
     return base
-  const values = parseEnvironmentFile(readFileSync(path, 'utf8'))
+  }
   return Object.keys(values).length === 0 ? base : { ...base, ...values }
 }
