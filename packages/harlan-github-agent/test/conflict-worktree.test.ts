@@ -1,4 +1,5 @@
 import type { ClaimedConflictResolutionTask } from '../src/types.ts'
+import type { ConflictWorktreeManager, PreparedConflictWorktree } from '../src/worktree.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -78,6 +79,15 @@ function fixture(): { checkout: string, currentBaseSha: string, remote: string, 
   }
 }
 
+async function conflicted(manager: ConflictWorktreeManager, task: ClaimedConflictResolutionTask): Promise<PreparedConflictWorktree> {
+  const prepared = await manager.prepare(task, new AbortController().signal)
+  if (prepared._tag === 'Err')
+    throw new Error(prepared.error)
+  if (prepared.value._tag !== 'Conflicted')
+    throw new Error('Expected a conflicted worktree.')
+  return prepared.value.worktree
+}
+
 describe('conflict worktree', () => {
   it('uses the current base branch when the pull request base SHA is stale', async () => {
     const { currentBaseSha, remote, root, task } = fixture()
@@ -90,7 +100,50 @@ describe('conflict worktree', () => {
 
     const result = await manager.prepare(task, new AbortController().signal)
 
-    expect(result).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ baseSha: currentBaseSha, conflictedFiles: ['file.txt'] }) }))
+    expect(result).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ _tag: 'Conflicted', worktree: expect.objectContaining({ baseSha: currentBaseSha, conflictedFiles: ['file.txt'] }) }) }))
+  })
+
+  it('reports a clean merge instead of a failure when the base merges without conflicts', async () => {
+    const { checkout, remote, root, task } = fixture()
+    // GitHub kept reporting two stacked pull requests as conflicting while
+    // their real base merged cleanly. Prepare read that as a failure, spent
+    // the whole recovery budget, and raised an error Incident each time.
+    git(checkout, 'checkout', '-b', 'feature/clean', task.pullRequest.baseSha)
+    writeFileSync(join(checkout, 'helper.ts'), 'export const limit = 2\n')
+    git(checkout, 'commit', '-am', 'raise the limit')
+    git(checkout, 'push', 'origin', 'feature/clean')
+    const cleanBaseSha = git(checkout, 'rev-parse', 'HEAD')
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+
+    const result = await manager.prepare({ ...task, pullRequest: { ...task.pullRequest, baseRef: 'feature/clean' } }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ _tag: 'CleanMerge', headSha: task.pullRequest.headSha, baseSha: cleanBaseSha, baseRef: 'feature/clean' }))
+  })
+
+  it('reports the Git error when the merge fails for a reason other than conflicts', async () => {
+    const { checkout, remote, root, task } = fixture()
+    // A merge that fails before it can conflict has no unmerged files either.
+    // That used to read as "no longer conflicts" and hid the real error.
+    git(checkout, 'checkout', '--orphan', 'feature/unrelated')
+    writeFileSync(join(checkout, 'file.txt'), 'unrelated\n')
+    git(checkout, 'add', '--all')
+    git(checkout, 'commit', '-m', 'unrelated history')
+    git(checkout, 'push', 'origin', 'feature/unrelated')
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+
+    const result = await manager.prepare({ ...task, pullRequest: { ...task.pullRequest, baseRef: 'feature/unrelated' } }, new AbortController().signal)
+
+    expect(result).toEqual({ _tag: 'Err', error: expect.stringContaining('refusing to merge unrelated histories') })
   })
 
   it('merges the stacked base branch instead of the default branch', async () => {
@@ -112,10 +165,10 @@ describe('conflict worktree', () => {
 
     const result = await manager.prepare({ ...task, pullRequest: { ...task.pullRequest, baseRef: 'feature/parent' } }, new AbortController().signal)
 
-    expect(result).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ baseSha: parentSha, conflictedFiles: ['file.txt'] }) }))
-    if (result._tag === 'Err')
-      throw new Error(result.error)
-    expect(git(result.value.path, 'rev-parse', 'MERGE_HEAD')).toBe(parentSha)
+    expect(result).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ _tag: 'Conflicted', worktree: expect.objectContaining({ baseSha: parentSha, conflictedFiles: ['file.txt'] }) }) }))
+    if (result._tag === 'Err' || result.value._tag !== 'Conflicted')
+      throw new Error('Expected a conflicted worktree.')
+    expect(git(result.value.worktree.path, 'rev-parse', 'MERGE_HEAD')).toBe(parentSha)
   })
 
   it('stages a verified conflict file in the controller-owned index', async () => {
@@ -126,15 +179,13 @@ describe('conflict worktree', () => {
       root,
       tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
-    const prepared = await manager.prepare(task, new AbortController().signal)
-    if (prepared._tag === 'Err')
-      throw new Error(prepared.error)
-    writeFileSync(join(prepared.value.path, 'file.txt'), 'resolved\n')
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
 
-    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
 
     expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 1 }) }))
-    expect(git(prepared.value.path, 'diff', '--name-only', '--diff-filter=U')).toBe('')
+    expect(git(prepared.path, 'diff', '--name-only', '--diff-filter=U')).toBe('')
   })
 
   it('verifies conflict patches larger than the child process output buffer', async () => {
@@ -145,12 +196,10 @@ describe('conflict worktree', () => {
       root,
       tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
-    const prepared = await manager.prepare(task, new AbortController().signal)
-    if (prepared._tag === 'Err')
-      throw new Error(prepared.error)
-    writeFileSync(join(prepared.value.path, 'file.txt'), `${'resolved line\n'.repeat(100_000)}`)
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), `${'resolved line\n'.repeat(100_000)}`)
 
-    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
 
     expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 1 }) }))
   })
@@ -163,21 +212,19 @@ describe('conflict worktree', () => {
       root,
       tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
     })
-    const prepared = await manager.prepare(task, new AbortController().signal)
-    if (prepared._tag === 'Err')
-      throw new Error(prepared.error)
-    writeFileSync(join(prepared.value.path, 'file.txt'), 'pull request\n')
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'pull request\n')
 
-    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
 
     expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 0 }) }))
     if (verified._tag === 'Err')
       throw new Error(verified.error)
-    const committed = await manager.commit(task, prepared.value, verified.value, 'merge: reconcile parser changes', new AbortController().signal)
+    const committed = await manager.commit(task, prepared, verified.value, 'merge: reconcile parser changes', new AbortController().signal)
 
     expect(committed).toEqual(expect.objectContaining({ _tag: 'Ok' }))
-    expect(git(prepared.value.path, 'show', '--no-patch', '--format=%an <%ae>')).toBe('Harlan Wilton <harlan@harlanzw.com>')
-    expect(git(prepared.value.path, 'show', '--no-patch', '--format=%s')).toBe('merge: reconcile parser changes')
+    expect(git(prepared.path, 'show', '--no-patch', '--format=%an <%ae>')).toBe('Harlan Wilton <harlan@harlanzw.com>')
+    expect(git(prepared.path, 'show', '--no-patch', '--format=%s')).toBe('merge: reconcile parser changes')
   })
   it('publishes a resolution whose digest was read where blob names abbreviate differently', async () => {
     // Git scales blob name abbreviation with the object count of a repository,
@@ -191,15 +238,13 @@ describe('conflict worktree', () => {
       tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     }
     const manager = createConflictWorktreeManager(options)
-    const prepared = await manager.prepare(task, new AbortController().signal)
-    if (prepared._tag === 'Err')
-      throw new Error(prepared.error)
-    git(prepared.value.path, 'config', 'core.abbrev', '20')
-    writeFileSync(join(prepared.value.path, 'file.txt'), 'resolved\n')
-    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+    const prepared = await conflicted(manager, task)
+    git(prepared.path, 'config', 'core.abbrev', '20')
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
     if (verified._tag === 'Err')
       throw new Error(verified.error)
-    const committed = await manager.commit(task, prepared.value, verified.value, 'merge: resolve conflicts', new AbortController().signal)
+    const committed = await manager.commit(task, prepared, verified.value, 'merge: resolve conflicts', new AbortController().signal)
     if (committed._tag === 'Err')
       throw new Error(committed.error)
     git(join(root, 'repositories', `${task.repository.replace('/', '__')}.git`), 'config', 'core.abbrev', '7')
@@ -250,17 +295,15 @@ describe('conflict worktree', () => {
       root,
       tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
-    const prepared = await manager.prepare(task, new AbortController().signal)
-    if (prepared._tag === 'Err')
-      throw new Error(prepared.error)
-    expect(prepared.value.conflictedFiles).toEqual(['file.txt'])
-    writeFileSync(join(prepared.value.path, 'file.txt'), 'resolved\n')
-    writeFileSync(join(prepared.value.path, 'helper.ts'), 'export const limit = 3\n')
+    const prepared = await conflicted(manager, task)
+    expect(prepared.conflictedFiles).toEqual(['file.txt'])
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    writeFileSync(join(prepared.path, 'helper.ts'), 'export const limit = 3\n')
 
-    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
 
     expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 2 }) }))
-    expect(git(prepared.value.path, 'diff', '--cached', '--name-only', 'HEAD').split('\n').sort()).toEqual(['file.txt', 'helper.ts'])
+    expect(git(prepared.path, 'diff', '--cached', '--name-only', 'HEAD').split('\n').sort()).toEqual(['file.txt', 'helper.ts'])
   })
 
   it('refuses a resolution that edits a file the merge never touched', async () => {
@@ -271,13 +314,11 @@ describe('conflict worktree', () => {
       root,
       tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
-    const prepared = await manager.prepare(task, new AbortController().signal)
-    if (prepared._tag === 'Err')
-      throw new Error(prepared.error)
-    writeFileSync(join(prepared.value.path, 'file.txt'), 'resolved\n')
-    writeFileSync(join(prepared.value.path, 'keep.ts'), 'export const kept = false\n')
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    writeFileSync(join(prepared.path, 'keep.ts'), 'export const kept = false\n')
 
-    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
 
     expect(verified).toEqual({ _tag: 'Err', error: 'The worker changed a file the merge did not touch: keep.ts.' })
   })

@@ -988,6 +988,39 @@ describe('journal store', () => {
     expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
   })
 
+  it('does not requeue a conflict whose base merges cleanly until the head or the base changes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'conflicting', headSha: 'head-1', baseSha: 'base-1' })
+    let elapsed = 0
+    const at = (): string => new Date(Date.parse('2026-08-13T01:00:00.000Z') + (elapsed += 1000)).toISOString()
+    store.recordObservation({ externalId: 'clean-merge', observedAt: at(), source: 'poll', subject })
+    const task = store.claimNextConflictTask('worker-1', at(), 600_000)
+    if (task === null)
+      throw new Error('Expected a running conflict task.')
+    const cleanMerge = JSON.stringify({ _tag: 'CleanMerge', headSha: 'head-1', baseSha: 'base-1', baseRef: 'main' })
+
+    expect(store.completeTask({ taskId: task.id, workerId: 'worker-1', fence: task.state.fence, at: at(), evidence: cleanMerge })).toBe(true)
+
+    // GitHub keeps reporting the same stale state for the same head and base.
+    store.recordObservation({ externalId: 'clean-merge', observedAt: at(), source: 'poll', subject })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    // A new Revision with the same head and base, such as a title edit, must not spend a turn either.
+    store.recordObservation({ externalId: 'clean-merge-renamed', observedAt: at(), source: 'poll', subject: { ...subject, title: 'Renamed' } })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    expect(store.listIncidents()).toEqual([expect.objectContaining({
+      scope: { _tag: 'Task', taskId: task.id, repository: 'harlan-zw/example', itemNumber: subject.number },
+      severity: 'warning',
+      operation: 'resolve_conflict',
+      occurrences: 1,
+    })])
+
+    // The base moved, so the merge must be redone and the stale warning closes.
+    store.recordObservation({ externalId: 'clean-merge-moved', observedAt: at(), source: 'poll', subject: { ...subject, baseSha: 'base-2' } })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).not.toBeNull()
+    expect(store.listIncidents()).toEqual([])
+  })
+
   it('keeps a manually cancelled task cancelled across later polls', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
