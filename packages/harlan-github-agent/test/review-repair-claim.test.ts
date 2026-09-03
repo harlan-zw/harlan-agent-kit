@@ -562,27 +562,30 @@ describe('review Repair queue', () => {
     })])
   })
 
-  it('stops when a published Repair leaves the same finding', () => {
-    const store = createStore()
-    const { review, revisionId } = runningReview(store, 'fix/repeated-finding')
-    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
-    const queued = store.queueReviewFixTaskForReview({
-      taskId: review.id,
-      workerId: review.state.workerId,
-      fence: review.state.fence,
-      at: '2026-08-13T01:00:04.000Z',
-    })
-    if (queued._tag !== 'Queued')
-      throw new Error(queued.reason)
-    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)
+  /**
+   * Runs one full Repair round: claim the Repair, store its report, publish
+   * its commit, observe the new head, and record the fresh Review finding.
+   * Returns the fresh Review Task that now decides whether another round starts.
+   */
+  function publishRepairRound(store: ReturnType<typeof openJournalStore>, headRef: string, round: number) {
+    const at = (second: number) => `2026-08-13T01:0${round}:${String(second).padStart(2, '0')}.000Z`
+    const repair = store.claimNextReviewFixTask(`repair-agent-${round}`, at(5), 60_000)
     if (repair === null)
-      throw new Error('Expected the Repair Task.')
-    const repairCommit = 'd'.repeat(40)
+      throw new Error(`Expected the round ${round} Repair Task.`)
+    expect(store.recordRepairReport({
+      taskId: repair.id,
+      workerId: repair.state.workerId,
+      fence: repair.state.fence,
+      at: at(6),
+      summary: `Round ${round} widened the parser guard.`,
+      checks: ['pnpm vitest run test/parser.test.ts'],
+    })).toBe(true)
+    const repairCommit = String(round).repeat(40)
     expect(store.stagePublication({
       taskId: repair.id,
       workerId: repair.state.workerId,
       fence: repair.state.fence,
-      at: '2026-08-13T01:00:06.000Z',
+      at: at(7),
       publication: {
         _tag: 'UpdatePullRequest',
         taskKind: 'review_fix',
@@ -592,46 +595,87 @@ describe('review Repair queue', () => {
         baseSha: 'base123',
         expectedHeadSha: repair.pullRequest.headSha,
         headRef: repair.pullRequest.headRef,
-        artifactRef: 'refs/harlan-github-agent/publications/repeated-finding',
-        patchDigest: 'repair-patch',
+        artifactRef: `refs/harlan-github-agent/publications/${headRef}-${round}`,
+        patchDigest: `repair-patch-${round}`,
         changedFiles: 2,
       },
     })._tag).toBe('Staged')
-    const publication = store.claimNextPublication('publisher', '2026-08-13T01:00:07.000Z', 60_000)
+    const publication = store.claimNextPublication('publisher', at(8), 60_000)
     if (publication === null)
       throw new Error('Expected the Repair Publication.')
     expect(store.completePublication({
       commandId: publication.id,
       workerId: publication.workerId,
       fence: publication.fence,
-      at: '2026-08-13T01:00:08.000Z',
+      at: at(9),
       evidence: 'Published Repair commit.',
     })).toBe(true)
-
     const repaired = store.recordObservation({
-      externalId: 'repeated-finding-repaired-head',
-      observedAt: '2026-08-13T01:01:00.000Z',
+      externalId: `${headRef}-repaired-${round}`,
+      observedAt: at(10),
       source: 'poll',
-      subject: pullRequestItem({
-        headRef: 'fix/repeated-finding',
-        headSha: repairCommit,
-        mergeState: 'clean',
-        updatedAt: '2026-08-13T01:01:00.000Z',
-      }),
+      subject: pullRequestItem({ headRef, headSha: repairCommit, mergeState: 'clean', updatedAt: at(10) }),
     })
     if (repaired._tag !== 'Inserted')
       throw new Error('Expected a new repaired Revision.')
-    const freshReview = store.claimNextAdversarialReviewTask('fresh-review-agent', '2026-08-13T01:01:01.000Z', 60_000)
+    const freshReview = store.claimNextAdversarialReviewTask(`fresh-review-agent-${round}`, at(11), 60_000)
     if (freshReview === null)
       throw new Error('Expected a fresh Review Task.')
     recordOpenFinding(store, repaired.revisionId, repairCommit)
+    return { repair, freshReview, at: at(12) }
+  }
 
-    expect(store.queueReviewFixTaskForReview({
-      taskId: freshReview.id,
-      workerId: freshReview.state.workerId,
-      fence: freshReview.state.fence,
-      at: '2026-08-13T01:01:02.000Z',
-    })).toEqual({ _tag: 'ActionRequired', reason: 'A repaired head still has the same Review finding: Unsafe parser input.' })
+  function queueRound(store: ReturnType<typeof openJournalStore>, review: { id: string, state: { workerId: string, fence: number } }, at: string) {
+    return store.queueReviewFixTaskForReview({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at })
+  }
+
+  it('starts a second Repair round that reads the first round when the finding survives', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/repeated-finding')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
+    expect(queueRound(store, review, '2026-08-13T01:00:04.000Z')).toMatchObject({ _tag: 'Queued', rounds: { number: 1, limit: 3 } })
+
+    const first = publishRepairRound(store, 'fix/repeated-finding', 1)
+    expect(queueRound(store, first.freshReview, first.at)).toMatchObject({ _tag: 'Queued', rounds: { number: 2, limit: 3 } })
+
+    const second = store.claimNextReviewFixTask('repair-agent-2', '2026-08-13T01:02:00.000Z', 60_000)
+    if (second === null)
+      throw new Error('Expected the round 2 Repair Task.')
+    expect(second.rounds).toEqual({
+      number: 2,
+      limit: 3,
+      prior: [{
+        number: 1,
+        revisionId,
+        commitSha: '1'.repeat(40),
+        summary: 'Round 1 widened the parser guard.',
+        checks: ['pnpm vitest run test/parser.test.ts'],
+        findings: ['Unsafe parser input.'],
+      }],
+    })
+  })
+
+  it('stops with the round history once the round limit is spent', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/exhausted-rounds')
+    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
+    expect(queueRound(store, review, '2026-08-13T01:00:04.000Z')._tag).toBe('Queued')
+
+    const first = publishRepairRound(store, 'fix/exhausted-rounds', 1)
+    expect(queueRound(store, first.freshReview, first.at)).toMatchObject({ _tag: 'Queued', rounds: { number: 2 } })
+    const second = publishRepairRound(store, 'fix/exhausted-rounds', 2)
+    expect(queueRound(store, second.freshReview, second.at)).toMatchObject({ _tag: 'Queued', rounds: { number: 3 } })
+    const third = publishRepairRound(store, 'fix/exhausted-rounds', 3)
+
+    expect(queueRound(store, third.freshReview, third.at)).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'Repair used 3 of 3 rounds and the finding remains. '
+        + 'Round 1 (`1111111`): Round 1 widened the parser guard. '
+        + 'Round 2 (`2222222`): Round 2 widened the parser guard. '
+        + 'Round 3 (`3333333`): Round 3 widened the parser guard. '
+        + 'A person decides the next step.',
+    })
+    expect(store.claimNextReviewFixTask('repair-agent-4', '2026-08-13T01:04:00.000Z', 60_000)).toBeNull()
   })
 
   it('hands a fresh Review the identities its repaired Revision reported', () => {

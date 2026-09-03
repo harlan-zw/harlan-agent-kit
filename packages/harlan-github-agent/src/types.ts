@@ -477,6 +477,7 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
+  rounds: { number: number, limit: number, prior: RepairRound[] }
 }
 
 /**
@@ -488,8 +489,25 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
  * wording of a reason, decides whether the review runs again.
  */
 export type ReviewFixQueueResult
-  = | { _tag: 'Queued', taskId: string }
+  = | { _tag: 'Queued', taskId: string, rounds: { number: number, limit: number } }
     | { _tag: 'ActionRequired', reason: string }
+
+/**
+ * One earlier controller Repair in the chain that produced the current head.
+ *
+ * Round 1 is the first Repair after a contributor commit. A later round reads
+ * every earlier one, so it never repeats an approach Review already rejected.
+ */
+export interface RepairRound {
+  number: number
+  revisionId: string
+  commitSha: string
+  /** What that round's Repair Agent reported, or null when the report was never stored. */
+  summary: string | null
+  checks: string[]
+  /** Summaries of the findings that round set out to fix. */
+  findings: string[]
+}
 
 export interface BaselineRepairTask {
   id: string

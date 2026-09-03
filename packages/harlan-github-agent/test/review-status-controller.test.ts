@@ -18,6 +18,7 @@ describe('review status controller', () => {
       updatedAt: '2026-08-13T01:00:00.000Z',
       repositoryMapping: repository,
       pullRequest,
+      rounds: { number: 1, limit: 3, prior: [] },
     }
     let replaced = false
     let body = ''
@@ -83,7 +84,7 @@ describe('review status controller', () => {
     expect(await controller.publishRepair(task, { percent: 35, label: 'Git worktree ready' }, new AbortController().signal)).toEqual(ok(undefined))
 
     expect(read().replaced).toBe(true)
-    expect(read().body).toContain('### 🤖 REPAIR · 35% · Git worktree ready')
+    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 35% · Git worktree ready')
   })
 
   it('says how long one phase has run, so a slow agent reads as alive', async () => {
@@ -96,7 +97,7 @@ describe('review status controller', () => {
       new AbortController().signal,
     )).toEqual(ok(undefined))
 
-    expect(read().body).toContain('### 🤖 REPAIR · 70% · Editing files for 35 min')
+    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 70% · Editing files for 35 min')
   })
 
   it('leaves a phase that just started without a duration', async () => {
@@ -108,6 +109,6 @@ describe('review status controller', () => {
       new AbortController().signal,
     )).toEqual(ok(undefined))
 
-    expect(read().body).toContain('### 🤖 REPAIR · 70% · Editing files\n')
+    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 70% · Editing files\n')
   })
 })

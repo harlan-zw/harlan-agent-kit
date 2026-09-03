@@ -60,6 +60,7 @@ import type {
   RecordReviewRunInput,
   RecordReviewRunRejection,
   RecordReviewRunResult,
+  RepairRound,
   RepositoryMapping,
   RepositoryStatus,
   RestartOperation,
@@ -104,6 +105,7 @@ import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSele
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { isIssueTriageState } from './issue-triage.ts'
+import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { buildStats } from './stats.ts'
 import { cleanLine } from './text.ts'
@@ -632,6 +634,8 @@ export interface JournalStore {
     fence: number
     at: string
   }) => ReviewFixQueueResult
+  /** Stores one Repair Agent's report under its fenced lease, before its commit is staged. */
+  recordRepairReport: (input: { taskId: string, workerId: string, fence: number, at: string, summary: string, checks: string[] }) => boolean
   queueBaselineRepairForReview: (input: {
     taskId: string
     workerId: string
@@ -3554,7 +3558,7 @@ function planConflictResolution(
  * What the controller may do with the exact findings one Review recorded.
  */
 type ReviewFixPlan
-  = | { _tag: 'Planned', taskId: string }
+  = | { _tag: 'Planned', taskId: string, rounds: { number: number, limit: number } }
     | { _tag: 'Refused', reason: string }
 
 function openReviewFindings(database: DatabaseSync, subjectId: number, revisionId: string): Array<Extract<ReviewFinding, { _tag: 'Open' }>> {
@@ -3569,37 +3573,55 @@ function openReviewFindings(database: DatabaseSync, subjectId: number, revisionI
     : (JSON.parse(row.findings) as ReviewFinding[]).filter((finding): finding is Extract<ReviewFinding, { _tag: 'Open' }> => finding._tag === 'Open')
 }
 
-function findingIdentity(finding: Extract<ReviewFinding, { _tag: 'Open' }>): string {
-  return finding.details?.fingerprint
-    ?? cleanLine(finding.summary).toLocaleLowerCase('en-US')
-}
-
 /**
- * Finds a defect that survived the repair which created the current head SHA.
+ * The chain of controller Repairs that produced the current head SHA, oldest first.
  *
- * Comparing only the direct repair parent avoids treating a later contributor
- * edit as a failed controller repair.
+ * Each published Repair commit names the Revision it repaired. That Revision's
+ * head may itself be a Repair commit. The walk stops at the first head no
+ * Repair published, which is a contributor commit, so a contributor push
+ * always starts a fresh count.
  */
-function repeatedReviewFinding(
-  database: DatabaseSync,
-  subject: GitHubPullRequestItem,
-  subjectId: number,
-  revisionId: string,
-): Extract<ReviewFinding, { _tag: 'Open' }> | undefined {
-  const repaired = database.prepare(`
-    SELECT tasks.revision_id
+function reviewFixRounds(database: DatabaseSync, subjectId: number, headSha: string): RepairRound[] {
+  const repairedBy = database.prepare(`
+    SELECT tasks.id AS task_id, tasks.revision_id, publication_commands.commit_sha,
+      json_extract(revisions.payload, '$.headSha') AS repaired_head_sha,
+      repair_reports.summary, repair_reports.checks
     FROM publication_commands
     JOIN tasks ON tasks.id = publication_commands.task_id
+    JOIN revisions ON revisions.id = tasks.revision_id
+    LEFT JOIN repair_reports ON repair_reports.task_id = tasks.id
     WHERE tasks.subject_id = ? AND tasks.kind = 'review_fix'
       AND publication_commands.state_tag = 'Published'
       AND publication_commands.commit_sha = ?
     ORDER BY publication_commands.published_at DESC, publication_commands.id DESC
     LIMIT 1
-  `).get(subjectId, subject.headSha) as { revision_id: string } | undefined
-  if (repaired === undefined)
-    return undefined
-  const previous = new Set(openReviewFindings(database, subjectId, repaired.revision_id).map(findingIdentity))
-  return openReviewFindings(database, subjectId, revisionId).find(finding => previous.has(findingIdentity(finding)))
+  `)
+  const rounds: RepairRound[] = []
+  const seen = new Set<string>()
+  let commitSha = headSha
+  while (!seen.has(commitSha)) {
+    seen.add(commitSha)
+    const row = repairedBy.get(subjectId, commitSha) as {
+      task_id: string
+      revision_id: string
+      commit_sha: string
+      repaired_head_sha: string | null
+      summary: string | null
+      checks: string | null
+    } | undefined
+    if (row === undefined || row.repaired_head_sha === null)
+      break
+    rounds.unshift({
+      number: 0,
+      revisionId: row.revision_id,
+      commitSha: row.commit_sha,
+      summary: row.summary,
+      checks: row.checks === null ? [] : JSON.parse(row.checks) as string[],
+      findings: openReviewFindings(database, subjectId, row.revision_id).map(finding => finding.summary),
+    })
+    commitSha = row.repaired_head_sha
+  }
+  return rounds.map((round, index) => ({ ...round, number: index + 1 }))
 }
 
 function requeueReviewFix(
@@ -3607,6 +3629,7 @@ function requeueReviewFix(
   existing: { id: string, state_tag: TaskRow['state_tag'], fence: number },
   reason: string,
   observedAt: string,
+  rounds: { number: number, limit: number },
 ): ReviewFixPlan {
   database.prepare(`
     UPDATE tasks
@@ -3623,7 +3646,7 @@ function requeueReviewFix(
     fence: existing.fence,
     at: observedAt,
   })
-  return { _tag: 'Planned', taskId: existing.id }
+  return { _tag: 'Planned', taskId: existing.id, rounds }
 }
 
 /**
@@ -3661,11 +3684,12 @@ function planReviewFix(
   const dismissal = openFindings.find(finding => finding.resolution === 'Dismissal')
   if (dismissal !== undefined)
     return refuse(`Review recommends Dismissal: ${cleanLine(dismissal.summary)}`)
-  const repeated = repeatedReviewFinding(database, subject, subjectId, revisionId)
-  if (repeated !== undefined)
-    return refuse(`A repaired head still has the same Review finding: ${cleanLine(repeated.summary)}`)
   if (openFindings.length === 0)
     return refuse('The Review recorded no open finding to repair.')
+  const round = planRepairRound(reviewFixRounds(database, subjectId, subject.headSha))
+  if (round._tag === 'Exhausted')
+    return refuse(round.reason)
+  const rounds = { number: round.number, limit: REPAIR_ROUND_LIMIT }
 
   database.prepare(`
     INSERT OR IGNORE INTO pull_request_approvals (subject_id, revision_id, kind, approved_at)
@@ -3686,17 +3710,17 @@ function planReviewFix(
       VALUES (?, ?, ?, 'review_fix', 'Queued', NULL, ?)
     `).run(taskId, subjectId, revisionId, observedAt)
     recordTransition(database, { taskId, from: null, to: 'Queued', reason: null, fence: 0, at: observedAt })
-    return { _tag: 'Planned', taskId }
+    return { _tag: 'Planned', taskId, rounds }
   }
   if (existing.cancelled === 1)
     return { _tag: 'Refused', reason: REVIEW_REPAIR_REFUSALS.cancelled }
   if (existing.state_tag === 'Queued')
-    return { _tag: 'Planned', taskId: existing.id }
+    return { _tag: 'Planned', taskId: existing.id, rounds }
   // A newer Review recorded exact findings for this same head commit.
   if (existing.state_tag === 'Superseded')
-    return requeueReviewFix(database, existing, 'The exact pull request head commit is active again.', observedAt)
+    return requeueReviewFix(database, existing, 'The exact pull request head commit is active again.', observedAt, rounds)
   if (existing.state_tag === 'Failed' || existing.state_tag === 'ActionRequired')
-    return requeueReviewFix(database, existing, 'The review made a newer repair for this head commit.', observedAt)
+    return requeueReviewFix(database, existing, 'The review made a newer repair for this head commit.', observedAt, rounds)
   if (existing.state_tag === 'Completed')
     return { _tag: 'Refused', reason: REVIEW_REPAIR_REFUSALS.published }
   return { _tag: 'Refused', reason: REVIEW_REPAIR_REFUSALS.owned }
@@ -5148,6 +5172,18 @@ const routineRecoveryMigration = `
   PRAGMA user_version = 60;
 `
 
+/** Stores what each Repair Agent reported, so a later Repair round can read it. */
+const repairReportMigration = `
+  CREATE TABLE repair_reports (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+    summary TEXT NOT NULL,
+    checks TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+  );
+
+  PRAGMA user_version = 61;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -5416,9 +5452,13 @@ function installSchema(database: DatabaseSync): void {
     const columns = (database.prepare('PRAGMA table_info(routine_runs)').all() as unknown as Array<{ name: string }>)
       .map(column => column.name)
     applyMigration(database, columns.includes('recovery_attempts') ? 'PRAGMA user_version = 60;' : routineRecoveryMigration)
+    version = 60
+  }
+  if (version === 60) {
+    applyMigration(database, repairReportMigration)
     return
   }
-  if (version === 60)
+  if (version === 61)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7384,8 +7424,10 @@ export function openJournalStore(
       if (subject.kind !== 'pull_request')
         throw new Error(`Pull request Task ${row.id} crossed the issue claim boundary.`)
       const task = { ...taskBase, kind, pullRequestNumber: row.github_number, pullRequest: subject }
-      if (kind === 'review_fix')
-        return { ...task, kind }
+      if (kind === 'review_fix') {
+        const prior = reviewFixRounds(database, row.subject_id, subject.headSha)
+        return { ...task, kind, rounds: { number: prior.length + 1, limit: REPAIR_ROUND_LIMIT, prior } }
+      }
       if (kind === 'resolve_conflict')
         return { ...task, kind }
       if (kind === 'baseline_repair')
@@ -7453,13 +7495,29 @@ export function openJournalStore(
       const plan = planReviewFix(database, subject, row.subject_id, row.revision_id, input.at, mapping)
       database.exec('COMMIT')
       return plan._tag === 'Planned'
-        ? { _tag: 'Queued', taskId: plan.taskId }
+        ? { _tag: 'Queued', taskId: plan.taskId, rounds: plan.rounds }
         : { _tag: 'ActionRequired', reason: plan.reason }
     }
     catch (error) {
       database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  const recordRepairReport: JournalStore['recordRepairReport'] = (input) => {
+    const owned = database.prepare(`
+      SELECT 1 FROM tasks
+      WHERE id = ? AND kind = 'review_fix' AND state_tag = 'Running'
+        AND worker_id = ? AND fence = ? AND lease_expires_at > ?
+    `).get(input.taskId, input.workerId, input.fence, input.at) !== undefined
+    if (!owned)
+      return false
+    database.prepare(`
+      INSERT INTO repair_reports (task_id, summary, checks, recorded_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT (task_id) DO UPDATE SET summary = excluded.summary, checks = excluded.checks, recorded_at = excluded.recorded_at
+    `).run(input.taskId, input.summary, JSON.stringify(input.checks), input.at)
+    return true
   }
 
   const retireBaselineRepairForReview: JournalStore['retireBaselineRepairForReview'] = (input) => {
@@ -12858,6 +12916,7 @@ export function openJournalStore(
     claimNextIssueWorkTask,
     claimNextReviewFixTask,
     queueReviewFixTaskForReview,
+    recordRepairReport,
     queueBaselineRepairForReview,
     retireBaselineRepairForReview,
     claimNextPublication,

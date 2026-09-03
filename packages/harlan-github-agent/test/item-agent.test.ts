@@ -395,7 +395,7 @@ describe('subject Workers', () => {
       store: {
         queueReviewFixTaskForReview: () => {
           queued = true
-          return { _tag: 'Queued', taskId: 'repair-task' }
+          return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
         },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,

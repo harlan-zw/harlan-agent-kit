@@ -30,6 +30,7 @@ import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { isIssueTriageState } from './issue-triage.ts'
+import { repairRoundLabel } from './repair-rounds.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
@@ -910,11 +911,14 @@ async function projectReviewRun(
       fence: task.state.fence,
       at: options.now().toISOString(),
     })
-    if (queued._tag !== 'Queued') {
-      findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
-        ? { ...finding, nextAction: queued.reason }
-        : finding)
-    }
+    findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
+      ? {
+          ...finding,
+          nextAction: queued._tag === 'Queued'
+            ? `Repair ${repairRoundLabel(queued.rounds)} starts. ${finding.nextAction}`
+            : queued.reason,
+        }
+      : finding)
   }
   else if (repairable && !recommendsDismissal && preflight._tag === 'ActionRequired') {
     findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
