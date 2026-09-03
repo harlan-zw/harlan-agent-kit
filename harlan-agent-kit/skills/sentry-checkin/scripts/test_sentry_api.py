@@ -607,8 +607,8 @@ class DigestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"
             bundles_dir = self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE])
-            first = self.run_digest(bundles_dir, state, "--run-id", "run-1")
-            second = self.run_digest(bundles_dir, state, "--run-id", "run-2")
+            first = self.run_digest(bundles_dir, state, "--run-id", "run-1", "--record")
+            second = self.run_digest(bundles_dir, state, "--run-id", "run-2", "--record")
             self.assertTrue(second["snapshot_unchanged"])
             self.assertTrue(second["all_unchanged"])
             self.assertEqual(second["previous_run"]["run_id"], "run-1")
@@ -622,17 +622,45 @@ class DigestTest(unittest.TestCase):
             grown["issue"]["count"] = "13"
             grown["issue"]["lastSeen"] = "2026-09-01T00:00:00Z"
             bundles_dir = self.write_bundles(directory, [grown, COMPACT_BUNDLE])
-            third = self.run_digest(bundles_dir, state, "--no-record")
+            third = self.run_digest(bundles_dir, state)
             self.assertTrue(third["snapshot_unchanged"])
             self.assertFalse(third["all_unchanged"])
             self.assertEqual(third["changed_issue_ids"], ["1"])
             self.assertFalse(third["recorded"])
             self.assertEqual(json.loads(state.read_text())["run_id"], "run-2")
 
+    def test_digest_never_skips_a_backlog_an_aborted_run_only_looked_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            bundles_dir = self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE])
+            looked = self.run_digest(bundles_dir, state, "--run-id", "run-1")
+            self.assertFalse(looked["recorded"])
+            self.assertFalse(state.exists())
+            again = self.run_digest(bundles_dir, state, "--run-id", "run-2")
+            self.assertFalse(again["snapshot_unchanged"])
+            self.assertFalse(again["all_unchanged"])
+            recorded = self.run_digest(bundles_dir, state, "--run-id", "run-2", "--record")
+            self.assertTrue(recorded["recorded"])
+            self.assertTrue(self.run_digest(bundles_dir, state, "--run-id", "run-3")["all_unchanged"])
+
+    def test_digest_keeps_two_defects_apart_when_they_share_frames_and_culprit(self):
+        first = json.loads(json.dumps(FULL_BUNDLE))
+        second = json.loads(json.dumps(FULL_BUNDLE))
+        second["issue"]["id"] = "3"
+        second["issue"]["shortId"] = "SITE-3"
+        second["issue"]["title"] = "TypeError: y is not a function"
+        second["events"][0]["entries"][0]["data"]["values"][0]["value"] = "y is not a function"
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [first, second])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            one, two = digest["issues"]
+            self.assertEqual(one["frames"], two["frames"])
+            self.assertNotEqual(one["fingerprint"], two["fingerprint"])
+
     def test_digest_sees_a_new_issue_set_as_changed(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"
-            self.run_digest(self.write_bundles(directory, [FULL_BUNDLE]), state)
+            self.run_digest(self.write_bundles(directory, [FULL_BUNDLE]), state, "--record")
             digest = self.run_digest(
                 self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE]), state
             )
@@ -655,6 +683,7 @@ class DigestTest(unittest.TestCase):
                 str(bundles_dir),
                 "--state",
                 str(state),
+                "--record",
             ]
             processes = [
                 subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)

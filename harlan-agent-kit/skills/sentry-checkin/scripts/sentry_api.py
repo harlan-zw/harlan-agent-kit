@@ -541,21 +541,21 @@ def issue_fingerprint(project, fields, exception, frames):
     """A fingerprint that survives a new Sentry issue ID for the same defect.
 
     Sentry issues an ID per grouping, and a resolved issue that regresses can
-    come back under a new one. The exception type, culprit, and innermost
-    in-app frame name the defect itself, so the Candidate keeps its identity.
-    A frameless issue carries no stack to tell defects apart, so the title
-    (or issue ID) stands in.
+    come back under a new one. The exception type and value, culprit, and
+    innermost in-app frame name the defect itself, so the Candidate keeps its
+    identity. One function can raise two different errors, so the value is
+    always part of the name. Without an exception the title stands in, and
+    without a title the issue ID does.
     """
     frame = frames[0] if frames else {}
     parts = [
         project,
         exception.get("type") or "",
+        exception.get("value") or fields.get("title") or fields["id"],
         fields.get("culprit") or "",
         frame.get("file") or "",
         frame.get("function") or "",
     ]
-    if not frames:
-        parts.append(fields.get("title") or fields["id"])
     return "sentry:" + sha256_text("|".join(parts))[:16]
 
 
@@ -589,10 +589,13 @@ def compare_with_previous(entries, previous):
 
 
 def digest_bundles(args):
-    """Summarize every bundle in a bulk-bundles directory and record what was seen.
+    """Summarize every bundle in a bulk-bundles directory.
 
-    The state file is local run memory, not a Sentry or repository write. It is
-    what lets a read-only Routine run skip a backlog it already analysed.
+    With --record it also writes what it saw. The state file is local run
+    memory, not a Sentry or repository write. It is what lets a read-only
+    Routine run skip a backlog it already analysed. Recording is a separate
+    step so that a run which aborts after the digest leaves no state behind:
+    the next run then sees an unanalysed backlog, not an unchanged one.
     """
     bundles_dir = Path(args.bundles)
     manifest = json.loads((bundles_dir / "manifest.json").read_text())
@@ -635,7 +638,7 @@ def digest_bundles(args):
         "recorded": False,
         "issues": entries,
     }
-    if not args.no_record:
+    if args.record:
         state = {
             "org": args.org,
             "project": project,
@@ -817,7 +820,12 @@ def build_parser():
     digest.add_argument("--run-id", default=None, help="Run identity to record")
     digest.add_argument("--state", help="Override the local state file path")
     digest.add_argument(
-        "--no-record", action="store_true", help="Compare only. Leave the state file alone."
+        "--record",
+        action="store_true",
+        help=(
+            "Write the state file. Run this only after the analysis is complete. "
+            "Without it the command compares only."
+        ),
     )
     digest.add_argument("--output", help="Also write the digest JSON to this path")
 

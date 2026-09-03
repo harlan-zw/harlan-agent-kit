@@ -16,8 +16,9 @@ A Routine names one site and one repository. The turn is read only for that repo
 - Use the installed `sentry-cli`. Fall back to `pnpm dlx @sentry/cli` only if none is installed.
 - Never read `~/.sentryclirc`. `scripts/sentry_api.py` reads it for you. It redacts the output. Its `digest` command reads no token at all.
 - Fetch evidence once with `bulk-bundles`. Then run `digest`. Read the digest, not the raw bundles.
-- Run `digest` without `--no-record`. It writes local run state. That state is neither a Sentry write nor a repository write. It is what makes the next run cheap.
 - If `all_unchanged` is true, stop. Do not read code. Return `Candidates: []` and give the reason: the issue set and every issue match the last run.
+- After the report is complete, run `digest` again with `--record`. That writes local run state. The state is neither a Sentry write nor a repository write. It is what makes the next run cheap.
+- Never pass `--record` before the analysis is complete. A run that aborts after recording would hide the backlog from the next run.
 - Return one JSON object only. Put no prose before it. Put no prose after it. The Routine parses the answer with `JSON.parse`.
 - Put the report text in the `report` field. Use one `fingerprint` from the digest per Candidate, so the same defect keeps one identity.
 
@@ -31,6 +32,13 @@ python3 scripts/sentry_api.py --org ORG bulk-bundles --project PROJECT \
   --snapshot "$RUN_DIR/PROJECT.snapshot.json" --output "$RUN_DIR/PROJECT" --workers 4
 python3 scripts/sentry_api.py --org ORG digest --project PROJECT \
   --bundles "$RUN_DIR/PROJECT" --run-id "$(basename "$RUN_DIR")" --output "$RUN_DIR/PROJECT.digest.json"
+```
+
+The last command of the run, after the report exists:
+
+```bash
+python3 scripts/sentry_api.py --org ORG digest --project PROJECT \
+  --bundles "$RUN_DIR/PROJECT" --run-id "$(basename "$RUN_DIR")" --record
 ```
 
 ## Worktree isolation
@@ -131,9 +139,9 @@ The digest also compares this run with the last digest for the project:
 - `unchanged_since_last_run`: the issue kept its last-seen time and event count.
 - `snapshot_unchanged`: the issue ID set matches the last run.
 - `all_unchanged`: both hold for every issue.
-- `runs_seen`: how many digests saw this issue.
+- `runs_seen`: how many recorded digests saw this issue.
 
-Pass `--no-record` to compare without writing the state file.
+`digest` compares only. It writes the state file only with `--record`. Run `--record` once, after every ledger for the project is complete. An aborted run then leaves no state, and the next run analyses the backlog in full.
 
 ## Read the prior dispositions
 
