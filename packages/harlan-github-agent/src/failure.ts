@@ -348,3 +348,89 @@ export function recoveryDelayMilliseconds(recoveryAttempts: number): number {
 export function nextRecoveryAt(failedAt: string, recoveryAttempts: number): string {
   return new Date(Date.parse(failedAt) + recoveryDelayMilliseconds(recoveryAttempts)).toISOString()
 }
+
+/**
+ * What one failing check says about who can fix it.
+ *
+ * `Repairable` means the repository is the cause, so an Agent may change it.
+ * `Infrastructure` means the runner host or a remote service failed. No change
+ * to the repository fixes that, and every past Agent turn on one produced a
+ * mask: a retry wrapper, a concurrency limit, or a build flag. A person repairs
+ * the host, then re-runs the check.
+ */
+export type CheckFailureClass
+  = | { _tag: 'Repairable' }
+    | { _tag: 'Infrastructure', reason: string }
+
+export interface CheckFailureSignal {
+  name: string
+  conclusion: string | null
+  /** What the job steps say, when the controller could read them. */
+  runnerLost?: boolean
+  /** The last lines of the failed job log, oldest first. Empty when unavailable. */
+  logTail: string[]
+}
+
+/** A runner killed the job process, or the host killed the runner. */
+const runnerKillPatterns: RegExp[] = [
+  /\bexit code 129\b/i,
+  /\bexit code 137\b/i,
+  /\brunner has received a shutdown signal\b/i,
+  /\blost communication with the server\b/i,
+  /\bThe hosted runner\b.+\blost communication\b/i,
+  /\bThe self-hosted runner\b.+\blost communication\b/i,
+  /\bThe operation was canceled\b/i,
+]
+
+/** Remote services a workflow downloads from, which the repository does not control. */
+const remoteHostPattern = /\b(?:unpkg\.com|nodejs\.org|registry\.npmjs\.org|registry\.yarnpkg\.com|objects\.githubusercontent\.com|release-assets\.githubusercontent\.com|github\.com\/[\w.-]+\/[\w.-]+\/releases\/download)\b/i
+
+/** A download failed for a reason the repository cannot change. */
+const remoteFetchFailurePatterns: RegExp[] = [
+  /\bETIMEDOUT\b/,
+  /\bECONNRESET\b/,
+  /\bECONNREFUSED\b/,
+  /\bENOTFOUND\b/,
+  /\bEAI_AGAIN\b/,
+  /\bUND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET)\b/,
+  /\bsocket hang up\b/i,
+  /\bfetch failed\b/i,
+  /\btimed? ?out\b/i,
+  /\bERR_PNPM_FETCH_\w+\b/,
+  /\b(?:502|503|504)\b/,
+]
+
+/** How many neighbouring lines one download failure may span. */
+const remoteFetchWindow = 4
+
+function remoteFetchFailure(logTail: string[]): string | null {
+  for (let index = 0; index < logTail.length; index += 1) {
+    const window = logTail.slice(index, index + remoteFetchWindow).join('\n')
+    const host = window.match(remoteHostPattern)
+    if (host !== null && matches(remoteFetchFailurePatterns, window))
+      return host[0]
+  }
+  return null
+}
+
+/**
+ * Classifies one failing check from what the controller can read before an Agent starts.
+ *
+ * Only a runner kill or a remote download failure is Infrastructure. A heap
+ * limit inside a step stays Repairable, because the workflow's `NODE_OPTIONS`
+ * is the repository's to change. An unreadable log stays Repairable, because
+ * an Agent can still read the repository.
+ */
+export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureClass {
+  if (signal.runnerLost === true)
+    return { _tag: 'Infrastructure', reason: `The runner lost the job for check "${signal.name}" before any step failed.` }
+  if (signal.conclusion === 'timed_out')
+    return { _tag: 'Infrastructure', reason: `GitHub timed out check "${signal.name}" before it finished.` }
+  const killed = signal.logTail.find(line => matches(runnerKillPatterns, line))
+  if (killed !== undefined)
+    return { _tag: 'Infrastructure', reason: `The runner killed the job for check "${signal.name}": ${killed.trim()}` }
+  const host = remoteFetchFailure(signal.logTail)
+  if (host !== null)
+    return { _tag: 'Infrastructure', reason: `A download from ${host} failed during check "${signal.name}".` }
+  return { _tag: 'Repairable' }
+}

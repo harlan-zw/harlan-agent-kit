@@ -34,7 +34,7 @@ export interface TaskSchedulerOptions<Task extends PublicationTask = ClaimedConf
   /** Called once the worker stops running a task, whatever the outcome. */
   onTaskSettled?: (taskId: string, task: Task) => void
   permits: AgentPermitPool
-  store: Pick<JournalStore, 'claimNextConflictTask' | 'failTask' | 'heartbeatTask' | 'needsAttentionTask' | 'stagePublication' | 'supersedeTask'>
+  store: Pick<JournalStore, 'claimNextConflictTask' | 'completeTask' | 'failTask' | 'heartbeatTask' | 'needsAttentionTask' | 'stagePublication' | 'supersedeTask'>
   worker: PublicationWorker<Task>
   workerId: string
 }
@@ -94,6 +94,16 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
             at: options.now().toISOString(),
             reason: result.value.reason,
             ...(result.value.usage === undefined ? {} : { usage: result.value.usage }),
+          })
+          return
+        }
+        if (result.value._tag === 'Completed') {
+          options.store.completeTask({
+            taskId: task.id,
+            workerId: options.workerId,
+            fence: task.state.fence,
+            at: options.now().toISOString(),
+            evidence: result.value.evidence,
           })
           return
         }

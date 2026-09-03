@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyFailure, contextBudgetExhaustedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
+import { classifyCheckFailure, classifyFailure, contextBudgetExhaustedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
   it.each([
@@ -136,5 +136,77 @@ describe('contextBudgetExhaustedReason', () => {
 
     expect(classifyFailure({ message: wordedLikeAnOutage })).toEqual({ _tag: 'Permanent', kind: 'context_budget' })
     expect(mayRetryFailure({ message: wordedLikeAnOutage })).toBe(false)
+  })
+})
+
+describe('classifyCheckFailure', () => {
+  const runnerKill = [
+    '##[group]Run pnpm build',
+    '> nuxt build',
+    'ℹ Building Nuxt Nitro server (preset: `cloudflare-module`)',
+    '##[error]Process completed with exit code 129.',
+  ]
+  const unpkgTimeout = [
+    '[nuxt-scripts] Fetching https://unpkg.com/@unhead/schema-org@2.0.0/dist/index.mjs',
+    'TypeError: fetch failed',
+    '    at node:internal/deps/undici/undici:13502:13',
+    '  [cause]: ConnectTimeoutError: Connect Timeout Error (attempted address: 104.16.123.96:443, timeout: 10000ms)',
+    '    code: \'UND_ERR_CONNECT_TIMEOUT\'',
+  ]
+  const nodeGyp = [
+    'gyp http GET https://nodejs.org/download/release/v24.7.0/node-v24.7.0-headers.tar.gz',
+    'gyp WARN install got an error, rolling back install',
+    'gyp ERR! configure error',
+    'gyp ERR! stack FetchError: request to https://nodejs.org/download/release/v24.7.0/node-v24.7.0-headers.tar.gz failed, reason: connect ETIMEDOUT 104.20.22.46:443',
+    'ELIFECYCLE Command failed with exit code 1.',
+  ]
+  const registryFetch = [
+    ' ERR_PNPM_FETCH_504  GET https://registry.npmjs.org/@nuxt%2Fkit: Gateway Time-out - 504',
+    'This error happened while installing a direct dependency of /home/runner/work/app/app',
+  ]
+  const releaseAsset = [
+    'Downloading https://github.com/cloudflare/workerd/releases/download/v1.20260901.0/workerd-linux-64.gz',
+    'Error: connect ECONNRESET 140.82.121.4:443',
+  ]
+  const typeError = [
+    'src/components/Note.vue:12:5 - error TS2322: Type \'boolean | undefined\' is not assignable to type \'boolean\'.',
+    '12     open: note && expanded,',
+    'Found 1 error in src/components/Note.vue:12',
+    'ELIFECYCLE Command failed with exit code 2.',
+  ]
+  const heapLimit = [
+    'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory',
+    ' 1: 0xb8a5c0 node::Abort() [node]',
+    'ELIFECYCLE Command failed with exit code 134.',
+  ]
+  const unpkgMention = [
+    'FAIL test/scripts.test.ts > resolves the unpkg.com bundle url',
+    'AssertionError: expected \'https://unpkg.com/x@1\' to be \'https://unpkg.com/x@2\'',
+    'Tests 1 failed | 41 passed',
+  ]
+
+  it.each([
+    ['a runner kill', runnerKill, /exit code 129/],
+    ['an unpkg connect timeout', unpkgTimeout, /unpkg\.com/],
+    ['a node-gyp header download timeout', nodeGyp, /nodejs\.org/],
+    ['a registry gateway timeout', registryFetch, /registry\.npmjs\.org/],
+    ['a GitHub release asset reset', releaseAsset, /releases\/download/],
+  ])('reads %s as Infrastructure', (_name, logTail, reason) => {
+    const failure = classifyCheckFailure({ name: 'build', conclusion: 'failure', logTail })
+    expect(failure).toEqual({ _tag: 'Infrastructure', reason: expect.stringMatching(reason) })
+  })
+
+  it.each([
+    ['a type error', typeError],
+    ['a heap limit inside a step', heapLimit],
+    ['a test that only mentions a remote host', unpkgMention],
+    ['an empty log', []],
+  ])('keeps %s Repairable', (_name, logTail) => {
+    expect(classifyCheckFailure({ name: 'typecheck', conclusion: 'failure', logTail })).toEqual({ _tag: 'Repairable' })
+  })
+
+  it('reads a lost runner as Infrastructure without a log', () => {
+    const failure = classifyCheckFailure({ name: 'test', conclusion: 'failure', runnerLost: true, logTail: [] })
+    expect(failure).toEqual({ _tag: 'Infrastructure', reason: expect.stringContaining('runner lost the job') })
   })
 })
