@@ -52,6 +52,8 @@ describe('classifyPullRequestPaths', () => {
     ['a Claude command', ['CHANGELOG.md', '.claude/commands/ship.md'], '.claude/commands/ship.md'],
     ['a Codex prompt', ['LICENSE', '.codex/prompts/review.md'], '.codex/prompts/review.md'],
     ['a Markdown file under .github', ['.github/PULL_REQUEST_TEMPLATE.md'], '.github/PULL_REQUEST_TEMPLATE.md'],
+    ['a code file under a nested docs directory', ['src/docs/parser.ts'], 'src/docs/parser.ts'],
+    ['a fixture under a nested docs directory', ['test/docs/fixture.json'], 'test/docs/fixture.json'],
     ['no changed files', [], undefined],
   ])('requires Review for %s', (_label, changedFiles, path) => {
     const verdict = classifyPullRequestPaths(changedFiles)
@@ -119,6 +121,32 @@ describe('pull request triage Agent', () => {
       value: {
         _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
         reason: 'model: Only a typo in the README changed.',
+        source: 'reuse',
+      },
+    })
+    expect(capture.requests).toHaveLength(0)
+  })
+
+  it('prefixes a legacy stored reason with model:', async () => {
+    const capture: ProviderCapture = { requests: [] }
+    const agent = triageAgent({
+      capture,
+      stored: {
+        outcome: 'ReviewSkipped',
+        reason: 'Only prose changed.',
+        completedAt: '2026-08-27T23:00:00.000Z',
+      },
+    })
+
+    const result = await agent.run(reviewTask('docs: fix a typo'), {
+      changedFiles: ['README.md'],
+    }, new AbortController().signal)
+
+    expect(result).toEqual({
+      _tag: 'Ok',
+      value: {
+        _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
+        reason: 'model: Only prose changed.',
         source: 'reuse',
       },
     })

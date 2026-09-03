@@ -50,7 +50,7 @@ interface PullRequestTriageAgentOptions {
 }
 
 const PROSE_FILE_PATTERN = /(?:^|\/)(?:[^/]+\.(?:md|mdx|txt)|LICENSE[^/]*|CHANGELOG[^/]*)$/i
-const PROSE_DIRECTORY_PATTERN = /(?:^|\/)docs\//
+const PROSE_DIRECTORY_PATTERN = /^docs\//
 /** Agent instructions are behaviour, so they leave the prose set even when they end in `.md`. */
 const BEHAVIOUR_PATTERN = /(?:^|\/)(?:SKILL\.md|AGENTS\.md|CLAUDE\.md)$|(?:^|\/)(?:\.github|\.claude|\.codex[^/]*)\//
 
@@ -77,9 +77,11 @@ function reuseStoredVerdict(store: PullRequestTriageAgentOptions['store'], task:
   const stored = store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
   if (stored === null || stored.outcome === 'ReviewRequiredAfterFailure')
     return null
+  // Rows recorded before the prefix contract were all model decisions.
+  const reason = /^(?:rule|model): /.test(stored.reason) ? stored.reason : `model: ${stored.reason}`
   return {
     _tag: stored.outcome === 'ReviewSkipped' ? 'ADVERSARIAL_REVIEW_SKIPPED' : 'ADVERSARIAL_REVIEW_REQUIRED',
-    reason: stored.reason,
+    reason,
     source: 'reuse',
   }
 }
