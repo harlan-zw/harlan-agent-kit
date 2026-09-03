@@ -43,6 +43,39 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('reads the repository prepare commands with the default timeout', () => {
+    const parsed = parseConfigText(configText.replace('    take_ownership:', '    prepare: [\'pnpm exec nuxt prepare\']\n    take_ownership:'))
+
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.prepare).toEqual({ commands: ['pnpm exec nuxt prepare'], timeoutSeconds: 600 })
+  })
+
+  it('keeps a repository without prepare commands runnable', () => {
+    const parsed = parseConfigText(configText)
+
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.prepare).toEqual({ commands: [], timeoutSeconds: 600 })
+  })
+
+  it('reads a repository prepare timeout', () => {
+    const parsed = parseConfigText(configText.replace('    take_ownership:', '    prepare: [\'pnpm ensure-prepared\']\n    prepare_timeout_seconds: 120\n    take_ownership:'))
+
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.prepare.timeoutSeconds).toBe(120)
+  })
+
+  it.each([
+    ['[\'pnpm build && rm -rf .nuxt\']', '$.repositories[0].prepare', 'Every prepare command must be one plain command with no shell syntax.'],
+    ['[]', '$.repositories[0].prepare', 'Expected at least one command, or leave prepare out.'],
+  ])('rejects prepare %s', (value, path, message) => {
+    const parsed = parseConfigText(configText.replace('    take_ownership:', `    prepare: ${value}\n    take_ownership:`))
+
+    expect(parsed).toEqual({ _tag: 'Err', error: [{ path, message }] })
+  })
+
+  it('rejects a prepare timeout outside one second to one hour', () => {
+    const parsed = parseConfigText(configText.replace('    take_ownership:', '    prepare: [\'pnpm ensure-prepared\']\n    prepare_timeout_seconds: 0\n    take_ownership:'))
+
+    expect(parsed).toEqual({ _tag: 'Err', error: [{ path: '$.repositories[0].prepare_timeout_seconds', message: 'Expected an integer from 1 to 3600.' }] })
+  })
+
   it('accepts the Portless dashboard origin', () => {
     const parsed = parseConfigText(configText)
 

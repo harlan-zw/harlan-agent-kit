@@ -97,6 +97,60 @@ describe('review fix Worker', () => {
     expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
   })
 
+  it('starts no Repair Agent when the repository prepare command fails', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const mapping = repositoryMapping({ ownership: 'maintained', prepare: { commands: ['pnpm exec nuxt prepare'], timeoutSeconds: 600 } })
+    const task: ClaimedReviewFixTask = {
+      id: 'repair-task-prepare',
+      kind: 'review_fix',
+      repository: mapping.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'repair-worker', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: mapping,
+      pullRequest,
+      rounds: { number: 1, limit: 3, prior: [] },
+    }
+    const capture: ProviderCapture = { requests: [] }
+    const reason = 'Repository prepare command `pnpm exec nuxt prepare` exited with code 1.\nERROR Cannot find module nuxt'
+
+    const result = await createReviewFixWorker({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [] },
+          body: '',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' },
+          reviews: [],
+        })),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({ outcome: 'repaired', summary: '', checks: [], commitMessage: 'fix: x' }), capture)),
+      status: { publishRepair: () => Promise.resolve(ok(undefined)) },
+      store: {
+        getReviewFixFindings: () => [{ _tag: 'Open', summary: 'A finding.', nextAction: 'Fix it.', details: { fingerprint: 'f'.repeat(64), location: { path: 'src/parser.ts', line: 1 }, proof: 'proof', regressionTest: 'test' } }],
+        recordRepairReport: () => true,
+        getWorkerSession: () => null,
+        requestReviewRerun: () => { throw new Error('A failed prepare must not queue another Review.') },
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(mapping)),
+      worktrees: {
+        prepare: () => Promise.resolve(err(reason)),
+        verify: () => { throw new Error('Nothing to verify without an Agent turn.') },
+        commit: () => { throw new Error('Nothing to commit without an Agent turn.') },
+      },
+    }).run(task, new AbortController().signal)
+
+    expect(result).toEqual(err(reason))
+    expect(capture.requests).toEqual([])
+  })
+
   it('hands a later round the earlier rounds and stores its own report', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const mapping = repositoryMapping({ ownership: 'maintained' })

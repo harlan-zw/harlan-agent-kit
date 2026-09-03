@@ -181,6 +181,10 @@ const networkPatterns: RegExp[] = [
   /\bENETUNREACH\b/,
   /\bsocket hang up\b/i,
   /\bfetch failed\b/i,
+  /\bERR_PNPM_FETCH_\w+\b/,
+  // A repository prepare command that outlived its timeout was most often
+  // waiting on a registry or a cold cache. The same command finishes on retry.
+  /\bprepare command\b.+\btimed out\b/i,
   /\bnetwork\b.+\berror\b/i,
   /\brequest\b.+\btimed out\b/i,
   // The article varies by caller, so it must not decide the class.

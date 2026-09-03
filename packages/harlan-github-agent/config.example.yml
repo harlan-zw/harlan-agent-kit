@@ -60,3 +60,15 @@ repositories: []
 # Maintained repositories need an explicit policy. Without an installation,
 # the controller uses the authenticated GitHub account.
 # Set repositories[].max_open_pull_requests to hold new Issue work for one busy repository.
+# Set repositories[].prepare to the repository's own prepare step. Worktrunk
+# installs node_modules; these commands run after it, in the task worktree,
+# before a Repair, conflict resolution, Baseline repair, or Issue work Agent
+# starts. Review and Issue triage skip them. Each entry is one plain command
+# with the worktree's node_modules/.bin on PATH, no shell syntax. A failing or
+# timed out command stops the Agent and records a Task Incident with the output.
+# prepare_timeout_seconds bounds each command. Default 600.
+# - github: harlan-zw/nuxtseo.com
+#   prepare:
+#     - pnpm ensure-prepared
+#     - pnpm --filter @nuxtseo/protocol build
+#   prepare_timeout_seconds: 900

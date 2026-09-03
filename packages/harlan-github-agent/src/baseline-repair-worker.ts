@@ -12,6 +12,7 @@ import { runAgentTurn } from './agent-turn.ts'
 import { withBaselineRepairMarker } from './baseline-repair-state.ts'
 import { classifyCheckFailure } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
+import { preparedCommandsLine } from './repository-prepare.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -221,6 +222,8 @@ function checkBlock(context: FailedCheckContext): string {
 
 export interface BaselineRepairPromptInput {
   repository: string
+  /** The repository prepare commands the controller already ran in the worktree. */
+  prepareCommands: readonly string[]
   baseSha: string
   repairable: FailedCheckContext[]
   infrastructure: Array<{ check: GitHubCheck, reason: string }>
@@ -243,7 +246,7 @@ export function baselineRepairPrompt(input: BaselineRepairPromptInput): string {
 Own the work end to end. Find the root cause, implement the complete fix, and verify it.
 Work as a normal local agent session. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before you return a result.
-${agents}Apply the unit-tests skill for a bug fix.
+${preparedCommandsLine(input.prepareCommands)}${agents}Apply the unit-tests skill for a bug fix.
 
 Failing checks:
 ${input.repairable.map(checkBlock).join('\n')}
@@ -347,6 +350,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: progress, work: 'baseline' },
         prompt: baselineRepairPrompt({
           repository: task.repository,
+          prepareCommands: task.repositoryMapping.prepare.commands,
           baseSha: task.pullRequest.baseSha,
           repairable,
           infrastructure,

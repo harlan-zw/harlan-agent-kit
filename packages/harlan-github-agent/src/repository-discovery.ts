@@ -113,6 +113,7 @@ function defaultMapping(repository: InstalledRepository, checkout: string): Repo
     writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/', 'ci/'],
     issueWork: ownership === 'owned',
     maxOpenPullRequests: null,
+    prepare: { commands: [], timeoutSeconds: 600 },
     pullRequestReview: true,
     conflictResolution: ownership === 'owned',
     takeOwnership: { _tag: 'Disabled' },

@@ -11,6 +11,8 @@ describe('classifyFailure', () => {
     ['Request quota exhausted for request GET https://api.github.com/repos', 'rate_limit'],
     ['request to https://api.github.com failed, reason: ECONNRESET', 'network'],
     ['fetch failed', 'network'],
+    ['Repository prepare command `pnpm exec nuxt prepare` timed out after 600 seconds.\nstill resolving', 'network'],
+    ['Repository prepare command `pnpm ensure-prepared` exited with code 1.\nERR_PNPM_FETCH_404 GET https://registry.npmjs.org/nuxt', 'network'],
     ['The opencode session stopped sending output.', 'agent_provider'],
     ['The opencode session exited with code 1.', 'agent_provider'],
     ['The opencode session failed: Unexpected server error. Check server logs for details.', 'agent_provider'],
@@ -239,5 +241,13 @@ describe('classifyCheckFailure', () => {
   it('reads a lost runner as Infrastructure without a log', () => {
     const failure = classifyCheckFailure({ name: 'test', conclusion: 'failure', runnerLost: true, logTail: [] })
     expect(failure).toEqual({ _tag: 'Infrastructure', reason: expect.stringContaining('runner lost the job') })
+  })
+})
+
+describe('classifyFailure for a repository prepare failure', () => {
+  it('leaves a prepare command that failed on the repository itself for a person', () => {
+    const reason = 'Repository prepare command `pnpm exec nuxt prepare` exited with code 1.\nERROR Cannot find module nuxt'
+
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'unknown' })
   })
 })

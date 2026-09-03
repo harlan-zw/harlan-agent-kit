@@ -7,6 +7,7 @@ import type { AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcom
 import type { ConflictWorktreeManager, PreparedConflictWorktree } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
+import { preparedCommandsLine } from './repository-prepare.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -50,7 +51,7 @@ function workerPrompt(task: ClaimedConflictResolutionTask, worktree: PreparedCon
 
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
-The controller already merged the base branch into this worktree. Do not rediscover the merge state.
+${preparedCommandsLine(task.repositoryMapping.prepare.commands)}The controller already merged the base branch into this worktree. Do not rediscover the merge state.
 Pull request head: ${worktree.headSha}
 Base branch: ${baseRef} at ${worktree.baseSha}
 Conflicted files:

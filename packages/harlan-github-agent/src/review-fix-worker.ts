@@ -11,6 +11,7 @@ import { CHECK_BUDGET_LINES, instructionFilesLine, listInstructionFiles, TOOLCHA
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
+import { preparedCommandsLine } from './repository-prepare.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -105,7 +106,7 @@ export function reviewFixPrompt(input: ReviewFixPromptInput): string {
   return `Repair the exact material Review findings for ${task.repository}#${task.pullRequestNumber}.
 
 Work as a fresh local Agent session inside this prepared Git worktree.
-${instructionFilesLine(input.instructionFiles)}
+${preparedCommandsLine(task.repositoryMapping.prepare.commands)}${instructionFilesLine(input.instructionFiles)}
 Treat the findings below as the complete Repair scope.
 ${repairRoundHistory(task.rounds)}
 ${UNIT_TEST_LINES}

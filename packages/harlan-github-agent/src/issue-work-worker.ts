@@ -12,6 +12,7 @@ import { runAgentTurn } from './agent-turn.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
 import { canWorkIssues } from './repository-policy.ts'
+import { preparedCommandsLine } from './repository-prepare.ts'
 import { err, ok } from './result.ts'
 import { chooseOverlappingStackBase, chooseStackBase } from './stack.ts'
 import { cleanLine } from './text.ts'
@@ -223,7 +224,7 @@ ${storedTriageLines(input.triage)}
 Plan, implement, and verify the complete fix.
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
-${instructionFilesLine(input.instructionFiles)}
+${preparedCommandsLine(task.repositoryMapping.prepare.commands)}${instructionFilesLine(input.instructionFiles)}
 Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or humanize-writing. Their rules are inlined below.
 ${UNIT_TEST_LINES}
 ${CHECK_BUDGET_LINES}
