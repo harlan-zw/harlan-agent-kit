@@ -111,6 +111,7 @@ Unsure means no label. Rules: `harlan-agent-kit/references/auto-merge.md`.
 ## Workflow
 
 - Ship the smallest thing that solves it. Add structure when it fails.
+- A pull request that crosses three or more modules, a boundary, or a sequence carries a PR Lens diagram in its description. Smaller ones do not. Read `skills/pr-lens/SKILL.md`.
 - Production error: fix the category, not the instance.
 - Refactors and architecture audits: finish the whole change before stopping (imports updated, old code removed, tests pass).
 

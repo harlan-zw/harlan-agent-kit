@@ -170,6 +170,12 @@ Modelled on Harlan's hand-written PRs to `nuxt/nuxt`. These are the moves that r
 - **Motivation before mechanism** for a feature: who needs this, what they do today, what is bad about that, then the change.
 - **Do not perform completeness.** Leave the repo template's HTML comments untouched. Tick a checklist box only if it is true. Shipping with boxes unticked is normal and correct.
 
+### Diagram
+
+Before writing the description, decide whether the change earns a diagram. Read the [pr-lens skill](../pr-lens/SKILL.md) and use its threshold: three or more modules, a crossed boundary, or a sequence a reviewer must follow. If it qualifies, author and render the graph document there, then reference the top architecture view from the description with a Markdown image and pass the same path to `--attach` on `gh pr create` or `gh pr edit`. One view is normal. Two is the ceiling unless the change is a large refactor.
+
+A diagram goes in the description, after the why and before the AI disclosure. Never in a trailing comment.
+
 **Strip AI tells from the title and description** before pushing, run them through `/humanize-writing`. For PRs specifically: no em-dashes, drop the over-explained "this means that..." takeaway, and use specifics (issue numbers, real before/after behaviour, measured figures) instead of vague claims like "improves performance". A PR body that reads as AI-generated erodes reviewer trust.
 
 **Reads-human check.** Before pushing, reread the body and cut anything that exists to show effort rather than to help the reviewer. This is the target shape:
@@ -224,6 +230,8 @@ BODY
 EOF
 )"
 ```
+
+When Step 3 rendered a diagram, add `--attach .pr-lens/<view>-dark-<hash>.svg` for each image the body references. GitHub CLI rewrites the Markdown path to the uploaded asset.
 
 Output the PR URL when done. Log to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 

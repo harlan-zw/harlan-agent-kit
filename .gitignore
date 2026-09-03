@@ -12,3 +12,6 @@ __pycache__/
 
 # Harness worktrees; wt owns worktrees as repo siblings
 .claude/worktrees/
+
+# PR Lens writes its previews here. They are rebuilt on demand.
+.pr-lens/
