@@ -373,6 +373,7 @@ def fetch_issue_bundle(org, project, issue_id, events, compact, base_url, token)
         detailed_events.append(compact_event(detail) if compact else detail)
     return {
         "project": project,
+        "compact": compact,
         "issue": issue_summary(issue) if compact else issue,
         "events": detailed_events,
     }
@@ -410,7 +411,11 @@ def bulk_bundles(args, base_url, token):
         path = output_dir / f"{issue_id}.json"
         if path.exists():
             existing = json.loads(path.read_text())
-            if str(existing.get("issue", {}).get("id")) == issue_id:
+            # A bundle written before the mode was recorded is compact, because
+            # this command was compact-only then. Reuse only a bundle of the
+            # requested mode, or a resumed run keeps evidence with no frames.
+            same_mode = existing.get("compact", True) == args.compact
+            if str(existing.get("issue", {}).get("id")) == issue_id and same_mode:
                 text = stable_json(existing)
                 return issue_id, text
         value = fetch_issue_bundle(
@@ -445,6 +450,7 @@ def bulk_bundles(args, base_url, token):
         "issue_count": len(issue_ids),
         "issue_ids_sha256": issue_ids_checksum(issue_ids),
         "events_per_issue": args.events,
+        "compact": args.compact,
         "completed": dict(sorted(checksums.items())),
         "errors": dict(sorted(errors.items())),
     }
@@ -646,7 +652,9 @@ def digest_bundles(args):
             },
         }
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = state_path.with_suffix(".json.tmp")
+        # One temp name per process, so two digests of one project cannot
+        # interleave writes into a shared file and publish a torn state.
+        temporary = state_path.with_name(f"{state_path.name}.{os.getpid()}.tmp")
         temporary.write_text(stable_json(state))
         temporary.replace(state_path)
         result["recorded"] = True

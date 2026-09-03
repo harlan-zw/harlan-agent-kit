@@ -265,6 +265,60 @@ print('''+----------+----------+----------------------+-------------------------
             self.assertEqual(json.loads((output / "1.json").read_text())["project"], "site")
 
 
+    def test_bulk_bundle_refetches_a_compact_bundle_when_full_evidence_is_requested(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory) / "snapshot.json"
+            snapshot.write_text(
+                json.dumps(
+                    {"org": "test", "project": "site", "issues": [{"id": "1", "short_id": "TEST-1"}]}
+                )
+            )
+            output = Path(directory) / "bundles"
+            output.mkdir()
+            (output / "1.json").write_text(
+                json.dumps(
+                    {
+                        "project": "site",
+                        "issue": {"id": "1", "short_id": "TEST-1"},
+                        "events": [{"eventID": "event-1", "exceptions": []}],
+                    }
+                )
+            )
+            env = dict(os.environ)
+            env["SENTRY_AUTH_TOKEN"] = "test-token"
+            env["SENTRY_URL"] = f"http://127.0.0.1:{server.server_port}"
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("sentry_api.py")),
+                        "--org",
+                        "test",
+                        "bulk-bundles",
+                        "--project",
+                        "site",
+                        "--snapshot",
+                        str(snapshot),
+                        "--output",
+                        str(output),
+                    ],
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                    text=True,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            bundle = json.loads((output / "1.json").read_text())
+            self.assertFalse(bundle["compact"])
+            self.assertIn("entries", bundle["events"][0])
+            self.assertFalse(json.loads((output / "manifest.json").read_text())["compact"])
+
     def run_resolve(self, *arguments):
         SentryHandler.writes = []
         server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
@@ -584,6 +638,33 @@ class DigestTest(unittest.TestCase):
             )
             self.assertFalse(digest["snapshot_unchanged"])
             self.assertEqual(digest["changed_issue_ids"], ["2"])
+
+    def test_concurrent_digests_leave_the_state_file_readable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            bundles_dir = self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE])
+            command = [
+                sys.executable,
+                str(Path(__file__).with_name("sentry_api.py")),
+                "--org",
+                "test",
+                "digest",
+                "--project",
+                "site",
+                "--bundles",
+                str(bundles_dir),
+                "--state",
+                str(state),
+            ]
+            processes = [
+                subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                for _ in range(4)
+            ]
+            for process in processes:
+                _, stderr = process.communicate()
+                self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(json.loads(state.read_text())["project"], "site")
+            self.assertEqual(list(Path(directory).glob("state.json.*.tmp")), [])
 
     def test_compact_bundle_warns_that_frames_are_dropped(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
