@@ -7,6 +7,7 @@ import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
 import type { ReviewFixWorktreeManager } from './worktree.ts'
 import { createHash } from 'node:crypto'
+import { CHECK_BUDGET_LINES, instructionFilesLine, listInstructionFiles, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
@@ -91,16 +92,27 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
     .catch(() => err('The Agent returned malformed Repair JSON.'))
 }
 
-function prompt(task: ClaimedReviewFixTask, findings: ReviewFinding[]): string {
+export interface ReviewFixPromptInput {
+  task: ClaimedReviewFixTask
+  findings: readonly ReviewFinding[]
+  /** Instruction file names that exist in the prepared worktree. */
+  instructionFiles: readonly string[]
+}
+
+/** The Repair prompt. Exported so tests can assert its contract without an Agent. */
+export function reviewFixPrompt(input: ReviewFixPromptInput): string {
+  const { task, findings } = input
   return `Repair the exact material Review findings for ${task.repository}#${task.pullRequestNumber}.
 
 Work as a fresh local Agent session inside this prepared Git worktree.
-Read repository AGENTS.md and trusted contributor instructions.
-Apply the unit-tests skill before every bug or validation fix.
+${instructionFilesLine(input.instructionFiles)}
 Treat the findings below as the complete Repair scope.
 ${repairRoundHistory(task.rounds)}
+${UNIT_TEST_LINES}
 For each finding, write the named failing regression test first. Confirm it fails for the stated reason.
-Fix every finding. Run focused checks that cover every changed behavior.
+Fix every finding.
+${CHECK_BUDGET_LINES}
+${TOOLCHAIN_LINES}
 For a visual finding, read the pull request image and reproduce the defect at the shown viewport.
 Download images only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths).
 If a private-user-images URL returns 404 or 401, refetch it with an Authorization header carrying the repository-scoped token from the authenticated GitHub CLI.
@@ -113,7 +125,7 @@ Do not stage, commit, push, approve, merge, or post comments. The controller own
 Choose a concise commit message that describes the actual fix.
 Return an empty commitMessage with outcome blocked or disputed.
 Return every schema field.
-Return only the required JSON.
+Return only the required JSON. Do not wrap it in a code fence.
 
 Base SHA: ${task.pullRequest.baseSha}
 Head SHA: ${task.pullRequest.headSha}
@@ -177,12 +189,13 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const ready = await progress({ percent: 35, label: 'Repair worktree ready' })
       if (ready._tag === 'Err')
         return ready
+      const instructionFiles = await listInstructionFiles(prepared.value.path)
 
       const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
         freshSession: true,
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Repair worktree ready' }, report: progress, work: 'fix' },
-        prompt: prompt(task, findings),
+        prompt: reviewFixPrompt({ task, findings, instructionFiles }),
         repository: task.repository,
         role: 'review_fix',
         schema: outputSchema,
