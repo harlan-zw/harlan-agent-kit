@@ -171,11 +171,7 @@ If creation, update, or confirmation fails, return an explicit posting failure. 
 
 ## Return
 
-Return one compact line:
-
-## Examples
-
-Examples:
+Return one compact line. Examples:
 
 Input: `Adversarial review https://github.com/owner/repo/pull/42`
 
