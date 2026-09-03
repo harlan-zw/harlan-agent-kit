@@ -905,6 +905,8 @@ export interface JournalStore {
   recordAgentFeedback: (input: { reviewRunId: string, feedback: AgentFeedbackInput, at: string }) => RecordAgentFeedbackResult
   /** Newest explicit judgments with the Review evidence needed by the feedback Routine. */
   listAgentFeedback: (limit?: number) => AgentFeedbackSignal[]
+  /** Evidence JSON of the Completed Issue triage Task for one issue Revision. */
+  getIssueTriageEvidence: (repository: string, issueNumber: number, revisionId: string) => string | null
   /** Exact open findings the current Review handed to its Repair Task. */
   getReviewFixFindings: (repository: string, pullRequestNumber: number, revisionId: string) => ReviewFinding[]
   /**
@@ -7299,6 +7301,21 @@ export function openJournalStore(
       : (JSON.parse(row.findings) as ReviewFinding[]).filter(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
   }
 
+  const getIssueTriageEvidence: JournalStore['getIssueTriageEvidence'] = (repository, issueNumber, revisionId) => {
+    const row = database.prepare(`
+      SELECT worker_tasks.evidence
+      FROM worker_tasks
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
+        AND worker_tasks.revision_id = ?
+        AND worker_tasks.kind = 'issue_triage' AND worker_tasks.state_tag = 'Completed'
+      ORDER BY worker_tasks.updated_at DESC, worker_tasks.id DESC
+      LIMIT 1
+    `).get(repository, issueNumber, revisionId) as { evidence: string } | undefined
+    return row === undefined ? null : row.evidence
+  }
+
   const getRepairedHeadFindings: JournalStore['getRepairedHeadFindings'] = (repository, pullRequestNumber, commitSha) => {
     const repaired = database.prepare(`
       SELECT tasks.revision_id AS revision_id
@@ -13023,6 +13040,7 @@ export function openJournalStore(
     heartbeatTask,
     heartbeatWorkerTask,
     countOpenPullRequests,
+    getIssueTriageEvidence,
     getReviewFixFindings,
     getRepairedHeadFindings,
     listAgentFeedback,

@@ -46,19 +46,13 @@ export interface IssueWorkWorker {
   run: (task: ClaimedIssueWorkTask, signal: AbortSignal) => Promise<Result<MutationWorkerOutcome, string>>
 }
 
-/** Reads the evidence JSON of the completed Issue triage Task for one issue Revision. */
-export interface IssueTriageEvidenceSource {
-  getIssueTriageEvidence: (repository: string, issueNumber: number, revisionId: string) => string | null
-}
-
 export interface IssueWorkWorkerOptions {
   github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'getPullRequestTemplate' | 'listPullRequestFiles'>
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
-  store: Pick<JournalStore, 'getWorkerSession' | 'listOpenAgentPullRequests' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getIssueTriageEvidence' | 'getWorkerSession' | 'listOpenAgentPullRequests' | 'saveWorkerSession' | 'updateAgentProgress'>
     & Partial<Pick<JournalStore, 'getRoutineIssueSource'>>
-    & Partial<IssueTriageEvidenceSource>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: IssueWorktreeManager
 }
@@ -337,7 +331,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (ready._tag === 'Err')
         return ready
       const instructionFiles = await listInstructionFiles(prepared.value.path)
-      const triage = parseStoredIssueTriage(options.store.getIssueTriageEvidence?.(task.repository, task.issueNumber, task.revisionId))
+      const triage = parseStoredIssueTriage(options.store.getIssueTriageEvidence(task.repository, task.issueNumber, task.revisionId))
 
       // The triage session is keyed on the default branch tip, whatever the pull
       // request stacks on, so stacking never loses the session that triaged it.
