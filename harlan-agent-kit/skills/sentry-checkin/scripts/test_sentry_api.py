@@ -265,6 +265,60 @@ print('''+----------+----------+----------------------+-------------------------
             self.assertEqual(json.loads((output / "1.json").read_text())["project"], "site")
 
 
+    def test_bulk_bundle_refetches_a_compact_bundle_when_full_evidence_is_requested(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory) / "snapshot.json"
+            snapshot.write_text(
+                json.dumps(
+                    {"org": "test", "project": "site", "issues": [{"id": "1", "short_id": "TEST-1"}]}
+                )
+            )
+            output = Path(directory) / "bundles"
+            output.mkdir()
+            (output / "1.json").write_text(
+                json.dumps(
+                    {
+                        "project": "site",
+                        "issue": {"id": "1", "short_id": "TEST-1"},
+                        "events": [{"eventID": "event-1", "exceptions": []}],
+                    }
+                )
+            )
+            env = dict(os.environ)
+            env["SENTRY_AUTH_TOKEN"] = "test-token"
+            env["SENTRY_URL"] = f"http://127.0.0.1:{server.server_port}"
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("sentry_api.py")),
+                        "--org",
+                        "test",
+                        "bulk-bundles",
+                        "--project",
+                        "site",
+                        "--snapshot",
+                        str(snapshot),
+                        "--output",
+                        str(output),
+                    ],
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                    text=True,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            bundle = json.loads((output / "1.json").read_text())
+            self.assertFalse(bundle["compact"])
+            self.assertIn("entries", bundle["events"][0])
+            self.assertFalse(json.loads((output / "manifest.json").read_text())["compact"])
+
     def run_resolve(self, *arguments):
         SentryHandler.writes = []
         server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
@@ -346,6 +400,332 @@ print('''+----------+----------+----------------------+-------------------------
         self.assertEqual(result.returncode, 1)
         self.assertIn("numeric issue ID", result.stderr)
         self.assertEqual(SentryHandler.writes, [])
+
+
+FULL_BUNDLE = {
+    "project": "site",
+    "issue": {
+        "id": "1",
+        "shortId": "SITE-1",
+        "title": "TypeError: x is undefined",
+        "culprit": "app/pages/index.vue",
+        "level": "error",
+        "status": "unresolved",
+        "count": "12",
+        "userCount": 4,
+        "firstSeen": "2026-08-10T00:00:00Z",
+        "lastSeen": "2026-08-28T00:00:00Z",
+    },
+    "events": [
+        {
+            "eventID": "event-1",
+            "release": {"version": "abc123"},
+            "environment": "production",
+            "entries": [
+                {
+                    "type": "exception",
+                    "data": {
+                        "values": [
+                            {
+                                "type": "TypeError",
+                                "value": "x is undefined",
+                                "stacktrace": {
+                                    "frames": [
+                                        {"filename": "node_modules/vue/runtime.js", "function": "render", "lineno": 1, "in_app": False},
+                                        {"filename": "app/pages/index.vue", "function": "setup", "lineno": 42, "in_app": True},
+                                        {"filename": "app/utils/read.ts", "function": "read", "lineno": 7, "in_app": True},
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+    ],
+}
+COMPACT_BUNDLE = {
+    "project": "site",
+    "issue": {
+        "id": "2",
+        "short_id": "SITE-2",
+        "title": "Error: boom",
+        "culprit": "server/api/boom.ts",
+        "count": "3",
+        "user_count": 1,
+        "first_seen": "2026-08-20T00:00:00Z",
+        "last_seen": "2026-08-21T00:00:00Z",
+    },
+    "events": [
+        {
+            "release": "def456",
+            "exceptions": [
+                {
+                    "type": "Error",
+                    "value": "boom",
+                    "frames": [
+                        {"filename": "server/api/boom.ts", "function": "handler", "lineno": 3, "in_app": True}
+                    ],
+                }
+            ],
+        }
+    ],
+}
+
+
+class DigestTest(unittest.TestCase):
+    def write_bundles(self, directory, bundles):
+        bundles_dir = Path(directory) / "bundles"
+        bundles_dir.mkdir(exist_ok=True)
+        for bundle in bundles:
+            issue_id = str(bundle["issue"]["id"])
+            (bundles_dir / f"{issue_id}.json").write_text(json.dumps(bundle))
+        (bundles_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "org": "test",
+                    "project": "site",
+                    "completed": {str(bundle["issue"]["id"]): "x" for bundle in bundles},
+                    "errors": {},
+                }
+            )
+        )
+        return bundles_dir
+
+    def run_digest(self, bundles_dir, state, *arguments):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("sentry_api.py")),
+                "--org",
+                "test",
+                "digest",
+                "--project",
+                "site",
+                "--bundles",
+                str(bundles_dir),
+                "--state",
+                str(state),
+                *arguments,
+            ],
+            capture_output=True,
+            check=False,
+            env={**os.environ, "SENTRY_AUTH_TOKEN": ""},
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        return json.loads(result.stdout)
+
+    def test_digest_summarizes_full_and_compact_bundles_without_a_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            full, compact = digest["issues"]
+            self.assertEqual(full["short_id"], "SITE-1")
+            self.assertEqual(full["event_count"], "12")
+            self.assertEqual(full["user_count"], 4)
+            self.assertEqual(full["release"], "abc123")
+            self.assertEqual(full["exception"]["type"], "TypeError")
+            self.assertEqual(
+                [(frame["file"], frame["function"]) for frame in full["frames"]],
+                [("app/utils/read.ts", "read"), ("app/pages/index.vue", "setup")],
+            )
+            self.assertEqual(compact["release"], "def456")
+            self.assertEqual(compact["frames"][0]["file"], "server/api/boom.ts")
+            self.assertTrue(all(entry["fingerprint"].startswith("sentry:") for entry in digest["issues"]))
+            self.assertFalse(digest["snapshot_unchanged"])
+            self.assertEqual([entry["runs_seen"] for entry in digest["issues"]], [1, 1])
+
+    def test_digest_reports_a_zero_user_count_from_a_compact_bundle(self):
+        zero = json.loads(json.dumps(COMPACT_BUNDLE))
+        zero["issue"]["user_count"] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [zero])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            self.assertEqual(digest["issues"][0]["user_count"], 0)
+
+    def test_digest_gives_frameless_issues_with_one_culprit_distinct_fingerprints(self):
+        frameless = {
+            "project": "site",
+            "issue": {
+                "id": "10",
+                "short_id": "SITE-10",
+                "title": "Error: first",
+                "culprit": "server/api/gone.ts",
+                "count": "1",
+                "user_count": 1,
+                "first_seen": "2026-08-20T00:00:00Z",
+                "last_seen": "2026-08-21T00:00:00Z",
+            },
+            "events": [{"eventID": "event-a"}],
+        }
+        sibling = json.loads(json.dumps(frameless))
+        sibling["issue"]["id"] = "11"
+        sibling["issue"]["short_id"] = "SITE-11"
+        sibling["issue"]["title"] = "Error: second"
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [frameless, sibling])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            first, second = digest["issues"]
+            self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_digest_gives_typed_frameless_issues_with_one_culprit_distinct_fingerprints(self):
+        frameless = {
+            "project": "site",
+            "issue": {
+                "id": "12",
+                "short_id": "SITE-12",
+                "title": "Error: first",
+                "culprit": "server/api/gone.ts",
+                "count": "1",
+                "user_count": 1,
+                "first_seen": "2026-08-20T00:00:00Z",
+                "last_seen": "2026-08-21T00:00:00Z",
+            },
+            "events": [
+                {
+                    "entries": [
+                        {"type": "exception", "data": {"values": [{"type": "Error", "value": "first"}]}}
+                    ]
+                }
+            ],
+        }
+        sibling = json.loads(json.dumps(frameless))
+        sibling["issue"]["id"] = "13"
+        sibling["issue"]["short_id"] = "SITE-13"
+        sibling["issue"]["title"] = "Error: second"
+        sibling["events"][0]["entries"][0]["data"]["values"][0]["value"] = "second"
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [frameless, sibling])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            first, second = digest["issues"]
+            self.assertEqual(first["exception"]["type"], "Error")
+            self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_digest_flags_an_unchanged_backlog_on_the_next_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            bundles_dir = self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE])
+            first = self.run_digest(bundles_dir, state, "--run-id", "run-1", "--record")
+            second = self.run_digest(bundles_dir, state, "--run-id", "run-2", "--record")
+            self.assertTrue(second["snapshot_unchanged"])
+            self.assertTrue(second["all_unchanged"])
+            self.assertEqual(second["previous_run"]["run_id"], "run-1")
+            self.assertEqual([entry["runs_seen"] for entry in second["issues"]], [2, 2])
+            self.assertEqual(
+                [entry["fingerprint"] for entry in first["issues"]],
+                [entry["fingerprint"] for entry in second["issues"]],
+            )
+
+            grown = json.loads(json.dumps(FULL_BUNDLE))
+            grown["issue"]["count"] = "13"
+            grown["issue"]["lastSeen"] = "2026-09-01T00:00:00Z"
+            bundles_dir = self.write_bundles(directory, [grown, COMPACT_BUNDLE])
+            third = self.run_digest(bundles_dir, state)
+            self.assertTrue(third["snapshot_unchanged"])
+            self.assertFalse(third["all_unchanged"])
+            self.assertEqual(third["changed_issue_ids"], ["1"])
+            self.assertFalse(third["recorded"])
+            self.assertEqual(json.loads(state.read_text())["run_id"], "run-2")
+
+    def test_digest_never_skips_a_backlog_an_aborted_run_only_looked_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            bundles_dir = self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE])
+            looked = self.run_digest(bundles_dir, state, "--run-id", "run-1")
+            self.assertFalse(looked["recorded"])
+            self.assertFalse(state.exists())
+            again = self.run_digest(bundles_dir, state, "--run-id", "run-2")
+            self.assertFalse(again["snapshot_unchanged"])
+            self.assertFalse(again["all_unchanged"])
+            recorded = self.run_digest(bundles_dir, state, "--run-id", "run-2", "--record")
+            self.assertTrue(recorded["recorded"])
+            self.assertTrue(self.run_digest(bundles_dir, state, "--run-id", "run-3")["all_unchanged"])
+
+    def test_digest_keeps_two_defects_apart_when_they_share_frames_and_culprit(self):
+        first = json.loads(json.dumps(FULL_BUNDLE))
+        second = json.loads(json.dumps(FULL_BUNDLE))
+        second["issue"]["id"] = "3"
+        second["issue"]["shortId"] = "SITE-3"
+        second["issue"]["title"] = "TypeError: y is not a function"
+        second["events"][0]["entries"][0]["data"]["values"][0]["value"] = "y is not a function"
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [first, second])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            one, two = digest["issues"]
+            self.assertEqual(one["frames"], two["frames"])
+            self.assertNotEqual(one["fingerprint"], two["fingerprint"])
+
+    def test_digest_sees_a_new_issue_set_as_changed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            self.run_digest(self.write_bundles(directory, [FULL_BUNDLE]), state, "--record")
+            digest = self.run_digest(
+                self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE]), state
+            )
+            self.assertFalse(digest["snapshot_unchanged"])
+            self.assertEqual(digest["changed_issue_ids"], ["2"])
+
+    def test_concurrent_digests_leave_the_state_file_readable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            bundles_dir = self.write_bundles(directory, [FULL_BUNDLE, COMPACT_BUNDLE])
+            command = [
+                sys.executable,
+                str(Path(__file__).with_name("sentry_api.py")),
+                "--org",
+                "test",
+                "digest",
+                "--project",
+                "site",
+                "--bundles",
+                str(bundles_dir),
+                "--state",
+                str(state),
+                "--record",
+            ]
+            processes = [
+                subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                for _ in range(4)
+            ]
+            for process in processes:
+                _, stderr = process.communicate()
+                self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(json.loads(state.read_text())["project"], "site")
+            self.assertEqual(list(Path(directory).glob("state.json.*.tmp")), [])
+
+    def test_compact_bundle_warns_that_frames_are_dropped(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), SentryHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        env = dict(os.environ)
+        env["SENTRY_AUTH_TOKEN"] = "test-token"
+        env["SENTRY_URL"] = f"http://127.0.0.1:{server.server_port}"
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("sentry_api.py")),
+                    "--org",
+                    "test",
+                    "bundle",
+                    "--project",
+                    "site",
+                    "--issue",
+                    "1",
+                    "--compact",
+                ],
+                capture_output=True,
+                check=False,
+                env=env,
+                text=True,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("drops thread and raw frames", result.stderr)
 
 
 if __name__ == "__main__":

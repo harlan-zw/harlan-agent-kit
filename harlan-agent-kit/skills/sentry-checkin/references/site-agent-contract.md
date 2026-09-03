@@ -14,22 +14,18 @@ All fixes, tests, commits, and PR actions for this site happen in the selected t
 
 ## Inspect every issue
 
-For snapshots with at most 25 issues, fetch the latest compact event for each issue:
-
-```bash
-python3 SKILL_DIR/scripts/sentry_api.py --org ORG bundle \
-  --project PROJECT --issue ISSUE_ID --events 1 --compact
-```
-
-For larger snapshots, use the resumable bulk command. Use at most four workers:
+Fetch the latest full event for every issue with the resumable bulk command. Use at most four workers:
 
 ```bash
 python3 SKILL_DIR/scripts/sentry_api.py --org ORG bulk-bundles \
   --project PROJECT --snapshot PROJECT.snapshot.json \
   --output SITE_ARTIFACTS/PROJECT --events 1 --workers 4
+python3 SKILL_DIR/scripts/sentry_api.py --org ORG digest \
+  --project PROJECT --bundles SITE_ARTIFACTS/PROJECT \
+  --output SITE_ARTIFACTS/PROJECT.digest.json
 ```
 
-Rerun the same command after transient failures. It preserves completed redacted bundles and writes a checksum manifest. Read the latest event stack, release, environment, request path, breadcrumbs, tags, and source context. Fetch up to five events with `bundle` only when the latest event lacks evidence.
+Rerun the same command after transient failures. It preserves completed redacted bundles and writes a checksum manifest. Read the digest first. It holds the title, culprit, top in-app frames, counts, release, and a stable fingerprint per issue. Open a raw bundle for the request path, breadcrumbs, tags, and source context only when the digest lacks the evidence. Fetch up to five events with `bundle` only when the latest event lacks evidence. `--compact` drops thread and raw frames, so leave it off.
 
 Initialize one site ledger from every project manifest before editing:
 

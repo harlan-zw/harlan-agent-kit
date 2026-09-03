@@ -7,6 +7,40 @@ description: "Triage and repair all open Sentry issues across Harlan's sites. Us
 
 Turn the complete open Sentry backlog into one verified PR per affected site. Account for every issue present at discovery time.
 
+## Routine mode
+
+A Routine names one site and one repository. The turn is read only for that repository. Follow these rules and skip the rest of this file where they conflict.
+
+- Skip the site inventory. The Routine names the site.
+- Skip `references/site-agent-contract.md`. It describes delegated site agents. There are none.
+- Use the installed `sentry-cli`. Fall back to `pnpm dlx @sentry/cli` only if none is installed.
+- Never read `~/.sentryclirc`. `scripts/sentry_api.py` reads it for you. It redacts the output. Its `digest` command reads no token at all.
+- Fetch evidence once with `bulk-bundles`. Then run `digest`. Read the digest, not the raw bundles.
+- If `all_unchanged` is true, stop. Do not read code. Return `Candidates: []` and give the reason: the issue set and every issue match the last run.
+- After the report is complete, run `digest` again with `--record`. That writes local run state. The state is neither a Sentry write nor a repository write. It is what makes the next run cheap.
+- Never pass `--record` before the analysis is complete. A run that aborts after recording would hide the backlog from the next run.
+- Return one JSON object only. Put no prose before it. Put no prose after it. The Routine parses the answer with `JSON.parse`.
+- Put the report text in the `report` field. Use one `fingerprint` from the digest per Candidate, so the same defect keeps one identity.
+
+The Routine command sequence for site PROJECT in org ORG:
+
+```bash
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/sentry-checkin"
+RUN_DIR=$(mktemp -d "${XDG_STATE_HOME:-$HOME/.local/state}/sentry-checkin/run-XXXXXXXX")
+python3 scripts/sentry_api.py --org ORG snapshot --project PROJECT --output "$RUN_DIR/PROJECT.snapshot.json"
+python3 scripts/sentry_api.py --org ORG bulk-bundles --project PROJECT \
+  --snapshot "$RUN_DIR/PROJECT.snapshot.json" --output "$RUN_DIR/PROJECT" --workers 4
+python3 scripts/sentry_api.py --org ORG digest --project PROJECT \
+  --bundles "$RUN_DIR/PROJECT" --run-id "$(basename "$RUN_DIR")" --output "$RUN_DIR/PROJECT.digest.json"
+```
+
+The last command of the run, after the report exists:
+
+```bash
+python3 scripts/sentry_api.py --org ORG digest --project PROJECT \
+  --bundles "$RUN_DIR/PROJECT" --run-id "$(basename "$RUN_DIR")" --record
+```
+
 ## Worktree isolation
 
 Before site edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
@@ -31,18 +65,20 @@ If no inventory exists, stop before spawning agents or editing repositories. Rep
 
 ## Verify Sentry access
 
-Prefer an installed `sentry-cli`. Otherwise use `pnpm dlx @sentry/cli`.
+Use the installed `sentry-cli`. Fall back to `pnpm dlx @sentry/cli` only if none is installed.
 
 ```bash
-pnpm dlx @sentry/cli info
-pnpm dlx @sentry/cli organizations list
+sentry-cli info
+sentry-cli organizations list
 ```
 
 Use the sole organization when only one exists. If two or more exist and the request names none, ask which organization is in scope.
 
 Use `sentry-cli` for authentication, project discovery, and issue discovery. Sentry CLI 3.6 does not expose issue or stack details. The bundled `scripts/sentry_api.py` fills that gap. It uses the CLI token from `~/.sentryclirc` and redacts common secrets and personal data.
 
-Every command in that script reads, except `resolve`. `resolve` reports its plan and writes only with `--apply`.
+Never read `~/.sentryclirc` yourself. Never print the token. The script holds the token. The `digest` command gives event and user counts, so nobody needs a raw API call.
+
+Every command in that script reads Sentry only, except `resolve`. `resolve` reports its plan and writes only with `--apply`. `digest` writes one local state file per project. That file is run memory, not a Sentry write.
 
 Create a persistent run directory outside every repository:
 
@@ -57,7 +93,7 @@ SENTRY_CHECKIN_RUN_DIR=$(mktemp -d "${XDG_STATE_HOME:-$HOME/.local/state}/sentry
 2. List current Sentry projects with the CLI:
 
    ```bash
-   pnpm dlx @sentry/cli projects list --org ORG
+   sentry-cli projects list --org ORG
    ```
 
 3. Match each project to a site using the site's tracked Sentry configuration. Search for exact project slugs with `rg` or `git grep`.
@@ -79,6 +115,33 @@ The wrapper parses exact numeric and short IDs, writes a checksum, and stops at 
 The CLI paginates a live query, so one issue can appear on two pages. The wrapper keeps the first row per ID and lists every dropped ID in `duplicate_ids_dropped`. Report a non-empty list with the run. `issue_ids_sha256` covers the unique IDs in numeric order, so it compares directly with the `ledger.py audit` checksum.
 
 The snapshot is the run contract. New issues after discovery belong to the next run. Disappearing issues still need a ledger disposition.
+
+## Digest the evidence
+
+Fetch full bundles once per project, then summarize them:
+
+```bash
+python3 scripts/sentry_api.py --org ORG bulk-bundles --project PROJECT \
+  --snapshot "$SENTRY_CHECKIN_RUN_DIR/PROJECT.snapshot.json" \
+  --output "$SENTRY_CHECKIN_RUN_DIR/PROJECT" --workers 4
+python3 scripts/sentry_api.py --org ORG digest --project PROJECT \
+  --bundles "$SENTRY_CHECKIN_RUN_DIR/PROJECT" \
+  --run-id "$(basename "$SENTRY_CHECKIN_RUN_DIR")" \
+  --output "$SENTRY_CHECKIN_RUN_DIR/PROJECT.digest.json"
+```
+
+Full bundles are the default. `--compact` keeps exception frames only and drops thread and raw frames. Use it only when bundle size is the problem.
+
+The digest lists each issue once: title, culprit, top in-app frames, first and last seen, event and user counts, release, and a stable `fingerprint`. Read the digest before any bundle. Open a raw bundle only when the digest lacks the evidence for one issue.
+
+The digest also compares this run with the last digest for the project:
+
+- `unchanged_since_last_run`: the issue kept its last-seen time and event count.
+- `snapshot_unchanged`: the issue ID set matches the last run.
+- `all_unchanged`: both hold for every issue.
+- `runs_seen`: how many recorded digests saw this issue.
+
+`digest` compares only. It writes the state file only with `--record`. Run `--record` once, after every ledger for the project is complete. An aborted run then leaves no state, and the next run analyses the backlog in full.
 
 ## Read the prior dispositions
 
