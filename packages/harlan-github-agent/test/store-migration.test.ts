@@ -37,7 +37,13 @@ function dropReviewResolutionAdditions(database: DatabaseSync): void {
     database.exec('ALTER TABLE review_status_commands DROP COLUMN review_run_id')
 }
 
+/** Rewinds past the Repair report table, which every version below 60 predates. */
+function dropRepairReports(database: DatabaseSync): void {
+  database.exec('DROP TABLE IF EXISTS repair_reports')
+}
+
 function dropRestartOperationAdditions(database: DatabaseSync): void {
+  dropRepairReports(database)
   const columns = database.prepare('PRAGMA table_info(restart_requests)').all() as unknown as Array<{ name: string }>
   if (columns.some(column => column.name === 'target_commit'))
     database.exec('ALTER TABLE restart_requests DROP COLUMN target_commit')
@@ -595,6 +601,7 @@ describe('write quarantine Incident recovery migration', () => {
     store.close()
 
     const oldJournal = new DatabaseSync(path)
+    dropRepairReports(oldJournal)
     oldJournal.exec('PRAGMA user_version = 58')
     oldJournal.close()
 
@@ -628,7 +635,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(59)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(60)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })

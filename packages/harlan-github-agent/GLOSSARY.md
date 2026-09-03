@@ -41,6 +41,7 @@ did not cover it.
 | Conflict resolution | `tasks.kind` | Scheduler | One Task kind | conflict resolution |
 | Baseline repair | `tasks.kind` | Scheduler | One Task for one failing default branch commit | Baseline repair |
 | Repair | `tasks.kind` | Scheduler | One Task for the findings of one Review run | repair |
+| Repair round | `repair_reports`, Repair lineage in `publication_commands` | Scheduler | One Repair in a chain of controller Repairs on one pull request | repair round |
 | Context budget | `agent.contextBudget` | Runner | One per agent session | Context budget |
 | Stack | `subjects` base ref, `publication_commands.base_ref` | GitHub | A pull request whose base is another pull request's head | stack |
 | Issue triage | `worker_tasks.kind` | Scheduler | One Task for one issue Revision | issue triage |
@@ -366,6 +367,16 @@ One local GitHub Actions runner that executes workflow jobs.
 A self-hosted runner is independent of Harlan GitHub Agent. Its availability never changes Harlan GitHub Agent status.
 
 Use self-hosted runner. Do not use Agent, worker, executor, box, or build agent.
+
+### Repair round
+
+One Repair in the chain of controller Repairs that produced the current pull request head.
+
+Round 1 is the first Repair after a contributor commit. If the fresh Review of a Repair commit still finds a defect, the next round starts. A later round reads every earlier round's commit, report, and target findings before it changes anything.
+
+A pull request gets 3 rounds per contributor commit. A contributor push ends the chain and starts a fresh count. When the rounds are spent, Repair stops with Action required, and the canonical comment lists every round.
+
+Use Repair round. Do not use attempt, retry, iteration, or loop.
 
 ### Conflict resolution
 

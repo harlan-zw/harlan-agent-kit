@@ -115,7 +115,7 @@ function harness(input: {
     store: {
       queueReviewFixTaskForReview: input.queueRepair ?? (() => {
         repairs.queued += 1
-        return { _tag: 'Queued', taskId: 'repair-task' }
+        return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
       }),
       getRepairedHeadFindings: () => [],
       listReviewRuns: () => input.reviewRuns ?? [],

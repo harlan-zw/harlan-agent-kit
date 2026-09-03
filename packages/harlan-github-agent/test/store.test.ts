@@ -3181,7 +3181,7 @@ describe('journal store', () => {
       workerId: rerun.state.workerId,
       fence: rerun.state.fence,
       at: '2026-08-13T01:02:03.000Z',
-    })).toEqual({ _tag: 'Queued', taskId: expect.any(String) })
+    })).toEqual({ _tag: 'Queued', taskId: expect.any(String), rounds: { number: 1, limit: 3 } })
   })
 
   it('does not carry Approval to a new Revision', () => {

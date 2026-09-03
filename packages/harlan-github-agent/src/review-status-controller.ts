@@ -3,6 +3,7 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewStatusTaskPhase } from './types.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
+import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { updatedAtLabel } from './text.ts'
@@ -134,7 +135,7 @@ export async function publishClaimedReviewStatus(
     : err('GitHub accepted the review comment, but the local review changed. Refresh before retrying.')
 }
 
-function repairProgressComment(headSha: string, progress: AgentProgress, at: string): string {
+function repairProgressComment(task: ClaimedReviewFixTask, progress: AgentProgress, at: string): string {
   // Declarative, and about the Repair rather than the reader. These lines read
   // as instructions to whoever opened the pull request when they are imperative,
   // and every other automated comment states what the work does next.
@@ -148,8 +149,8 @@ function repairProgressComment(headSha: string, progress: AgentProgress, at: str
           ? 'Repair fixes the Review findings.'
           : 'Repair creates its Git worktree.'
   return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
-### 🤖 REPAIR · ${progress.percent}% · ${progress.label}${formatPhaseDuration(progress.since, at)}
+<!-- reviewed-sha: ${task.pullRequest.headSha} -->
+### 🤖 REPAIR · ${repairRoundLabel(task.rounds)} · ${progress.percent}% · ${progress.label}${formatPhaseDuration(progress.since, at)}
 
 ${automatedDisclosure({ kind: 'repair update', updatedAt: updatedAtLabel(at) })}
 
@@ -213,7 +214,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
       const published = await publishStatus(
         task,
         { taskKind: 'review_fix', phase: 'repair' },
-        repairProgressComment(task.pullRequest.headSha, progress, options.now().toISOString()),
+        repairProgressComment(task, progress, options.now().toISOString()),
         true,
         signal,
       )

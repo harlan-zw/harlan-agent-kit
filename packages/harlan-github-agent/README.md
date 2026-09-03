@@ -89,7 +89,8 @@ The final Review replaces that route with one outcome label: `ready`, `pending`,
 The canonical comment lists every Review gate and the next action.
 After GitHub merges or closes the pull request, the comment records that state and Agent labels clear.
 
-Every published Repair head SHA gets a fresh Review. A repeated finding stops with Action required.
+Every published Repair head SHA gets a fresh Review. If that Review still finds a defect, the next Repair round starts. It reads every earlier round's commit and report, so it does not repeat a rejected approach.
+A pull request gets 3 Repair rounds per contributor commit. A contributor push starts a fresh count. When the rounds are spent, Repair stops with Action required and the comment lists every round.
 
 If Repair stops, the canonical review comment changes to `BLOCKED`. It lists every finding and next action.
 

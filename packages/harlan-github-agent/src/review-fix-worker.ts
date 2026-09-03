@@ -8,6 +8,7 @@ import type { AgentProgress, ClaimedReviewFixTask, MutationWorkerOutcome, Reposi
 import type { ReviewFixWorktreeManager } from './worktree.ts'
 import { createHash } from 'node:crypto'
 import { runParsedAgentTurn } from './agent-turn.ts'
+import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
@@ -47,7 +48,7 @@ export interface ReviewFixWorkerOptions {
   onProgressPublishFailure?: (task: ClaimedReviewFixTask, reason: string) => void
   runtime: AgentRuntimeSource
   status: Pick<ReviewStatusController, 'publishRepair'>
-  store: Pick<JournalStore, 'getReviewFixFindings' | 'getWorkerSession' | 'requestReviewRerun' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getReviewFixFindings' | 'getWorkerSession' | 'recordRepairReport' | 'requestReviewRerun' | 'saveWorkerSession' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: ReviewFixWorktreeManager
 }
@@ -97,6 +98,7 @@ Work as a fresh local Agent session inside this prepared Git worktree.
 Read repository AGENTS.md and trusted contributor instructions.
 Apply the unit-tests skill before every bug or validation fix.
 Treat the findings below as the complete Repair scope.
+${repairRoundHistory(task.rounds)}
 For each finding, write the named failing regression test first. Confirm it fails for the stated reason.
 Fix every finding. Run focused checks that cover every changed behavior.
 For a visual finding, read the pull request image and reproduce the defect at the shown viewport.
@@ -232,6 +234,18 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         })
       }
 
+      // The report outlives this Task. A later Repair round reads it to avoid
+      // repeating an approach Review already rejected.
+      const reported = options.store.recordRepairReport({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: options.now().toISOString(),
+        summary: turn.value.value.summary,
+        checks: turn.value.value.checks,
+      })
+      if (!reported)
+        return err('The Repair report lost its fenced lease before the commit was verified.')
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')
         return verified

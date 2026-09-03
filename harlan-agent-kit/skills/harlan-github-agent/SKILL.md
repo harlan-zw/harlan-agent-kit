@@ -201,7 +201,9 @@ Available empty base and head check sets with no declared required checks mean t
 
 If Review recommends Dismissal, queue no Repair. Use this only when the premise is wrong and Repair would replace the pull request intent. Harlan decides whether to Dismiss.
 
-If fresh Review repeats one finding fingerprint after Repair, stop with Action required. Do not attempt a root architecture rewrite.
+If fresh Review of a Repair commit still records a Repair finding, queue the next Repair round. Give that round every earlier round's commit, report, and target findings. Never repeat a rejected approach.
+
+Allow 3 Repair rounds per contributor commit. A contributor push starts a fresh count. When the rounds are spent, stop with Action required and list every round in the canonical comment. Do not attempt a root architecture rewrite.
 
 If Repair returns Action required or exhausts retries, replace its progress comment with `BLOCKED`. Include every stored finding and its exact next action.
 
