@@ -3,7 +3,11 @@ export default defineNuxtConfig({
   pages: { pattern: ['**/*.vue', '!**/_*.vue'] },
   css: ['~/assets/css/main.css'],
   devtools: { enabled: true },
-  modules: ['@nuxt/ui', '@nuxt/fonts', '@nuxt/icon', '@vueuse/nuxt'],
+  modules: ['@nuxt/ui', '@nuxt/fonts', '@nuxt/icon', '@vueuse/nuxt', 'nuxt-skew-protection'],
+  skewProtection: {
+    updateStrategy: 'polling',
+    reloadStrategy: 'prompt',
+  },
   fonts: {
     families: [
       { name: 'Mona Sans', provider: 'google', weights: [400, 500, 600] },

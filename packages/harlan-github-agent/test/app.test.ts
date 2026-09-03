@@ -469,6 +469,16 @@ describe('dashboard HTTP app', () => {
     expect(await response.text()).toContain('How GitHub work moves through the agent')
   })
 
+  it('serves the skew protection service worker', async () => {
+    const response = await createApp().request(`http://${allowedHost}/_nuxt-skew-sw.js`, { headers: { authorization, host: allowedHost } })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(await response.text()).toContain('loadedModules')
+  })
+
   it('returns local review history for one pull request', async () => {
     const requests: Array<{ repository: string, pullRequestNumber: number }> = []
     const app = createAgentApp({
