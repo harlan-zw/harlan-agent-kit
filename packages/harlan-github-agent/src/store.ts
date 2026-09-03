@@ -436,6 +436,40 @@ export interface StoppedReview {
 }
 
 /** A published clean Review whose moving controller gates need another read. */
+/** The newest completed Review on one pull request, with the Revision it answered for. */
+export interface ReusableReviewRun {
+  reviewRunId: string
+  revisionId: string
+  headSha: string
+  baseSha: string
+  /** Absent on a Revision observed before the controller recorded the base branch. */
+  baseRef: string | undefined
+  gates: ReviewGates
+  findings: ReviewFinding[]
+  confidence: number | undefined
+  completedAt: string
+}
+
+export interface ReuseReviewRunInput {
+  id: string
+  repository: string
+  pullRequestNumber: number
+  revisionId: string
+  headSha: string
+  /** The completed Review whose report this head inherits. */
+  reusesReviewRunId: string
+  /** The moving gates, read again for this head. The review gate is the prior run's. */
+  controllerGates: Pick<ReviewGates, 'ci' | 'merge'>
+  /** Why the report applies: the earlier head this diff matches. */
+  reason: string
+  at: string
+}
+
+export type ReuseReviewRunResult
+  = | { _tag: 'Inserted', reviewRunId: string }
+    | { _tag: 'Duplicate', reviewRunId: string }
+    | { _tag: 'Rejected', reason: { _tag: 'RunNotFound' } | { _tag: 'AlreadySuperseded' } | { _tag: 'RerunRequested' } | { _tag: 'RevisionMismatch' } | { _tag: 'ReviewApprovalRequired' } | { _tag: 'OpenFindingRequiresBlocked' } }
+
 export interface ReviewGateRefresh {
   reviewRunId: string
   repository: string
@@ -949,6 +983,10 @@ export interface JournalStore {
   recordReviewRun: (input: RecordReviewRunInput) => RecordReviewRunResult
   /** Atomically stores a refreshed Review and its published GitHub projection. */
   supersedeReviewRun: (input: SupersedeReviewRunInput) => SupersedeReviewRunResult
+  /** The newest Review report on one pull request that no later row restates and no unanswered rerun request disputes. */
+  getReusableReviewRun: (repository: string, pullRequestNumber: number) => ReusableReviewRun | null
+  /** Stores a prior Review report for a new head whose diff did not change. Starts no Agent. */
+  reuseReviewRun: (input: ReuseReviewRunInput) => ReuseReviewRunResult
   recordReviewPublication: (input: RecordReviewPublicationInput) => RecordReviewPublicationResult
   requestReviewRerun: (input: {
     repository: string
@@ -7080,6 +7118,226 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * A rerun request nothing answered yet.
+   *
+   * The request follows the subject, not one head: a person who disputes the
+   * report on head A still disputes it when head B carries the same diff. A
+   * later head supersedes the requeued Task, so only a Review completed after
+   * the request, by an Agent rather than a reused row, can retire it.
+   */
+  const pendingRerunRequestSql = (subjectColumn: string): string => `
+    EXISTS (
+      SELECT 1 FROM review_rerun_requests AS pending
+      JOIN worker_tasks AS requested ON requested.id = pending.task_id
+      WHERE requested.subject_id = ${subjectColumn}
+        AND requested.kind = 'adversarial_review'
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS answered
+          WHERE answered.subject_id = requested.subject_id
+            AND answered.kind = 'adversarial_review'
+            AND answered.supersedes_review_run_id IS NULL
+            AND answered.completed_at > pending.requested_at
+        )
+    )`
+
+  const getReusableReviewRun: JournalStore['getReusableReviewRun'] = (repository, pullRequestNumber) => {
+    const row = database.prepare(`
+      SELECT review_runs.id, review_runs.revision_id, review_runs.head_sha, review_runs.gates,
+        review_runs.findings, review_runs.completed_at,
+        COALESCE(projection.confidence, review_runs.confidence) AS confidence,
+        revisions.payload
+      FROM review_runs
+      JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = review_runs.revision_id AND revisions.subject_id = subjects.id
+      JOIN review_evidence_scopes ON review_evidence_scopes.review_run_id = review_runs.id
+      LEFT JOIN review_gate_projections AS projection ON projection.review_run_id = review_runs.id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND review_runs.kind = 'adversarial_review'
+        AND review_evidence_scopes.policy_digest = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS settled
+          WHERE settled.supersedes_review_run_id = review_runs.id
+        )
+        AND EXISTS (
+          SELECT 1 FROM review_publications
+          WHERE review_publications.review_run_id = review_runs.id
+            AND review_publications.result_tag = 'Published'
+        )
+        AND NOT ${pendingRerunRequestSql('subjects.id')}
+      ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, digest((database.prepare(`
+      SELECT policy_json FROM repositories WHERE github = ?
+    `).get(repository) as { policy_json: string } | undefined)?.policy_json ?? '')) as {
+      id: string
+      revision_id: string
+      head_sha: string
+      gates: string
+      findings: string
+      completed_at: string
+      confidence: number | null
+      payload: string
+    } | undefined
+    if (row === undefined)
+      return null
+    const pullRequest = JSON.parse(row.payload) as GitHubItem
+    if (pullRequest.kind !== 'pull_request')
+      return null
+    return {
+      reviewRunId: row.id,
+      revisionId: row.revision_id,
+      headSha: row.head_sha,
+      baseSha: pullRequest.baseSha,
+      baseRef: pullRequest.baseRef,
+      gates: JSON.parse(row.gates) as ReviewGates,
+      findings: JSON.parse(row.findings) as ReviewFinding[],
+      confidence: row.confidence ?? undefined,
+      completedAt: row.completed_at,
+    }
+  }
+
+  const reuseReviewRun: JournalStore['reuseReviewRun'] = (input) => {
+    const revision = database.prepare(`
+      SELECT subjects.id AS subject_id, revisions.payload, repositories.policy_json,
+        EXISTS (
+          SELECT 1 FROM pull_request_approvals
+          WHERE subject_id = subjects.id AND revision_id = revisions.id AND kind = 'review'
+        ) AS review_approved
+      FROM revisions
+      JOIN subjects ON subjects.id = revisions.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ?
+        AND subjects.kind = 'pull_request' AND revisions.id = ?
+        AND subjects.current_revision_id = revisions.id
+    `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
+      subject_id: number
+      payload: string
+      policy_json: string
+      review_approved: number
+    } | undefined
+    const pullRequest = revision === undefined ? undefined : JSON.parse(revision.payload) as GitHubItem
+    if (revision === undefined || pullRequest?.kind !== 'pull_request' || pullRequest.headSha !== input.headSha)
+      return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
+    const mapping = JSON.parse(revision.policy_json) as RepositoryMapping
+    if (requiresPullRequestApproval(database, mapping, pullRequest.author) && revision.review_approved !== 1)
+      return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
+
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.id)
+      if (existing !== undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Duplicate', reviewRunId: input.id }
+      }
+      const prior = database.prepare(`
+        SELECT id, head_sha, provider, session_id, model, agent_version, skill_digest, gates, findings, confidence,
+          EXISTS (
+            SELECT 1 FROM review_runs AS settled
+            WHERE settled.supersedes_review_run_id = review_runs.id
+          ) AS superseded
+        FROM review_runs
+        WHERE id = ? AND subject_id = ? AND kind = 'adversarial_review'
+      `).get(input.reusesReviewRunId, revision.subject_id) as {
+        id: string
+        head_sha: string
+        provider: string
+        session_id: string
+        model: string
+        agent_version: string
+        skill_digest: string
+        gates: string
+        findings: string
+        confidence: number | null
+        superseded: number
+      } | undefined
+      if (prior === undefined || prior.superseded === 1) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: { _tag: prior === undefined ? 'RunNotFound' : 'AlreadySuperseded' } }
+      }
+      const rerunRequested = database.prepare(`SELECT ${pendingRerunRequestSql('?')} AS pending`).get(revision.subject_id) as { pending: number }
+      if (rerunRequested.pending === 1) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: { _tag: 'RerunRequested' } }
+      }
+      const priorGates = JSON.parse(prior.gates) as ReviewGates
+      const gates: ReviewGates = { merge: input.controllerGates.merge, review: priorGates.review, ci: input.controllerGates.ci }
+      const findings = JSON.parse(prior.findings) as ReviewFinding[]
+      const outcome = derivedReviewOutcome(gates)
+      if (findings.some(finding => finding._tag === 'Open') && outcome !== 'Blocked') {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: { _tag: 'OpenFindingRequiresBlocked' } }
+      }
+      const policyDigest = digest(revision.policy_json)
+      const gatesJson = JSON.stringify(gates)
+      const contentDigest = digest(JSON.stringify({
+        reusesReviewRunId: prior.id,
+        repository: input.repository,
+        pullRequestNumber: input.pullRequestNumber,
+        revisionId: input.revisionId,
+        headSha: input.headSha,
+        policyDigest,
+        gates,
+        outcome,
+        findings,
+      }))
+      database.prepare(`
+        INSERT INTO review_runs (
+          id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
+          skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
+          confidence, findings, content_digest, usage, supersedes_review_run_id
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.id,
+        revision.subject_id,
+        input.revisionId,
+        prior.provider,
+        prior.session_id,
+        prior.model,
+        prior.agent_version,
+        prior.skill_digest,
+        input.headSha,
+        input.at,
+        input.at,
+        gatesJson,
+        outcome,
+        prior.confidence,
+        prior.findings,
+        contentDigest,
+        JSON.stringify({ _tag: 'Unavailable' } satisfies AgentTokenUsage),
+        prior.id,
+      )
+      database.prepare(`
+        INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
+        VALUES (?, ?, ?)
+      `).run(input.id, policyDigest, input.at)
+      database.prepare(`
+        INSERT INTO review_gate_projections (
+          review_run_id, gates, outcome_tag, confidence, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+      `).run(input.id, gatesJson, outcome, prior.confidence, input.at)
+      recordWorkflowEvent(database, {
+        stream: 'review_run',
+        event: 'Reused',
+        entityId: input.id,
+        repository: input.repository,
+        itemNumber: input.pullRequestNumber,
+        revisionId: input.revisionId,
+        from: prior.head_sha,
+        to: input.headSha,
+        reason: input.reason,
+        at: input.at,
+      })
+      database.exec('COMMIT')
+      return { _tag: 'Inserted', reviewRunId: input.id }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recordReviewPublication: JournalStore['recordReviewPublication'] = (input) => {
     const bodySha256 = digest(input.body)
     const contentDigest = digest(JSON.stringify({
@@ -13071,6 +13329,8 @@ export function openJournalStore(
     recordPollSuccess,
     recordReviewRun,
     supersedeReviewRun,
+    getReusableReviewRun,
+    reuseReviewRun,
     recordReviewPublication,
     requestReviewRerun,
     resumeAgents,

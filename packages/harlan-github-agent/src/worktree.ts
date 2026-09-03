@@ -83,6 +83,23 @@ export type RestackOutcome
   = | { _tag: 'Restacked', workspace: PreparedWorkerWorkspace, patch: VerifiedIssuePatch }
     | { _tag: 'Unstacked', reason: string }
 
+/**
+ * What one pull request changes against its base, independent of the commits
+ * that carry it.
+ *
+ * `git patch-id --stable` over `git diff base...head` ignores commit ids,
+ * line numbers, and whitespace, so a merge of the base branch into the head
+ * keeps the same identity while any real change to the diff gets a new one.
+ */
+export type DiffIdentity
+  = | { _tag: 'Patch', patchId: string }
+    | { _tag: 'Empty' }
+
+export interface DiffRange {
+  baseSha: string
+  headSha: string
+}
+
 export interface AgentWorkspaceManager {
   prepareBaseline: (task: ClaimedBaselineRepairTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   prepareFix: (task: ClaimedReviewFixTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
@@ -90,6 +107,8 @@ export interface AgentWorkspaceManager {
   prepareReview: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   /** A Routine scan reads the default branch. It never starts from a pull request head. */
   prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  /** Reads one diff identity from the repository checkout. Fetches missing commits read only; opens no worktree. */
+  reviewDiffIdentity: (task: ClaimedAdversarialReviewTask, range: DiffRange, signal: AbortSignal) => Promise<Result<DiffIdentity, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
@@ -265,6 +284,66 @@ function runGitDigest(checkout: string, args: string[], signal: AbortSignal): Pr
         exitCode: code ?? 1,
         stderr: Buffer.concat(stderr).toString('utf8').trim() || spawnError,
       })
+    })
+  })
+}
+
+/**
+ * `git diff base...head | git patch-id --stable`, as one pipeline.
+ *
+ * The diff can be large, so it streams between the two processes and never
+ * enters this process. An empty diff produces no patch id at all.
+ */
+function runGitPatchId(checkout: string, range: DiffRange, signal: AbortSignal): Promise<Result<DiffIdentity, string>> {
+  return new Promise((resolve) => {
+    const common = ['-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', '-C', checkout]
+    const diff = spawn('git', [...common, 'diff', '--no-color', '--no-ext-diff', `${range.baseSha}...${range.headSha}`], {
+      env: gitEnvironment(),
+      signal,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const patchId = spawn('git', [...common, 'patch-id', '--stable'], {
+      env: gitEnvironment(),
+      signal,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    // Both processes report before anything is decided. `patch-id` can close
+    // first, on a diff that failed after partial output, and a decision taken
+    // then would accept a truncated identity as a real one.
+    const exits: { diff: number | null, patchId: number | null } = { diff: null, patchId: null }
+    let settled = false
+    const fail = (reason: string) => {
+      if (settled)
+        return
+      settled = true
+      resolve(err(reason))
+    }
+    const decide = () => {
+      if (settled || exits.diff === null || exits.patchId === null)
+        return
+      settled = true
+      if (exits.diff !== 0 || exits.patchId !== 0) {
+        resolve(err(`Could not read the diff identity: ${Buffer.concat(stderr).toString('utf8').trim()}`))
+        return
+      }
+      const id = Buffer.concat(stdout).toString('utf8').trim().split(/\s+/)[0]
+      resolve(id === undefined || id.length === 0 ? ok({ _tag: 'Empty' }) : ok({ _tag: 'Patch', patchId: id }))
+    }
+    diff.stdout.pipe(patchId.stdin)
+    diff.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+    patchId.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
+    patchId.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+    diff.on('error', error => fail(`Could not read the diff: ${error.message}`))
+    patchId.on('error', error => fail(`Could not read the patch id: ${error.message}`))
+    diff.on('close', (code) => {
+      exits.diff = code ?? 1
+      decide()
+    })
+    patchId.on('close', (code) => {
+      exits.patchId = code ?? 1
+      decide()
     })
   })
 }
@@ -885,6 +964,33 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       if (base.exitCode !== 0 || base.stdout !== task.pullRequest.baseSha)
         return err('Fetched base branch no longer matches the claimed review base commit SHA.')
       return ok({ ...prepared.value, baseSha: base.stdout })
+    },
+
+    async reviewDiffIdentity(task, range, signal) {
+      const repository = task.repositoryMapping.checkout
+      const missing: string[] = []
+      for (const sha of [range.baseSha, range.headSha]) {
+        if (!/^[a-f\d]{40}$/.test(sha))
+          return err(`The commit ${sha} is not a full SHA.`)
+        const present = await runGit(repository, ['cat-file', '-e', `${sha}^{commit}`], signal)
+        if (present.exitCode !== 0)
+          missing.push(sha)
+      }
+      if (missing.length > 0) {
+        const token = await options.tokens.getToken(task.repository, 'read', signal)
+        if (token._tag === 'Err')
+          return err(token.error.message)
+        const remoteUrl = options.remoteUrl?.(task.repository) ?? `https://github.com/${task.repository}.git`
+        const fetch = await runGit(repository, [
+          'fetch',
+          '--no-tags',
+          remoteUrl,
+          ...missing.map(sha => `+${sha}:refs/harlan-github-agent/reviews/${task.pullRequestNumber}/identity/${sha}`),
+        ], signal, token.value.token, options.remoteUrl !== undefined)
+        if (fetch.exitCode !== 0)
+          return err(`Git fetch failed: ${fetch.stderr}`)
+      }
+      return runGitPatchId(repository, range, signal)
     },
 
     async verifyReview(task, worktree, signal) {
