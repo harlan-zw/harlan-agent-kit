@@ -198,7 +198,8 @@ describe('subject Workers', () => {
           triageCalls += 1
           return Promise.resolve(ok({
             _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-            reason: 'The old triage Agent waived this Review.',
+            reason: 'model: The old triage Agent waived this Review.',
+            source: 'model',
           }))
         },
       },

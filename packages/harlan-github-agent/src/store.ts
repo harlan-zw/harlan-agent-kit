@@ -2,7 +2,7 @@ import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { TransientKind } from './failure.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { IssueTriageState } from './issue-triage.ts'
-import type { RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
+import type { PullRequestTriageStatsOutcome, RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
   AgentFeedback,
@@ -605,6 +605,12 @@ type UnpositionedQueueEntry = QueueEntry extends infer Entry
   ? Entry extends QueueEntry ? Omit<Entry, 'position'> : never
   : never
 
+export interface LatestPullRequestTriageRun {
+  outcome: PullRequestTriageStatsOutcome
+  reason: string
+  completedAt: string
+}
+
 export interface JournalStore {
   approveIssueWork: (input: {
     repository: string
@@ -623,6 +629,8 @@ export interface JournalStore {
   authorizePublication: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
   cancelTask: (input: { taskId: string, at: string }) => CancelTaskResult
   recordPullRequestTriageRun: (input: RecordPullRequestTriageRunInput) => RecordPullRequestTriageRunResult
+  /** The newest recorded Pull request triage decision for one exact head commit, or null. */
+  getLatestPullRequestTriageRun: (repository: string, pullRequestNumber: number, headSha: string) => LatestPullRequestTriageRun | null
   claimNextAdversarialReviewTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedAdversarialReviewTask | null
   claimNextBaselineRepairTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedBaselineRepairTask | null
   claimNextConflictTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedConflictResolutionTask | null
@@ -6738,6 +6746,26 @@ export function openJournalStore(
       database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  const getLatestPullRequestTriageRun: JournalStore['getLatestPullRequestTriageRun'] = (repository, pullRequestNumber, headSha) => {
+    const row = database.prepare(`
+      SELECT pull_request_triage_runs.outcome_tag, pull_request_triage_runs.reason, pull_request_triage_runs.completed_at
+      FROM pull_request_triage_runs
+      JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND pull_request_triage_runs.head_sha = ?
+      ORDER BY pull_request_triage_runs.completed_at DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, headSha) as {
+      outcome_tag: PullRequestTriageStatsOutcome
+      reason: string
+      completed_at: string
+    } | undefined
+    return row === undefined
+      ? null
+      : { outcome: row.outcome_tag, reason: row.reason, completedAt: row.completed_at }
   }
 
   const recordReviewRun: JournalStore['recordReviewRun'] = (input) => {
@@ -12948,6 +12976,7 @@ export function openJournalStore(
     authorizePublication,
     cancelTask,
     recordPullRequestTriageRun,
+    getLatestPullRequestTriageRun,
     claimNextAdversarialReviewTask,
     claimNextBaselineRepairTask,
     claimNextConflictTask,

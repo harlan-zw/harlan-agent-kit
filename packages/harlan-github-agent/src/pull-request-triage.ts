@@ -19,15 +19,23 @@ function isPullRequestTriageState(value: unknown): value is PullRequestTriageSta
   return typeof value === 'string' && PULL_REQUEST_TRIAGE_STATES.includes(value as PullRequestTriageState)
 }
 
+/**
+ * Who decided. `rule` is the path classifier, `model` is a fresh Agent turn,
+ * `reuse` is a stored decision for the same head commit.
+ */
+export type PullRequestTriageSource = 'rule' | 'model' | 'reuse'
+
 export interface PullRequestTriageResult {
   _tag: PullRequestTriageState
+  /** Starts with `rule: ` or `model: ` so a stored row still names its source. */
   reason: string
+  source: PullRequestTriageSource
 }
 
 export interface PullRequestTriageAgent {
   run: (
     task: ClaimedAdversarialReviewTask,
-    input: { body: string, changedFiles: string[] },
+    input: { changedFiles: string[] },
     signal: AbortSignal,
   ) => Promise<Result<PullRequestTriageResult, string>>
 }
@@ -36,9 +44,44 @@ interface PullRequestTriageAgentOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession'>
+  store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'getWorkerSession' | 'saveWorkerSession'>
   /** A service-owned directory. Pull request triage never runs in a Repository mapping. */
   workspace: string
+}
+
+const PROSE_FILE_PATTERN = /(?:^|\/)(?:[^/]+\.(?:md|mdx|txt)|LICENSE[^/]*|CHANGELOG[^/]*)$/i
+const PROSE_DIRECTORY_PATTERN = /(?:^|\/)docs\//
+/** Agent instructions are behaviour, so they leave the prose set even when they end in `.md`. */
+const BEHAVIOUR_PATTERN = /(?:^|\/)(?:SKILL\.md|AGENTS\.md|CLAUDE\.md)$|(?:^|\/)(?:\.github|\.claude|\.codex[^/]*)\//
+
+export function isProsePath(path: string): boolean {
+  if (BEHAVIOUR_PATTERN.test(path))
+    return false
+  return PROSE_FILE_PATTERN.test(path) || PROSE_DIRECTORY_PATTERN.test(path)
+}
+
+export type PullRequestPathVerdict
+  = | { _tag: 'ReviewRequired', path: string }
+    | { _tag: 'ProseOnly' }
+
+/**
+ * The path rule. One path outside the prose set requires Review with no
+ * Agent. Only a prose-only pull request needs a judgment.
+ */
+export function classifyPullRequestPaths(changedFiles: readonly string[]): PullRequestPathVerdict {
+  const path = changedFiles.find(candidate => !isProsePath(candidate))
+  return path === undefined ? { _tag: 'ProseOnly' } : { _tag: 'ReviewRequired', path }
+}
+
+function reuseStoredVerdict(store: PullRequestTriageAgentOptions['store'], task: ClaimedAdversarialReviewTask): PullRequestTriageResult | null {
+  const stored = store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
+  if (stored === null || stored.outcome === 'ReviewRequiredAfterFailure')
+    return null
+  return {
+    _tag: stored.outcome === 'ReviewSkipped' ? 'ADVERSARIAL_REVIEW_SKIPPED' : 'ADVERSARIAL_REVIEW_REQUIRED',
+    reason: stored.reason,
+    source: 'reuse',
+  }
 }
 
 const schema = {
@@ -57,16 +100,17 @@ function parseResponse(text: string): Promise<Result<PullRequestTriageResult, st
     .then((value): Result<PullRequestTriageResult, string> => {
       if (!isPullRequestTriageState(value._tag) || typeof value.reason !== 'string' || cleanLine(value.reason) === '')
         return err('The Agent returned an invalid pull request triage result.')
-      return ok({ _tag: value._tag, reason: cleanLine(value.reason) })
+      return ok({ _tag: value._tag, reason: `model: ${cleanLine(value.reason)}`, source: 'model' })
     })
     .catch((): Result<PullRequestTriageResult, string> => err('The Agent returned malformed pull request triage JSON.'))
 }
 
-function prompt(task: ClaimedAdversarialReviewTask, input: { body: string, changedFiles: string[] }): string {
+function prompt(task: ClaimedAdversarialReviewTask, changedFiles: string[]): string {
   return `Decide whether this pull request needs an adversarial Review.
-Do not use tools or inspect the repository. Use only the supplied pull request metadata and changed file paths.
+Every changed file is prose: Markdown, text, licence, changelog, or docs. Nothing else reached you.
+Do not use tools or inspect the repository. Use only the supplied title and changed file paths.
 Return ADVERSARIAL_REVIEW_SKIPPED only for clearly judgment-free prose, formatting, or comment-only changes.
-Require ADVERSARIAL_REVIEW_REQUIRED for source code, tests, configuration, dependencies, workflows, schemas, generated runtime output, security boundaries, public APIs, performance-sensitive files, or behavior claims.
+Require ADVERSARIAL_REVIEW_REQUIRED for behavior claims, public API documentation that states a contract, or security guidance.
 Any uncertainty requires ADVERSARIAL_REVIEW_REQUIRED.
 Return only the required JSON.
 
@@ -75,21 +119,28 @@ ${JSON.stringify({
   repository: task.repository,
   number: task.pullRequestNumber,
   title: task.pullRequest.title,
-  body: input.body.slice(0, 4_000),
-  changedFiles: input.changedFiles.slice(0, 300),
+  changedFiles: changedFiles.slice(0, 300),
 })}`
 }
 
 export function createPullRequestTriageAgent(options: PullRequestTriageAgentOptions): PullRequestTriageAgent {
   return {
     async run(task, input, signal) {
+      const verdict = classifyPullRequestPaths(input.changedFiles)
+      if (verdict._tag === 'ReviewRequired')
+        return ok({ _tag: 'ADVERSARIAL_REVIEW_REQUIRED', reason: `rule: ${verdict.path} is outside the prose set.`, source: 'rule' })
+
+      const reused = reuseStoredVerdict(options.store, task)
+      if (reused !== null)
+        return ok(reused)
+
       const scopeDigest = createHash('sha256')
-        .update(JSON.stringify({ headSha: task.pullRequest.headSha, ...input }))
+        .update(JSON.stringify({ headSha: task.pullRequest.headSha, changedFiles: input.changedFiles }))
         .digest('hex')
       const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
         freshSession: true,
         number: task.pullRequestNumber,
-        prompt: prompt(task, input),
+        prompt: prompt(task, input.changedFiles),
         repository: task.repository,
         role: 'pull_request_triage',
         schema,
