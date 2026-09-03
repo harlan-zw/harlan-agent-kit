@@ -67,7 +67,8 @@ Run only these focused checks:
 - git diff --check
 Run package scripts with pnpm exec. Never use npx.
 Do not run the full test suite, the full typecheck, a build, or a toolchain install. CI runs those after publication.
-A failure outside the conflicted files is pre-existing. Do not chase it.
+A failure in a file that neither side of the merge changed is pre-existing. Do not chase it.
+If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
 
 Do not stage files. The controller stages verified conflict files.
 Do not commit, push, amend, rebase, abort the merge, or edit Git configuration.
