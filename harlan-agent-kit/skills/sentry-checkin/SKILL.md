@@ -24,6 +24,7 @@ A Routine names one site and one repository. The turn is read only for that repo
 The Routine command sequence for site PROJECT in org ORG:
 
 ```bash
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/sentry-checkin"
 RUN_DIR=$(mktemp -d "${XDG_STATE_HOME:-$HOME/.local/state}/sentry-checkin/run-XXXXXXXX")
 python3 scripts/sentry_api.py --org ORG snapshot --project PROJECT --output "$RUN_DIR/PROJECT.snapshot.json"
 python3 scripts/sentry_api.py --org ORG bulk-bundles --project PROJECT \

@@ -483,6 +483,14 @@ class DigestTest(unittest.TestCase):
             self.assertFalse(digest["snapshot_unchanged"])
             self.assertEqual([entry["runs_seen"] for entry in digest["issues"]], [1, 1])
 
+    def test_digest_reports_a_zero_user_count_from_a_compact_bundle(self):
+        zero = json.loads(json.dumps(COMPACT_BUNDLE))
+        zero["issue"]["user_count"] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [zero])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            self.assertEqual(digest["issues"][0]["user_count"], 0)
+
     def test_digest_flags_an_unchanged_backlog_on_the_next_run(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"

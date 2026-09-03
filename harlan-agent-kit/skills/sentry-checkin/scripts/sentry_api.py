@@ -512,18 +512,22 @@ def event_release(event):
 
 def issue_fields(issue):
     """One shape for a full API issue and a compact issue_summary."""
+    def pick(key, fallback):
+        value = issue.get(key)
+        return value if value is not None else issue.get(fallback)
+
     return {
         "id": str(issue.get("id")),
-        "short_id": issue.get("short_id") or issue.get("shortId"),
+        "short_id": pick("short_id", "shortId"),
         "title": issue.get("title"),
         "culprit": issue.get("culprit"),
         "level": issue.get("level"),
         "status": issue.get("status"),
         "permalink": issue.get("permalink"),
-        "first_seen": issue.get("first_seen") or issue.get("firstSeen"),
-        "last_seen": issue.get("last_seen") or issue.get("lastSeen"),
+        "first_seen": pick("first_seen", "firstSeen"),
+        "last_seen": pick("last_seen", "lastSeen"),
         "event_count": issue.get("count"),
-        "user_count": issue.get("user_count") or issue.get("userCount"),
+        "user_count": pick("user_count", "userCount"),
     }
 
 
