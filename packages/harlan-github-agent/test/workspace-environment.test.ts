@@ -26,6 +26,14 @@ BROKEN LINE
   it('refuses names that change how the Agent process runs', () => {
     expect(parseEnvironmentFile('PATH=/evil\nNODE_OPTIONS=--require x\nGIT_DIR=/x\nSENTRY_AUTH_TOKEN=ok\n'))
       .toEqual({ SENTRY_AUTH_TOKEN: 'ok' })
+    expect(parseEnvironmentFile('LD_AUDIT=/tmp/evil.so\nLD_LIBRARY_PATH=/x\nLD_PRELOAD=/y\nOK=1\n'))
+      .toEqual({ OK: '1' })
+    expect(parseEnvironmentFile('BASH_ENV=./pwn.sh\nENV=./pwn.sh\nOK=1\n'))
+      .toEqual({ OK: '1' })
+    expect(parseEnvironmentFile('NODE_PATH=/tmp/evil\nOK=1\n'))
+      .toEqual({ OK: '1' })
+    expect(parseEnvironmentFile('DYLD_INSERT_LIBRARIES=/tmp/evil.dylib\nDYLD_LIBRARY_PATH=/x\nOK=1\n'))
+      .toEqual({ OK: '1' })
   })
 })
 

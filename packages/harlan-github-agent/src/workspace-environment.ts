@@ -5,22 +5,24 @@ import { join } from 'node:path'
  * Names a repository file must never set for an Agent process.
  *
  * A seeded `.env` carries the tokens a repository's own tooling reads. It is
- * not a place to change which binaries run or how Node starts, and a checkout
- * that commits one of these could otherwise steer the controller's child
- * process. Everything else passes through as the repository wrote it.
+ * not a place to change which binaries run, how shells start (BASH_ENV, ENV),
+ * or how Node starts, and a checkout that commits one of these could otherwise
+ * steer the controller's child process. Everything else passes through as the
+ * repository wrote it.
  */
 const REFUSED_NAMES = new Set([
+  'BASH_ENV',
+  'ENV',
   'HOME',
-  'LD_LIBRARY_PATH',
-  'LD_PRELOAD',
   'NODE_OPTIONS',
+  'NODE_PATH',
   'PATH',
   'PNPM_HOME',
   'SHELL',
   'USER',
 ])
 
-const REFUSED_PREFIXES = ['DYLD_', 'GIT_', 'OPENCODE_', 'CODEX_']
+const REFUSED_PREFIXES = ['DYLD_', 'GIT_', 'LD_', 'OPENCODE_', 'CODEX_']
 
 /** Reads a `.env` file, the way the repository's tooling would. */
 export function parseEnvironmentFile(text: string): Record<string, string> {
