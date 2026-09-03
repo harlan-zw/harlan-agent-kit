@@ -34,6 +34,8 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
 }
 const agentControls = {
   getStats: (range: StatsRange, generatedAt: string) => statsSnapshot(range, generatedAt),
+  listRoutines: () => [],
+  openRoutineRun: () => null,
   pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
   requestRestart: (input: { id: string, source: 'dashboard' | 'tray' | 'helper', operation: RestartOperation, at: string }) => ({
     _tag: 'Requested' as const,
@@ -283,6 +285,67 @@ describe('dashboard HTTP app', () => {
     expect(await paused.json()).toEqual({ _tag: 'Paused', pausedAt: now().toISOString() })
     expect(await resumed.json()).toEqual({ _tag: 'Running' })
     expect(controls).toEqual([{ _tag: 'Pause', at: now().toISOString() }, { _tag: 'Resume', at: now().toISOString() }])
+  })
+
+  it('opens a Routine run for the current minute on request', async () => {
+    const opened: unknown[] = []
+    const routine = {
+      id: 'harlan-zw/example:daily-checkin',
+      repository: 'harlan-zw/example',
+      name: 'daily-checkin' as const,
+      crons: ['0 7 * * *'],
+      timeZone: 'UTC',
+      mode: 'propose' as const,
+      enabled: true,
+      specSha: 'abc123',
+      lastRunAt: null,
+      trackingIssueNumber: null,
+      updatedAt: now().toISOString(),
+    }
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now: () => new Date('2026-09-03T04:10:42.000Z'),
+      store: {
+        ...agentControls,
+        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        listRoutines: () => [routine],
+        openRoutineRun(input) {
+          opened.push(input)
+          return {
+            id: `${input.routineId}:${input.scheduledFor}`,
+            routineId: input.routineId,
+            repository: routine.repository,
+            name: routine.name,
+            scheduledFor: input.scheduledFor,
+            specSha: input.specSha,
+            mode: routine.mode,
+            state: { _tag: 'Queued' },
+            fence: 0,
+            attempts: 0,
+            progress: { percent: 0, label: 'Starting' },
+            usage: { _tag: 'Unavailable' },
+            createdAt: input.at,
+            updatedAt: input.at,
+          }
+        },
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const headers = { 'authorization': authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' }
+
+    const response = await app.request(`http://${allowedHost}/api/routines/run`, { method: 'POST', headers, body: JSON.stringify({ routineId: routine.id }) })
+    const unknown = await app.request(`http://${allowedHost}/api/routines/run`, { method: 'POST', headers, body: JSON.stringify({ routineId: 'harlan-zw/example:pr-triage' }) })
+
+    expect(response.status).toBe(202)
+    expect(await response.json()).toMatchObject({ scheduledFor: '2026-09-03T04:10:00.000Z', state: { _tag: 'Queued' } })
+    expect(opened).toEqual([{ routineId: routine.id, scheduledFor: '2026-09-03T04:10:00.000Z', specSha: 'abc123', at: '2026-09-03T04:10:42.000Z' }])
+    expect(unknown.status).toBe(404)
   })
 
   it('stores a dashboard Restart request', async () => {

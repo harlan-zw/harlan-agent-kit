@@ -15,7 +15,7 @@ import { parseAgentSelection } from './agent-profile.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -367,6 +367,29 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     })
     setResponseStatus(event, 202)
     return request
+  })
+
+  app.post('/api/routines/run', async (event) => {
+    const body = await event.req.json().catch(() => {
+      // Validation below reports malformed JSON as a bad request.
+      return undefined
+    }) as { routineId?: unknown } | undefined
+    if (typeof body?.routineId !== 'string' || body.routineId === '')
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'A Routine ID is required.' })
+    const routine = options.store.listRoutines().find(candidate => candidate.id === body.routineId)
+    if (routine === undefined)
+      throw createError({ status: 404, statusText: 'Not Found', message: 'The Routine was not found.' })
+    if (!routine.enabled)
+      throw createError({ status: 409, statusText: 'Conflict', message: 'The Routine is disabled, so a run would never start.' })
+    const at = options.now()
+    // A manual run answers the current minute. The cron instant that follows it
+    // today is newer, so it still opens on its own.
+    const scheduledFor = new Date(Math.floor(at.getTime() / 60_000) * 60_000).toISOString()
+    const run = options.store.openRoutineRun({ routineId: routine.id, scheduledFor, specSha: routine.specSha, at: at.toISOString() })
+    if (run === null)
+      throw createError({ status: 409, statusText: 'Conflict', message: 'A run already exists for this minute. Try again in a minute.' })
+    setResponseStatus(event, 202)
+    return run
   })
 
   app.post('/api/agents/selection-mode', async (event) => {

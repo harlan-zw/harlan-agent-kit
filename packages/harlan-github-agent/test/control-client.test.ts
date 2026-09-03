@@ -101,4 +101,19 @@ describe('harlan GitHub Agent control client', () => {
       error: { _tag: 'HttpFailure', status: 502, message: 'The service returned HTTP 502.' },
     })
   })
+
+  it('opens a Routine run through the service', async () => {
+    const requests: Request[] = []
+    const run = { id: 'harlan-zw/example:daily-checkin:2026-09-03T04:10:00.000Z', routineId: 'harlan-zw/example:daily-checkin', scheduledFor: '2026-09-03T04:10:00.000Z', state: { _tag: 'Queued' } }
+    const created = clientWith([Response.json(run, { status: 202 })], requests)
+
+    expect(created._tag).toBe('Ok')
+    if (created._tag === 'Err')
+      return
+    const result = await created.value.runRoutine('harlan-zw/example:daily-checkin')
+
+    expect(result).toEqual({ _tag: 'Ok', value: run })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/routines/run`)
+    expect(await requests[0]?.json()).toEqual({ routineId: 'harlan-zw/example:daily-checkin' })
+  })
 })
