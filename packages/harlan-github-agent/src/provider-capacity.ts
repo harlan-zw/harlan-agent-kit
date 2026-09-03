@@ -222,6 +222,20 @@ export interface ZaiCapacityOptions {
   timeoutMilliseconds?: number
 }
 
+function zaiFailureReason(error: unknown): string {
+  if (!(error instanceof Error))
+    return 'The GLM Coding Plan quota could not be read.'
+  if (error.name === 'AbortError')
+    return 'The GLM Coding Plan quota request timed out.'
+  if (error.message.startsWith('The GLM Coding Plan answered '))
+    return error.message
+  const cause = error.cause
+  const code = typeof cause === 'object' && cause !== null && 'code' in cause && typeof cause.code === 'string' ? cause.code : null
+  return code === null
+    ? `The GLM Coding Plan quota could not be read: ${error.message}`
+    : `The GLM Coding Plan quota could not be read: ${code}.`
+}
+
 /** Asks the GLM Coding Plan what its windows have left. */
 export async function readZaiCapacity(options: ZaiCapacityOptions = {}): Promise<ProviderCapacity> {
   const apiKey = options.apiKey === undefined ? readZaiApiKey() : options.apiKey
@@ -245,13 +259,10 @@ export async function readZaiCapacity(options: ZaiCapacityOptions = {}): Promise
     return zaiPlanCapacity(body)
   }
   catch (error) {
-    // Never let the key reach a log. Only the shape of the failure is reported.
-    return {
-      _tag: 'Unavailable',
-      reason: error instanceof Error && error.name === 'AbortError'
-        ? 'The GLM Coding Plan quota request timed out.'
-        : 'The GLM Coding Plan quota could not be read.',
-    }
+    // Never let the key reach a log. The status or the socket error code is
+    // enough to tell a rate limit from a DNS failure, which one bare "could
+    // not be read" hid for a whole afternoon of stalled Tasks.
+    return { _tag: 'Unavailable', reason: zaiFailureReason(error) }
   }
   finally {
     clearTimeout(timeout)
