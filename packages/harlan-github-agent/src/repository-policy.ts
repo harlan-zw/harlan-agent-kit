@@ -1,4 +1,4 @@
-import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
+import type { AgentTask, GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 
 /**
  * What Harlan may do in a repository, named once instead of compared everywhere.
@@ -62,4 +62,25 @@ export function canWorkIssues(mapping: RepositoryMapping): boolean {
     && canPushBranch(mapping)
     && mapping.issueWork
     && mapping.writablePullRequestHeadPrefixes.length > 0
+}
+
+/**
+ * True when a Task of this kind changes the repository, so its worktree gets
+ * the repository prepare step before the Agent starts.
+ *
+ * Review and Issue triage read the tree and never run a check, so they skip
+ * the step. Every kind that may publish a change runs it.
+ */
+export function preparesRepository(kind: AgentTask['kind'] | 'routine'): boolean {
+  switch (kind) {
+    case 'review_fix':
+    case 'resolve_conflict':
+    case 'baseline_repair':
+    case 'issue_work':
+      return true
+    case 'adversarial_review':
+    case 'issue_triage':
+    case 'routine':
+      return false
+  }
 }

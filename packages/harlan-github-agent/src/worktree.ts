@@ -2,6 +2,7 @@ import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
+import type { PrepareCommandRunner } from './repository-prepare.ts'
 import type { Result } from './result.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
 import { Buffer } from 'node:buffer'
@@ -12,7 +13,8 @@ import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { StringDecoder } from 'node:string_decoder'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
-import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
+import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead, preparesRepository } from './repository-policy.ts'
+import { createPrepareCommandRunner, runRepositoryPrepare } from './repository-prepare.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -47,6 +49,8 @@ export interface ConflictWorktreeManager {
 
 export interface ConflictWorktreeManagerOptions {
   gitIdentity?: GitIdentity
+  /** Runs one repository prepare command. Defaults to a real process. */
+  prepare?: PrepareCommandRunner
   remoteUrl?: (repository: string) => string
   root: string
   tokens: GitHubTokenProvider
@@ -579,6 +583,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
   const gitIdentity = options.gitIdentity
+  const prepareRunner = options.prepare ?? createPrepareCommandRunner()
   async function prepare(task: ClaimedConflictResolutionTask, signal: AbortSignal): Promise<Result<PreparedConflictWorktree, string>> {
     const branch = agentWorktreeBranch(`pull-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}`, { taskId: task.id, fence: task.state.fence })
     const repository = task.repositoryMapping.checkout
@@ -614,6 +619,11 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     const worktree = await prepareWtWorktree(repository, branch, head.stdout, signal)
     if (worktree._tag === 'Err')
       return worktree
+    // Prepare runs on the clean head. After the merge below, conflict markers
+    // would break any generator that reads the tree.
+    const prepared = await runRepositoryPrepare(task.repositoryMapping, worktree.value, prepareRunner, signal)
+    if (prepared._tag === 'Err')
+      return prepared
 
     const merge = await runGit(worktree.value, [
       '-c',
@@ -739,6 +749,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
 }
 
 export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOptions): AgentWorkspaceManager {
+  const prepareRunner = options.prepare ?? createPrepareCommandRunner()
   async function prepareRepository(
     task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun,
     label: string,
@@ -761,9 +772,16 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       return err(`Could not resolve the Worker head: ${head.stderr}`)
     const branch = agentWorktreeBranch(label, { taskId: task.id, fence: task.state.fence })
     const worktree = await prepareWtWorktree(repository, branch, head.stdout, signal)
-    return worktree._tag === 'Err'
-      ? worktree
-      : ok({ path: worktree.value, baseSha: head.stdout, headSha: head.stdout })
+    if (worktree._tag === 'Err')
+      return worktree
+    // Worktrunk's pre-start hook has finished by now. A mutating Agent gets the
+    // repository's own prepare step on top; a read only one never needs it.
+    if (preparesRepository('kind' in task ? task.kind : 'routine')) {
+      const prepared = await runRepositoryPrepare(task.repositoryMapping, worktree.value, prepareRunner, signal)
+      if (prepared._tag === 'Err')
+        return prepared
+    }
+    return ok({ path: worktree.value, baseSha: head.stdout, headSha: head.stdout })
   }
 
   return {

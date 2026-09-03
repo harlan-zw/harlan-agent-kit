@@ -1,7 +1,7 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, RepositoryPrepare, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -74,6 +74,38 @@ function stringArray(source: UnknownRecord, key: string, path: string, issues: C
     return value.map(item => (item as string).trim())
 
   issues.push({ path: `${path}.${key}`, message: 'Expected a list of non-empty strings.' })
+}
+
+/** Ten minutes covers a Nuxt workspace prepare plus one dist build. */
+const DEFAULT_PREPARE_TIMEOUT_SECONDS = 600
+
+/** A shell would let one line run anything; each command is one argv with nothing to interpret. */
+const shellSyntax = /[;&|<>$`\\'"()]/u
+
+/**
+ * The repository prepare step. Absent means no command, which is the common
+ * case and needs no key.
+ */
+function repositoryPrepare(source: UnknownRecord, path: string, issues: ConfigIssue[]): RepositoryPrepare | undefined {
+  const commands = source.prepare === undefined ? [] : stringArray(source, 'prepare', path, issues)
+  if (commands === undefined)
+    return undefined
+  if (commands.length === 0 && source.prepare !== undefined) {
+    issues.push({ path: `${path}.prepare`, message: 'Expected at least one command, or leave prepare out.' })
+    return undefined
+  }
+  if (commands.some(command => shellSyntax.test(command))) {
+    issues.push({ path: `${path}.prepare`, message: 'Every prepare command must be one plain command with no shell syntax.' })
+    return undefined
+  }
+  const timeout = source.prepare_timeout_seconds
+  if (timeout === undefined)
+    return { commands, timeoutSeconds: DEFAULT_PREPARE_TIMEOUT_SECONDS }
+  if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout < 1 || timeout > 3600) {
+    issues.push({ path: `${path}.prepare_timeout_seconds`, message: 'Expected an integer from 1 to 3600.' })
+    return undefined
+  }
+  return { commands, timeoutSeconds: timeout }
 }
 
 /** Auto merge is off unless the configuration turns it on. */
@@ -365,6 +397,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
       : undefined
   const pullRequestReview = requiredBoolean(value, 'pr_review', path, issues)
   const conflictResolution = requiredBoolean(value, 'conflict_resolution', path, issues)
+  const prepare = repositoryPrepare(value, path, issues)
   const ownershipConfig = takeOwnership(value, path, repositoryOwnership, issues)
 
   if (github !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(github))
@@ -400,6 +433,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     || maxOpenPullRequests === undefined
     || pullRequestReview === undefined
     || conflictResolution === undefined
+    || prepare === undefined
     || ownershipConfig === undefined
   ) {
     return undefined
@@ -418,6 +452,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     maxOpenPullRequests,
     pullRequestReview,
     conflictResolution,
+    prepare,
     takeOwnership: ownershipConfig,
   }
 }

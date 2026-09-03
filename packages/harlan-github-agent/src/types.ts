@@ -16,6 +16,17 @@ export type TakeOwnershipConfig
 
 export type RepositoryAuthentication = 'app' | 'user'
 
+/**
+ * The repository's own prepare step, run in every task worktree before a
+ * mutating Agent starts. Worktrunk installs `node_modules`; this fills in what
+ * the repository generates on top, such as `nuxt prepare` output.
+ */
+export interface RepositoryPrepare {
+  /** Plain commands run in order with the worktree's `node_modules/.bin` on PATH. Empty when the repository needs none. */
+  commands: string[]
+  timeoutSeconds: number
+}
+
 export interface RepositoryMapping {
   github: string
   checkout: string
@@ -34,6 +45,7 @@ export interface RepositoryMapping {
   maxOpenPullRequests: number | null
   pullRequestReview: boolean
   conflictResolution: boolean
+  prepare: RepositoryPrepare
   takeOwnership: TakeOwnershipConfig
 }
 
