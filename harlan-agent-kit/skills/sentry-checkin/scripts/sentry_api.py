@@ -537,8 +537,8 @@ def issue_fingerprint(project, fields, exception, frames):
     Sentry issues an ID per grouping, and a resolved issue that regresses can
     come back under a new one. The exception type, culprit, and innermost
     in-app frame name the defect itself, so the Candidate keeps its identity.
-    Without an exception type the remaining parts cannot tell defects apart,
-    so the title (or issue ID) stands in.
+    A frameless issue carries no stack to tell defects apart, so the title
+    (or issue ID) stands in.
     """
     frame = frames[0] if frames else {}
     parts = [
@@ -548,7 +548,7 @@ def issue_fingerprint(project, fields, exception, frames):
         frame.get("file") or "",
         frame.get("function") or "",
     ]
-    if not exception.get("type"):
+    if not frames:
         parts.append(fields.get("title") or fields["id"])
     return "sentry:" + sha256_text("|".join(parts))[:16]
 

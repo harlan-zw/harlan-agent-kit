@@ -516,6 +516,39 @@ class DigestTest(unittest.TestCase):
             first, second = digest["issues"]
             self.assertNotEqual(first["fingerprint"], second["fingerprint"])
 
+    def test_digest_gives_typed_frameless_issues_with_one_culprit_distinct_fingerprints(self):
+        frameless = {
+            "project": "site",
+            "issue": {
+                "id": "12",
+                "short_id": "SITE-12",
+                "title": "Error: first",
+                "culprit": "server/api/gone.ts",
+                "count": "1",
+                "user_count": 1,
+                "first_seen": "2026-08-20T00:00:00Z",
+                "last_seen": "2026-08-21T00:00:00Z",
+            },
+            "events": [
+                {
+                    "entries": [
+                        {"type": "exception", "data": {"values": [{"type": "Error", "value": "first"}]}}
+                    ]
+                }
+            ],
+        }
+        sibling = json.loads(json.dumps(frameless))
+        sibling["issue"]["id"] = "13"
+        sibling["issue"]["short_id"] = "SITE-13"
+        sibling["issue"]["title"] = "Error: second"
+        sibling["events"][0]["entries"][0]["data"]["values"][0]["value"] = "second"
+        with tempfile.TemporaryDirectory() as directory:
+            bundles_dir = self.write_bundles(directory, [frameless, sibling])
+            digest = self.run_digest(bundles_dir, Path(directory) / "state.json")
+            first, second = digest["issues"]
+            self.assertEqual(first["exception"]["type"], "Error")
+            self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+
     def test_digest_flags_an_unchanged_backlog_on_the_next_run(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"
