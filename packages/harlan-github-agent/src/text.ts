@@ -1,8 +1,27 @@
 /** One line, no markers, short enough for a dashboard row or a Git subject. */
 const maximumLineCharacters = 240
 
+const markerPattern = /<!--|-->|🤖/g
+
 export function cleanLine(value: string): string {
-  return value.replaceAll(/<!--|-->|[\r\n]|🤖/g, ' ').replaceAll(/\s+/g, ' ').trim().slice(0, maximumLineCharacters)
+  return value.replaceAll(markerPattern, ' ').replaceAll(/[\r\n]/g, ' ').replaceAll(/\s+/g, ' ').trim().slice(0, maximumLineCharacters)
+}
+
+/**
+ * Whole text, no markers, no control characters, no length cap.
+ *
+ * A Review finding's proof, regression test, and next action feed the next
+ * Repair Agent. Cut at 240 characters they ended mid-word, and every Repair
+ * re-read the diff to recover the intent. Line breaks and tabs stay because
+ * the Agent writes lists and code in them.
+ */
+export function cleanText(value: string): string {
+  return value
+    .replaceAll(markerPattern, ' ')
+    .replaceAll('\r\n', '\n')
+    // eslint-disable-next-line no-control-regex
+    .replaceAll(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '')
+    .trim()
 }
 
 /**

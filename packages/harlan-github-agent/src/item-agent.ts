@@ -34,7 +34,7 @@ import { repairRoundLabel } from './repair-rounds.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
-import { cleanLine, updatedAtLabel } from './text.ts'
+import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
 
 interface ReviewResponse {
   confidence: number
@@ -103,10 +103,12 @@ Check clipping, overlap, overflow, alignment, contrast, missing content, and bro
 Treat a clearly labelled Before image as historical evidence. Verify the current head separately.
 If an image stays inaccessible after authenticated retrieval, or is corrupt, return a material documentation finding.
 Trace each visual defect to the affected implementation and include screenshot proof.
-Use live search when current documentation or external context improves the review. The controller owns head stability, merge state, CI, and the final Review outcome.
+The controller owns head stability, merge state, CI, and the final Review outcome.
+Read only the changed hunks plus the symbols they call. Do not read a file over 300 lines whole.
+Run at most one test command. Never run a test file CI already runs.
 Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. If CI is missing or unavailable, continue the code review. The controller reports that state.
-Limit local commands to changed files, their direct dependants, and focused behavior. Run one focused test or command only to prove a material finding or verify touched behavior that CI does not cover.
-Use GitHub read commands when history, linked issues, pull requests, checks, or releases improve the review.
+Never pass -r to rg. It means replace, not recursive.
+Stay inside the worktree. Never search / or another worktree.
 Keep the worktree read only. Do not edit, stage, commit, push, or post comments. The controller rejects a Review that changes files.
 Return only the required JSON.
 
@@ -121,7 +123,8 @@ Do not call GitHub-first workflow state a wrong premise by itself.
 Call the premise wrong when the pull request removes local coordination before the required GitHub-backed replacement exists.
 Return one evidence-based finding for every material consequence of a wrong premise.
 Return every material defect.
-Each finding needs a stable identity, exact path and line, proof, summary, and next action.
+Each finding needs a stable identity, exact path and line, proof, summary, and next action. Every field is required, including summary.
+Example finding: {"identity":"buffered-byte-loss","path":"src/parser.ts","line":42,"proof":"A split UTF-8 sequence loses its first byte.","regressionTest":"Split one sequence across two chunks and assert the original string.","summary":"The parser drops data.","nextAction":"Keep the buffered bytes."}
 Keep the identity stable across line changes.
 For a sound premise, describe one test that fails before Repair and passes after it.
 For a wrong premise, return null for every regressionTest. The controller will recommend Dismissal.
@@ -320,12 +323,12 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
           return typeof candidate.identity === 'string' && normalizedFindingIdentity(candidate.identity).length > 0
             && typeof candidate.path === 'string' && cleanLine(candidate.path).length > 0
             && (candidate.line === null || (Number.isInteger(candidate.line) && (candidate.line ?? 0) >= 1))
-            && typeof candidate.proof === 'string' && cleanLine(candidate.proof).length > 0
+            && typeof candidate.proof === 'string' && cleanText(candidate.proof).length > 0
             && (premise.verdict === 'sound'
-              ? typeof candidate.regressionTest === 'string' && cleanLine(candidate.regressionTest).length > 0
+              ? typeof candidate.regressionTest === 'string' && cleanText(candidate.regressionTest).length > 0
               : candidate.regressionTest === null)
             && typeof candidate.summary === 'string' && cleanLine(candidate.summary).length > 0
-            && typeof candidate.nextAction === 'string' && cleanLine(candidate.nextAction).length > 0
+            && typeof candidate.nextAction === 'string' && cleanText(candidate.nextAction).length > 0
         })
         || !(typeof confidence === 'number' && Number.isInteger(confidence) && confidence >= 0 && confidence <= 100)
       ) {
@@ -338,11 +341,13 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
         findings: reviewed.map(finding => ({
           identity: normalizedFindingIdentity(finding.identity),
           line: finding.line,
+          // Only the summary must fit one line. The other fields reach the
+          // Repair Agent whole, so it never re-reads the diff to finish a cut sentence.
           summary: cleanLine(finding.summary),
-          nextAction: cleanLine(finding.nextAction),
+          nextAction: cleanText(finding.nextAction),
           path: cleanLine(finding.path),
-          proof: cleanLine(finding.proof),
-          regressionTest: finding.regressionTest === null ? null : cleanLine(finding.regressionTest),
+          proof: cleanText(finding.proof),
+          regressionTest: finding.regressionTest === null ? null : cleanText(finding.regressionTest),
         })),
       })
     })
