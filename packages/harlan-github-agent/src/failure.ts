@@ -371,7 +371,11 @@ export interface CheckFailureSignal {
   logTail: string[]
 }
 
-/** A runner killed the job process, or the host killed the runner. */
+/**
+ * A runner killed the job process, or the host killed the runner. GitHub
+ * prints the kill as the last lines of the failed step, so only the tail's
+ * final lines count. A test that asserts kill-signal output prints it earlier.
+ */
 const runnerKillPatterns: RegExp[] = [
   /\bexit code 129\b/i,
   /\bexit code 137\b/i,
@@ -385,7 +389,11 @@ const runnerKillPatterns: RegExp[] = [
 /** Remote services a workflow downloads from, which the repository does not control. */
 const remoteHostPattern = /\b(?:unpkg\.com|nodejs\.org|registry\.npmjs\.org|registry\.yarnpkg\.com|objects\.githubusercontent\.com|release-assets\.githubusercontent\.com|github\.com\/[\w.-]+\/[\w.-]+\/releases\/download)\b/i
 
-/** A download failed for a reason the repository cannot change. */
+/**
+ * A download failed at the transport level. Bare words such as `timeout`,
+ * `fetch failed`, or a `503` also appear in repository tests that mention a
+ * package host, so only an OS or client error token counts.
+ */
 const remoteFetchFailurePatterns: RegExp[] = [
   /\bETIMEDOUT\b/,
   /\bECONNRESET\b/,
@@ -394,14 +402,14 @@ const remoteFetchFailurePatterns: RegExp[] = [
   /\bEAI_AGAIN\b/,
   /\bUND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET)\b/,
   /\bsocket hang up\b/i,
-  /\bfetch failed\b/i,
-  /\btimed? ?out\b/i,
   /\bERR_PNPM_FETCH_\w+\b/,
-  /\b(?:502|503|504)\b/,
 ]
 
-/** How many neighbouring lines one download failure may span. */
-const remoteFetchWindow = 4
+/** How many neighbouring lines one download failure may span: the URL, a stack trace, then the cause. */
+const remoteFetchWindow = 6
+
+/** How many final lines of the tail a runner kill may occupy. */
+const runnerKillTail = 3
 
 function remoteFetchFailure(logTail: string[]): string | null {
   for (let index = 0; index < logTail.length; index += 1) {
@@ -419,14 +427,15 @@ function remoteFetchFailure(logTail: string[]): string | null {
  * Only a runner kill or a remote download failure is Infrastructure. A heap
  * limit inside a step stays Repairable, because the workflow's `NODE_OPTIONS`
  * is the repository's to change. An unreadable log stays Repairable, because
- * an Agent can still read the repository.
+ * an Agent can still read the repository. A `timed_out` conclusion stays
+ * Repairable unless the log shows the host or a download stalled.
  */
 export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureClass {
   if (signal.runnerLost === true)
     return { _tag: 'Infrastructure', reason: `The runner lost the job for check "${signal.name}" before any step failed.` }
-  if (signal.conclusion === 'timed_out')
-    return { _tag: 'Infrastructure', reason: `GitHub timed out check "${signal.name}" before it finished.` }
-  const killed = signal.logTail.find(line => matches(runnerKillPatterns, line))
+  // A `timed_out` conclusion alone says nothing about who hung. A repository
+  // test can hang as easily as a host can stall, so the log decides.
+  const killed = signal.logTail.slice(-runnerKillTail).find(line => matches(runnerKillPatterns, line))
   if (killed !== undefined)
     return { _tag: 'Infrastructure', reason: `The runner killed the job for check "${signal.name}": ${killed.trim()}` }
   const host = remoteFetchFailure(signal.logTail)

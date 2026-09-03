@@ -196,6 +196,37 @@ describe('classifyCheckFailure', () => {
     expect(failure).toEqual({ _tag: 'Infrastructure', reason: expect.stringMatching(reason) })
   })
 
+  it('keeps a timed_out check Repairable when the log shows a repository test hanging', () => {
+    const logTail = [
+      '> vitest run',
+      ' ❯ test/job-consumer.test.ts (12 tests) 599000ms',
+      '   × retries a transient failure',
+      '##[error]The job running on runner harlan-desktop-2 has exceeded the maximum execution time of 10 minutes.',
+    ]
+    expect(classifyCheckFailure({ name: 'test', conclusion: 'timed_out', logTail })).toEqual({ _tag: 'Repairable' })
+  })
+
+  it('ignores kill-signal text that a repository test printed before the real failure', () => {
+    const logTail = [
+      'stdout | test/runner.test.ts > reports exit code 129 from a killed child',
+      'Process completed with exit code 129.',
+      ' ❯ test/runner.test.ts (3 tests | 1 failed)',
+      '   × reports exit code 129 from a killed child',
+      'AssertionError: expected "killed" to be "signalled"',
+      '##[error]Process completed with exit code 1.',
+    ]
+    expect(classifyCheckFailure({ name: 'test', conclusion: 'failure', logTail })).toEqual({ _tag: 'Repairable' })
+  })
+
+  it('ignores a bare status code or timeout word next to a package host', () => {
+    const logTail = [
+      'FAIL test/registry.test.ts > returns 503 from https://registry.npmjs.org when the mirror is down',
+      'AssertionError: expected timeout to equal 30000',
+      '##[error]Process completed with exit code 1.',
+    ]
+    expect(classifyCheckFailure({ name: 'test', conclusion: 'failure', logTail })).toEqual({ _tag: 'Repairable' })
+  })
+
   it.each([
     ['a type error', typeError],
     ['a heap limit inside a step', heapLimit],
