@@ -10,6 +10,7 @@ export type StoppedReviewOutcome
   = | { _tag: 'Published', repository: string, pullRequestNumber: number }
     | { _tag: 'CommentGone', repository: string, pullRequestNumber: number }
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
+    | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 export type { StoppedReviewDisposition }
 
@@ -168,7 +169,12 @@ export async function publishStoppedReviews(
       })
       return ok({ _tag: 'CommentGone', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
     }
-    if (edited.value._tag === 'Changed') {
+    // Changed: another Task now owns the comment. Foreign: the stored id names
+    // a comment another actor or pull request owns, which no pass can change.
+    // Both end this publication; the closure still records that the pull
+    // request left, so the row stops asking.
+    if (edited.value._tag === 'Changed' || edited.value._tag === 'Foreign') {
+      const foreign = edited.value._tag === 'Foreign' ? edited.value.reason : null
       if (closure !== null) {
         const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
         if (labels._tag === 'Err')
@@ -191,9 +197,11 @@ export async function publishStoppedReviews(
         taskId: review.taskId,
         commentId: review.commentId,
         at,
-        reason: 'Another Task replaced the canonical comment.',
+        reason: foreign ?? 'Another Task replaced the canonical comment.',
       })
-      return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
+      return ok(foreign === null
+        ? { _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber }
+        : { _tag: 'Retired', repository: review.repository, pullRequestNumber: review.pullRequestNumber, reason: foreign })
     }
     const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
     if (labels._tag === 'Err')

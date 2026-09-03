@@ -1,5 +1,6 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { TransientKind } from './failure.ts'
+import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { IssueTriageState } from './issue-triage.ts'
 import type { RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
@@ -868,7 +869,7 @@ export interface JournalStore {
     taskId: string
     commentId: number
     at: string
-    reason: 'A person deleted the comment.' | 'Another Task replaced the canonical comment.'
+    reason: 'A person deleted the comment.' | 'Another Task replaced the canonical comment.' | ForeignReviewCommentReason
   }) => boolean
   recordStoppedReviewStatus: (input: {
     taskId: string

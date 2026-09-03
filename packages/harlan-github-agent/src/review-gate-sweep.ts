@@ -2,6 +2,7 @@ import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, ReviewGateRefresh } from './store.ts'
 import type { RepositoryMapping, ReviewOutcomeName } from './types.ts'
+import { createHash } from 'node:crypto'
 import { refreshControllerGates, reviewOutcome, terminalComment } from './item-agent.ts'
 import { err, ok } from './result.ts'
 
@@ -9,12 +10,13 @@ export type ReviewGateRefreshOutcome
   = | { _tag: 'PublicationQueued', repository: string, pullRequestNumber: number, outcome: ReviewOutcomeName }
     | { _tag: 'Unchanged', repository: string, pullRequestNumber: number, outcome: ReviewOutcomeName, reason: string }
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
+    | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 export interface ReviewGateSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampAgentLabel'>
   now: () => Date
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'stageReviewGateStatus'>
+  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'recordReviewPublication' | 'stageReviewGateStatus'>
 }
 
 /**
@@ -58,6 +60,23 @@ export async function refreshReviewGates(
       )
       if (confirmed._tag === 'Err')
         return err(`${review.repository}#${review.pullRequestNumber}: ${confirmed.error}`)
+      if (confirmed.value._tag === 'Foreign') {
+        // The stored id names a comment another actor or pull request owns.
+        // Staging a fresh status would send the publish loop back to the same
+        // id every pass. A failed Publication with the reason takes this
+        // Review out of the refresh list, and the next Review opens its own.
+        const at = options.now().toISOString()
+        const recorded = options.store.recordReviewPublication({
+          id: createHash('sha256').update(`${review.reviewRunId}:foreign:${review.commentId}`).digest('hex'),
+          reviewRunId: review.reviewRunId,
+          body: review.publishedBody,
+          at,
+          result: { _tag: 'Failed', reason: confirmed.value.reason },
+        })
+        if (recorded._tag === 'Rejected')
+          return err(`${review.repository}#${review.pullRequestNumber}: ${confirmed.value.reason} The refusal could not be recorded.`)
+        return ok({ _tag: 'Retired', repository: review.repository, pullRequestNumber: review.pullRequestNumber, reason: confirmed.value.reason })
+      }
       if (confirmed.value._tag !== 'Edited') {
         const at = options.now().toISOString()
         const staged = options.store.stageReviewGateStatus({

@@ -85,4 +85,21 @@ describe('editReviewStatus compare and swap', () => {
     const result = await source().editReviewStatus(repositoryMapping(), 24, 5, publishedBody, 'updated body', new AbortController().signal)
     expect(result).toEqual(ok({ _tag: 'Changed' }))
   })
+
+  it('reports Foreign without writing when another actor owns the comment', async () => {
+    hoisted.state.remoteBody = publishedBody
+    hoisted.state.writes = 0
+    hoisted.octokit.rest.issues.getComment = () => Promise.resolve({
+      data: {
+        id: 5,
+        html_url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-5',
+        issue_url: 'https://github.com/harlan-zw/example/issues/24',
+        user: { login: 'someone-else' },
+        body: publishedBody,
+      },
+    })
+    const result = await source().editReviewStatus(repositoryMapping(), 24, 5, publishedBody, 'updated body', new AbortController().signal)
+    expect(hoisted.state.writes).toBe(0)
+    expect(result).toEqual(ok({ _tag: 'Foreign', reason: 'The stored automated review comment belongs to another GitHub actor.' }))
+  })
 })

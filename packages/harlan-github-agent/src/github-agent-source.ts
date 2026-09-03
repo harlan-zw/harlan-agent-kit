@@ -165,10 +165,21 @@ export interface PublishedReviewStatus {
  * `Missing` means a person deleted the comment, so there is nothing to correct.
  * `Changed` means somebody wrote it after the caller last read it.
  */
+/**
+ * Why a stored comment id names a comment this service must never edit.
+ *
+ * Neither reason changes on a later pass, so a caller retires the publication
+ * that holds the id instead of asking GitHub the same question every pass.
+ */
+export type ForeignReviewCommentReason
+  = | 'The stored automated review comment belongs to another pull request.'
+    | 'The stored automated review comment belongs to another GitHub actor.'
+
 export type EditedReviewStatus
   = | { _tag: 'Edited', commentId: number, url: string }
     | { _tag: 'Changed' }
     | { _tag: 'Missing' }
+    | { _tag: 'Foreign', reason: ForeignReviewCommentReason }
 
 export interface GitHubAgentSource {
   consumeApprovalLabel: (repository: RepositoryMapping, subjectKind: 'issue' | 'pull_request', itemNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -727,7 +738,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
         .then(async (existing) => {
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
-            return err('The stored automated review comment belongs to another pull request.')
+            return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another pull request.' as const })
           const legacyActor = options.legacyActor
           const existingHead = automatedReviewHead(existing.data.body ?? '')?.toLowerCase()
           const expectedHead = automatedReviewHead(expectedBody)?.toLowerCase()
@@ -741,7 +752,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             && existingHead === expectedHead
             && existingHead === nextHead
           if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
-            return err('The stored automated review comment belongs to another GitHub actor.')
+            return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another GitHub actor.' as const })
           if (existing.data.body === body && existing.data.html_url !== undefined)
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           if (existing.data.body !== expectedBody)
