@@ -14,7 +14,7 @@ Context to read first (read-only, do not edit anything):
 - {controller file that builds the prompt for this role}
 - You may query the journal on Hogwild read-only: ssh hogwild 'sqlite3 ~/.local/share/harlan-github-agent/state.sqlite "..."'. Never write to it.
 
-Read every transcript in full. Then write a report to `REPORT.md` in that same directory and also return it. Structure, hard cap ~700 words, plain words, short sentences:
+Read every transcript in full. Then write a report to `REPORT.md` in that same directory and also return it. Structure, one page, plain words, short sentences:
 
 1. **Sessions**: one line each: id, subject, duration, tokens in/out, outcome, one-phrase description of what it spent its time on.
 2. **Redundant work within the group**: work repeated across sessions or within a session that the controller or prompt could supply once. Cite session id + timestamp for each claim.

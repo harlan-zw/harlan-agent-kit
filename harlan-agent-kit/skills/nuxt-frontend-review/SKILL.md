@@ -3,7 +3,6 @@ name: nuxt-frontend-review
 description: "Adversarially review a Nuxt frontend. Run it and verify its contract, UX, and visual behavior. Use for frontend review or testing."
 user_invocable: true
 argument-hint: "[job-id] [inline]"
-model: opus
 effort: high
 allowed-tools: Read, Bash, Glob, Grep
 ---
@@ -125,7 +124,7 @@ Only when the diff touches charts, dashboards, sparklines, stat cards, or quanti
 
 ### Suspicion check
 
-Zero issues found means re-examine the three highest-complexity components with fresh skepticism; a clean review on a non-trivial build is statistically unlikely. Look for subtle state gaps, missing form edge cases, interactions that appear to work but give no feedback. Still clean afterward, PASS is legitimate.
+A clean result on a non-trivial build is a legitimate PASS. Name the high-complexity components you exercised and the evidence that cleared them: state gaps, form edge cases, interactions that give no feedback.
 
 ## Step 4: Visual Verification
 

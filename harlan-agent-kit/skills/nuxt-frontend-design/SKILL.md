@@ -3,7 +3,6 @@ name: nuxt-frontend-design
 description: "Build or polish Nuxt UI v4+ pages and design systems. Use for landing pages, dashboards, tokens, motion, or generic-looking UX."
 user_invocable: true
 argument-hint: "[component/page/area]"
-model: opus
 effort: max
 ---
 
@@ -66,7 +65,7 @@ IS_NUXT=false: this skill needs a Nuxt project (`nuxt.config.ts`). Say so and st
 
 Phase 2 depends on a complete design system. If any of the three indicators is missing, run Phase 1 first and tell the user you're doing so.
 
-Phase 1 consumes a lot of context. When Phase 1 completes in the current conversation, prefer emitting the handoff and telling the user: "Design system ready. Start a new conversation and run `/nuxt-frontend-design {page}` to build with fresh context." Continue in the same conversation only if the remaining build is small and context is still clean.
+After Phase 1, emit the handoff and continue into Phase 2 when pages were asked for. Offer a fresh conversation with `/nuxt-frontend-design {page}` only after repair passes or for multi-page builds.
 
 ## Content & Asset Rules
 

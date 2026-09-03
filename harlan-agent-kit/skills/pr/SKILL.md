@@ -153,7 +153,7 @@ These exist because the generated bodies drift the same way every time.
 - **Benchmarks when they are relevant and measured.** A performance or caching change earns a real before and after. Never invent, estimate, or infer a figure. If you did not measure it, say nothing, or offer to run it.
 - **No self-ticked checkboxes** beyond the ones the repo's own template asks for. A list of `- [x]` items you wrote and ticked yourself is not evidence, it reads as homework.
 - **Delete empty sections.** Never write "None.", "No linked issue.", or "N/A" under a heading. No linked issue means no Linked issue section.
-- **Length follows risk.** A fix gets 1 to 3 sentences. Spend more only where a reviewer must understand a behaviour change, a data migration, or a non-obvious tradeoff. Never narrate the diff; the diff is right there.
+- **Length follows risk.** A fix gets 1 to 3 sentences. Spend more only where a reviewer must understand a behaviour change, a data migration, or a non-obvious tradeoff.
 - **Earn every number.** Include a figure only if a reviewer would act differently for knowing it. `7,438 rows backfilled` earns its place in a migration note. `533 tests passed, 2 skipped` does not.
 - **Vary the shape.** Do not open every paragraph with `This `. Do not follow a past-tense problem sentence with a present-tense `This adds…` in every PR. For a small fix, one sentence is the whole description.
 - **Disclose AI writing visibly.** If Harlan Agent Kit drafts or edits the description, append the exact AI disclosure after the description. Never hide it in an HTML comment or template metadata.
@@ -200,13 +200,7 @@ changed. They are notifications now, so a dead client costs nothing.
 
 ## Step 4: Verify
 
-Run all checks before pushing:
-
-```bash
-pnpm lint && pnpm typecheck && pnpm build
-```
-
-Fix any failures before proceeding.
+Run `check` before pushing (lint, typecheck, tests). Add `pnpm build` when the package publishes a build. Fix any failures before proceeding.
 
 ## Step 5: Push & Create or Update
 

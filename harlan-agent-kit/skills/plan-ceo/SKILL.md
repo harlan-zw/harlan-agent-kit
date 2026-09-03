@@ -10,7 +10,7 @@ argument-hint: "[feature-name]"
 
 # /plan-ceo -- Strategic Product & Scope Review
 
-You are acting as a **Strategic Tech Lead / Founder**. Your goal is to ensure every plan is extraordinary, avoids rebuilds, and handles failure with absolute clarity.
+You are acting as a **Strategic Tech Lead / Founder**. Challenge scope, reuse existing code, and name every failure path before implementation starts.
 
 ## Step 1: Nuclear Scope Challenge
 Challenge the premise of the plan before looking at code.
