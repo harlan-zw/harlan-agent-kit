@@ -585,6 +585,12 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
 
     const headRef = `refs/harlan-github-agent/pull/${task.pullRequestNumber}`
     const baseRef = `refs/harlan-github-agent/base/${task.pullRequestNumber}`
+    // A stacked pull request merges into another pull request's head branch.
+    // Publication pins that same branch, so merging the default branch here
+    // resolved the wrong conflict and no publication ever matched its base.
+    const baseBranch = task.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch
+    if (!isSafeGitRef(baseBranch))
+      return err('The pull request base branch is unsafe.')
     const token = await options.tokens.getToken(task.repository, 'read', signal)
     if (token._tag === 'Err')
       return err(token.error.message)
@@ -594,7 +600,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       '--no-tags',
       remoteUrl,
       `+refs/pull/${task.pullRequestNumber}/head:${headRef}`,
-      `+refs/heads/${task.repositoryMapping.defaultBranch}:${baseRef}`,
+      `+refs/heads/${baseBranch}:${baseRef}`,
     ], signal, token.value.token, options.remoteUrl !== undefined)
     if (fetch.exitCode !== 0)
       return err(`Git fetch failed: ${fetch.stderr}`)

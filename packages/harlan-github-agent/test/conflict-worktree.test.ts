@@ -93,6 +93,31 @@ describe('conflict worktree', () => {
     expect(result).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ baseSha: currentBaseSha, conflictedFiles: ['file.txt'] }) }))
   })
 
+  it('merges the stacked base branch instead of the default branch', async () => {
+    const { checkout, remote, root, task } = fixture()
+    // A stack: the pull request merges into another branch that diverged from
+    // main. Merging main here resolves the wrong conflict and the publication
+    // base check never matches.
+    git(checkout, 'checkout', '-b', 'feature/parent', task.pullRequest.baseSha)
+    writeFileSync(join(checkout, 'file.txt'), 'parent base\n')
+    git(checkout, 'commit', '-am', 'parent change')
+    git(checkout, 'push', 'origin', 'feature/parent')
+    const parentSha = git(checkout, 'rev-parse', 'HEAD')
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve({ _tag: 'Ok', value: { token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' } }), invalidate: () => undefined },
+    })
+
+    const result = await manager.prepare({ ...task, pullRequest: { ...task.pullRequest, baseRef: 'feature/parent' } }, new AbortController().signal)
+
+    expect(result).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ baseSha: parentSha, conflictedFiles: ['file.txt'] }) }))
+    if (result._tag === 'Err')
+      throw new Error(result.error)
+    expect(git(result.value.path, 'rev-parse', 'MERGE_HEAD')).toBe(parentSha)
+  })
+
   it('stages a verified conflict file in the controller-owned index', async () => {
     const { remote, root, task } = fixture()
     const manager = createConflictWorktreeManager({
