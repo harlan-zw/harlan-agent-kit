@@ -1,6 +1,6 @@
 import type { AgentProvider, AgentProviderName } from './agent-provider.ts'
 import type { Result } from './result.ts'
-import type { AgentModel, AgentProfile, AgentRole, AgentSelection, CodexReasoningEffort, PinnedAgentSelection, RoleProfile } from './types.ts'
+import type { AgentModel, AgentProfile, AgentRole, AgentSelection, CodexReasoningEffort, PinnedAgentSelection, RoleProfile, RoleReasoningEfforts } from './types.ts'
 import { err, ok } from './result.ts'
 
 export const CODEX_AGENT_PROFILE = {
@@ -20,7 +20,10 @@ export const CODEX_AGENT_PROFILE = {
   },
 } as const satisfies AgentProfile
 
-/** GLM 5.3 Flash on the GLM Coding Plan answers every role at its highest reasoning effort. */
+/**
+ * GLM 5.3 Flash on the GLM Coding Plan answers every role at its highest
+ * reasoning effort unless `agent.reasoning_effort.opencode` lowers one role.
+ */
 export const OPENCODE_AGENT_PROFILE = {
   provider: 'opencode',
   authentication: 'opencode-go',
@@ -205,9 +208,10 @@ export function parseAgentSelection(value: unknown): Result<AgentSelection, stri
   return ok({ _tag: 'Pinned', provider, model, reasoningEffort })
 }
 
-function roleWithSelection(role: RoleProfile, selection: PinnedAgentSelection): RoleProfile {
+/** A pinned Reasoning effort wins, then the configured override, then the provider default. */
+function roleWithSelection(role: RoleProfile, selection: PinnedAgentSelection, configured: CodexReasoningEffort | undefined): RoleProfile {
   const model = selection.model ?? role.model
-  const reasoningEffort = selection.reasoningEffort ?? role.reasoningEffort
+  const reasoningEffort = selection.reasoningEffort ?? configured ?? role.reasoningEffort
   return reasoningEffort === undefined ? { model } : { model, reasoningEffort }
 }
 
@@ -217,10 +221,15 @@ function roleWithSelection(role: RoleProfile, selection: PinnedAgentSelection): 
  * The service sizes its agent permits when it starts, so agent capacity comes
  * from the caller and never from the selected provider's own profile.
  */
-export function resolveAgentProfile(selection: PinnedAgentSelection, maximumActiveAgents: number): AgentProfile {
+export function resolveAgentProfile(
+  selection: PinnedAgentSelection,
+  maximumActiveAgents: number,
+  roleReasoningEfforts: RoleReasoningEfforts = {},
+): AgentProfile {
   const base = agentProfile(selection.provider)
+  const configured = roleReasoningEfforts[selection.provider] ?? {}
   const roles = Object.fromEntries(
-    AGENT_ROLES.map(role => [role, roleWithSelection(base.roles[role], selection)]),
+    AGENT_ROLES.map(role => [role, roleWithSelection(base.roles[role], selection, configured[role])]),
   ) as Record<AgentRole, RoleProfile>
   return { ...base, maximumActiveAgents, roles }
 }
@@ -232,6 +241,8 @@ export interface AgentRuntimeSourceOptions {
   configuredProvider: AgentProviderName
   maximumActiveAgents: number
   providers: Record<AgentProviderName, AgentProvider>
+  /** Reasoning effort overrides the configuration file names, per provider and role. */
+  roleReasoningEfforts?: RoleReasoningEfforts
   selection: () => AgentSelection
 }
 
@@ -246,7 +257,7 @@ export function createAgentRuntimeSource(options: AgentRuntimeSourceOptions): Ag
   return () => {
     const selection = resolveAgentSelection(options.selection(), configured, options.chooseProvider)
     return {
-      profile: resolveAgentProfile(selection, options.maximumActiveAgents),
+      profile: resolveAgentProfile(selection, options.maximumActiveAgents, options.roleReasoningEfforts),
       provider: options.providers[selection.provider],
     }
   }

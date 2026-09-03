@@ -80,6 +80,7 @@ import type {
   ReviewResolution,
   ReviewRun,
   ReviewStatusTaskPhase,
+  RoleReasoningEfforts,
   Routine,
   RoutineIssueSource,
   RoutineReportCommand,
@@ -5764,6 +5765,8 @@ export function openJournalStore(
   /** Issue work stops when open pull requests reach this limit. Matches the configuration default. */
   maxOpenPullRequests = 8,
   serviceUpdate: () => ServiceUpdateStatus = () => ({ _tag: 'Checking', deployedCommit: '' }),
+  /** Reasoning effort overrides the configuration names, per Agent provider and role. */
+  roleReasoningEfforts: RoleReasoningEfforts = {},
 ): JournalStore {
   const database = openDatabase(path)
   const configuredSelection = providerAgentSelection(profile.provider)
@@ -10972,7 +10975,7 @@ export function openJournalStore(
       selectionMode: currentSelectionMode,
       openPullRequests: countOpenPullRequests(),
       maxOpenPullRequests,
-      agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents),
+      agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents, roleReasoningEfforts),
       agentSelection: getAgentSelection(),
       agentStart: !mutationsEnabled
         ? { _tag: 'WritesDisabled' }

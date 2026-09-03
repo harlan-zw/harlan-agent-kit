@@ -14,6 +14,16 @@ agent:
   reserve_percent:
     codex: 20
     opencode: 50
+  # Reasoning effort per Agent provider and role. A listed role replaces that
+  # provider's own default. A pinned Agent selection with an explicit
+  # Reasoning effort still wins. Values: none, low, medium, high, xhigh, max.
+  # Roles: adversarial_review, baseline_repair, conflict_resolution,
+  # pull_request_triage, issue_triage, issue_work, review_fix, routine_scan,
+  # routine_fix.
+  # reasoning_effort:
+  #   opencode:
+  #     review_fix: medium
+  #     pull_request_triage: low
 github:
   app_id: 12345
   private_key_path: /home/harlan/.config/harlan-github-agent/app.pem

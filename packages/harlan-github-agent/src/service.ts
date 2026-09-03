@@ -270,7 +270,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ...providerProfile,
     maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
   }
-  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read)
+  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort)
   const processId = randomUUID()
   const restartController = createRestartController({
     store,
@@ -320,6 +320,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     chooseProvider,
     configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
+    roleReasoningEfforts: config.agent.reasoningEffort,
     providers: {
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,
