@@ -137,6 +137,14 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       const prepared = await options.worktrees.prepare(currentTask, signal)
       if (prepared._tag === 'Err')
         return prepared
+      if (prepared.value._tag === 'CleanMerge') {
+        // GitHub's conflicting state is stale. A GET on the pull request makes
+        // GitHub recompute mergeability in the background. Its answer is stale
+        // by definition, so it is not read; the next poll reads the result.
+        await options.github.getPullRequest(validated.value, task.pullRequestNumber, signal)
+        return ok({ _tag: 'Completed', evidence: JSON.stringify(prepared.value) })
+      }
+      const worktree = prepared.value.worktree
       const worktreeReady = reportProgress({ percent: 35, label: 'Git worktree ready' })
       if (worktreeReady._tag === 'Err')
         return worktreeReady
@@ -145,12 +153,12 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'conflict' },
-        prompt: workerPrompt(currentTask, prepared.value),
+        prompt: workerPrompt(currentTask, worktree),
         repository: task.repository,
         role: 'conflict_resolution',
         schema: outputSchema,
         taskId: task.id,
-        workspace: prepared.value.path,
+        workspace: worktree.path,
       }, signal)
       if (turn._tag === 'Err')
         return turn
@@ -167,7 +175,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         })
       }
 
-      const verified = await options.worktrees.verify(currentTask, prepared.value, signal)
+      const verified = await options.worktrees.verify(currentTask, worktree, signal)
       if (verified._tag === 'Err')
         return verified
       const checksPassed = reportProgress({ percent: 90, label: 'Conflict fix checked' })
@@ -182,7 +190,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         publishSnapshot.value.state !== 'open'
         || publishSnapshot.value.draft
         || publishSnapshot.value.mergeState !== 'conflicting'
-        || publishSnapshot.value.headSha !== prepared.value.headSha
+        || publishSnapshot.value.headSha !== worktree.headSha
         || (publishForkHead && publishSnapshot.value.maintainerCanModify !== true)
       ) {
         return err('The pull request changed before the fix was committed.')
@@ -190,7 +198,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
 
       const committed = await options.worktrees.commit(
         currentTask,
-        prepared.value,
+        worktree,
         verified.value,
         cleanLine(parsed.value.commitMessage),
         signal,

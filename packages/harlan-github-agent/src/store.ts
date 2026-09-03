@@ -111,6 +111,7 @@ import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { buildStats } from './stats.ts'
 import { cleanLine } from './text.ts'
+import { parseConflictCleanMergeEvidence } from './worktree.ts'
 
 export interface RecordIncidentInput {
   scope: IncidentScope
@@ -278,6 +279,66 @@ function resolveTaskIncidents(database: DatabaseSync, taskId: string, at: string
     UPDATE incidents SET resolved_at = ?
     WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?
   `).run(at, taskId)
+}
+
+/**
+ * Names a conflict Task whose real base merged cleanly while GitHub still said
+ * it conflicts.
+ *
+ * Nothing failed, so this is a warning and not an error, and it spends no
+ * Recovery budget. It is recorded after the Task completes, because completion
+ * closes every Incident the Task raised while it ran. The Task id already
+ * identifies one head and base pair, so a stale state seen twice stays one row.
+ */
+function recordCleanMergeIncident(database: DatabaseSync, taskId: string, evidence: string, at: string): void {
+  const cleanMerge = parseConflictCleanMergeEvidence(evidence)
+  if (cleanMerge === undefined)
+    return
+  const row = database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number
+    FROM tasks
+    JOIN subjects ON subjects.id = tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE tasks.id = ?
+  `).get(taskId) as { repository: string, github_number: number } | undefined
+  if (row === undefined)
+    return
+  upsertIncident(database, {
+    scope: { _tag: 'Task', taskId, repository: row.repository, itemNumber: row.github_number },
+    kind: 'subject_changed',
+    severity: 'warning',
+    operation: 'resolve_conflict',
+    message: `GitHub reports ${row.repository}#${row.github_number} as conflicting, but ${cleanMerge.baseRef} at ${cleanMerge.baseSha.slice(0, 12)} merges cleanly into head ${cleanMerge.headSha.slice(0, 12)}. GitHub's merge state is stale. Update the branch on GitHub, or push a new commit.`,
+    recovery: { _tag: 'ActionRequired' },
+    at,
+  })
+}
+
+/**
+ * Whether a completed conflict Task already proved this head and base merge cleanly.
+ *
+ * GitHub's stale state survives a Revision change that touches neither SHA,
+ * such as a title edit, so the Revision alone cannot answer this.
+ */
+function hasCleanMergeCompletion(database: DatabaseSync, subjectId: number, headSha: string, baseSha: string): boolean {
+  const rows = database.prepare(`
+    SELECT evidence FROM tasks
+    WHERE subject_id = ? AND kind = 'resolve_conflict' AND state_tag = 'Completed' AND evidence LIKE '{%'
+  `).all(subjectId) as unknown as Array<{ evidence: string }>
+  return rows.some((row) => {
+    const cleanMerge = parseConflictCleanMergeEvidence(row.evidence)
+    return cleanMerge !== undefined && cleanMerge.headSha === headSha && cleanMerge.baseSha === baseSha
+  })
+}
+
+/** Closes the stale-state warnings once the head or base moved, or GitHub agrees. */
+function resolveCleanMergeIncidents(database: DatabaseSync, subjectId: number, at: string): void {
+  database.prepare(`
+    UPDATE incidents SET resolved_at = ?
+    WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id IN (
+      SELECT id FROM tasks WHERE subject_id = ? AND kind = 'resolve_conflict' AND state_tag = 'Completed'
+    )
+  `).run(at, subjectId)
 }
 
 /** Failure kinds an outage causes, and that a healthy GitHub therefore clears. */
@@ -3502,6 +3563,7 @@ function planConflictResolution(
 
   if (!eligible) {
     supersedeTasks(database, subjectId, observedAt, 'The pull request no longer needs conflict resolution.')
+    resolveCleanMergeIncidents(database, subjectId, observedAt)
     return
   }
 
@@ -3590,6 +3652,11 @@ function planConflictResolution(
   }
   if (existing !== undefined)
     return
+  // The base merged cleanly for this exact head and base, and GitHub has not
+  // caught up. Another turn proves the same thing and raises the same warning.
+  if (hasCleanMergeCompletion(database, subjectId, subject.headSha, subject.baseSha))
+    return
+  resolveCleanMergeIncidents(database, subjectId, observedAt)
 
   const state: TaskState = ready
     ? { _tag: 'Queued' }
@@ -9392,6 +9459,7 @@ export function openJournalStore(
       if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
         resolveTaskIncidents(database, input.taskId, input.at)
+        recordCleanMergeIncident(database, input.taskId, input.evidence, input.at)
       }
       database.exec('COMMIT')
       return result.changes === 1

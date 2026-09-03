@@ -23,6 +23,37 @@ export interface PreparedConflictWorktree {
   conflictedFiles: string[]
 }
 
+/**
+ * What merging the real base into the pull request head showed.
+ *
+ * GitHub reported two stacked pull requests as conflicting for days while
+ * their real base merged cleanly. A clean merge is a fact about GitHub's stale
+ * state, not a failure, so it is its own case and never spends Recovery budget.
+ */
+export type ConflictPrepareResult
+  = | { _tag: 'Conflicted', worktree: PreparedConflictWorktree }
+    | ConflictCleanMergeEvidence
+
+/** Stored as the Completed evidence of a conflict Task whose base merged cleanly. */
+export interface ConflictCleanMergeEvidence {
+  _tag: 'CleanMerge'
+  headSha: string
+  baseSha: string
+  baseRef: string
+}
+
+export function parseConflictCleanMergeEvidence(evidence: string | null): ConflictCleanMergeEvidence | undefined {
+  if (evidence === null || !evidence.startsWith('{'))
+    return undefined
+  const value = JSON.parse(evidence) as Partial<ConflictCleanMergeEvidence>
+  return value._tag === 'CleanMerge'
+    && typeof value.headSha === 'string'
+    && typeof value.baseSha === 'string'
+    && typeof value.baseRef === 'string'
+    ? { _tag: 'CleanMerge', headSha: value.headSha, baseSha: value.baseSha, baseRef: value.baseRef }
+    : undefined
+}
+
 export interface VerifiedConflictPatch {
   digest: string
   changedFiles: number
@@ -41,7 +72,7 @@ export interface PreparedConflictPublication extends VerifiedConflictPatch {
 
 export interface ConflictWorktreeManager {
   commit: (task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree, patch: VerifiedConflictPatch, message: string, signal: AbortSignal) => Promise<Result<PreparedConflictPublication, string>>
-  prepare: (task: ClaimedConflictResolutionTask, signal: AbortSignal) => Promise<Result<PreparedConflictWorktree, string>>
+  prepare: (task: ClaimedConflictResolutionTask, signal: AbortSignal) => Promise<Result<ConflictPrepareResult, string>>
   verify: (task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree, signal: AbortSignal) => Promise<Result<VerifiedConflictPatch, string>>
 }
 
@@ -579,7 +610,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
   const gitIdentity = options.gitIdentity
-  async function prepare(task: ClaimedConflictResolutionTask, signal: AbortSignal): Promise<Result<PreparedConflictWorktree, string>> {
+  async function prepare(task: ClaimedConflictResolutionTask, signal: AbortSignal): Promise<Result<ConflictPrepareResult, string>> {
     const branch = agentWorktreeBranch(`pull-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}`, { taskId: task.id, fence: task.state.fence })
     const repository = task.repositoryMapping.checkout
 
@@ -625,17 +656,31 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       '--no-ff',
       base.stdout,
     ], signal)
-    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '--diff-filter=U'], signal)
-    if (merge.exitCode === 0 || unmerged.stdout.length === 0) {
+    // `--no-commit` stops a clean merge before the commit and still exits 0.
+    // Only a conflict, or a merge that could not start, exits non-zero.
+    if (merge.exitCode === 0) {
       await runGit(worktree.value, ['merge', '--abort'], signal)
-      return err('Git no longer reports merge conflicts for this head commit.')
+      return ok({ _tag: 'CleanMerge', headSha: head.stdout, baseSha: base.stdout, baseRef: baseBranch })
+    }
+    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '--diff-filter=U'], signal)
+    if (unmerged.exitCode !== 0)
+      return err(`Could not list the conflicted files: ${unmerged.stderr}`)
+    // A merge that never started, for unrelated histories or a file in the way,
+    // has no unmerged files either. That used to read as "no longer conflicts"
+    // and hid the real error behind a retry.
+    if (unmerged.stdout.length === 0) {
+      await runGit(worktree.value, ['merge', '--abort'], signal)
+      return err(`Git could not merge ${baseBranch} into the pull request head: ${cleanLine(merge.stderr || merge.stdout)}`)
     }
 
     return ok({
-      path: worktree.value,
-      headSha: head.stdout,
-      baseSha: base.stdout,
-      conflictedFiles: unmerged.stdout.split('\n').filter(Boolean).sort(),
+      _tag: 'Conflicted',
+      worktree: {
+        path: worktree.value,
+        headSha: head.stdout,
+        baseSha: base.stdout,
+        conflictedFiles: unmerged.stdout.split('\n').filter(Boolean).sort(),
+      },
     })
   }
 
