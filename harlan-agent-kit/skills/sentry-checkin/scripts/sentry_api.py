@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Snapshot with sentry-cli, fetch redacted issue evidence, resolve proven fixes.
 
-Every command except resolve is read-only. Resolve writes only with --apply.
+Every command except resolve is read-only against Sentry. Resolve writes only
+with --apply. Digest writes local run state so the next run can see what changed.
 """
 
 import argparse
@@ -26,6 +27,11 @@ DEFAULT_URL = "https://sentry.io"
 PAGE_SIZE = 100
 SAFETY_CAP = 10_000
 RESOLVE_CAP = 200
+TOP_FRAMES = 5
+COMPACT_WARNING = (
+    "Warning: --compact keeps exception frames only. It drops thread and raw "
+    "frames, so digest may find no frames. Full bundles are the default."
+)
 SECRET_KEYS = {
     "authorization",
     "cookie",
@@ -276,6 +282,7 @@ def issue_summary(issue):
         "level": issue.get("level"),
         "status": issue.get("status"),
         "count": issue.get("count"),
+        "user_count": issue.get("userCount"),
         "first_seen": issue.get("firstSeen"),
         "last_seen": issue.get("lastSeen"),
         "permalink": issue.get("permalink"),
@@ -411,7 +418,7 @@ def bulk_bundles(args, base_url, token):
             args.project,
             issue_id,
             args.events,
-            True,
+            args.compact,
             base_url,
             token,
         )
@@ -448,6 +455,200 @@ def bulk_bundles(args, base_url, token):
             f"Evidence fetch failed for {len(errors)} issues; rerun to resume."
         )
     return manifest
+
+
+def default_digest_state_path(org, project):
+    state = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    return Path(state) / "sentry-checkin" / "digest" / org / f"{project}.json"
+
+
+def event_frames(event):
+    """Every stack frame in one event, innermost last, from a full or compact event."""
+    frames = []
+    for exception in event.get("exceptions") or []:
+        frames.extend(exception.get("frames") or [])
+    for entry in event.get("entries") or []:
+        data = entry.get("data") or {}
+        if entry.get("type") in ("exception", "threads"):
+            for value in data.get("values") or []:
+                frames.extend((value.get("stacktrace") or {}).get("frames") or [])
+        elif entry.get("type") == "stacktrace":
+            frames.extend(data.get("frames") or [])
+    return frames
+
+
+def event_exception(event):
+    for exception in event.get("exceptions") or []:
+        return {"type": exception.get("type"), "value": exception.get("value")}
+    for entry in event.get("entries") or []:
+        if entry.get("type") != "exception":
+            continue
+        for value in (entry.get("data") or {}).get("values") or []:
+            return {"type": value.get("type"), "value": value.get("value")}
+    return {"type": None, "value": None}
+
+
+def top_frames(frames):
+    """The innermost in-app frames. Falls back to the innermost frames of any kind."""
+    in_app = [frame for frame in frames if frame.get("in_app")]
+    chosen = list(reversed(in_app or frames))[:TOP_FRAMES]
+    return [
+        {
+            "file": frame.get("filename") or frame.get("abs_path") or frame.get("module"),
+            "function": frame.get("function"),
+            "line": frame.get("lineno"),
+            "in_app": bool(frame.get("in_app")),
+        }
+        for frame in chosen
+    ]
+
+
+def event_release(event):
+    release = event.get("release")
+    if isinstance(release, dict):
+        return release.get("version")
+    return release
+
+
+def issue_fields(issue):
+    """One shape for a full API issue and a compact issue_summary."""
+    return {
+        "id": str(issue.get("id")),
+        "short_id": issue.get("short_id") or issue.get("shortId"),
+        "title": issue.get("title"),
+        "culprit": issue.get("culprit"),
+        "level": issue.get("level"),
+        "status": issue.get("status"),
+        "permalink": issue.get("permalink"),
+        "first_seen": issue.get("first_seen") or issue.get("firstSeen"),
+        "last_seen": issue.get("last_seen") or issue.get("lastSeen"),
+        "event_count": issue.get("count"),
+        "user_count": issue.get("user_count") or issue.get("userCount"),
+    }
+
+
+def issue_fingerprint(project, fields, exception, frames):
+    """A fingerprint that survives a new Sentry issue ID for the same defect.
+
+    Sentry issues an ID per grouping, and a resolved issue that regresses can
+    come back under a new one. The exception type, culprit, and innermost
+    in-app frame name the defect itself, so the Candidate keeps its identity.
+    """
+    frame = frames[0] if frames else {}
+    parts = [
+        project,
+        exception.get("type") or "",
+        fields.get("culprit") or "",
+        frame.get("file") or "",
+        frame.get("function") or "",
+    ]
+    if not any(parts[1:]):
+        parts.append(fields.get("title") or fields["id"])
+    return "sentry:" + sha256_text("|".join(parts))[:16]
+
+
+def digest_bundle(project, bundle):
+    fields = issue_fields(bundle.get("issue") or {})
+    events = bundle.get("events") or []
+    latest = events[0] if events else {}
+    exception = event_exception(latest)
+    frames = top_frames(event_frames(latest))
+    return {
+        **fields,
+        "exception": exception,
+        "frames": frames,
+        "release": event_release(latest),
+        "environment": latest.get("environment"),
+        "fingerprint": issue_fingerprint(project, fields, exception, frames),
+    }
+
+
+def compare_with_previous(entries, previous):
+    """Mark each issue unchanged when the last run saw the same count and last-seen time."""
+    seen = previous.get("issues") or {}
+    for entry in entries:
+        prior = seen.get(entry["id"])
+        entry["runs_seen"] = (prior or {}).get("runs_seen", 0) + 1
+        entry["unchanged_since_last_run"] = bool(prior) and (
+            prior.get("last_seen") == entry["last_seen"]
+            and prior.get("event_count") == entry["event_count"]
+        )
+    return entries
+
+
+def digest_bundles(args):
+    """Summarize every bundle in a bulk-bundles directory and record what was seen.
+
+    The state file is local run memory, not a Sentry or repository write. It is
+    what lets a read-only Routine run skip a backlog it already analysed.
+    """
+    bundles_dir = Path(args.bundles)
+    manifest = json.loads((bundles_dir / "manifest.json").read_text())
+    project = manifest.get("project")
+    if manifest.get("org") != args.org or project != args.project:
+        raise RuntimeError("Manifest organization or project does not match arguments.")
+    if manifest.get("errors"):
+        raise RuntimeError("Manifest lists fetch errors; rerun bulk-bundles first.")
+    entries = []
+    for issue_id in manifest.get("completed", {}):
+        bundle = json.loads((bundles_dir / f"{issue_id}.json").read_text())
+        entry = digest_bundle(project, bundle)
+        if entry["id"] != issue_id:
+            raise RuntimeError(f"Bundle {issue_id} does not match its manifest.")
+        entries.append(entry)
+    entries.sort(key=lambda entry: int(entry["id"]))
+    issue_ids = [entry["id"] for entry in entries]
+    checksum = issue_ids_checksum(issue_ids)
+
+    state_path = Path(args.state) if args.state else default_digest_state_path(args.org, project)
+    previous = json.loads(state_path.read_text()) if state_path.exists() else {}
+    compare_with_previous(entries, previous)
+    changed = [entry["id"] for entry in entries if not entry["unchanged_since_last_run"]]
+    snapshot_unchanged = previous.get("issue_ids_sha256") == checksum
+    result = {
+        "org": args.org,
+        "project": project,
+        "run_id": args.run_id,
+        "issue_count": len(entries),
+        "issue_ids_sha256": checksum,
+        "previous_run": {
+            "run_id": previous.get("run_id"),
+            "recorded_at": previous.get("recorded_at"),
+            "issue_ids_sha256": previous.get("issue_ids_sha256"),
+        },
+        "snapshot_unchanged": snapshot_unchanged,
+        "all_unchanged": snapshot_unchanged and not changed,
+        "changed_issue_ids": changed,
+        "state": str(state_path.resolve()),
+        "recorded": False,
+        "issues": entries,
+    }
+    if not args.no_record:
+        state = {
+            "org": args.org,
+            "project": project,
+            "run_id": args.run_id,
+            "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "issue_ids_sha256": checksum,
+            "issues": {
+                entry["id"]: {
+                    "last_seen": entry["last_seen"],
+                    "event_count": entry["event_count"],
+                    "runs_seen": entry["runs_seen"],
+                }
+                for entry in entries
+            },
+        }
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = state_path.with_suffix(".json.tmp")
+        temporary.write_text(stable_json(state))
+        temporary.replace(state_path)
+        result["recorded"] = True
+    if args.output:
+        path = Path(args.output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(stable_json(redact(result)))
+    return result
 
 
 def request_write(base_url, token, path, payload, params=None, method="PUT"):
@@ -571,20 +772,40 @@ def build_parser():
     snapshot.add_argument("--query", default="is:unresolved")
     snapshot.add_argument("--output")
 
+    compact_help = "Keep exception frames only. Drops thread and raw frames."
     bundle = subparsers.add_parser("bundle", help="Fetch issue and recent full events")
     bundle.add_argument("--project", required=True)
     bundle.add_argument("--issue", required=True)
     bundle.add_argument("--events", type=int, default=1)
-    bundle.add_argument("--compact", action="store_true")
+    bundle.add_argument("--compact", action="store_true", help=compact_help)
 
     bulk = subparsers.add_parser(
-        "bulk-bundles", help="Fetch compact evidence for every snapshot issue"
+        "bulk-bundles", help="Fetch full evidence for every snapshot issue"
     )
     bulk.add_argument("--project", required=True)
     bulk.add_argument("--snapshot", required=True)
     bulk.add_argument("--output", required=True)
     bulk.add_argument("--events", type=int, default=1)
     bulk.add_argument("--workers", type=int, default=4)
+    bulk.add_argument("--compact", action="store_true", help=compact_help)
+
+    digest = subparsers.add_parser(
+        "digest",
+        help=(
+            "Summarize a bulk-bundles directory: title, culprit, top in-app frames, "
+            "first and last seen, event and user counts, release, and a stable "
+            "fingerprint per issue. Records what it saw so the next run can tell "
+            "what changed. Needs no Sentry token."
+        ),
+    )
+    digest.add_argument("--project", required=True)
+    digest.add_argument("--bundles", required=True, help="bulk-bundles output directory")
+    digest.add_argument("--run-id", default=None, help="Run identity to record")
+    digest.add_argument("--state", help="Override the local state file path")
+    digest.add_argument(
+        "--no-record", action="store_true", help="Compare only. Leave the state file alone."
+    )
+    digest.add_argument("--output", help="Also write the digest JSON to this path")
 
     resolve = subparsers.add_parser(
         "resolve", help="Resolve issues this run proved fixed"
@@ -608,8 +829,12 @@ def main():
         raise RuntimeError("--events must be between 1 and 20.")
     if getattr(args, "workers", 1) < 1 or getattr(args, "workers", 1) > 8:
         raise RuntimeError("--workers must be between 1 and 8.")
+    if getattr(args, "compact", False):
+        print(COMPACT_WARNING, file=sys.stderr)
     if args.command == "snapshot":
         result = snapshot_issues(args)
+    elif args.command == "digest":
+        result = digest_bundles(args)
     else:
         token, base_url = load_cli_config()
         if args.command == "bundle":
