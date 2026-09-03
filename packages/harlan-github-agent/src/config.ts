@@ -1,13 +1,14 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, AgentRole, CodexReasoningEffort, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { parse } from 'yaml'
+import { AGENT_ROLES, REASONING_EFFORTS } from './agent-profile.ts'
 import { err, ok } from './result.ts'
 
 export interface ConfigIssue {
@@ -184,6 +185,44 @@ function reservePercent(value: unknown, issues: ConfigIssue[]): Record<AgentProv
   return reserve
 }
 
+/** Reads `agent.reasoning_effort`, one Reasoning effort per Agent provider and role. */
+function roleReasoningEfforts(value: unknown, issues: ConfigIssue[]): RoleReasoningEfforts | undefined {
+  if (value === undefined)
+    return {}
+  if (!isRecord(value)) {
+    issues.push({ path: '$.agent.reasoning_effort', message: 'Expected a Reasoning effort per Agent provider and role.' })
+    return undefined
+  }
+  const efforts: RoleReasoningEfforts = {}
+  for (const [providerKey, roles] of Object.entries(value)) {
+    const provider = providerName(providerKey)
+    if (provider === undefined) {
+      issues.push({ path: `$.agent.reasoning_effort.${providerKey}`, message: 'Expected codex or opencode.' })
+      return undefined
+    }
+    if (!isRecord(roles)) {
+      issues.push({ path: `$.agent.reasoning_effort.${provider}`, message: 'Expected a Reasoning effort per Agent role.' })
+      return undefined
+    }
+    const providerEfforts: Partial<Record<AgentRole, CodexReasoningEffort>> = {}
+    for (const [roleKey, effort] of Object.entries(roles)) {
+      const role = AGENT_ROLES.find(candidate => candidate === roleKey)
+      if (role === undefined) {
+        issues.push({ path: `$.agent.reasoning_effort.${provider}.${roleKey}`, message: `Expected one Agent role: ${AGENT_ROLES.join(', ')}.` })
+        return undefined
+      }
+      const known = REASONING_EFFORTS.find(candidate => candidate === effort)
+      if (known === undefined) {
+        issues.push({ path: `$.agent.reasoning_effort.${provider}.${role}`, message: `Expected one Reasoning effort: ${REASONING_EFFORTS.join(', ')}.` })
+        return undefined
+      }
+      providerEfforts[role] = known
+    }
+    efforts[provider] = providerEfforts
+  }
+  return efforts
+}
+
 function providerName(value: unknown): AgentProviderName | undefined {
   return value === 'codex' || value === 'opencode' ? value : undefined
 }
@@ -205,7 +244,7 @@ function isDashboardOrigin(value: string): boolean {
 function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfig['agent'] | undefined {
   const agent = source.agent
   if (agent === undefined)
-    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: DEFAULT_PROVIDER_ORDER, maximumActiveAgents: null }
+    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: DEFAULT_PROVIDER_ORDER, maximumActiveAgents: null, reasoningEffort: {} }
   if (!isRecord(agent)) {
     issues.push({ path: '$.agent', message: 'Expected an object.' })
     return undefined
@@ -239,9 +278,11 @@ function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfi
   if (maximumActiveAgents === undefined)
     issues.push({ path: '$.agent.maximum_active_agents', message: 'Expected a whole number from 1 to 16.' })
 
-  if (provider === undefined || reserve === undefined || order === undefined || maximumActiveAgents === undefined)
+  const reasoningEffort = roleReasoningEfforts(agent.reasoning_effort, issues)
+
+  if (provider === undefined || reserve === undefined || order === undefined || maximumActiveAgents === undefined || reasoningEffort === undefined)
     return undefined
-  return { provider, reservePercent: reserve, order, maximumActiveAgents }
+  return { provider, reservePercent: reserve, order, maximumActiveAgents, reasoningEffort }
 }
 
 /** The webhook listener is off unless the configuration turns it on. */

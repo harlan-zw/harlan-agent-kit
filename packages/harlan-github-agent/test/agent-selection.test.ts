@@ -89,6 +89,48 @@ describe('agent profile resolution', () => {
       expect(role).toEqual({ model: 'gpt-5.6-luna', reasoningEffort: 'low' })
   })
 
+  it('replaces one role default with the configured Reasoning effort and keeps the others', () => {
+    const profile = resolveAgentProfile(
+      { provider: 'opencode', model: null, reasoningEffort: null },
+      3,
+      { opencode: { review_fix: 'medium', pull_request_triage: 'low' } },
+    )
+
+    expect(profile.roles.review_fix).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'medium' })
+    expect(profile.roles.pull_request_triage).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'low' })
+    expect(profile.roles.adversarial_review).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' })
+  })
+
+  it('applies the configured Reasoning effort only to its own Agent provider', () => {
+    const profile = resolveAgentProfile(
+      { provider: 'codex', model: null, reasoningEffort: null },
+      3,
+      { opencode: { review_fix: 'low' } },
+    )
+
+    expect(profile.roles.review_fix).toEqual({ model: 'gpt-5.6-terra', reasoningEffort: 'medium' })
+  })
+
+  it('lets a pinned Reasoning effort beat the configured override', () => {
+    const profile = resolveAgentProfile(
+      { provider: 'opencode', model: null, reasoningEffort: 'xhigh' },
+      3,
+      { opencode: { review_fix: 'medium' } },
+    )
+
+    expect(profile.roles.review_fix.reasoningEffort).toBe('xhigh')
+  })
+
+  it('answers with the configured override for a pinned selection that names no Reasoning effort', () => {
+    const profile = resolveAgentProfile(
+      { provider: 'opencode', model: 'zai-coding-plan/glm-5.3', reasoningEffort: null },
+      3,
+      { opencode: { review_fix: 'medium' } },
+    )
+
+    expect(profile.roles.review_fix).toEqual({ model: 'zai-coding-plan/glm-5.3', reasoningEffort: 'medium' })
+  })
+
   it('takes agent capacity from the caller, because the service fixes it at start', () => {
     const profile = resolveAgentProfile({ provider: 'opencode', model: null, reasoningEffort: null }, 5)
 

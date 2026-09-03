@@ -100,7 +100,7 @@ Automatic selection picks the Agent provider by remaining capacity. It walks `or
 
 For `codex`, use `gpt-5.6-luna` with low reasoning for Pull request triage. Use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair.
 
-For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role.
+For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role. `agent.reasoning_effort.<provider>.<role>` in the configuration replaces one role's default, for example `agent.reasoning_effort.opencode.review_fix: medium`. A pinned Agent selection with an explicit Reasoning effort still wins over the file.
 
 A saved session belongs to the Agent provider that created it. Switching providers starts new sessions.
 

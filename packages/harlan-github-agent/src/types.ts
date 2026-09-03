@@ -83,6 +83,14 @@ export interface AgentConfig {
      * not against core count: each Agent runs a whole coding session.
      */
     maximumActiveAgents: number | null
+    /**
+     * Reasoning effort overrides per Agent provider and role.
+     *
+     * A listed role replaces that provider's own per-role default. An absent
+     * provider or role keeps the default. A pinned Agent selection with an
+     * explicit Reasoning effort still wins over this.
+     */
+    reasoningEffort: RoleReasoningEfforts
   }
   github: {
     appId: number
@@ -1123,6 +1131,9 @@ export type OpencodeAgentModel
     | 'opencode-go/qwen3.7-plus'
 export type AgentModel = CodexAgentModel | OpencodeAgentModel
 export type CodexReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** Reasoning effort overrides keyed by Agent provider, then by Agent role. */
+export type RoleReasoningEfforts = Partial<Record<AgentProviderName, Partial<Record<AgentRole, CodexReasoningEffort>>>>
 
 export interface RoleProfile {
   model: AgentModel
