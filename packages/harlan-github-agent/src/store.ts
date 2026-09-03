@@ -468,7 +468,7 @@ export interface ReuseReviewRunInput {
 export type ReuseReviewRunResult
   = | { _tag: 'Inserted', reviewRunId: string }
     | { _tag: 'Duplicate', reviewRunId: string }
-    | { _tag: 'Rejected', reason: { _tag: 'RunNotFound' } | { _tag: 'AlreadySuperseded' } | { _tag: 'RevisionMismatch' } | { _tag: 'ReviewApprovalRequired' } | { _tag: 'OpenFindingRequiresBlocked' } }
+    | { _tag: 'Rejected', reason: { _tag: 'RunNotFound' } | { _tag: 'AlreadySuperseded' } | { _tag: 'RerunRequested' } | { _tag: 'RevisionMismatch' } | { _tag: 'ReviewApprovalRequired' } | { _tag: 'OpenFindingRequiresBlocked' } }
 
 export interface ReviewGateRefresh {
   reviewRunId: string
@@ -983,7 +983,7 @@ export interface JournalStore {
   recordReviewRun: (input: RecordReviewRunInput) => RecordReviewRunResult
   /** Atomically stores a refreshed Review and its published GitHub projection. */
   supersedeReviewRun: (input: SupersedeReviewRunInput) => SupersedeReviewRunResult
-  /** The newest Review report on one pull request that no later row restates and no rerun request set aside. */
+  /** The newest Review report on one pull request that no later row restates and no unanswered rerun request disputes. */
   getReusableReviewRun: (repository: string, pullRequestNumber: number) => ReusableReviewRun | null
   /** Stores a prior Review report for a new head whose diff did not change. Starts no Agent. */
   reuseReviewRun: (input: ReuseReviewRunInput) => ReuseReviewRunResult
@@ -7118,6 +7118,29 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * A rerun request nothing answered yet.
+   *
+   * The request follows the subject, not one head: a person who disputes the
+   * report on head A still disputes it when head B carries the same diff. A
+   * later head supersedes the requeued Task, so only a Review completed after
+   * the request, by an Agent rather than a reused row, can retire it.
+   */
+  const pendingRerunRequestSql = (subjectColumn: string): string => `
+    EXISTS (
+      SELECT 1 FROM review_rerun_requests AS pending
+      JOIN worker_tasks AS requested ON requested.id = pending.task_id
+      WHERE requested.subject_id = ${subjectColumn}
+        AND requested.kind = 'adversarial_review'
+        AND NOT EXISTS (
+          SELECT 1 FROM review_runs AS answered
+          WHERE answered.subject_id = requested.subject_id
+            AND answered.kind = 'adversarial_review'
+            AND answered.supersedes_review_run_id IS NULL
+            AND answered.completed_at > pending.requested_at
+        )
+    )`
+
   const getReusableReviewRun: JournalStore['getReusableReviewRun'] = (repository, pullRequestNumber) => {
     const row = database.prepare(`
       SELECT review_runs.id, review_runs.revision_id, review_runs.head_sha, review_runs.gates,
@@ -7142,13 +7165,7 @@ export function openJournalStore(
           WHERE review_publications.review_run_id = review_runs.id
             AND review_publications.result_tag = 'Published'
         )
-        AND NOT EXISTS (
-          SELECT 1 FROM review_rerun_requests
-          JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
-          WHERE worker_tasks.subject_id = subjects.id
-            AND worker_tasks.revision_id = subjects.current_revision_id
-            AND worker_tasks.kind = 'adversarial_review'
-        )
+        AND NOT ${pendingRerunRequestSql('subjects.id')}
       ORDER BY review_runs.completed_at DESC, review_runs.id DESC
       LIMIT 1
     `).get(repository, pullRequestNumber, digest((database.prepare(`
@@ -7238,6 +7255,11 @@ export function openJournalStore(
       if (prior === undefined || prior.superseded === 1) {
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: { _tag: prior === undefined ? 'RunNotFound' : 'AlreadySuperseded' } }
+      }
+      const rerunRequested = database.prepare(`SELECT ${pendingRerunRequestSql('?')} AS pending`).get(revision.subject_id) as { pending: number }
+      if (rerunRequested.pending === 1) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: { _tag: 'RerunRequested' } }
       }
       const priorGates = JSON.parse(prior.gates) as ReviewGates
       const gates: ReviewGates = { merge: input.controllerGates.merge, review: priorGates.review, ci: input.controllerGates.ci }

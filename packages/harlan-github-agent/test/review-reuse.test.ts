@@ -103,7 +103,7 @@ function reviewedFirstHead(input: { checkout: string, base1: string, head1: stri
   const observed = store.recordObservation({ externalId: 'obs-1', observedAt: '2026-09-01T01:00:00.000Z', source: 'poll', subject: first })
   if (observed._tag !== 'Inserted')
     throw new Error('Expected a pull request.')
-  const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-09-01T01:01:00.000Z', 60_000)
+  const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-09-01T01:01:00.000Z', 30 * 60_000)
   if (task === null)
     throw new Error('Expected a Review Task.')
   const recorded = store.recordReviewRun({
@@ -132,7 +132,7 @@ function reviewedFirstHead(input: { checkout: string, base1: string, head1: stri
     at: '2026-09-01T01:12:30.000Z',
     result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
   })
-  store.completeReviewTask({
+  const completed = store.completeReviewTask({
     taskId: task.id,
     workerId: task.state.workerId,
     fence: task.state.fence,
@@ -140,6 +140,8 @@ function reviewedFirstHead(input: { checkout: string, base1: string, head1: stri
     evidence: 'run-1',
     resolution: { _tag: 'Reviewed', reviewRunId: 'run-1' },
   })
+  if (!completed)
+    throw new Error('Expected the first Review Task to complete.')
   return { mapping, store }
 }
 
@@ -238,6 +240,58 @@ describe('review reuse', () => {
     expect(result).toEqual(err('A fresh Review started.'))
     expect(started).toEqual([repo.head3])
     expect(store.listReviewRuns(mapping.github, 24).map(run => run.id)).toEqual(['run-1'])
+  })
+
+  it('starts a fresh Review when a rerun was requested on the reviewed head and the head then moved', async () => {
+    const repo = repository()
+    const { mapping, store } = reviewedFirstHead(repo)
+    const [first] = store.listReviewRuns(mapping.github, 24)
+    const rerun = store.requestReviewRerun({
+      repository: mapping.github,
+      pullRequestNumber: 24,
+      revisionId: first!.revisionId,
+      requestId: 'comment-7',
+      source: 'github_comment',
+      requestedBy: 'harlan-zw',
+      at: '2026-09-01T01:20:00.000Z',
+    })
+    expect(rerun._tag).toBe('Queued')
+    const merged = pullRequestItem({ baseSha: repo.base2, headSha: repo.head2, headRef: 'fix/review', mergeState: 'clean' })
+    const task = claimNewHead(store, merged)
+    const { failures, started, worker } = harness({ remote: repo.remote, root: repo.root, store, live: merged })
+
+    await worker.run(task, new AbortController().signal)
+
+    expect(failures).toEqual([])
+    expect(started).toEqual([repo.head2])
+    // The transaction refuses the same reuse on its own, whatever the caller read first.
+    expect(store.reuseReviewRun({
+      id: 'reused-anyway',
+      repository: mapping.github,
+      pullRequestNumber: 24,
+      revisionId: task.revisionId,
+      headSha: repo.head2,
+      reusesReviewRunId: 'run-1',
+      controllerGates: { merge: passed, ci: passed },
+      reason: 'test',
+      at: '2026-09-01T02:01:30.000Z',
+    })).toEqual({ _tag: 'Rejected', reason: { _tag: 'RerunRequested' } })
+  })
+
+  it('reports a failed diff read and starts a fresh Review', async () => {
+    const repo = repository()
+    const { store } = reviewedFirstHead(repo)
+    const merged = pullRequestItem({ baseSha: repo.base2, headSha: repo.head2, headRef: 'fix/review', mergeState: 'clean' })
+    const task = claimNewHead(store, merged)
+    const { failures, started, worker } = harness({ remote: repo.remote, root: repo.root, store, live: merged })
+    // The blob the prior head's diff needs is gone, so git diff fails mid read.
+    const blob = git(repo.checkout, 'rev-parse', `${repo.head1}:file.ts`)
+    rmSync(join(repo.checkout, '.git', 'objects', blob.slice(0, 2), blob.slice(2)))
+
+    await worker.run(task, new AbortController().signal)
+
+    expect(failures).toEqual([expect.stringContaining('Could not read the diff identity')])
+    expect(started).toEqual([repo.head2])
   })
 
   it('starts a fresh Review when the manual Review label is on the new head', async () => {

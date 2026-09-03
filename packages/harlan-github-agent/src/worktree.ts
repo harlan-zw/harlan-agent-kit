@@ -309,13 +309,27 @@ function runGitPatchId(checkout: string, range: DiffRange, signal: AbortSignal):
     })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
-    let diffExit: number | null = null
+    // Both processes report before anything is decided. `patch-id` can close
+    // first, on a diff that failed after partial output, and a decision taken
+    // then would accept a truncated identity as a real one.
+    const exits: { diff: number | null, patchId: number | null } = { diff: null, patchId: null }
     let settled = false
     const fail = (reason: string) => {
       if (settled)
         return
       settled = true
       resolve(err(reason))
+    }
+    const decide = () => {
+      if (settled || exits.diff === null || exits.patchId === null)
+        return
+      settled = true
+      if (exits.diff !== 0 || exits.patchId !== 0) {
+        resolve(err(`Could not read the diff identity: ${Buffer.concat(stderr).toString('utf8').trim()}`))
+        return
+      }
+      const id = Buffer.concat(stdout).toString('utf8').trim().split(/\s+/)[0]
+      resolve(id === undefined || id.length === 0 ? ok({ _tag: 'Empty' }) : ok({ _tag: 'Patch', patchId: id }))
     }
     diff.stdout.pipe(patchId.stdin)
     diff.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
@@ -324,19 +338,12 @@ function runGitPatchId(checkout: string, range: DiffRange, signal: AbortSignal):
     diff.on('error', error => fail(`Could not read the diff: ${error.message}`))
     patchId.on('error', error => fail(`Could not read the patch id: ${error.message}`))
     diff.on('close', (code) => {
-      diffExit = code
+      exits.diff = code ?? 1
+      decide()
     })
     patchId.on('close', (code) => {
-      if (settled)
-        return
-      settled = true
-      const errors = Buffer.concat(stderr).toString('utf8').trim()
-      if (code !== 0 || (diffExit !== null && diffExit !== 0)) {
-        resolve(err(`Could not read the diff identity: ${errors}`))
-        return
-      }
-      const id = Buffer.concat(stdout).toString('utf8').trim().split(/\s+/)[0]
-      resolve(id === undefined || id.length === 0 ? ok({ _tag: 'Empty' }) : ok({ _tag: 'Patch', patchId: id }))
+      exits.patchId = code ?? 1
+      decide()
     })
   })
 }
