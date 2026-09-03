@@ -83,7 +83,7 @@ harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config
 
 `routine-run` opens one Routine run for the current minute, ahead of its cron.
 
-A `daily-checkin` Routine runs the repository's own `.claude/skills/daily-checkin/SKILL.md`. Its data script reads Cloudflare and Sentry with tokens from the process environment. On Hogwild, put read-only tokens in `~/.config/harlan-github-agent/secrets.env` as `NAME=value` lines. The service unit loads that file when it exists, and every Agent turn inherits it. Use it to prove a new Routine end to end. The next cron instant still opens on its own.
+A `daily-checkin` Routine runs the repository's own `.claude/skills/daily-checkin/SKILL.md`. Its data script reads Cloudflare and Sentry with tokens from the process environment. On Hogwild, put read-only tokens in `~/.config/harlan-github-agent/secrets.env` as `NAME=value` lines: `CLOUDFLARE_API_TOKEN` for Workers analytics and D1, and `NUXTSEO_TOKEN` for the `nuxtseo` CLI, which is installed at `~/.local/bin/nuxtseo` there. The service unit loads that file when it exists, and every Agent turn inherits it. Use it to prove a new Routine end to end. The next cron instant still opens on its own.
 
 Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
 Every command prints one JSON value. A tagged JSON error exits with status 1.
