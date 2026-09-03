@@ -106,11 +106,8 @@ For each variation show:
 
 - No hashtags unless the user explicitly includes them
 - No emojis unless the user's draft already uses them
-- Don't start with "I"
-- Avoid corporate/marketing speak
 - Match the user's voice
 - If referencing code/tech, be specific not vague
-- Thread-style (1/n) only if user asks for it
 - Front-load the hook in the first line
 
 ### Iterate
@@ -172,7 +169,7 @@ node /path/to/scratchpad/template.mjs
 Dependencies (`sharp`, `@resvg/resvg-js`) should be available globally or in the project. If not, install to scratchpad:
 
 ```bash
-cd /path/to/scratchpad && npm init -y && npm install sharp @resvg/resvg-js
+cd /path/to/scratchpad && pnpm init && pnpm add sharp @resvg/resvg-js
 ```
 
 ### 3e. Verify Output

@@ -89,7 +89,7 @@ For builds spanning multiple pages or phases:
 2. **Route smoke test**: curl the affected route on `$DEV_PORT`, then run the error-scan grep. On failure, read `$DEV_LOG` and fix. Full browser verification belongs to review.
 3. **Intermediate review**: after page 1 of a multi-page build, suggest running `/nuxt-frontend-review {JOB_ID}` before page 2. Systemic issues (wrong tokens, broken shared components) are cheaper to catch before they propagate.
 4. **Cross-page consistency**: before page N+1, re-read page N's files. Same number of states handled, same interaction detail, same token use? Page N+1 scope feeling smaller than page N is context degradation. Stop and emit the handoff.
-5. **Scope gate**: `PAGES_BUILT` is the source of truth. At ≥2 pages with a complex next page (forms, tables, multi-step flows), or ≥3 pages regardless, emit the handoff and tell the user: "Start a new conversation and run `/nuxt-frontend-design {next page}` to continue." Continuing past this point produces visibly thinner pages.
+5. **Scope gate**: if the cross-page consistency check shows page N+1 thinner than page N, emit the handoff and tell the user: "Start a new conversation and run `/nuxt-frontend-design {next page}` to continue."
 6. **No silent scope reduction**: contract criteria you cannot confirm get flagged explicitly in `build-progress.md` and the handoff.
 
 ## Handoff

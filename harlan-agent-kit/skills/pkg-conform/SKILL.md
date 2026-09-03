@@ -47,7 +47,7 @@ Determine project type from the **absolute path** of the working directory:
 
 If path doesn't match either pattern, fall back to heuristics: `private: true` + `nuxt` in deps -> Site, otherwise Package.
 
-**IMPORTANT:** The project type determines which rules apply. Do NOT apply Package-only rules (exports, obuild, test:attw, prepack, release) to Sites, and do NOT apply Site-only rules (nuxi scripts, generate, preview) to Packages.
+The project type selects the rule set. Package-only rules (exports, obuild, test:attw, prepack, release) never apply to Sites. Site-only rules (nuxi scripts, generate, preview) never apply to Packages.
 
 ---
 

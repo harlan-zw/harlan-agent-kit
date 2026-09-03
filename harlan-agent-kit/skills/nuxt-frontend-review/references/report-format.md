@@ -100,5 +100,5 @@ Design-system-level issues get called out separately: "The contrast issues are d
 - Every item states the expected result.
 - Happy path first, then edge cases.
 - Include dark mode if anything visual changed, mobile if layout was touched.
-- 5-10 items.
+- One item per contract criterion plus the risky edge cases.
 - List each affected route URL.

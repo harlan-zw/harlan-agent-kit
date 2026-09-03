@@ -102,7 +102,7 @@ For any email classified as urgency 4-5 or `suggestedAction: reply`, read the fu
 himalaya message read <id> -f <folder> --no-headers
 ```
 
-Limit to 5 full reads per triage to keep things fast. Spawn these reads in parallel.
+Read only the bodies you need to decide the action. Spawn the reads in parallel.
 
 ### Step 4: Present triage table
 
