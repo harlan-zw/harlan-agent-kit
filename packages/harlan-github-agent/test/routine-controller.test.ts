@@ -297,3 +297,40 @@ routines:
     }
   })
 })
+
+const sydneySpec = 'version: 1\nroutines:\n  - name: sentry-checkin\n    on:\n      schedule:\n        - cron: "0 5 * * *"\n    timezone: Australia/Sydney\n    mode: propose\n    enabled: true\n'
+
+describe('moving a Routine spec', () => {
+  it('keeps the last run across retire and revive, so a missed instant is still reported', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await syncRepositoryRoutines(repositoryMapping(), {
+        github: githubReturning(ok({ _tag: 'Present', specSha: 'abc123', text: sydneySpec })),
+        now: at('2026-08-30T18:00:00.000Z'),
+        store,
+      })
+      const onTime = planRoutineRuns({ now: at('2026-08-30T19:00:30.000Z'), store })
+      expect(onTime.opened.map(run => run.scheduledFor)).toEqual(['2026-08-30T19:00:00.000Z'])
+
+      // The next morning passes with no pass planning it. That afternoon the
+      // spec file moves, so one sync retires the Routine and the next revives it.
+      await syncRepositoryRoutines(repositoryMapping(), {
+        github: githubReturning(ok({ _tag: 'Absent', specSha: 'def456' })),
+        now: at('2026-09-01T04:21:49.000Z'),
+        store,
+      })
+      await syncRepositoryRoutines(repositoryMapping(), {
+        github: githubReturning(ok({ _tag: 'Present', specSha: 'def456', text: sydneySpec })),
+        now: at('2026-09-01T04:21:50.000Z'),
+        store,
+      })
+
+      const afterMove = planRoutineRuns({ now: at('2026-09-01T04:25:00.000Z'), store })
+      expect(afterMove.opened).toEqual([])
+      expect(afterMove.skipped.map(run => run.scheduledFor)).toEqual(['2026-08-31T19:00:00.000Z'])
+    }
+    finally {
+      store.close()
+    }
+  })
+})
