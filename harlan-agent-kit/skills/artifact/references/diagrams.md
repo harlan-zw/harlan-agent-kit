@@ -11,7 +11,7 @@ Draw as the engineer who has to live with the decision. A diagram earns its plac
 
 ## Mermaid
 
-`<pre class="mermaid">` renders natively on both publish paths. Use it for flowcharts, sequences, and state machines where layout precision does not matter. Keep node labels short. Put the sentence in a `<figcaption>` below.
+`<pre class="mermaid">` renders without any setup; the publish script loads Mermaid only when a page uses it. Use it for flowcharts, sequences, and state machines where layout precision does not matter. Keep node labels short. Put the sentence in a `<figcaption>` below.
 
 ## Inline SVG
 

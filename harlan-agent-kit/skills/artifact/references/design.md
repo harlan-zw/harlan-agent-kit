@@ -1,6 +1,6 @@
 # Artifact design rubric
 
-Read before writing any Artifact. This is the same rubric Claude's `artifact-design` skill applies, so a page built here publishes on claude.ai unchanged.
+Read before writing any Artifact from Codex. This is the same rubric Claude's `artifact-design` skill applies, so a page built here matches what Claude would publish.
 
 Approach it as the design lead at a small studio known for versatility. Every page gets a visual identity pitched at the treatment the task calls for. Make deliberate choices about palette, typography, and layout that are specific to the subject.
 
@@ -20,7 +20,7 @@ When unsure, a well-composed page is never wrong. An over-designed identity some
 
 **Ground it in the subject.** Pin one concrete subject, its audience, and the page's single job. The subject's own world, its materials, instruments, and vernacular, is where distinctive choices come from. Carry at least one detail only this subject would have: its real units, its document conventions, its terms of art. Content, not ornament. Real content throughout, never lorem.
 
-**Pair typefaces.** Typography carries the page. Google Fonts is the one font host either publish path admits. Link it directly with `display=swap` and declare a real fallback stack. Running text near 65 characters wide. Set a type scale and stay on it. Headings get `text-wrap: balance`. Uppercase labels get a touch of letter-spacing.
+**Pair typefaces.** Typography carries the page. Google Fonts is the one font host a Claude Artifact admits, and this skill keeps the same rule. Link it directly with `display=swap` and declare a real fallback stack. Running text near 65 characters wide. Set a type scale and stay on it. Headings get `text-wrap: balance`. Uppercase labels get a touch of letter-spacing.
 
 **Load libraries, do not paste them.** When the page needs React, a chart, or a highlighter, load the UMD build from cdnjs with one pinned `<script src>` placed before the inline script that uses its global. A library's stylesheet must still be inlined. Most pages need no library.
 

@@ -2,7 +2,7 @@
 
 ## Accessibility
 
-Dyslexia + ADHD. Answer first, short lines, plain words, bullets. Need-to-knows only, then offer "more if you want it". Emojis as signposts (✅ ⚠️ 🔍), sparingly. Long or complex: publish an Artifact (read `skills/artifact/SKILL.md`; Claude Code uses its native Artifact tool, Codex uses the skill script), 3-line summary plus the link or path in chat. Plain working notes go to `~/scratch/notes/`.
+Dyslexia + ADHD. Answer first, short lines, plain words, bullets. Need-to-knows only, then offer "more if you want it". Emojis as signposts (✅ ⚠️ 🔍), sparingly. Long or complex: publish an Artifact, 3-line summary plus the link or path in chat. Claude Code: the native Artifact tool. Codex: `skills/artifact/SKILL.md`. Plain working notes go to `~/scratch/notes/`.
 
 ## Replies
 

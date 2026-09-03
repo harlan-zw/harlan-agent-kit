@@ -1,14 +1,14 @@
 ---
 name: artifact
-description: "Publish one self-contained HTML Artifact for a report, plan, dashboard, or tool. Use for long or complex output, or when the user asks for an artifact, page, dashboard, visual report, or something to share. Works in Claude Code and Codex."
+description: "Codex only. Publish one self-contained HTML Artifact for a report, plan, dashboard, or tool when no native Artifact tool exists. Use in Codex for long or complex output, or when the user asks for an artifact, page, dashboard, or visual report. Claude Code uses its native Artifact tool instead and never loads this skill."
 user_invocable: true
 ---
 
-# Artifact
+# Artifact (Codex)
 
 One HTML file, designed for the reader, published where they can open it.
 
-Claude Code has a native Artifact tool that hosts the page on claude.ai. Every other agent gets the same result from this skill: the same fragment format, the same page skeleton, the same design rules, a local file instead of a URL.
+Claude Code has a native Artifact tool that hosts the page on claude.ai, with its own `artifact-design` skill. If you are Claude Code, stop here and use that tool. This skill gives Codex the same result: the same fragment format, the same page skeleton, the same design rules, a local file instead of a URL.
 
 ## When to publish an Artifact
 
@@ -18,7 +18,7 @@ Claude Code has a native Artifact tool that hosts the page on claude.ai. Every o
 
 Do not publish for advice the user will act on alone, right now, in the code at hand. A short answer stays in chat. Plain working notes stay in `~/scratch/notes/`.
 
-## Format, identical on every host
+## Format, identical to a Claude Artifact
 
 Write the page as a fragment, not a document. No `<!doctype>`, `<html>`, `<head>`, or `<body>`. Start the file with `<title>` and `<style>`, then the content. The host wraps it in one skeleton: charset, viewport, `color-scheme: light`, zero body margin, a 14px system font on an off-white ground, `img{max-width:100%}`, and `[hidden]{display:none!important}`. `templates/skeleton.html` is that skeleton.
 
@@ -29,7 +29,7 @@ Write the page as a fragment, not a document. No `<!doctype>`, `<html>`, `<head>
 - Theme aware. The complete light palette lives on bare `:root` as tokens. Dark redefines only tokens, under `@media (prefers-color-scheme: dark)` guarded as `:root:not([data-theme="light"])`, and again under `:root[data-theme="dark"]`. `body` sets an explicit token background. `templates/page.html` has the pattern.
 - `<title>` is a product name: two to four words, specific to the subject, no explainer after a dash or colon. Keep it stable across republishes.
 
-A fragment written this way publishes unchanged through either host.
+A fragment written this way is byte for byte what Claude's Artifact tool accepts, so a page can move between the two later.
 
 ## Process
 
@@ -37,21 +37,14 @@ A fragment written this way publishes unchanged through either host.
 2. **Plan in five lines.** Four to six named hex colors, two type roles with faces, one sentence of layout. Then build from the plan. Diagrams follow `references/diagrams.md`.
 3. **Write the fragment** to the scratchpad directory, or `~/scratch/artifacts/src/<slug>.html` when no scratchpad exists.
 4. **Look once.** One screenshot of the rendered page, one pass of edits. No test loop around your own file.
-5. **Publish.** See the host table below.
+5. **Publish.** `scripts/publish.sh <slug> <fragment>` writes `~/scratch/artifacts/<slug>.html` and prints the path. Add `--open` to open it for the user. The same slug overwrites the same path, so the slug is the page's stable identity. Lowercase letters, digits, and hyphens.
 6. **Report.** Three lines in chat plus the link or path. The page is the deliverable; chat does not repeat it.
 
-## Publish per host
+## Publish
 
-| Host | Publish | Republish |
-| --- | --- | --- |
-| Claude Code | Load the `artifact-design` skill, then call the Artifact tool with the fragment path, a `favicon`, and a one-sentence `description`. | Same file path, no favicon. |
-| Codex and any other agent | `scripts/publish.sh <slug> <fragment>` writes `~/scratch/artifacts/<slug>.html` and prints the path. Add `--open` to open it for the user. | Same slug overwrites the same path. |
+The publish script refuses a full document, because a page with its own `<html>` would render differently from a Claude Artifact. Fix the fragment, do not bypass the script.
 
-The slug is the stable identity, like the file path is for Claude. Lowercase letters, digits, and hyphens.
-
-The publish script refuses a full document, because a page with its own `<html>` renders differently on the two hosts. Fix the fragment, do not bypass the script.
-
-### Look once without Claude's preview
+### Look once
 
 `dev-browser run` takes a script file, not stdin. Write the script to the scratchpad first.
 
