@@ -20,7 +20,7 @@ import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
-import { createBaselineRepairWorker } from './baseline-repair-worker.ts'
+import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-repair-worker.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
 import { createCodexProvider } from './codex-provider.ts'
@@ -578,6 +578,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           worker: createBaselineRepairWorker({
             activityLog,
             github: workerGithub,
+            inspectWorkspace: inspectWorkspaceFiles,
             now,
             runtime,
             store,

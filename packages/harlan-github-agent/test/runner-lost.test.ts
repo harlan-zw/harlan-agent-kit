@@ -72,6 +72,8 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
       listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
       stampAgentLabel: () => Promise.resolve(ok(undefined)),
+      findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+      getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
       listPullRequestFiles: () => Promise.reject(new Error('Unexpected file listing.')),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),

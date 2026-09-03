@@ -348,3 +348,101 @@ export function recoveryDelayMilliseconds(recoveryAttempts: number): number {
 export function nextRecoveryAt(failedAt: string, recoveryAttempts: number): string {
   return new Date(Date.parse(failedAt) + recoveryDelayMilliseconds(recoveryAttempts)).toISOString()
 }
+
+/**
+ * What one failing check says about who can fix it.
+ *
+ * `Repairable` means the repository is the cause, so an Agent may change it.
+ * `Infrastructure` means the runner host or a remote service failed. No change
+ * to the repository fixes that, and every past Agent turn on one produced a
+ * mask: a retry wrapper, a concurrency limit, or a build flag. A person repairs
+ * the host, then re-runs the check.
+ */
+export type CheckFailureClass
+  = | { _tag: 'Repairable' }
+    | { _tag: 'Infrastructure', reason: string }
+
+export interface CheckFailureSignal {
+  name: string
+  conclusion: string | null
+  /** What the job steps say, when the controller could read them. */
+  runnerLost?: boolean
+  /** The last lines of the failed job log, oldest first. Empty when unavailable. */
+  logTail: string[]
+}
+
+/**
+ * A runner killed the job process, or the host killed the runner. GitHub
+ * prints the kill as the last lines of the failed step, so only the tail's
+ * final lines count. A test that asserts kill-signal output prints it earlier.
+ */
+const runnerKillPatterns: RegExp[] = [
+  /\bexit code 129\b/i,
+  /\bexit code 137\b/i,
+  /\brunner has received a shutdown signal\b/i,
+  /\blost communication with the server\b/i,
+  /\bThe hosted runner\b.+\blost communication\b/i,
+  /\bThe self-hosted runner\b.+\blost communication\b/i,
+  /\bThe operation was canceled\b/i,
+]
+
+/** Remote services a workflow downloads from, which the repository does not control. */
+const remoteHostPattern = /\b(?:unpkg\.com|nodejs\.org|registry\.npmjs\.org|registry\.yarnpkg\.com|objects\.githubusercontent\.com|release-assets\.githubusercontent\.com|github\.com\/[\w.-]+\/[\w.-]+\/releases\/download)\b/i
+
+/**
+ * A download failed at the transport level. Bare words such as `timeout`,
+ * `fetch failed`, or a `503` also appear in repository tests that mention a
+ * package host, so only an OS or client error token counts.
+ */
+const remoteFetchFailurePatterns: RegExp[] = [
+  /\bETIMEDOUT\b/,
+  /\bECONNRESET\b/,
+  /\bECONNREFUSED\b/,
+  /\bENOTFOUND\b/,
+  /\bEAI_AGAIN\b/,
+  /\bUND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET)\b/,
+  /\bsocket hang up\b/i,
+  /\bERR_PNPM_FETCH_\w+\b/,
+]
+
+/** How many neighbouring lines one download failure may span: the URL, a stack trace, then the cause. */
+const remoteFetchWindow = 6
+
+/** How many final lines of the tail a runner kill may occupy. */
+const runnerKillTail = 3
+
+function remoteFetchFailure(logTail: string[]): string | null {
+  for (let index = 0; index < logTail.length; index += 1) {
+    const window = logTail.slice(index, index + remoteFetchWindow).join('\n')
+    const host = window.match(remoteHostPattern)
+    if (host !== null && matches(remoteFetchFailurePatterns, window))
+      return host[0]
+  }
+  return null
+}
+
+/**
+ * Classifies one failing check from what the controller can read before an Agent starts.
+ *
+ * Only a runner kill or a remote download failure is Infrastructure. A heap
+ * limit inside a step stays Repairable, because the workflow's `NODE_OPTIONS`
+ * is the repository's to change. An unreadable log stays Repairable, because
+ * an Agent can still read the repository. A `timed_out` conclusion stays
+ * Repairable unless the log shows the host or a download stalled.
+ */
+export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureClass {
+  if (signal.runnerLost === true)
+    return { _tag: 'Infrastructure', reason: `The runner lost the job for check "${signal.name}" before any step failed.` }
+  // A `timed_out` conclusion alone says nothing about who hung. A repository
+  // test can hang as easily as a host can stall, so the log decides.
+  const tail = signal.logTail.slice(-runnerKillTail)
+  // GitHub reports the kill on a `##[error]` annotation or as the final line.
+  // A test name that quotes an exit code sits inside vitest output, not there.
+  const killed = tail.find((line, index) => (line.startsWith('##[error]') || index === tail.length - 1) && matches(runnerKillPatterns, line))
+  if (killed !== undefined)
+    return { _tag: 'Infrastructure', reason: `The runner killed the job for check "${signal.name}": ${killed.trim()}` }
+  const host = remoteFetchFailure(signal.logTail)
+  if (host !== null)
+    return { _tag: 'Infrastructure', reason: `A download from ${host} failed during check "${signal.name}".` }
+  return { _tag: 'Repairable' }
+}

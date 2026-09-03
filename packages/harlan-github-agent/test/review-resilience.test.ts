@@ -95,6 +95,8 @@ function harness(input: {
       clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
       listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
       stampAgentLabel: () => Promise.resolve(ok(undefined)),
+      findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+      getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
       listPullRequestFiles: () => Promise.resolve(ok([])),

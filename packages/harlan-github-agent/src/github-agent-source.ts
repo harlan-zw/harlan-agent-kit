@@ -181,7 +181,39 @@ export type EditedReviewStatus
     | { _tag: 'Missing' }
     | { _tag: 'Foreign', reason: ForeignReviewCommentReason }
 
+/** One open pull request found by its head branch. */
+export interface OpenPullRequestReference {
+  number: number
+  url: string
+}
+
+/**
+ * What one failed GitHub Actions job can tell an Agent before it starts.
+ *
+ * Every Baseline repair session used to spend its first minutes finding the
+ * run, and four found the log already expired. The controller reads it once.
+ */
+export interface FailedJobContext {
+  runId: number
+  jobName: string
+  /** The name of the first failed step, or null when no step reports failure. */
+  failedStep: string | null
+  /** The last lines of the job log, oldest first. */
+  logTail: string[]
+}
+
+export const FAILED_JOB_LOG_TAIL_LINES = 80
+
 export interface GitHubAgentSource {
+  /** Finds the open pull request whose head is `headRef`, if one exists. */
+  findOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal: AbortSignal) => Promise<Result<OpenPullRequestReference | null, string>>
+  /**
+   * Reads one failed Actions job: its run, its failed step, and its log tail.
+   *
+   * For a GitHub Actions check run, the check run id is also the job id. An
+   * expired log answers `Err`, and the caller says so instead of guessing.
+   */
+  getFailedJobContext: (repository: RepositoryMapping, jobId: number, signal: AbortSignal) => Promise<Result<FailedJobContext, string>>
   consumeApprovalLabel: (repository: RepositoryMapping, subjectKind: 'issue' | 'pull_request', itemNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   ensureApprovalLabel: (repository: RepositoryMapping, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   /**
@@ -367,6 +399,42 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     clientWith(options.tokens, repository, access, signal)
 
   return {
+    async findOpenPullRequestForBranch(repository, headRef, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return octokit.value.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${headRef}`, per_page: 1, request: { signal } })
+        .then((response): Result<OpenPullRequestReference | null, string> => {
+          const pull = response.data[0]
+          return ok(pull === undefined ? null : { number: pull.number, url: pull.html_url })
+        })
+        .catch((error: unknown): Result<OpenPullRequestReference | null, string> => err(message(error)))
+    },
+
+    async getFailedJobContext(repository, jobId, signal) {
+      const octokit = await client(repository.github, 'checks_read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return Promise.all([
+        octokit.value.rest.actions.getJobForWorkflowRun({ owner, repo, job_id: jobId, request: { signal } }),
+        octokit.value.rest.actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: jobId, request: { signal } }),
+      ]).then(([job, log]): Result<FailedJobContext, string> => {
+        if (typeof log.data !== 'string')
+          return err(`GitHub returned no log text for job ${jobId}.`)
+        const lines = log.data.split(/\r?\n/)
+        while (lines.length > 0 && lines[lines.length - 1]?.trim() === '')
+          lines.pop()
+        return ok({
+          runId: job.data.run_id,
+          jobName: job.data.name,
+          failedStep: job.data.steps?.find(step => step.conclusion === 'failure')?.name ?? null,
+          logTail: lines.slice(-FAILED_JOB_LOG_TAIL_LINES),
+        })
+      }).catch((error: unknown): Result<FailedJobContext, string> => err(message(error)))
+    },
+
     async listPullRequestFiles(repository, pullRequestNumber, signal) {
       const octokit = await client(repository.github, 'read', signal)
       if (octokit._tag === 'Err')
