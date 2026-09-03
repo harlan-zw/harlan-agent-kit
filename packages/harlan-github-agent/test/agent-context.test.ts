@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from '../src/agent-context.ts'
+import { defaultAgentContextPaths, instructionFilesLine, listInstructionFiles, loadAgentContext, opencodeAgentEnvironment } from '../src/agent-context.ts'
 
 describe('defaultAgentContextPaths', () => {
   it('resolves the copied service context from its working directory', () => {
@@ -109,5 +109,37 @@ describe('opencodeAgentEnvironment', () => {
       _tag: 'Err',
       error: 'OPENCODE_CONFIG_CONTENT must contain one JSON object.',
     })
+  })
+})
+
+describe('instructionFilesLine', () => {
+  it('names only the instruction files that exist, in canonical order', () => {
+    expect(instructionFilesLine(['CLAUDE.md', 'AGENTS.md', 'README.md']))
+      .toBe('Read these repository instruction files before you change code: AGENTS.md, CLAUDE.md.')
+  })
+
+  it('tells the Agent not to search when no instruction file exists', () => {
+    expect(instructionFilesLine([]))
+      .toBe('This repository has no AGENTS.md, CLAUDE.md, .github/copilot-instructions.md. Do not search for one.')
+  })
+})
+
+describe('listInstructionFiles', () => {
+  it('reports the instruction files present in one worktree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harlan-instruction-files-'))
+    await mkdir(join(root, '.github'), { recursive: true })
+    await writeFile(join(root, '.github', 'copilot-instructions.md'), '# Copilot\n')
+    await mkdir(join(root, 'AGENTS.md'))
+
+    try {
+      await expect(listInstructionFiles(root)).resolves.toEqual(['.github/copilot-instructions.md'])
+    }
+    finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  it('reports nothing for a worktree that does not exist', async () => {
+    await expect(listInstructionFiles(join(tmpdir(), 'harlan-missing-worktree'))).resolves.toEqual([])
   })
 })

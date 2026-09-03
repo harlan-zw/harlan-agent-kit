@@ -1383,6 +1383,33 @@ describe('journal store', () => {
     ])
   })
 
+  it('reads the completed issue triage evidence back by Revision', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'issue-triage',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem(),
+    })
+    const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
+    if (task === null)
+      throw new Error('Expected an issue triage Task.')
+    const evidence = JSON.stringify({ _tag: 'READY_TO_IMPLEMENT', summary: 'The parser drops the last byte.' })
+
+    expect(store.getIssueTriageEvidence('harlan-zw/example', 12, task.revisionId)).toBeNull()
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: 'issue-worker',
+      fence: task.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      evidence,
+    })
+
+    expect(store.getIssueTriageEvidence('harlan-zw/example', 12, task.revisionId)).toBe(evidence)
+    expect(store.getIssueTriageEvidence('harlan-zw/example', 12, 'other-revision')).toBeNull()
+  })
+
   it('queues outside contributor issue work after approval and keeps the same agent session', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
