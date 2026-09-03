@@ -4708,6 +4708,69 @@ describe('journal store', () => {
       .toContain('RestartRecovered')
   })
 
+  it('requeues a Routine run that failed while the Agent provider was unreachable', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'sentry-checkin', crons: ['0 9 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+      at: '2026-08-13T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    store.openRoutineRun({ routineId: routine.id, scheduledFor: '2026-08-13T09:00:00.000Z', specSha: routine.specSha, at: '2026-08-13T09:00:01.000Z' })
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextRoutineRun('routine-1', `2026-08-13T09:0${attempt}:00.000Z`, 60_000)
+      if (task === null)
+        throw new Error('Expected a queued Routine run.')
+      expect(store.failRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-13T09:0${attempt}:30.000Z`,
+        reason: 'The opencode session failed: Internal network failure, please try again later.',
+      })).toBe(attempt < 3 ? 'Retrying' : 'Failed')
+    }
+    expect(store.claimNextRoutineRun('routine-2', '2026-08-13T09:04:00.000Z', 60_000)).toBeNull()
+
+    expect(store.retryRecoverableWorkerFailures('2026-08-13T09:05:00.000Z')).toBe(1)
+    expect(store.claimNextRoutineRun('routine-3', '2026-08-13T09:06:00.000Z', 60_000)).toMatchObject({
+      attempts: 1,
+      state: { fence: 4 },
+    })
+  })
+
+  it('leaves a failed Routine run alone once a newer instant has its own run', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const [routine] = store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'sentry-checkin', crons: ['0 9 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+      at: '2026-08-13T00:01:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    store.openRoutineRun({ routineId: routine.id, scheduledFor: '2026-08-13T09:00:00.000Z', specSha: routine.specSha, at: '2026-08-13T09:00:01.000Z' })
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextRoutineRun('routine-1', `2026-08-13T09:0${attempt}:00.000Z`, 60_000)
+      if (task === null)
+        throw new Error('Expected a queued Routine run.')
+      store.failRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: `2026-08-13T09:0${attempt}:30.000Z`,
+        reason: 'The opencode session failed: Internal network failure, please try again later.',
+      })
+    }
+    store.openRoutineRun({ routineId: routine.id, scheduledFor: '2026-08-14T09:00:00.000Z', specSha: routine.specSha, at: '2026-08-14T09:00:01.000Z' })
+
+    expect(store.retryRecoverableWorkerFailures('2026-08-14T09:00:02.000Z')).toBe(0)
+    expect(store.claimNextRoutineRun('routine-2', '2026-08-14T09:00:03.000Z', 60_000)?.scheduledFor).toBe('2026-08-14T09:00:00.000Z')
+  })
+
   it('requeues a task that an earlier shutdown recorded as aborted', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

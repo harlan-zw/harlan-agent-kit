@@ -350,6 +350,38 @@ describe('filing the issues Candidates propose', () => {
     }
   })
 
+  it('asks again a day later, so a repository that switches Issues on gets its proposals', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const commands = candidateIssueCommands(store.listCandidates(routine.routineId), routine)
+      store.stageCandidateIssues({ commands, at: now().toISOString() })
+      const refusing = {
+        findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+        createComment: async () => ok({ id: 1 }),
+        createIssue: async () => ({
+          _tag: 'Err' as const,
+          error: { repository: 'harlan-zw/example', message: 'Issues has been disabled in this repository.', status: 410 },
+        }),
+      }
+      await createCandidateIssueController({ github: refusing, now, store, workerId: 'controller-1' })
+        .publishPending(new AbortController().signal)
+
+      expect(store.stageCandidateIssues({ commands, at: '2026-08-27T20:00:00.000Z' })).toBe(0)
+      expect(store.claimNextCandidateIssue('controller-2', '2026-08-27T20:00:00.000Z', 60_000)).toBeNull()
+
+      expect(store.stageCandidateIssues({ commands, at: '2026-08-28T07:10:00.000Z' })).toBe(1)
+      const calls: Array<{ title: string, labels?: readonly string[] }> = []
+      await createCandidateIssueController({ github: publisher(calls), now: () => new Date('2026-08-28T07:10:00.000Z'), store, workerId: 'controller-3' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.map(call => call.title)).toEqual(['pr-triage: This helper is never called.'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('stops a proposal that spends its attempts on the same refusal', async () => {
     const store = openJournalStore(':memory:')
     try {
