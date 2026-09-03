@@ -965,6 +965,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: queued the ${result.value.outcome} Review status.`)
             else if (result.value._tag === 'Superseded')
               options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the head commit moved, so the prior Review was left alone.`)
+            else if (result.value._tag === 'Retired')
+              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The Review left the refresh list.`)
           }
           else {
             options.logger.error(`Waiting review: ${result.error}`)
