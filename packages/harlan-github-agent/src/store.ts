@@ -3458,6 +3458,21 @@ function supersedeTasks(
   })
 }
 
+/**
+ * Whether the last supersede of a Task caught it after it had left Queued.
+ *
+ * The state machine records this, not the reason text: a task superseded while
+ * Running or Publishing had finished or started agent work for its head commit.
+ */
+function supersededAfterStarting(database: DatabaseSync, taskId: string): boolean {
+  const row = database.prepare(`
+    SELECT from_tag FROM task_transitions
+    WHERE task_id = ? AND to_tag = 'Superseded'
+    ORDER BY id DESC LIMIT 1
+  `).get(taskId) as { from_tag: TaskRow['state_tag'] | null } | undefined
+  return row?.from_tag === 'Running' || row?.from_tag === 'Publishing'
+}
+
 function planConflictResolution(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -3498,6 +3513,25 @@ function planConflictResolution(
     && existing.reason !== null
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
     && isTransientFailure({ message: existing.reason })
+  // A Superseded task that had already left Queued spent an agent turn on this
+  // exact head commit, and the controller then threw that work away. Doing it
+  // again is a retry, so it spends recovery budget. One stacked pull request
+  // lost the publication base check two hundred times in two days because this
+  // path requeued it free of charge. A task superseded while still Queued
+  // never ran, so GitHub reporting the same conflict again stays unbudgeted.
+  const repeatedTurn = existing?.state_tag === 'Superseded'
+    && existing.cancelled === 0
+    && supersededAfterStarting(database, existing.id)
+  if (repeatedTurn && existing.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS) {
+    const reason = `${existing.reason ?? 'The publication was retired.'} The controller resolved this conflict ${existing.recovery_attempts + 1} times without publishing. Resolve it by hand, or push a new commit to the pull request.`
+    database.prepare(`
+      UPDATE tasks
+      SET state_tag = 'ActionRequired', reason = ?, updated_at = ?
+      WHERE id = ? AND state_tag = 'Superseded'
+    `).run(reason, observedAt, existing.id)
+    recordTransition(database, { taskId: existing.id, from: 'Superseded', to: 'ActionRequired', reason, fence: existing.fence, at: observedAt })
+    return
+  }
   if ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure) {
     database.prepare(`
       UPDATE tasks
@@ -3505,14 +3539,16 @@ function planConflictResolution(
         command_id = NULL, lease_expires_at = NULL, updated_at = ?,
         recovery_attempts = recovery_attempts + ?
       WHERE id = ? AND state_tag = ?
-    `).run(observedAt, recoverableFailure ? 1 : 0, existing.id, existing.state_tag)
+    `).run(observedAt, recoverableFailure || repeatedTurn ? 1 : 0, existing.id, existing.state_tag)
     recordTransition(database, {
       taskId: existing.id,
       from: existing.state_tag,
       to: 'Queued',
       reason: recoverableFailure
         ? 'The previous conflict resolution failed for a transient reason.'
-        : 'GitHub reports merge conflicts again.',
+        : repeatedTurn
+          ? 'The previous conflict resolution was retired before publication.'
+          : 'GitHub reports merge conflicts again.',
       fence: existing.fence,
       at: observedAt,
     })
@@ -3522,7 +3558,9 @@ function planConflictResolution(
   const canWriteHead = canWritePullRequestHead(mapping, subject)
   const canRepairHead = canRepairPullRequestHead(mapping, subject) && reviewApproved
   const ready = canWriteHead || canRepairHead
-  if (existing?.state_tag === 'ActionRequired' && existing.cancelled === 0 && ready) {
+  // An exhausted budget waits for a person. A new head commit makes a new task.
+  if (existing?.state_tag === 'ActionRequired' && existing.cancelled === 0 && ready
+    && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS) {
     database.prepare(`
       UPDATE tasks
       SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
