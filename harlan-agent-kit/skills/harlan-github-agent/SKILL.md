@@ -19,10 +19,12 @@ Require an explicit configuration file. Start from `config.example.yml` only whe
 
 Use `github.allowed_owners` before GitHub access. Ignore installations and personal-account repositories from every other GitHub owner. Scan only immediate directories under `~/pkg` and `~/sites` to find trusted local checkouts. Treat configured repositories as policy overrides. Never act on a checkout without matching its GitHub origin and discovered authentication.
 
-Skip a tracked pull request with a conventional non-breaking `chore:` title before starting an Agent.
-For every other tracked pull request authored by `harlan-zw`, run low-cost Pull request triage.
-Require an adversarial Review for code, tests, configuration, dependencies, workflows, schemas, generated runtime output, security boundaries, public APIs, performance-sensitive files, behavior claims, or uncertainty.
-Skip only clearly judgment-free prose, formatting, or comment-only changes.
+For every tracked pull request authored by `harlan-zw`, run Pull request triage. The path rule decides first.
+If one changed path is outside the prose set, require an adversarial Review without an Agent. The prose set is `*.md`, `*.mdx`, `*.txt`, `LICENSE*`, `CHANGELOG*`, and `docs/**`.
+Treat `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `.github/**`, `.claude/**`, and `.codex*/**` as behaviour, not prose. They always require Review.
+If every changed path is prose, reuse the stored decision for the same head commit. If none exists, ask the low-cost Agent with the title and changed paths only.
+The Agent skips only clearly judgment-free prose, formatting, or comment-only changes. Uncertainty requires Review.
+Store the decision source in the reason. A stored reason starts with `rule: ` or `model: `.
 Stamp `harlan-agent-review-skipped` when Review is skipped.
 Stamp `harlan-agent-review-required` when Pull request triage requires Review.
 Replace that route label with exactly one Review outcome label when Review finishes.

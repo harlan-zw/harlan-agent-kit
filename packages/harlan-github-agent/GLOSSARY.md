@@ -420,9 +420,9 @@ One self identified automated triage record on an issue. Re-runs update the cano
 
 One routing decision for one exact pull request head commit.
 
-A conventional non-breaking `chore:` title skips Review without starting an Agent.
+The path rule decides first. One changed path outside the prose set requires Review without starting an Agent. Agent instruction files and `.github/**` count as behaviour, not prose.
 
-Every other pull request uses a low-cost Agent decision. It requires or skips an adversarial Review. Any uncertainty requires Review.
+A prose-only pull request reuses the stored decision for the same head commit. Otherwise it uses a low-cost Agent decision from the title and changed paths. Any uncertainty requires Review.
 
 `harlan-agent-review-required` records the automatic route to Review. `harlan-agent-review-skipped` records a skipped Review.
 

@@ -125,7 +125,14 @@ describe('pull request triage Stats', () => {
       outcome: { _tag: 'ReviewSkipped' as const, reason: 'Only prose changed.' },
     }
 
+    expect(store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha)).toBeNull()
     expect(store.recordPullRequestTriageRun(input)).toEqual({ _tag: 'Inserted' })
+    expect(store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha)).toEqual({
+      outcome: 'ReviewSkipped',
+      reason: 'Only prose changed.',
+      completedAt: '2026-08-02T00:01:02.000Z',
+    })
+    expect(store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, 'f'.repeat(40))).toBeNull()
     expect(store.recordPullRequestTriageRun({
       ...input,
       startedAt: '2026-08-02T00:02:01.000Z',
