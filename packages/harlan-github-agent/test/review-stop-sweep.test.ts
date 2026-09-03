@@ -140,6 +140,37 @@ describe('publishStoppedReviews', () => {
     expect(recorded).toBe(1)
   })
 
+  it('retires the publication once the comment belongs to another actor', async () => {
+    const retired: Array<{ commentId: number, reason: string }> = []
+    let recorded = 0
+    const reason = 'The stored automated review comment belongs to another GitHub actor.' as const
+    const { results } = await publishStoppedReviews({
+      github: {
+        ...githubStatus,
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Foreign', reason })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        ...reviewClosureStore,
+        recordDeletedReviewComment: (input) => {
+          retired.push({ commentId: input.commentId, reason: input.reason })
+          return true
+        },
+        listStoppedReviews: () => [stopped],
+        recordStoppedReviewStatus: () => {
+          recorded += 1
+          return true
+        },
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({ _tag: 'Retired', repository: 'harlan-zw/example', pullRequestNumber: 24, reason })])
+    expect(recorded).toBe(0)
+    expect(retired).toEqual([{ commentId: 42, reason }])
+  })
+
   it('does not finish while stale Agent labels remain', async () => {
     let recorded = 0
     const { results } = await publishStoppedReviews({

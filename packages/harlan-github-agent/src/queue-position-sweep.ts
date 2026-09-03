@@ -63,6 +63,7 @@ export type QueuePositionOutcome
   = | { _tag: 'Published', repository: string, pullRequestNumber: number, queue: ReviewQueueState }
     | { _tag: 'CommentGone', repository: string, pullRequestNumber: number }
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
+    | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 /**
  * Tells a waiting pull request where its Task sits in the Queue.
@@ -132,6 +133,20 @@ export async function publishQueuePositions(
         reason: 'A person deleted the comment.',
       })
       return ok({ _tag: 'CommentGone', repository: status.repository, pullRequestNumber: status.pullRequestNumber })
+    }
+    if (edited.value._tag === 'Foreign') {
+      // The stored id names a comment another actor or pull request owns, and
+      // that never changes. One pull request asked GitHub 173 times in an
+      // afternoon. Retiring the publication ends it, and the next Review opens
+      // its own comment.
+      options.store.recordDeletedReviewComment({
+        taskKind: status.taskKind,
+        taskId: status.taskId,
+        commentId: status.commentId,
+        at,
+        reason: edited.value.reason,
+      })
+      return ok({ _tag: 'Retired', repository: status.repository, pullRequestNumber: status.pullRequestNumber, reason: edited.value.reason })
     }
     if (edited.value._tag === 'Changed')
       return ok({ _tag: 'Superseded', repository: status.repository, pullRequestNumber: status.pullRequestNumber })

@@ -944,7 +944,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the stopped review comment was deleted, so nothing was written.`
               : result.value._tag === 'Superseded'
                 ? `${result.value.repository}#${result.value.pullRequestNumber}: another writer took the comment, so it was left alone.`
-                : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
+                : result.value._tag === 'Retired'
+                  ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
+                  : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
           }
           else {
             options.logger.error(`Stopped review comment: ${result.error}`)
@@ -981,9 +983,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the automated comment was deleted, so nothing was written.`
               : result.value._tag === 'Superseded'
                 ? `${result.value.repository}#${result.value.pullRequestNumber}: an agent claimed the Task, so the Queue position comment was left to it.`
-                : result.value.queue._tag === 'Paused'
-                  ? `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads that the repository is paused.`
-                  : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.queue.position} of ${result.value.queue.total}.`)
+                : result.value._tag === 'Retired'
+                  ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
+                  : result.value.queue._tag === 'Paused'
+                    ? `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads that the repository is paused.`
+                    : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.queue.position} of ${result.value.queue.total}.`)
           }
           else {
             options.logger.error(`Queue position comment: ${result.error}`)
