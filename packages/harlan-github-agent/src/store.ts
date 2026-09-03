@@ -325,6 +325,9 @@ function restoreRecoveryBudget(database: DatabaseSync, github: string, at: strin
   return restored
 }
 
+/** How long a refused Candidate issue waits before the controller asks GitHub again. */
+const CANDIDATE_ISSUE_RETRY_MILLISECONDS = 24 * 60 * 60_000
+
 interface RecoveryCandidateRow {
   id: string
   fence: number
@@ -5131,6 +5134,20 @@ const writeQuarantineIncidentMigration = `
   PRAGMA user_version = 59;
 `
 
+/**
+ * Gives Routine runs the same recovery budget Tasks have.
+ *
+ * Six of seven check-ins failed one morning because the Agent provider was
+ * unreachable for half an hour. Each spent its three attempts inside that
+ * window and stayed Failed for the day. Recovery requeues them at capped
+ * backoff until the provider answers or the next instant supersedes them.
+ */
+const routineRecoveryMigration = `
+  ALTER TABLE routine_runs ADD COLUMN recovery_attempts INTEGER NOT NULL DEFAULT 0;
+
+  PRAGMA user_version = 60;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -5391,9 +5408,17 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 58) {
     applyMigration(database, writeQuarantineIncidentMigration)
+    version = 59
+  }
+  if (version === 59) {
+    // A journal rewound for replay already carries the column, and SQLite has
+    // no ADD COLUMN IF NOT EXISTS.
+    const columns = (database.prepare('PRAGMA table_info(routine_runs)').all() as unknown as Array<{ name: string }>)
+      .map(column => column.name)
+    applyMigration(database, columns.includes('recovery_attempts') ? 'PRAGMA user_version = 60;' : routineRecoveryMigration)
     return
   }
-  if (version === 59)
+  if (version === 60)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8000,6 +8025,25 @@ export function openJournalStore(
           -- requeue here would skip that and work against the old approval.
           AND NOT (tasks.kind = 'issue_work' AND tasks.reason = 'The issue changed before work started.')
       `).all() as unknown as RecoveryCandidateRow[]).filter(row => isRecoverable(row, at))
+      // Only the newest run of a Routine recovers. Once the next instant has
+      // its own run, yesterday's failure is history, not work.
+      const routineRows = (database.prepare(`
+        SELECT routine_runs.id, routine_runs.fence, routine_runs.reason,
+          routine_runs.recovery_attempts, routine_runs.updated_at,
+          routines.repository, 0 AS github_number
+        FROM routine_runs
+        JOIN routines ON routines.id = routine_runs.routine_id
+        JOIN repositories ON repositories.github = routines.repository
+        WHERE routine_runs.state_tag = 'Failed'
+          AND routines.enabled = 1
+          AND routines.retired_at IS NULL
+          AND repositories.enabled = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM routine_runs AS newer
+            WHERE newer.routine_id = routine_runs.routine_id
+              AND newer.scheduled_for > routine_runs.scheduled_for
+          )
+      `).all() as unknown as RecoveryCandidateRow[]).filter(row => isRecoverable(row, at))
       const issueScopeRows = database.prepare(`
         SELECT tasks.id AS task_id, tasks.fence AS task_fence,
           worker_tasks.id AS triage_id, worker_tasks.fence AS triage_fence
@@ -8037,6 +8081,13 @@ export function openJournalStore(
           lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Failed'
       `)
+      const retryRoutineRun = database.prepare(`
+        UPDATE routine_runs
+        SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
+          recovery_attempts = recovery_attempts + 1,
+          lease_expires_at = NULL, progress_percent = 0, progress_label = 'Starting', updated_at = ?
+        WHERE id = ? AND state_tag = 'Failed'
+      `)
       const awaitFreshTriage = database.prepare(`
         UPDATE tasks
         SET state_tag = 'Superseded', reason = ?,
@@ -8071,6 +8122,20 @@ export function openJournalStore(
         retried += 1
         recordTransition(database, {
           taskId: row.id,
+          from: 'Failed',
+          to: 'Queued',
+          reason: 'A recoverable controller failure was repaired.',
+          fence: row.fence,
+          at,
+        })
+      })
+      routineRows.forEach((row) => {
+        if (retryRoutineRun.run(at, row.id).changes !== 1)
+          return
+        retried += 1
+        recordRoutineRunEvent(database, {
+          runId: row.id,
+          event: 'Retrying',
           from: 'Failed',
           to: 'Queued',
           reason: 'A recoverable controller failure was repaired.',
@@ -11657,7 +11722,18 @@ export function openJournalStore(
     updatedAt: row.updated_at,
   })
 
-  /** Reconciles active definitions while preserving every historical Run. */
+  /**
+   * Reconciles active definitions while preserving every historical Run.
+   *
+   * A schedule change or a re-enable moves `last_run_at` to now, so the new
+   * schedule never fires for an instant that passed under the old one.
+   * Retiring and reviving a Routine leaves `last_run_at` and `enabled` alone,
+   * because a revival is not a re-enable and must not reset it. The spec moved
+   * to `.github/routines.yml` one afternoon, every Routine was retired and
+   * revived on the same pass, and the reset made that morning's run, which had
+   * never opened, read as already answered. Nothing reported it. With the
+   * instant kept, the planner records it as Skipped and the run log says so.
+   */
   const syncRoutines: JournalStore['syncRoutines'] = (input) => {
     const upsert = database.prepare(`
       INSERT INTO routines (id, repository, name, crons, time_zone, mode, enabled, spec_sha, last_run_at, retired_at, updated_at)
@@ -11667,7 +11743,6 @@ export function openJournalStore(
           WHEN routines.crons != excluded.crons
             OR routines.time_zone != excluded.time_zone
             OR routines.enabled != excluded.enabled
-            OR routines.retired_at IS NOT NULL
           THEN excluded.updated_at
           ELSE routines.last_run_at
         END,
@@ -11698,11 +11773,11 @@ export function openJournalStore(
       })
       database.prepare(`
         UPDATE routines
-        SET enabled = 0, retired_at = ?, last_run_at = ?, updated_at = ?
+        SET retired_at = ?, updated_at = ?
         WHERE repository = ?
           ${declared.length === 0 ? '' : `AND id NOT IN (${placeholders})`}
           AND retired_at IS NULL
-      `).run(input.at, input.at, input.at, input.repository, ...declared)
+      `).run(input.at, input.at, input.repository, ...declared)
 
       const superseded = database.prepare(`
         SELECT routine_runs.id, routine_runs.fence
@@ -11762,6 +11837,7 @@ export function openJournalStore(
     progress_percent: number
     progress_label: string
     usage: string
+    recovery_attempts: number
     created_at: string
     updated_at: string
   }
@@ -12210,7 +12286,21 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * Requests one issue per Candidate.
+   *
+   * A command that GitHub refused for good stays Failed, but only for a day. A
+   * repository with Issues switched off refused seven proposals, and switching
+   * Issues on filed none of them, because nothing ever asked again. One try a
+   * day keeps a broken repository quiet and lets a repaired one catch up on its
+   * own. Each retry still reports its refusal as an Incident.
+   */
   const stageCandidateIssues: JournalStore['stageCandidateIssues'] = (input) => {
+    const revive = database.prepare(`
+      UPDATE candidate_issue_commands
+      SET state_tag = 'Pending', reason = NULL, attempts = 0, updated_at = ?
+      WHERE candidate_id = ? AND state_tag = 'Failed' AND updated_at <= ?
+    `)
     const statement = database.prepare(`
       INSERT INTO candidate_issue_commands (
         id, candidate_id, repository, routine_name, title, body, state_tag, created_at, updated_at
@@ -12218,10 +12308,24 @@ export function openJournalStore(
       VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
       ON CONFLICT (candidate_id) DO NOTHING
     `)
+    const revivableBefore = new Date(Date.parse(input.at) - CANDIDATE_ISSUE_RETRY_MILLISECONDS).toISOString()
     let staged = 0
     database.exec('BEGIN IMMEDIATE')
     try {
       input.commands.forEach((command) => {
+        if (revive.run(input.at, command.candidateId, revivableBefore).changes === 1) {
+          staged += 1
+          recordDurableCommandEvent(database, {
+            stream: 'candidate_issue',
+            commandId: command.id,
+            event: 'Revived',
+            from: 'Failed',
+            to: 'Pending',
+            reason: 'A day passed since GitHub refused this proposal, so it is asked again.',
+            at: input.at,
+          })
+          return
+        }
         const inserted = statement.run(
           command.id,
           command.candidateId,
