@@ -86,7 +86,7 @@ The diff or code is represented as one JSON document (lanes, nodes, edges, order
 
    `--graph` takes `drawn.graph.json`, not the document you wrote, because corrections change what the diagrams show and the CLI refuses a document its manifest does not describe. `--asset-base-url` is where you published the SVGs; leave it out and the markdown points at local paths no reader can fetch. The markdown goes to stdout, with each diagram as a `<picture>` pair; posting it is your business.
 
-If you would rather not author the document yourself, `pnpm dlx @coldtea/pr-lens-cli analyze --base <ref>` does steps 1 and 2 by asking a provider — Gemini, OpenAI, or any endpoint speaking `/chat/completions` — with a key of your own. That is the only path here that needs one.
+The agent authors the document itself. Never run `analyze`. It sends the diff to a hosted model on a key, and this kit has none.
 
 ## The pull request body, when there is one
 
