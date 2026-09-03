@@ -1,0 +1,45 @@
+<title>Page Name</title>
+<style>
+  /* Complete light palette on bare :root. Every token is declared here first. */
+  :root {
+    --bg: #f7f6f2;
+    --surface: #ffffff;
+    --ink: #1f1d1a;
+    --muted: #625c53;
+    --line: #dcd7cd;
+    --accent: #1f5f8b;
+  }
+  /* System dark: only tokens change, and an explicit light choice still wins. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17161a;
+      --surface: #1f1e23;
+      --ink: #ebe8e1;
+      --muted: #a39d92;
+      --line: #35333a;
+      --accent: #7db6dd;
+    }
+  }
+  /* Explicit dark choice wins in the other direction. */
+  :root[data-theme="dark"] {
+    --bg: #17161a;
+    --surface: #1f1e23;
+    --ink: #ebe8e1;
+    --muted: #a39d92;
+    --line: #35333a;
+    --accent: #7db6dd;
+  }
+  body { background: var(--bg); color: var(--ink); }
+  main { max-width: 68ch; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  h1, h2 { text-wrap: balance; }
+  .wide { overflow-x: auto; }
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { border-bottom: 1px solid var(--line); padding: .4rem .6rem; text-align: left; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+<main>
+  <h1>Page Name</h1>
+  <p>Replace this with real content. The plan above the fold decides palette, type, and layout before a line of this is kept.</p>
+</main>

@@ -112,6 +112,7 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 
 | Skill | Description |
 |-------|-------------|
+| [`artifact`](./harlan-agent-kit/skills/artifact/SKILL.md) | Publish one self-contained HTML Artifact from Claude Code or Codex |
 | [`adversarial-review`](./harlan-agent-kit/skills/adversarial-review/SKILL.md) | Review one PR adversarially, hand defects to Repair, publish the bot status |
 | [`agent-feedback`](./harlan-agent-kit/skills/agent-feedback/SKILL.md) | Improve one Agent Skill from explicit Review feedback |
 | [`close-off`](./harlan-agent-kit/skills/close-off/SKILL.md) | Finish loose ends, verify delivery, clean task-owned Git state |
