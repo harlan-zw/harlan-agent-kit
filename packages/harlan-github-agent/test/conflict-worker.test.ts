@@ -148,4 +148,33 @@ describe('conflict worker', () => {
     expect(result._tag).toBe('Ok')
     expect(preparedBaseSha).toBe('current-base')
   })
+
+  it('tells the agent the conflicted files, both SHAs, and the check budget', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base', headSha: 'head-sha', baseRef: 'feat/parent' })
+    const capture: ProviderCapture = { requests: [] }
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
+      worktrees: {
+        ...conflictWorkerOptions(repository, current).worktrees,
+        prepare: () => Promise.resolve(ok({ path: '/tmp/worktree', headSha: 'head-sha', baseSha: 'current-base', conflictedFiles: ['src/a.ts', 'src/b.vue'] })),
+      },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    const prompt = capture.requests[0]?.prompt ?? ''
+    expect(prompt).toContain('Pull request head: head-sha')
+    expect(prompt).toContain('Base branch: feat/parent at current-base')
+    expect(prompt).toContain('- src/a.ts\n- src/b.vue')
+    expect(prompt).toContain('- eslint on the conflicted files')
+    expect(prompt).toContain('- vitest on the test files that import the conflicted files')
+    expect(prompt).toContain('- git diff --check')
+    expect(prompt).toContain('Do not run the full test suite, the full typecheck, a build, or a toolchain install.')
+    expect(prompt).toContain('Never use npx.')
+    expect(prompt).toContain('Leave no conflict markers in any file.')
+    expect(prompt).not.toContain('unit-tests skill')
+  })
 })
