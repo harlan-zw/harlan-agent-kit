@@ -435,7 +435,10 @@ export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureCl
     return { _tag: 'Infrastructure', reason: `The runner lost the job for check "${signal.name}" before any step failed.` }
   // A `timed_out` conclusion alone says nothing about who hung. A repository
   // test can hang as easily as a host can stall, so the log decides.
-  const killed = signal.logTail.slice(-runnerKillTail).find(line => matches(runnerKillPatterns, line))
+  const tail = signal.logTail.slice(-runnerKillTail)
+  // GitHub reports the kill on a `##[error]` annotation or as the final line.
+  // A test name that quotes an exit code sits inside vitest output, not there.
+  const killed = tail.find((line, index) => (line.startsWith('##[error]') || index === tail.length - 1) && matches(runnerKillPatterns, line))
   if (killed !== undefined)
     return { _tag: 'Infrastructure', reason: `The runner killed the job for check "${signal.name}": ${killed.trim()}` }
   const host = remoteFetchFailure(signal.logTail)
