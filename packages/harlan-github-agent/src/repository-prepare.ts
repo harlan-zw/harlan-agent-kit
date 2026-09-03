@@ -117,16 +117,31 @@ export function createPrepareCommandRunner(environment: NodeJS.ProcessEnv = proc
     }
     let timedOut = false
     let spawnError: string | null = null
+    // The command leads its own process group. pnpm and nuxt wrappers spawn
+    // worker processes, and killing only the direct child left those running
+    // and writing into a worktree the controller had already given up on.
     const child = spawn(command, args, {
       cwd: request.cwd,
+      detached: true,
       env: { ...environment, PATH: path },
       signal: request.signal,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+    const killTree = () => {
+      if (child.pid === undefined)
+        return
+      try {
+        process.kill(-child.pid, 'SIGKILL')
+      }
+      catch {
+        // The group is already gone. Nothing is left to kill.
+      }
+    }
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGKILL')
+      killTree()
     }, request.timeoutMilliseconds)
+    request.signal.addEventListener('abort', killTree, { once: true })
     child.stdout.on('data', collect)
     child.stderr.on('data', collect)
     let settled = false
@@ -136,6 +151,7 @@ export function createPrepareCommandRunner(environment: NodeJS.ProcessEnv = proc
         return
       settled = true
       clearTimeout(timer)
+      request.signal.removeEventListener('abort', killTree)
       if (graceTimer !== null)
         clearTimeout(graceTimer)
       // A pipe a grandchild still holds would otherwise stay open in the service.

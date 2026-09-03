@@ -1,7 +1,7 @@
 import type { PrepareCommandRequest } from '../src/repository-prepare.ts'
 import type { ClaimedIssueTriageTask, ClaimedIssueWorkTask } from '../src/types.ts'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -134,7 +134,39 @@ describe('prepare command runner', () => {
 
     expect(result).toEqual({ _tag: 'TimedOut', outputTail: ['started'] })
   })
+
+  it('kills the grandchildren of a command that outlives its timeout', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'harlan-prepare-runner-'))
+    temporaryDirectories.push(cwd)
+    const pidFile = join(cwd, 'grandchild.pid')
+    const result = await createPrepareCommandRunner()({
+      argv: ['node', '-e', `
+        const { spawn } = require('node:child_process')
+        const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' })
+        require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid))
+        setTimeout(() => {}, 60_000)
+      `],
+      cwd,
+      timeoutMilliseconds: 500,
+      signal: new AbortController().signal,
+    })
+    const grandchild = Number(readFileSync(pidFile, 'utf8'))
+
+    expect(result).toEqual({ _tag: 'TimedOut', outputTail: [] })
+    await expect.poll(() => isRunning(grandchild), { timeout: 3_000 }).toBe(false)
+  })
 })
+
+/** True while the process exists. A zombie of this test's own tree still counts as gone once it is reaped. */
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]?.[0] !== 'Z'
+  }
+  catch {
+    return false
+  }
+}
 
 describe('prepare command runner spawn failure', () => {
   it('names a command that never started', async () => {
