@@ -74,4 +74,12 @@ describe('the environment one turn runs with', () => {
 
     expect(workspaceEnvironment(base, workspace)).toBe(base)
   })
+
+  it('puts the repository binaries first on PATH', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'worktree-env-'))
+    mkdirSync(join(workspace, 'node_modules', '.bin'), { recursive: true })
+
+    expect(workspaceEnvironment({ PATH: '/usr/bin:/bin' }, workspace))
+      .toEqual({ PATH: `${join(workspace, 'node_modules', '.bin')}:/usr/bin:/bin` })
+  })
 })

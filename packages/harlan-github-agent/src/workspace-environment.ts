@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 /**
  * Names a repository file must never set for an Agent process.
@@ -79,21 +79,40 @@ export function parseEnvironmentFile(text: string): Record<string, string> {
  * The repository's values win over the service's own, because they are that
  * repository's configuration and the service has no better answer.
  *
- * Answers the same object when the worktree has no `.env`, so a provider that
- * shares one environment across turns keeps sharing it. A `.env` path that is
+ * Answers the same object when the worktree has no `.env` and no binaries, so
+ * a provider that shares one environment across turns keeps sharing it. A `.env` path that is
  * unreadable or not a regular file (a tracked `.env/` directory, for example)
  * falls back to the base environment rather than failing the turn.
  */
-export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string): NodeJS.ProcessEnv {
-  const path = join(workspace, '.env')
-  let values: Record<string, string>
+function readEnvironmentValues(path: string): Record<string, string> {
   try {
-    if (!statSync(path).isFile())
-      return base
-    values = parseEnvironmentFile(readFileSync(path, 'utf8'))
+    return statSync(path).isFile() ? parseEnvironmentFile(readFileSync(path, 'utf8')) : {}
   }
   catch {
-    return base
+    // An unreadable .env is the same as none: the turn still runs.
+    return {}
   }
-  return Object.keys(values).length === 0 ? base : { ...base, ...values }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  }
+  catch {
+    return false
+  }
+}
+
+export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string): NodeJS.ProcessEnv {
+  const values = readEnvironmentValues(join(workspace, '.env'))
+  // A repository's own binaries come first, the way a shell inside it would
+  // find them. The service unit carries a bare PATH, so a check-in script that
+  // shelled out to `wrangler` found nothing and reported every probe as failed.
+  const binaries = join(workspace, 'node_modules', '.bin')
+  const PATH = isDirectory(binaries)
+    ? [binaries, base.PATH].filter(entry => entry !== undefined && entry !== '').join(delimiter)
+    : base.PATH
+  if (Object.keys(values).length === 0 && PATH === base.PATH)
+    return base
+  return { ...base, ...values, ...(PATH === undefined ? {} : { PATH }) }
 }
