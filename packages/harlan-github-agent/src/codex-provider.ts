@@ -1,7 +1,9 @@
 import type { CodexOptions, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
+import process from 'node:process'
 import { Codex } from '@openai/codex-sdk'
 import { agentProviderFailureReason, agentTextEvent } from './agent-provider.ts'
+import { workspaceEnvironment } from './workspace-environment.ts'
 
 interface CodexThread {
   runStreamed: (prompt: string, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }>
@@ -94,12 +96,18 @@ async function* providerEvents(events: AsyncIterable<ThreadEvent>): AsyncGenerat
  * comes from this provider. If the SDK adds per-step usage, meter it here the
  * way `opencode-provider.ts` meters `step_finish`.
  */
+function definedEntries(environment: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined))
+}
+
 export function createCodexProvider(options: CodexProviderOptions = {}): AgentProvider {
   const factory = options.createCodex ?? (codexOptions => new Codex(codexOptions))
   return {
     name: 'codex',
     runTurn: (request: AgentTurnRequest) => (async function* () {
-      const client = factory({})
+      // The SDK replaces the inherited environment when `env` is set, so the
+      // whole service environment goes with the worktree's seeded .env on top.
+      const client = factory({ env: definedEntries(workspaceEnvironment(process.env, request.workspace)) })
       const baseOptions = {
         model: request.model,
         workingDirectory: request.workspace,

@@ -1,5 +1,9 @@
 import type { ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import process from 'node:process'
 import { describe, expect, it } from 'vitest'
 import { codexAgentEvent, createCodexProvider } from '../src/codex-provider.ts'
 
@@ -65,6 +69,26 @@ describe('codexAgentEvent', () => {
 })
 
 describe('createCodexProvider', () => {
+  it('starts Codex with the worktree .env layered over the service environment', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'codex-env-'))
+    await writeFile(join(workspace, '.env'), 'CLOUDFLARE_API_TOKEN=from-repo\n')
+    let codexOptions: { env?: Record<string, string> } | undefined
+    const provider = createCodexProvider({
+      createCodex: (options) => {
+        codexOptions = options
+        return {
+          startThread: () => thread(messageEvents),
+          resumeThread: () => { throw new Error('A new turn must not resume.') },
+        }
+      },
+    })
+
+    await collect(provider.runTurn(request({ workspace })))
+
+    expect(codexOptions?.env?.CLOUDFLARE_API_TOKEN).toBe('from-repo')
+    expect(codexOptions?.env?.PATH).toBe(process.env.PATH)
+  })
+
   it('pins the model, reasoning effort, and worktree on a new thread', async () => {
     let threadOptions: ThreadOptions | undefined
     const provider = createCodexProvider({
