@@ -53,6 +53,7 @@ import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
 import { refreshReviewGates } from './review-gate-sweep.ts'
 import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
+import { createReviewReuseWorker } from './review-reuse.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { createReviewStatusScheduler } from './review-status-scheduler.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
@@ -713,7 +714,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         worker: withGitHubWritePreflight({
           accesses: ['item_write'],
           source: tokens,
-          worker: createReviewWorker(subjectWorkerOptions),
+          worker: createReviewReuseWorker({
+            github: workerGithub,
+            now,
+            onReuseFailure: (task, reason) => options.logger.error(`${task.repository}#${task.pullRequestNumber}: the Review could not be reused, so a fresh Review runs: ${reason}`),
+            onReused: (task, priorHeadSha) => options.logger.info(`${task.repository}#${task.pullRequestNumber}: reused the Review of ${priorHeadSha.slice(0, 12)} for ${task.pullRequest.headSha.slice(0, 12)}. The diff did not change.`),
+            status: reviewStatus,
+            store,
+            workspaces,
+          }, createReviewWorker(subjectWorkerOptions)),
         }),
         workerId: randomUUID(),
       })),
