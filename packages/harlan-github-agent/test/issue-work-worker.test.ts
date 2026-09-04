@@ -8,6 +8,68 @@ import { ok } from '../src/result.ts'
 import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('issue work worker', () => {
+  it('closes every combined issue and stacks on the base a Batch chose', async () => {
+    const repository = repositoryMapping()
+    const issue = issueItem()
+    const bases: PullRequestBase[] = []
+    const worker = createIssueWorkWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'implemented',
+        summary: 'Fixed both.',
+        checks: ['pnpm test'],
+        commitMessage: 'fix: shared helper',
+        pullRequestTitle: 'fix: shared helper',
+        // The Agent forgot the combined issue, so the controller substitutes metadata that closes both.
+        pullRequestBody: '### Description\n\nFixed.\n\n### Linked Issues\n\nCloses #12.',
+      }))),
+      github: {
+        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Body', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
+        listPullRequestFiles: () => Promise.reject(new Error('A planned base needs no overlap check.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getIssueTriageEvidence: () => null,
+        getWorkerSession: () => 'triage-session',
+        listOpenAgentPullRequests: () => [],
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(repository)),
+      worktrees: {
+        prepare: (_task, base) => {
+          bases.push(base)
+          return Promise.resolve(ok({ path: '/tmp/issue-work', headSha: 'stack-head', baseSha: 'stack-head', defaultBranchSha: 'main-sha' }))
+        },
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 1, changedPaths: ['src/helper.ts'] })),
+        restack: () => Promise.reject(new Error('A planned base never restacks.')),
+        commit: () => Promise.resolve(ok({ commitSha: 'commit-sha', baseSha: 'stack-head', artifactRef: 'artifact-ref', digest: 'patch-digest', changedFiles: 1 })),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'issue-work-task',
+      kind: 'issue_work',
+      repository: repository.github,
+      issueNumber: issue.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      issue,
+    }, new AbortController().signal, {
+      combinedIssues: [{ number: 13, title: 'Same helper', body: 'Also broken.' }],
+      base: { _tag: 'Stacked', ref: 'fix/issue-9', pullRequestNumber: 9, headSha: 'stack-head' },
+    })
+
+    expect(bases).toEqual([{ _tag: 'Stacked', ref: 'fix/issue-9', pullRequestNumber: 9, headSha: 'stack-head' }])
+    if (result._tag !== 'Ok' || result.value._tag !== 'Publish' || result.value.publication._tag !== 'OpenPullRequest')
+      throw new Error('Expected a pull request publication.')
+    expect(result.value.publication.baseRef).toBe('fix/issue-9')
+    expect(result.value.publication.pullRequestBody).toContain('Closes #12.')
+    expect(result.value.publication.pullRequestBody).toContain('Closes #13.')
+  })
+
   it('refuses an Agent feedback patch outside its trusted skill target', async () => {
     const repository = repositoryMapping()
     const issue = issueItem()

@@ -176,6 +176,7 @@ const workLabels: Record<AgentRole, string> = {
   baseline_repair: 'Baseline repair',
   issue_triage: 'Issue triage',
   issue_work: 'Issue work',
+  batch_plan: 'Batch planning',
   routine_scan: 'Routine scan',
   routine_fix: 'Routine fix',
 }
@@ -694,6 +695,7 @@ const workChips: Record<AgentRole, WorkChip> = {
   baseline_repair: { label: 'Baseline', icon: 'i-octicon-pulse-16' },
   issue_triage: { label: 'Triage', icon: 'i-octicon-inbox-16' },
   issue_work: { label: 'Issue work', icon: 'i-octicon-code-16' },
+  batch_plan: { label: 'Batch planning', icon: 'i-octicon-stack-16' },
   routine_scan: { label: 'Routine scan', icon: 'i-octicon-telescope-16' },
   routine_fix: { label: 'Routine fix', icon: 'i-octicon-workflow-16' },
 }

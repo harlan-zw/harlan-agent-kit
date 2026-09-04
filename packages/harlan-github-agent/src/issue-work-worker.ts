@@ -42,8 +42,28 @@ interface AgentResponsePayload {
   pullRequestBody?: string
 }
 
+/** One issue a unit closes besides its primary issue, with the text the Agent reads. */
+export interface CombinedIssue {
+  number: number
+  title: string
+  body: string
+}
+
+/**
+ * What a Batch decided for one Issue work Task.
+ *
+ * Plain Issue work has no unit: one issue, one pull request, a base chosen from
+ * open agent pull requests. A Batch may fold more issues into the same pull
+ * request and may name the exact pull request head this one stacks on.
+ */
+export interface IssueWorkUnit {
+  combinedIssues: readonly CombinedIssue[]
+  /** The base the Batch plan chose, or null to choose as plain Issue work does. */
+  base: PullRequestBase | null
+}
+
 export interface IssueWorkWorker {
-  run: (task: ClaimedIssueWorkTask, signal: AbortSignal) => Promise<Result<MutationWorkerOutcome, string>>
+  run: (task: ClaimedIssueWorkTask, signal: AbortSignal, unit?: IssueWorkUnit) => Promise<Result<MutationWorkerOutcome, string>>
 }
 
 export interface IssueWorkWorkerOptions {
@@ -105,17 +125,21 @@ function preservesTemplate(body: string, template: PullRequestTemplate): boolean
   })
 }
 
-function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: PullRequestTemplate): ImplementedAgentResponse {
+function closesLines(issueNumbers: readonly number[]): string {
+  return issueNumbers.map(number => `Closes #${number}.`).join('\n')
+}
+
+function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: PullRequestTemplate, issueNumbers: readonly number[]): ImplementedAgentResponse {
   const issueTitle = cleanLine(task.issue.title)
   const title = /^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/.test(issueTitle)
     && issueTitle.length < 70
     ? issueTitle
     : `fix: resolve issue #${task.issueNumber}`
   const body = template._tag === 'Found'
-    ? `${template.body.trimEnd()}\n\nCloses #${task.issueNumber}.`
+    ? `${template.body.trimEnd()}\n\n${closesLines(issueNumbers)}`
     : `### 🔗 Linked issue
 
-Closes #${task.issueNumber}.
+${closesLines(issueNumbers)}
 
 ### ❓ Type of change
 
@@ -128,10 +152,10 @@ Closes #${task.issueNumber}.
 
 ### 📚 Description
 
-Implements ${task.repository}#${task.issueNumber}.`
+Implements ${issueNumbers.map(number => `${task.repository}#${number}`).join(', ')}.`
   return {
     outcome: 'implemented',
-    summary: `Implemented ${task.repository}#${task.issueNumber}.`,
+    summary: `Implemented ${issueNumbers.map(number => `${task.repository}#${number}`).join(', ')}.`,
     checks: [],
     commitMessage: title,
     pullRequestTitle: title,
@@ -139,7 +163,7 @@ Implements ${task.repository}#${task.issueNumber}.`
   }
 }
 
-function parseAgentResponse(text: string, issueNumber: number, template: PullRequestTemplate): Promise<Result<AgentResponse, string>> {
+function parseAgentResponse(text: string, issueNumbers: readonly number[], template: PullRequestTemplate): Promise<Result<AgentResponse, string>> {
   return Promise.resolve(text)
     .then(value => JSON.parse(value) as AgentResponsePayload)
     .then((value): Result<AgentResponse, string> => {
@@ -164,13 +188,13 @@ function parseAgentResponse(text: string, issueNumber: number, template: PullReq
         ? 'the title is not a Conventional Commit subject'
         : value.pullRequestTitle.length >= 70
           ? 'the title is 70 characters or longer'
-          : !new RegExp(`(?:closes|fixes|resolves)\\s+#${issueNumber}\\b`, 'i').test(pullRequestBody)
-              ? `the body does not close #${issueNumber}`
-              : /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(pullRequestBody)
-                ? 'the body adds a checks heading'
-                : preservesTemplate(pullRequestBody, template)
-                  ? undefined
-                  : 'the body drops part of the repository pull request template'
+          : issueNumbers.some(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody))
+            ? `the body does not close ${issueNumbers.filter(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody)).map(number => `#${number}`).join(', ')}`
+            : /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(pullRequestBody)
+              ? 'the body adds a checks heading'
+              : preservesTemplate(pullRequestBody, template)
+                ? undefined
+                : 'the body drops part of the repository pull request template'
       if (brokenRule !== undefined)
         return err(`The Agent returned invalid pull request text: ${brokenRule}.`)
       return ok({
@@ -198,7 +222,7 @@ const pullRequestMetadataLines = `Pull request metadata contract:
 - pullRequestBody keeps every heading, comment, and checklist of the trusted template below.
 - Under the description heading, write 2 to 4 sentences that say why the change is needed.
 - Tick the one type of change that matches.
-- The body closes the issue with "Closes #N".
+- The body closes every issue this pull request fixes, one "Closes #N" line each.
 - Do not add a checks, testing, or verification heading.
 - End the body with this exact line:
 ${aiDisclosure}`
@@ -212,6 +236,18 @@ export interface IssueWorkPromptInput {
   triage: IssueTriageResult | null
   /** Instruction file names that exist in the prepared worktree. */
   instructionFiles: readonly string[]
+  /** Other issues the same pull request closes, when a Batch combined them. */
+  combinedIssues?: readonly CombinedIssue[]
+}
+
+function combinedIssueLines(combined: readonly CombinedIssue[]): string {
+  if (combined.length === 0)
+    return ''
+  return `A Batch plan combined this issue with ${combined.map(issue => `#${issue.number}`).join(', ')}, because one change fixes them all.
+Implement every one of them in this worktree. The pull request body closes each with its own "Closes #N" line.
+Untrusted combined issue data follows as JSON:
+${JSON.stringify(combined.map(issue => ({ number: issue.number, title: issue.title, body: issue.body.slice(0, 8_000) })))}
+`
 }
 
 /** The Issue work prompt. Exported so tests can assert its contract without an Agent. */
@@ -237,7 +273,7 @@ Do not stage, commit, push, amend, rebase, change Git configuration, post commen
 Return outcome blocked only when required product intent or safe implementation cannot be determined.
 For an implemented outcome, return pullRequestTitle and pullRequestBody with the issue work result.
 Return only the required JSON. Do not wrap it in a code fence.
-
+${combinedIssueLines(input.combinedIssues ?? [])}
 Trusted pull request template follows as JSON:
 ${JSON.stringify(input.template)}
 
@@ -292,7 +328,9 @@ async function stackOnOverlap(
 
 export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWorkWorker {
   return {
-    async run(task, signal) {
+    async run(task, signal, unit) {
+      const combinedIssues = unit?.combinedIssues ?? []
+      const issueNumbers = [task.issueNumber, ...combinedIssues.map(issue => issue.number)]
       const reportProgress = (progress: AgentProgress): Result<void, string> => options.store.updateAgentProgress({
         taskId: task.id,
         taskKind: task.kind,
@@ -323,7 +361,9 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
 
       const candidates = options.store.listOpenAgentPullRequests(task.repository)
       const routineSource = options.store.getRoutineIssueSource?.(task.repository, task.issueNumber) ?? null
-      const preparedBase = chooseStackBase({ defaultBranch: validated.value.defaultBranch, candidates })
+      // A Batch plan names the exact head this unit stacks on. Without one, an
+      // open Baseline repair decides, as for plain Issue work.
+      const preparedBase = unit?.base ?? chooseStackBase({ defaultBranch: validated.value.defaultBranch, candidates })
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, preparedBase, signal)
       if (prepared._tag === 'Err')
         return prepared
@@ -351,6 +391,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           routineSource,
           triage,
           instructionFiles,
+          combinedIssues,
         }),
         repository: task.repository,
         role: 'issue_work',
@@ -363,7 +404,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       }, signal)
       if (turn._tag === 'Err')
         return turn
-      const parsed = await parseAgentResponse(turn.value.response, task.issueNumber, template.value)
+      const parsed = await parseAgentResponse(turn.value.response, issueNumbers, template.value)
       // A bad metadata envelope must not discard a finished patch. Review and
       // Repair own code quality after publication, so the controller supplies
       // safe PR metadata and keeps the Agent's work moving.
@@ -374,7 +415,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           at: options.now().toISOString(),
           text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
         })
-        response = controllerIssueMetadata(task, template.value)
+        response = controllerIssueMetadata(task, template.value, issueNumbers)
       }
       else {
         if (parsed.value.outcome === 'blocked') {

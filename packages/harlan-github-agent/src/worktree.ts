@@ -3,7 +3,7 @@ import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
 import type { Result } from './result.ts'
-import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -117,6 +117,8 @@ export interface AgentWorkspaceManager {
   prepareReview: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   /** A Routine scan reads the default branch. It never starts from a pull request head. */
   prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  /** A Batch planning turn reads the default branch, so it can see which issues touch the same code. */
+  prepareBatch: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
@@ -785,7 +787,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
 
 export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOptions): AgentWorkspaceManager {
   async function prepareRepository(
-    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun,
+    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun | ClaimedBatch,
     label: string,
     refs: string[],
     headRef: string,
@@ -812,6 +814,17 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
   }
 
   return {
+    async prepareBatch(batch, signal) {
+      const baseRef = `refs/harlan-github-agent/batches/${batch.id.slice(0, 12)}`
+      return prepareRepository(
+        batch,
+        `batch-${batch.id.slice(0, 12)}`,
+        [`+refs/heads/${batch.repositoryMapping.defaultBranch}:${baseRef}`],
+        baseRef,
+        signal,
+      )
+    },
+
     async prepareRoutine(task, signal) {
       // A Routine runs from the exact source commit stored when its Run opened.
       // A later default branch push cannot change queued work.
@@ -1383,7 +1396,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
     },
     async finalize(command, signal) {
       if (command._tag === 'UpdatePullRequest')
-        return ok(`Published ${command.commitSha}.`)
+        return ok({ evidence: `Published ${command.commitSha}.` })
       if (options.pullRequests === undefined)
         return err('Pull request publication is unavailable.')
       const pullRequest = await options.pullRequests.ensurePullRequest({
@@ -1397,7 +1410,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       }, signal)
       return pullRequest._tag === 'Err'
         ? err(pullRequest.error.message)
-        : ok(`Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}`)
+        : ok({ evidence: `Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}`, pullRequestNumber: pullRequest.value.number })
     },
   }
 }

@@ -14,6 +14,8 @@ interface IssueTriageEvidence {
   needsCodebaseReview: boolean
   nextAction: string
   summary: string
+  /** Open issues in the same repository that the same change should fix. Empty when none. */
+  relatedIssues: readonly number[]
 }
 
 /** One routing decision, with the evidence the next Agent receives. */
@@ -64,6 +66,10 @@ export function parseStoredIssueTriage(evidence: string | null | undefined): Iss
   ) {
     return null
   }
+  // Evidence stored before triage named related issues carries no list.
+  const relatedIssues = Array.isArray(record.relatedIssues)
+    ? record.relatedIssues.filter((value): value is number => Number.isInteger(value) && (value as number) > 0)
+    : []
   return {
     _tag: record._tag,
     difficulty: record.difficulty,
@@ -72,5 +78,6 @@ export function parseStoredIssueTriage(evidence: string | null | undefined): Iss
     needsCodebaseReview: record.needsCodebaseReview,
     summary: record.summary,
     nextAction: record.nextAction,
+    relatedIssues,
   }
 }
