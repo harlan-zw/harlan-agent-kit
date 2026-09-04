@@ -5,6 +5,7 @@ import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
+import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
@@ -348,7 +349,10 @@ function pullRequestItem(
   const labels = pull.labels.flatMap(label => label.name === undefined ? [] : [label.name])
   return {
     kind: 'pull_request',
-    approvalLabels: [],
+    // The poller reads the same labels. An empty list here let the manual
+    // Review label survive every Review, and each new Revision then reviewed
+    // the same head commit again as a fresh manual request.
+    approvalLabels: approvalLabels(labels),
     autoMerge: hasAutoMergeLabel(labels),
     repository: repository.github,
     number: pull.number,
