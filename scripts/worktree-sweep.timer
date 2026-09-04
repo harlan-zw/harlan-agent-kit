@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the safe Git worktree sweep daily
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 Australia/Melbourne
+RandomizedDelaySec=30m
+Persistent=true
+Unit=git-worktree-sweep.service
+
+[Install]
+WantedBy=timers.target
