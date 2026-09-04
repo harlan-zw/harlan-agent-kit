@@ -56,6 +56,10 @@ auto_merge:
   method: squash
 # No new issue work starts when open pull requests reach this limit.
 max_open_pull_requests: 8
+# Plan Ready Routine-filed issues as Batches: one planning turn groups related
+# issues, and its units run as sub agents under one Agent permit. Set false to
+# run every issue alone.
+issue_batches: true
 # With webhooks on, polling only has to catch what a delivery missed.
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14

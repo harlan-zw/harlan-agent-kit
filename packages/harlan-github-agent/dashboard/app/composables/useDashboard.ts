@@ -48,6 +48,7 @@ function emptySnapshot(): DashboardSnapshot {
     tasks: [],
     routines: [],
     routineRuns: [],
+    batches: [],
   }
 }
 

@@ -2,8 +2,14 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedPublicationCommand } from './types.ts'
 
+export interface FinalizedPublication {
+  evidence: string
+  pullRequestNumber?: number
+}
+
 export interface PublicationRemote {
-  finalize: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<string, string>>
+  /** Opens or confirms the pull request. The number lets a stacked unit find its base without a GitHub poll. */
+  finalize: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<FinalizedPublication, string>>
   getHeadSha: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<string | null, string>>
   push: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<void, string>>
   validateAuthority: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<void, string>>
@@ -47,13 +53,14 @@ export function createPublicationScheduler(options: PublicationSchedulerOptions)
     })
   }
 
-  const complete = (command: ClaimedPublicationCommand, evidence: string): void => {
+  const complete = (command: ClaimedPublicationCommand, finalized: FinalizedPublication): void => {
     options.store.completePublication({
       commandId: command.id,
       workerId: command.workerId,
       fence: command.fence,
       at: options.now().toISOString(),
-      evidence,
+      evidence: finalized.evidence,
+      ...(finalized.pullRequestNumber === undefined ? {} : { pullRequestNumber: finalized.pullRequestNumber }),
     })
   }
 

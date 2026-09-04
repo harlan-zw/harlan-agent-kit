@@ -147,6 +147,7 @@ Difficulty alone never means WAIT_TO_IMPLEMENT. Use READY_TO_SPEC for worthwhile
 For NEEDS_INFO, make nextAction the smallest concrete questions that unblock triage.
 For every other route, make nextAction the exact next Agent or human action.
 Estimate difficulty and impact from 1 to 5.
+List relatedIssues: the numbers of open issues in this repository that one change should fix together with this one, because they share a cause or the same code. Use the GitHub CLI to find them. Return an empty array when none.
 Do not commit, push, or post comments. Return only the required JSON.`
 const skillDigest = createHash('sha256').update(reviewPolicy).digest('hex')
 
@@ -271,7 +272,7 @@ const reviewSchema = {
 const issueTriageSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['_tag', 'difficulty', 'impact', 'hasReproduction', 'needsCodebaseReview', 'summary', 'nextAction'],
+  required: ['_tag', 'difficulty', 'impact', 'hasReproduction', 'needsCodebaseReview', 'summary', 'nextAction', 'relatedIssues'],
   properties: {
     _tag: { type: 'string', enum: ['READY_TO_IMPLEMENT', 'READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] },
     difficulty: { type: 'integer', minimum: 1, maximum: 5 },
@@ -280,6 +281,7 @@ const issueTriageSchema = {
     needsCodebaseReview: { type: 'boolean' },
     summary: { type: 'string' },
     nextAction: { type: 'string' },
+    relatedIssues: { type: 'array', items: { type: 'integer', minimum: 1 } },
   },
 }
 
@@ -377,6 +379,9 @@ function parseIssueTriageResponse(text: string): Promise<Result<IssueTriageResul
         needsCodebaseReview: value.needsCodebaseReview,
         summary: cleanLine(value.summary),
         nextAction: cleanLine(value.nextAction),
+        relatedIssues: Array.isArray(value.relatedIssues)
+          ? [...new Set(value.relatedIssues.filter((number): number is number => Number.isInteger(number) && number > 0))]
+          : [],
       })
     })
     .catch((): Result<IssueTriageResult, string> => err('The agent returned malformed issue triage JSON.'))

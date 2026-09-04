@@ -556,6 +556,10 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   if (maxOpenPullRequests === undefined)
     issues.push({ path: '$.max_open_pull_requests', message: 'Expected an integer from 1 to 100.' })
   const issueCutoff = fixedDate(document.value, 'issue_cutoff', '$', issues)
+  const issueBatchesValue = document.value.issue_batches ?? true
+  const issueBatches = typeof issueBatchesValue === 'boolean' ? issueBatchesValue : undefined
+  if (issueBatches === undefined)
+    issues.push({ path: '$.issue_batches', message: 'Expected a boolean.' })
 
   const externalRepositoriesValue = document.value.external_repositories
   const externalRepositories = Array.isArray(externalRepositoriesValue)
@@ -611,6 +615,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || autoMerge === undefined
     || maxOpenPullRequests === undefined
     || issueCutoff === undefined
+    || issueBatches === undefined
     || externalRepositories === undefined
     || repositories === undefined
   ) {
@@ -628,6 +633,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     mutationsEnabled,
     autoMerge,
     maxOpenPullRequests,
+    issueBatches,
     pollIntervalSeconds,
     issueCutoff,
     externalRepositories,

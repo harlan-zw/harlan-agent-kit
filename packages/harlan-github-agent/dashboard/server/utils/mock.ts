@@ -131,6 +131,36 @@ function fixture(): DashboardSnapshot {
     routineRuns: [
       { id: 'run-1', routineId: `${nuxtSeo}:pr-triage`, repository: nuxtSeo, name: 'pr-triage', scheduledFor: minutesAgo(600), specSha: hex('7'), mode: 'report', state: { _tag: 'Completed', evidence: 'Ranked 6 open pull requests.' }, fence: 1, attempts: 1, progress: { percent: 100, label: 'Done' }, usage: { _tag: 'Unavailable' }, createdAt: minutesAgo(600), updatedAt: minutesAgo(590), candidates: [], activity: [{ _tag: 'Command', at: minutesAgo(598), command: 'gh pr list --state open', output: '6 pull requests', exitCode: 0 }], reportState: 'Published' },
     ],
+    batches: [
+      {
+        id: hex('b1'),
+        repository: nuxtSeo,
+        state: { _tag: 'Running', workerId: 'lease-2', fence: 1, leaseExpiresAt: daysAhead(0.1) },
+        issues: [
+          { taskId: hex('c1'), issueNumber: 795, title: 'Runner doc misses the burst-registration DNS failure', body: '', triageSummary: null, relatedIssues: [796], target: 'docs/ops/github-actions-runner.md' },
+          { taskId: hex('c2'), issueNumber: 796, title: 'DataForSEO refusals warn once per day', body: '', triageSummary: null, relatedIssues: [795], target: 'layers/pro/dataforseo/server/utils/pipeline.ts' },
+          { taskId: hex('c3'), issueNumber: 797, title: 'Public token callers cannot resolve a Site by URL', body: '', triageSummary: null, relatedIssues: [], target: 'layers/pro/sites/server/utils/require-site-access.ts' },
+        ],
+        units: [
+          { id: 'unit-0', position: 0, primaryTaskId: hex('c1'), issueNumbers: [795, 796], dependsOnUnitId: null, rationale: 'Both change the DataForSEO pipeline and its runbook.', state: { _tag: 'Published', pullRequestNumber: 801, headRef: 'fix/issue-795', headSha: hex('5') } },
+          { id: 'unit-1', position: 1, primaryTaskId: hex('c3'), issueNumbers: [797], dependsOnUnitId: 'unit-0', rationale: 'Reuses the site lookup the first unit extracts.', state: { _tag: 'Running' } },
+        ],
+        createdAt: minutesAgo(25),
+        updatedAt: minutesAgo(1),
+      },
+      {
+        id: hex('b2'),
+        repository: unhead,
+        state: { _tag: 'Running', workerId: 'lease-3', fence: 1, leaseExpiresAt: daysAhead(0.1) },
+        issues: [
+          { taskId: hex('c4'), issueNumber: 30, title: 'fetch-head throws for expected upstream failures', body: '', triageSummary: null, relatedIssues: [31], target: 'layers/tools/server/api/tools/fetch-head.get.ts' },
+          { taskId: hex('c5'), issueNumber: 31, title: 'fetch-head 5xx mapping', body: '', triageSummary: null, relatedIssues: [30], target: 'layers/tools/server/api/tools/fetch-head.get.ts' },
+        ],
+        units: null,
+        createdAt: minutesAgo(2),
+        updatedAt: minutesAgo(2),
+      },
+    ],
   })
 }
 

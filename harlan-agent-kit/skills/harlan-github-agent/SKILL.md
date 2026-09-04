@@ -35,6 +35,8 @@ Review every tracked pull request, whatever its labels. Merge one pull request a
 
 Start no new issue work above `max_open_pull_requests` open pull requests. Keep review, repair, and conflict fixes running.
 
+Plan Ready Routine-filed issues as one Batch per repository when two or more wait. The Batch reserves their Issue work Tasks, runs one Batch planning turn over every reserved issue, and stores units: the issues one pull request closes, and the unit each one stacks on. Units run as Issue work Agents under the Batch's one permit, three at a time, each in its own worktree. A unit publishes the moment its Agent finishes; a stacked unit waits only for its base pull request to open, then falls back to the default branch after ten minutes. A planning turn that fails or returns an invalid plan runs every issue alone. `issue_batches: false` turns planning off. Issue triage names fix-together partners as `Fix with #N`, and the planning turn reads them as hints.
+
 Enable issue triage by default on owned repositories. Keep it disabled on maintained repositories unless explicit policy enables it.
 
 Post one self identified automated triage comment after each completed issue triage. Update that canonical comment on reruns.

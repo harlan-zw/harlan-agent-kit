@@ -1,4 +1,5 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
+import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { IssueTriageState } from './issue-triage.ts'
@@ -104,6 +105,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
+import { createBatchStore } from './batch-store.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { isIssueTriageState } from './issue-triage.ts'
@@ -673,7 +675,7 @@ export interface LatestPullRequestTriageRun {
   completedAt: string
 }
 
-export interface JournalStore {
+export interface JournalStore extends BatchStore {
   approveIssueWork: (input: {
     repository: string
     issueNumber: number
@@ -808,7 +810,7 @@ export interface JournalStore {
     commentId?: number
     url?: string
   }) => boolean
-  completePublication: (input: { commandId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
+  completePublication: (input: { commandId: string, workerId: string, fence: number, at: string, evidence: string, pullRequestNumber?: number }) => boolean
   deferPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   failTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   failWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
@@ -2782,6 +2784,7 @@ function dashboardQueue(
   currentSelectionMode: SelectionMode,
   reviewResolutions: Map<string, ReviewResolution>,
   desiredReviewOutcomes: Map<string, ReviewDesiredOutcome>,
+  batchReservationReasons: Map<string, string> = new Map(),
 ): QueueEntry[] {
   const currentTasks = new Map<string, DashboardTask>()
   tasks.forEach((task) => {
@@ -2819,6 +2822,9 @@ function dashboardQueue(
           case 'Running':
           case 'Publishing': return [{ ...base, kind: 'issue', state: { _tag: 'Active', work: 'issue_work' } }]
           case 'Queued': {
+            const reserved = batchReservationReasons.get(work.id)
+            if (reserved !== undefined)
+              return [{ ...base, kind: 'issue', state: { _tag: 'Pending', reason: reserved } }]
             const limit = mapping.maxOpenPullRequests
             const openPullRequests = openPullRequestsByRepository.get(subject.repository) ?? 0
             if (currentSelectionMode === 'auto' && limit !== null && openPullRequests >= limit) {
@@ -5301,6 +5307,72 @@ const repairReportMigration = `
   PRAGMA user_version = 61;
 `
 
+/**
+ * Batches: one planned group of Ready issues per repository.
+ *
+ * `batch_tasks` is the reservation. A Task in it belongs to its Batch and the
+ * plain Issue work claim skips it. `batch_units` is the plan, one row per pull
+ * request the Batch produces. A Batch owns no Item, like a Routine, so its
+ * lease lives on its own row.
+ *
+ * `publication_commands.pull_request_number` lets a unit that stacks read the
+ * pull request its dependency opened without waiting for the next GitHub poll.
+ */
+const batchMigration = `
+  CREATE TABLE IF NOT EXISTS batches (
+    id TEXT PRIMARY KEY,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Queued', 'Running', 'Completed', 'Failed')),
+    reason TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 2,
+    lease_expires_at TEXT,
+    plan TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (state_tag != 'Failed' OR reason IS NOT NULL)
+  );
+
+  CREATE INDEX IF NOT EXISTS batches_repository_state ON batches(repository_id, state_tag);
+
+  CREATE TABLE IF NOT EXISTS batch_units (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    primary_task_id TEXT NOT NULL REFERENCES tasks(id),
+    issue_numbers TEXT NOT NULL CHECK (json_valid(issue_numbers)),
+    depends_on_unit_id TEXT REFERENCES batch_units(id),
+    rationale TEXT NOT NULL,
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Waiting', 'Running', 'Published', 'ActionRequired', 'Failed')),
+    reason TEXT,
+    pull_request_number INTEGER,
+    head_ref TEXT,
+    head_sha TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE (batch_id, position),
+    CHECK (state_tag NOT IN ('ActionRequired', 'Failed') OR reason IS NOT NULL),
+    CHECK (state_tag != 'Published' OR (pull_request_number IS NOT NULL AND head_ref IS NOT NULL AND head_sha IS NOT NULL))
+  );
+
+  CREATE INDEX IF NOT EXISTS batch_units_batch ON batch_units(batch_id, position);
+
+  CREATE TABLE IF NOT EXISTS batch_tasks (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+    batch_id TEXT NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    unit_id TEXT REFERENCES batch_units(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS batch_tasks_batch ON batch_tasks(batch_id);
+
+  PRAGMA user_version = 62;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -5573,9 +5645,19 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 60) {
     applyMigration(database, repairReportMigration)
+    version = 61
+  }
+  if (version === 61) {
+    // A journal rewound for replay already carries the column and the tables,
+    // and SQLite has no ADD COLUMN IF NOT EXISTS.
+    const columns = (database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>)
+      .map(column => column.name)
+    applyMigration(database, columns.includes('pull_request_number')
+      ? batchMigration
+      : `ALTER TABLE publication_commands ADD COLUMN pull_request_number INTEGER;\n${batchMigration}`)
     return
   }
-  if (version === 61)
+  if (version === 62)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7458,6 +7540,9 @@ export function openJournalStore(
         JOIN revisions ON revisions.id = tasks.revision_id
         WHERE tasks.kind = ? AND tasks.state_tag = 'Queued'
           AND (? IS NULL OR tasks.id = ?)
+          -- A Task a Batch reserved runs under that Batch's lease. Only the
+          -- exact-Task claim the Batch makes may take it.
+          AND (? IS NOT NULL OR NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id))
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
@@ -7526,7 +7611,7 @@ export function openJournalStore(
           )
         ORDER BY tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, exactTaskId ?? null, exactTaskId ?? null, maxOpenPullRequests) as ClaimRow | undefined
+      `).get(kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, maxOpenPullRequests) as ClaimRow | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -7593,6 +7678,16 @@ export function openJournalStore(
       throw error
     }
   }
+
+  const batchStore = createBatchStore(database, {
+    claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
+      const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)
+      if (task === null || task.kind === 'issue_work')
+        return task
+      throw new Error(`Batch unit claim returned a ${task.kind} Task.`)
+    },
+    recordTransition: input => recordTransition(database, input),
+  })
 
   const claimNextConflictTask: JournalStore['claimNextConflictTask'] = (workerId, now, leaseMilliseconds) => {
     const task = claimMutationTask('resolve_conflict', workerId, now, leaseMilliseconds)
@@ -9897,7 +9992,7 @@ export function openJournalStore(
       const command = database.prepare(`
         UPDATE publication_commands
         SET state_tag = 'Published', worker_id = NULL, lease_expires_at = NULL,
-          published_at = ?, updated_at = ?
+          published_at = ?, updated_at = ?, pull_request_number = COALESCE(?, pull_request_number)
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND task_id IN (
             SELECT tasks.id FROM tasks
@@ -9905,7 +10000,7 @@ export function openJournalStore(
             WHERE tasks.state_tag = 'Publishing' AND tasks.command_id = publication_commands.id
               AND tasks.revision_id = subjects.current_revision_id
           )
-      `).run(input.at, input.at, input.commandId, input.workerId, input.fence)
+      `).run(input.at, input.at, input.pullRequestNumber ?? null, input.commandId, input.workerId, input.fence)
       if (command.changes !== 1) {
         database.exec('COMMIT')
         return false
@@ -11069,12 +11164,14 @@ export function openJournalStore(
         currentSelectionMode,
         reviewResolutions,
         desiredReviewOutcomes,
+        batchStore.batchReservationReasons(),
       ),
       repositories,
       items,
       tasks,
       routines,
       routineRuns,
+      batches: batchStore.listBatches(10),
     }
   }
 
@@ -13048,6 +13145,7 @@ export function openJournalStore(
     listUnverifiedClosedPullRequestNumbers,
     recordExactPullRequestObservation,
     recordVerifiedPullRequestClosure,
+    ...batchStore,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
     listRunningTaskItems,

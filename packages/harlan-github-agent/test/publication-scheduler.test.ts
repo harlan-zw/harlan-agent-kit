@@ -95,7 +95,7 @@ describe('publication scheduler', () => {
       publisher: {
         finalize: () => {
           calls.push('pull request')
-          return Promise.resolve(ok('Opened pull request #42.'))
+          return Promise.resolve(ok({ evidence: 'Opened pull request #42.', pullRequestNumber: 42 }))
         },
         getHeadSha: () => Promise.resolve(ok(head)),
         push: (command) => {
@@ -129,7 +129,7 @@ describe('publication scheduler', () => {
       onError: (error) => { throw error },
       store,
       publisher: {
-        finalize: () => Promise.resolve(ok('Published commit123.')),
+        finalize: () => Promise.resolve(ok({ evidence: 'Published commit123.' })),
         getHeadSha: () => Promise.resolve(ok('commit123')),
         push: () => {
           pushes += 1
@@ -161,7 +161,7 @@ describe('publication scheduler', () => {
       onError: (error) => { throw error },
       store,
       publisher: {
-        finalize: () => Promise.resolve(ok('Published commit123.')),
+        finalize: () => Promise.resolve(ok({ evidence: 'Published commit123.' })),
         getHeadSha: () => Promise.resolve(ok('different123')),
         push: () => {
           calls.push('push')
@@ -190,7 +190,7 @@ describe('publication scheduler', () => {
       onError: (error) => { throw error },
       store,
       publisher: {
-        finalize: () => Promise.resolve(ok('Opened pull request #7.')),
+        finalize: () => Promise.resolve(ok({ evidence: 'Opened pull request #7.', pullRequestNumber: 7 })),
         // The branch survives from an attempt that never opened a pull request.
         getHeadSha: () => Promise.resolve(ok(calls.includes('push') ? 'issue-commit' : 'orphan-commit')),
         push: () => {
@@ -224,7 +224,7 @@ describe('publication scheduler', () => {
       onError: (error) => { throw error },
       store,
       publisher: {
-        finalize: () => Promise.resolve(ok('Published commit123.')),
+        finalize: () => Promise.resolve(ok({ evidence: 'Published commit123.' })),
         getHeadSha: () => {
           reads += 1
           return Promise.resolve(reads === 1 ? ok('abc123') : err('network unavailable'))

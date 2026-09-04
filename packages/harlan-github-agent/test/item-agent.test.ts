@@ -1381,6 +1381,7 @@ describe('subject Workers', () => {
           needsCodebaseReview: false,
           summary: 'The parser drops valid input.',
           nextAction: 'Write a regression test and repair the parser.',
+          relatedIssues: [],
         }),
         usage: { _tag: 'Unavailable' },
       },
@@ -1395,6 +1396,7 @@ describe('subject Workers', () => {
       needsCodebaseReview: false,
       summary: 'The parser drops valid input.',
       nextAction: 'Write a regression test and repair the parser.',
+      relatedIssues: [],
     })
   })
 })
