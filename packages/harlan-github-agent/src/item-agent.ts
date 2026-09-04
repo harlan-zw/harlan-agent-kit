@@ -1073,7 +1073,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
 
       const storedRun = task.state.fence > 1 && task.rerun._tag === 'NotRequested' && !manualReview
         ? options.store.listReviewRuns(task.repository, task.pullRequestNumber)
-            .find(run => run.revisionId === task.revisionId && run.headSha === task.pullRequest.headSha)
+            .find(run => run.headSha === task.pullRequest.headSha)
         : undefined
       if (storedRun !== undefined) {
         const repairAccess = await options.preflightRepair(task.repository, signal)

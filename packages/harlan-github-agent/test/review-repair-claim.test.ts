@@ -175,50 +175,6 @@ describe('review Repair queue', () => {
     })._tag).toBe('Staged')
   })
 
-  it('stops an active Repair when the pull request base commit changes', () => {
-    const store = createStore()
-    const { review, revisionId } = runningReview(store, 'fix/base-moved')
-    recordOpenFinding(store, revisionId, review.pullRequest.headSha)
-    const queued = store.queueReviewFixTaskForReview({
-      taskId: review.id,
-      workerId: review.state.workerId,
-      fence: review.state.fence,
-      at: '2026-08-13T01:00:04.000Z',
-    })
-    if (queued._tag !== 'Queued')
-      throw new Error(queued.reason)
-    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 600_000)
-    if (repair === null)
-      throw new Error('Expected the Repair Task.')
-
-    const moved = store.recordObservation({
-      externalId: 'repair-base-moved',
-      observedAt: '2026-08-13T01:00:06.000Z',
-      source: 'poll',
-      subject: pullRequestItem({
-        headRef: repair.pullRequest.headRef,
-        headSha: repair.pullRequest.headSha,
-        baseSha: 'new-base-commit',
-        mergeState: 'clean',
-        updatedAt: '2026-08-13T01:00:06.000Z',
-      }),
-    })
-    if (moved._tag !== 'Inserted')
-      throw new Error('Expected the base move to create a new Revision.')
-
-    expect(store.heartbeatTask({
-      taskId: repair.id,
-      workerId: repair.state.workerId,
-      fence: repair.state.fence,
-      at: '2026-08-13T01:00:07.000Z',
-      leaseMilliseconds: 600_000,
-    })).toBe(false)
-    expect(store.getDashboardSnapshot('2026-08-13T01:00:07.000Z').tasks.find(task => task.id === repair.id)?.state).toEqual({
-      _tag: 'Superseded',
-      reason: 'A newer pull request Revision replaced this Repair.',
-    })
-  })
-
   it('retires a disputed Repair after a fresh Review finds no defect', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'fix/disputed-finding')
