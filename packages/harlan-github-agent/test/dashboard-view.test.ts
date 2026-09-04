@@ -48,6 +48,7 @@ import {
   taskSubjectUrl,
   waitingEntries,
 } from '../dashboard/app/utils/dashboard.ts'
+import { batchRow } from '../dashboard/app/utils/system.ts'
 import { OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { dashboardSnapshot } from './fixtures.ts'
 
@@ -929,5 +930,41 @@ describe('repositoryWritesControl', () => {
     expect(repositoryWritesControl(repository)).toEqual({ _tag: 'Adjustable', writesEnabled: true })
     expect(repositoryWritesControl({ ...repository, ownership: 'maintained', writesEnabled: false }))
       .toEqual({ _tag: 'Adjustable', writesEnabled: false })
+  })
+})
+
+describe('batchRow', () => {
+  it('names a planning Batch by its reserved issues and a planned one by its units and stack', () => {
+    const planning = batchRow({
+      id: 'batch-1',
+      repository: 'harlan-zw/example',
+      state: { _tag: 'Running', workerId: 'w', fence: 1, leaseExpiresAt: '2026-09-04T02:00:00.000Z' },
+      issues: [
+        { taskId: 't1', issueNumber: 101, title: 'A', body: '', triageSummary: null, relatedIssues: [], target: null },
+        { taskId: 't2', issueNumber: 102, title: 'B', body: '', triageSummary: null, relatedIssues: [], target: null },
+      ],
+      units: null,
+      createdAt: '2026-09-04T01:00:00.000Z',
+      updatedAt: '2026-09-04T01:00:00.000Z',
+    })
+    expect(planning).toEqual(expect.objectContaining({ label: 'Planning', issues: '#101, #102', units: [] }))
+
+    const planned = batchRow({
+      id: 'batch-1',
+      repository: 'harlan-zw/example',
+      state: { _tag: 'Running', workerId: 'w', fence: 1, leaseExpiresAt: '2026-09-04T02:00:00.000Z' },
+      issues: [],
+      units: [
+        { id: 'u0', position: 0, primaryTaskId: 't1', issueNumbers: [101, 102], dependsOnUnitId: null, rationale: 'Same helper.', state: { _tag: 'Published', pullRequestNumber: 7, headRef: 'fix/issue-101', headSha: 'c1' } },
+        { id: 'u1', position: 1, primaryTaskId: 't3', issueNumbers: [103], dependsOnUnitId: 'u0', rationale: 'Needs the helper.', state: { _tag: 'Running' } },
+      ],
+      createdAt: '2026-09-04T01:00:00.000Z',
+      updatedAt: '2026-09-04T01:00:00.000Z',
+    })
+    expect(planned.label).toBe('Running')
+    expect(planned.units.map(unit => [unit.issues, unit.label, unit.stack, unit.pullRequestNumber])).toEqual([
+      ['#101, #102', 'Opened #7', null, 7],
+      ['#103', 'Running', 'on #7', null],
+    ])
   })
 })

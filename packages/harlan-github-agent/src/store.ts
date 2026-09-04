@@ -11171,6 +11171,7 @@ export function openJournalStore(
       tasks,
       routines,
       routineRuns,
+      batches: batchStore.listBatches(10),
     }
   }
 

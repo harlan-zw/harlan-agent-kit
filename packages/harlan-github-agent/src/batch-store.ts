@@ -488,7 +488,9 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
   }
 
   const listBatches: BatchStore['listBatches'] = (limit = 20) => (database.prepare(`
-    ${selectBatch} ORDER BY batches.created_at DESC LIMIT ?
+    ${selectBatch}
+    ORDER BY CASE WHEN batches.state_tag IN ('Queued', 'Running') THEN 0 ELSE 1 END, batches.created_at DESC
+    LIMIT ?
   `).all(Math.max(1, Math.min(200, Math.trunc(limit)))) as unknown as BatchRow[]).map(readBatch)
 
   return {

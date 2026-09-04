@@ -75,7 +75,8 @@ const issueSteps: Step[] = [
       { title: 'Outside contributor', text: 'Wait for Approval of that exact issue state.', marker: 'decision' },
     ],
   },
-  { title: 'Issue work', text: 'The triage Agent resumes its own session, makes the change, and runs focused checks.' },
+  { title: 'Batch', text: 'Two or more Ready Routine-filed issues in one repository are planned together: one turn decides which share a pull request and which stack on which.' },
+  { title: 'Issue work', text: 'The triage Agent resumes its own session, makes the change, and runs focused checks. Batch units run three at a time under one permit and publish as each finishes.' },
   { title: 'Draft pull request', text: 'The controller pushes the pinned commit to an allowed branch and opens one pull request.' },
 ]
 

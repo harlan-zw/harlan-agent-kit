@@ -2,6 +2,8 @@ import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type { CronExpression } from '../../../src/routine-schedule.ts'
 import type {
   AgentStartState,
+  Batch,
+  BatchUnit,
   DashboardSnapshot,
   ProviderCapacityStatus,
   ProviderCircuit,
@@ -219,6 +221,74 @@ export function nextRoutineInstant(routine: Pick<Routine, 'crons' | 'timeZone' |
   return expressions
     .flatMap(expression => firstMatch(expression) ?? [])
     .sort((a, b) => a.getTime() - b.getTime())[0]
+}
+
+export interface BatchUnitRow {
+  id: string
+  /** `#101, #102` */
+  issues: string
+  label: string
+  tone: 'success' | 'warning' | 'error' | 'neutral'
+  /** `on #7` for a stacked unit whose base published, `on unit 1` before that. */
+  stack: string | null
+  rationale: string
+  pullRequestNumber: number | null
+}
+
+export interface BatchRow {
+  id: string
+  repository: string
+  label: string
+  tone: 'success' | 'warning' | 'error' | 'neutral'
+  /** The reserved issues before the plan exists, so the pane names them from the first poll. */
+  issues: string
+  units: BatchUnitRow[]
+  createdAt: string
+  reason: string | null
+}
+
+function unitLabel(unit: BatchUnit): { label: string, tone: BatchUnitRow['tone'] } {
+  switch (unit.state._tag) {
+    case 'Waiting': return { label: 'Waiting', tone: 'neutral' }
+    case 'Running': return { label: 'Running', tone: 'neutral' }
+    case 'Published': return { label: `Opened #${unit.state.pullRequestNumber}`, tone: 'success' }
+    case 'ActionRequired': return { label: 'Action required', tone: 'warning' }
+    case 'Failed': return { label: 'Failed', tone: 'error' }
+  }
+}
+
+/** One Batch as the System pane shows it. Pure, so the pane and its test read the same rows. */
+export function batchRow(batch: Batch): BatchRow {
+  const units = batch.units ?? []
+  const byId = new Map(units.map(unit => [unit.id, unit]))
+  const state = batch.state
+  const label = state._tag === 'Running'
+    ? (batch.units === null ? 'Planning' : 'Running')
+    : state._tag
+  const tone: BatchRow['tone'] = state._tag === 'Failed' ? 'error' : state._tag === 'Completed' ? 'success' : 'neutral'
+  return {
+    id: batch.id,
+    repository: batch.repository,
+    label,
+    tone,
+    issues: batch.issues.map(issue => `#${issue.issueNumber}`).join(', '),
+    createdAt: batch.createdAt,
+    reason: state._tag === 'Failed' ? state.reason : null,
+    units: units.map((unit) => {
+      const base = unit.dependsOnUnitId === null ? undefined : byId.get(unit.dependsOnUnitId)
+      const stack = base === undefined
+        ? null
+        : base.state._tag === 'Published' ? `on #${base.state.pullRequestNumber}` : `on unit ${base.position + 1}`
+      return {
+        id: unit.id,
+        issues: unit.issueNumbers.map(number => `#${number}`).join(', '),
+        ...unitLabel(unit),
+        stack,
+        rationale: unit.rationale,
+        pullRequestNumber: unit.state._tag === 'Published' ? unit.state.pullRequestNumber : null,
+      }
+    }),
+  }
 }
 
 /** The tab icon has 16 pixels, so it carries one signal: colour. */

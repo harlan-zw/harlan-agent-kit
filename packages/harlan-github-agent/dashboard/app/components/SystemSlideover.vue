@@ -16,7 +16,7 @@ import {
   formatHogwildServiceMetrics,
   formatHogwildTemperature,
 } from '../utils/hogwild-status.ts'
-import { capacityRow, circuitNotice, nextRoutineInstant, serviceUpdatePresentation } from '../utils/system.ts'
+import { batchRow, capacityRow, circuitNotice, nextRoutineInstant, serviceUpdatePresentation } from '../utils/system.ts'
 
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.
@@ -54,6 +54,7 @@ const routines = computed(() => {
 })
 
 const hostStatus = computed(() => host.value._tag === 'Connected' ? host.value.status : undefined)
+const batches = computed(() => snapshot.value.batches.map(batchRow))
 
 function activityLine(item: AgentActivityItem): string {
   switch (item._tag) {
@@ -170,6 +171,47 @@ function activityLine(item: AgentActivityItem): string {
         <p v-else class="mt-2 text-sm text-muted">
           No Incidents.
         </p>
+      </section>
+
+      <section v-if="batches.length > 0" aria-labelledby="system-batches">
+        <h3 id="system-batches" class="field-label flex items-center gap-2">
+          Batches
+          <span class="h-px flex-1 bg-border" aria-hidden="true" />
+        </h3>
+        <ul class="mt-1 divide-y divide-default">
+          <li v-for="batch in batches" :key="batch.id" class="space-y-1 py-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-mono text-sm text-highlighted">{{ batch.repository }}</span>
+              <span class="font-mono text-sm text-muted">{{ batch.issues }}</span>
+              <StateBadge :tone="batch.tone" :label="batch.label" class="ms-auto" />
+            </div>
+            <p class="text-sm text-muted">
+              Opened {{ relativeTime(batch.createdAt) }}. One permit.
+            </p>
+            <p v-if="batch.reason" class="text-sm status-warning">
+              {{ batch.reason }}
+            </p>
+            <ul v-if="batch.units.length > 0" class="mt-1 space-y-1.5">
+              <li v-for="unit in batch.units" :key="unit.id" class="rounded-md border border-default p-2.5 text-sm">
+                <div class="flex flex-wrap items-center gap-2">
+                  <a
+                    v-if="unit.pullRequestNumber !== null"
+                    :href="`https://github.com/${batch.repository}/pull/${unit.pullRequestNumber}`"
+                    target="_blank"
+                    rel="noreferrer"
+                    class="entity-link font-mono"
+                  >{{ unit.issues }}</a>
+                  <span v-else class="font-mono">{{ unit.issues }}</span>
+                  <span v-if="unit.stack" class="font-mono text-muted">{{ unit.stack }}</span>
+                  <StateBadge :tone="unit.tone" :label="unit.label" class="ms-auto" />
+                </div>
+                <p v-if="unit.rationale" class="mt-1 text-muted">
+                  {{ unit.rationale }}
+                </p>
+              </li>
+            </ul>
+          </li>
+        </ul>
       </section>
 
       <section v-if="routines.length > 0" aria-labelledby="system-routines">

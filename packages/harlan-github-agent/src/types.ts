@@ -1414,6 +1414,8 @@ export interface DashboardSnapshot {
   tasks: DashboardTask[]
   routines: Routine[]
   routineRuns: DashboardRoutineRun[]
+  /** Open Batches first, then the most recent finished ones. */
+  batches: Batch[]
 }
 
 export type StoredAgentControl
