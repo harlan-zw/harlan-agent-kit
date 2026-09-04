@@ -3886,9 +3886,12 @@ describe('journal store', () => {
       throw new Error('Expected the new base revision.')
 
     expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 10_000)).toBeNull()
-    expect(store.listWorkflowEvents({ stream: 'review_resolution', limit: 10 })).toContainEqual(expect.objectContaining({
-      event: 'Recorded',
+    // The run answers the head commit, so it follows the head to the new base.
+    expect(store.listReviewRuns('harlan-zw/example', 24)).toEqual([expect.objectContaining({
+      id: 'old-base-attempt',
       revisionId: secondObservation.revisionId,
+    })])
+    expect(store.listWorkflowEvents({ stream: 'review_resolution', limit: 10 })).not.toContainEqual(expect.objectContaining({
       to: 'ExistingReview',
     }))
   })
