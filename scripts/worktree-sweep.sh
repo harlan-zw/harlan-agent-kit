@@ -44,8 +44,10 @@ done
 
 worktrunk_bin=${WORKTREE_SWEEP_WT:-$(command -v wt 2>/dev/null || true)}
 jq_bin=${WORKTREE_SWEEP_JQ:-$(command -v jq 2>/dev/null || true)}
+realpath_bin=$(command -v realpath 2>/dev/null || true)
 [[ -x $worktrunk_bin ]] || fail 'Worktrunk is not installed.'
 [[ -x $jq_bin ]] || fail 'jq is not installed.'
+[[ -x $realpath_bin ]] || fail 'realpath is not installed.'
 
 now=$(date +%s)
 repo_count=0
@@ -107,7 +109,7 @@ has_live_claim() {
   common_git_dir=$(git -C "$path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   for claim in "$common_git_dir"/harlan-agent-kit/worktree-claims/*.json; do
     [[ -f $claim ]] || continue
-    if "$jq_bin" -e --arg path "$(realpath "$path")" --argjson now "$now" \
+    if "$jq_bin" -e --arg path "$("$realpath_bin" "$path")" --argjson now "$now" \
       '.worktree == $path and (.expires_epoch // 0) > $now' "$claim" >/dev/null 2>&1; then
       return 0
     fi

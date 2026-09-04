@@ -95,4 +95,24 @@ if git -C "$repository" show-ref --verify --quiet refs/remotes/origin/unintegrat
   exit 1
 fi
 
+bin_without_realpath="$test_root/bin-without-realpath"
+mkdir -p "$bin_without_realpath"
+for tool in bash git jq wt sha256sum flock date stat find; do
+  ln -s "$(command -v "$tool")" "$bin_without_realpath/$tool"
+done
+bash_bin=$(command -v bash)
+
+set +e
+regression_run=$(WORKTREE_SWEEP_WT="$test_root/bin/sweep-wt" WORKTREE_SWEEP_JQ="$(command -v jq)" \
+  PATH="$bin_without_realpath" "$bash_bin" "$sweep" --apply --days 0 "$test_root" 2>&1)
+sweep_status=$?
+set -e
+
+test "$sweep_status" -ne 0 || {
+  printf '%s\n' 'The sweep ran without realpath and treated the claimed worktree as unclaimed.' >&2
+  exit 1
+}
+grep -F 'realpath is not installed' <<< "$regression_run" >/dev/null
+test -d "$claimed"
+
 printf '%s\n' 'Worktree sweep tests passed'
