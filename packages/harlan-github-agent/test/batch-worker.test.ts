@@ -1,5 +1,8 @@
+import type { BatchUnit } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { batchPlanPrompt, parseBatchPlan } from '../src/batch-worker.ts'
+import { batchPlanPrompt, createBatchWorker, parseBatchPlan } from '../src/batch-worker.ts'
+import { ok } from '../src/result.ts'
+import { repositoryMapping } from './fixtures.ts'
 
 describe('parseBatchPlan', () => {
   it('reads units with their stack order and cleans the prose', () => {
@@ -41,5 +44,58 @@ describe('batchPlanPrompt', () => {
     expect(prompt).toContain('"target":"src/a.ts"')
     expect(prompt).toContain('Do not edit files, commit, push, or post comments.')
     expect(prompt).toContain('Every issue appears in exactly one unit.')
+  })
+})
+
+describe('batch worker unit failures', () => {
+  it('keeps running when the store refuses the failure it is recording', async () => {
+    // The store closed under the Batch. Recording the unit failure fails the
+    // same way the unit did, and that must not take the service down with it.
+    const errors: unknown[] = []
+    const repository = repositoryMapping()
+    const unit: BatchUnit = {
+      id: 'unit-1',
+      position: 0,
+      primaryTaskId: 'task-1',
+      issueNumbers: [12],
+      dependsOnUnitId: null,
+      rationale: 'Alone.',
+      state: { _tag: 'Waiting' },
+    }
+    const worker = createBatchWorker({
+      canClaimIssueWork: () => true,
+      github: { getIssueTriageSnapshot: () => Promise.reject(new Error('The Batch reads no snapshot here.')) },
+      issueWork: { run: () => Promise.reject(new Error('No unit Task is ever claimed.')) },
+      leaseMilliseconds: 60_000,
+      logger: { info: () => undefined, error: error => errors.push(error) },
+      now: () => new Date('2026-09-04T06:03:11.000Z'),
+      runtime: {} as never,
+      store: {
+        claimBatchUnitTask: () => null,
+        completeCombinedIssueWork: () => undefined,
+        getBatchDependency: () => ({ _tag: 'Unavailable', reason: 'The unit failed.' }),
+        recordBatchPlan: () => [],
+        settleBatchUnit: () => {
+          throw new Error('database is not open')
+        },
+      } as never,
+      validateMapping: () => Promise.resolve(ok(repository)),
+      workerId: 'worker-1',
+      workspaces: { prepareBatch: () => Promise.reject(new Error('The Batch prepares no workspace here.')) },
+    })
+
+    const result = await worker.run({
+      id: 'batch-1',
+      repository: repository.github,
+      repositoryMapping: repository,
+      issues: [{ taskId: 'task-1', issueNumber: 12, title: 'Broken', body: '', triageSummary: null, relatedIssues: [], target: null }],
+      units: [unit],
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-09-04T10:03:11.000Z' },
+      createdAt: '2026-09-04T05:14:15.000Z',
+      updatedAt: '2026-09-04T05:14:15.000Z',
+    } as never, new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    expect(errors.map(error => error instanceof Error ? error.message : String(error))).toContain('database is not open')
   })
 })

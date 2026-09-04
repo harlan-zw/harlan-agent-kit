@@ -358,7 +358,15 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
           const execution = runUnit(batch, mapping, unit, signal)
             .catch((error: unknown) => {
               options.logger.error(error)
-              options.store.settleBatchUnit({ unitId: unit.id, at: options.now().toISOString(), state: { _tag: 'Failed', reason: error instanceof Error ? error.message : 'The unit failed unexpectedly.' } })
+              // The unit failed, and recording that can fail the same way, so
+              // this never rethrows. A Batch that loses one unit keeps its
+              // other units, and the lease expiry settles what is left.
+              try {
+                options.store.settleBatchUnit({ unitId: unit.id, at: options.now().toISOString(), state: { _tag: 'Failed', reason: error instanceof Error ? error.message : 'The unit failed unexpectedly.' } })
+              }
+              catch (settleError: unknown) {
+                options.logger.error(settleError)
+              }
             })
             .finally(() => running.delete(execution))
           running.add(execution)
