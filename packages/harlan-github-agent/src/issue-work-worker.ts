@@ -373,9 +373,9 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const instructionFiles = await listInstructionFiles(prepared.value.path)
       const triage = parseStoredIssueTriage(options.store.getIssueTriageEvidence(task.repository, task.issueNumber, task.revisionId))
 
-      // The triage session is keyed on the default branch tip, whatever the pull
-      // request stacks on, so stacking never loses the session that triaged it.
-      const scopeDigest = issueSnapshotDigest({ ...snapshot.value, baseSha: prepared.value.defaultBranchSha })
+      // The triage session is keyed on the issue alone, so neither stacking nor
+      // a moved default branch loses the session that triaged it.
+      const scopeDigest = issueSnapshotDigest(snapshot.value)
       const sessionId = options.store.getWorkerSession(task.repository, task.issueNumber, 'issue_triage', scopeDigest)
       if (sessionId === null)
         return err('The issue changed before work started.')
@@ -452,7 +452,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const frozen = await options.github.getIssueTriageSnapshot(validated.value, task.issueNumber, signal)
       if (frozen._tag === 'Err')
         return frozen
-      if (issueSnapshotDigest({ ...frozen.value, baseSha: prepared.value.defaultBranchSha }) !== scopeDigest)
+      if (issueSnapshotDigest(frozen.value) !== scopeDigest)
         return err('The issue changed before the controller committed the fix.')
 
       const committed = await options.worktrees.commit(task, stacked.value.workspace, stacked.value.patch, response.commitMessage, signal)

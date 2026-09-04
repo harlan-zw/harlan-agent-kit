@@ -4,6 +4,7 @@ import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createIssueWorkWorker } from '../src/issue-work-worker.ts'
+import { issueSnapshotDigest } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
@@ -612,5 +613,64 @@ Closes #12.`,
 
     expect(workspaceCreated).toBe(true)
     expect(result).toEqual({ _tag: 'Err', error: 'The issue changed before work started.' })
+  })
+  it('keeps the triage session when only the default branch moves', async () => {
+    const repository = repositoryMapping()
+    const issue = issueItem()
+    // The issue itself never changed. Only the default branch tip advanced
+    // between the triage turn and this Batch unit claiming its Task.
+    const snapshot = { body: 'Body', comments: [], state: 'open' as const, title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' }
+    const triageDigest = issueSnapshotDigest(snapshot)
+    const asked: Array<string | undefined> = []
+    const worker = createIssueWorkWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'implemented',
+        summary: 'Fixed.',
+        checks: ['pnpm test'],
+        commitMessage: 'fix: helper',
+        pullRequestTitle: 'fix: helper',
+        pullRequestBody: '### Description\n\nFixed.\n\n### Linked Issues\n\nCloses #12.',
+      }))),
+      github: {
+        getIssueTriageSnapshot: () => Promise.resolve(ok(snapshot)),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+      },
+      now: () => new Date('2026-08-13T01:06:00.000Z'),
+      store: {
+        getIssueTriageEvidence: () => null,
+        getWorkerSession: (_repository, _itemNumber, _role, scopeDigest) => {
+          asked.push(scopeDigest)
+          return scopeDigest === triageDigest ? 'triage-session' : null
+        },
+        listOpenAgentPullRequests: () => [],
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(repository)),
+      worktrees: {
+        // Triage ran on `main-sha-1`. This worktree stands on `main-sha-2`.
+        prepare: () => Promise.resolve(ok({ path: '/tmp/issue-work', headSha: 'main-sha-2', baseSha: 'main-sha-2', defaultBranchSha: 'main-sha-2' })),
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 1, changedPaths: ['src/helper.ts'] })),
+        restack: () => Promise.reject(new Error('Issue work must not restack.')),
+        commit: () => Promise.resolve(ok({ commitSha: 'commit-sha', baseSha: 'main-sha-2', artifactRef: 'artifact-ref', digest: 'patch-digest', changedFiles: 1 })),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'issue-work-task',
+      kind: 'issue_work',
+      repository: repository.github,
+      issueNumber: issue.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      issue,
+    }, new AbortController().signal)
+
+    expect(new Set(asked)).toEqual(new Set([triageDigest]))
+    if (result._tag !== 'Ok' || result.value._tag !== 'Publish' || result.value.publication._tag !== 'OpenPullRequest')
+      throw new Error('Expected a pull request publication.')
   })
 })
