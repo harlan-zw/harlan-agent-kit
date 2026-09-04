@@ -64,6 +64,44 @@ created_time_for() {
   printf '%s\n' "$created"
 }
 
+default_target_for() {
+  local repository=$1 remote_head primary_branch
+  remote_head=$(git -C "$repository" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [[ -n $remote_head ]] && git -C "$repository" show-ref --verify --quiet "$remote_head"; then
+    printf '%s\n' "$remote_head"
+    return 0
+  fi
+  if git -C "$repository" show-ref --verify --quiet refs/remotes/origin/main; then
+    printf '%s\n' refs/remotes/origin/main
+    return 0
+  fi
+  if git -C "$repository" show-ref --verify --quiet refs/heads/main; then
+    printf '%s\n' refs/heads/main
+    return 0
+  fi
+  primary_branch=$(git -C "$repository" symbolic-ref --quiet HEAD 2>/dev/null || true)
+  [[ -n $primary_branch ]] || return 1
+  git -C "$repository" show-ref --verify --quiet "$primary_branch" || return 1
+  printf '%s\n' "$primary_branch"
+}
+
+is_integrated() {
+  local repository=$1 head=$2 target=$3 head_tree target_tree merged_tree
+  if git -C "$repository" merge-base --is-ancestor "$head" "$target" 2>/dev/null; then
+    return 0
+  fi
+  if git -C "$repository" diff --quiet "$target...$head" -- 2>/dev/null; then
+    return 0
+  fi
+  head_tree=$(git -C "$repository" rev-parse "$head^{tree}" 2>/dev/null) || return 1
+  target_tree=$(git -C "$repository" rev-parse "$target^{tree}" 2>/dev/null) || return 1
+  if [[ $head_tree == "$target_tree" ]]; then
+    return 0
+  fi
+  merged_tree=$(git -C "$repository" merge-tree --write-tree "$target" "$head" 2>/dev/null) || return 1
+  [[ $merged_tree == "$target_tree" ]]
+}
+
 has_live_claim() {
   local path=$1 common_git_dir claim
   common_git_dir=$(git -C "$path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
@@ -83,59 +121,69 @@ keep() {
   ((kept_count += 1))
 }
 
+record_error() {
+  local path=$1 reason=$2
+  printf 'error\t%s\treason=%s\n' "$path" "$reason" >&2
+  ((error_count += 1))
+}
+
 inspect_repository() {
-  local repository=$1 worktrunk_json rows path branch head state dirty detached created age current_head removal
+  local repository=$1 field path='' head='' branch='' locked=false primary=true
+  local target created age status current_head removal i
+  local -a paths=() heads=() branches=() locked_flags=()
 
   ((repo_count += 1))
-  if ! worktrunk_json=$(COLUMNS=120 LINES=40 NO_COLOR=1 TERM=dumb \
-    "$worktrunk_bin" -C "$repository" list --format=json); then
-    printf 'error\t%s\treason=worktrunk-list-failed\n' "$repository" >&2
-    ((error_count += 1))
-    return
-  fi
+  while IFS= read -r -d '' field; do
+    if [[ -z $field ]]; then
+      if [[ $primary == true ]]; then
+        primary=false
+      elif [[ -n $path && -e $path/.git && $head =~ ^[0-9a-f]{40}$ ]]; then
+        paths+=("$path")
+        heads+=("$head")
+        branches+=("$branch")
+        locked_flags+=("$locked")
+        ((worktree_count += 1))
+      fi
+      path=''
+      head=''
+      branch=''
+      locked=false
+      continue
+    fi
 
-  if ! rows=$("$jq_bin" -r '
-    if .schema != 2 or (.items | type) != "array" then
-      error("Worktrunk JSON schema 2 is required")
-    else
-      .items[]
-      | select(.worktree != null and .worktree.main == false)
-      | [
-          .worktree.path,
-          (.branch // ""),
-          .head.sha,
-          (.display.state // "unknown"),
-          ([
-            .worktree.changes.staged,
-            .worktree.changes.modified,
-            .worktree.changes.untracked,
-            .worktree.changes.renamed,
-            .worktree.changes.deleted,
-            .worktree.changes.conflicted
-          ] | any | tostring),
-          (.worktree.detached // false | tostring)
-        ]
-      | @tsv
-    end
-  ' <<< "$worktrunk_json"); then
-    printf 'error\t%s\treason=unsupported-worktrunk-json\n' "$repository" >&2
-    ((error_count += 1))
-    return
-  fi
+    case "$field" in
+      'worktree '*) path=${field#worktree } ;;
+      'HEAD '*) head=${field#HEAD } ;;
+      'branch refs/heads/'*) branch=${field#branch refs/heads/} ;;
+      locked*) locked=true ;;
+    esac
+  done < <(git -C "$repository" worktree list --porcelain -z 2>/dev/null)
 
-  while IFS=$'\t' read -r path branch head state dirty detached; do
-    [[ -n $path && -e $path/.git ]] || continue
-    ((worktree_count += 1))
+  ((${#paths[@]})) || return
+  target=$(default_target_for "$repository") || {
+    record_error "$repository" default-branch-missing
+    return
+  }
+
+  for i in "${!paths[@]}"; do
+    path=${paths[$i]}
+    head=${heads[$i]}
+    branch=${branches[$i]}
+    locked=${locked_flags[$i]}
     created=$(created_time_for "$path")
-    ((created > 0)) || {
+    if ((created <= 0)); then
       keep "$path" unknown-age
       continue
-    }
+    fi
     age=$(((now - created) / 86400))
     ((age >= stale_days)) || continue
     ((old_count += 1))
 
-    if [[ $dirty == true ]]; then
+    if ! status=$(git -C "$path" status --porcelain=v1 --untracked-files=all 2>/dev/null); then
+      record_error "$path" status-failed
+      continue
+    fi
+    if [[ -n $status ]]; then
       keep "$path" dirty
       continue
     fi
@@ -143,18 +191,22 @@ inspect_repository() {
       keep "$path" claimed
       continue
     fi
-    if [[ $detached == true ]]; then
+    if [[ $locked == true ]]; then
+      keep "$path" locked
+      continue
+    fi
+    if [[ -z $branch ]]; then
       keep "$path" detached
       continue
     fi
-    if [[ $state != integrated && $state != empty ]]; then
+    if ! is_integrated "$repository" "$head" "$target"; then
       keep "$path" not-integrated
       continue
     fi
 
     ((ready_count += 1))
     if [[ $apply == false ]]; then
-      printf 'ready\t%s\tbranch=%s\tage_days=%d\tstate=%s\n' "$path" "$branch" "$age" "$state"
+      printf 'ready\t%s\tbranch=%s\tage_days=%d\tstate=integrated\n' "$path" "$branch" "$age"
       continue
     fi
 
@@ -163,7 +215,11 @@ inspect_repository() {
       keep "$path" changed
       continue
     fi
-    if [[ -n $(git -C "$path" status --porcelain=v1 --untracked-files=all 2>/dev/null) ]]; then
+    if ! status=$(git -C "$path" status --porcelain=v1 --untracked-files=all 2>/dev/null); then
+      record_error "$path" status-failed
+      continue
+    fi
+    if [[ -n $status ]]; then
       keep "$path" dirty
       continue
     fi
@@ -171,16 +227,19 @@ inspect_repository() {
       keep "$path" claimed
       continue
     fi
+    if ! is_integrated "$repository" "$head" "$target"; then
+      keep "$path" changed
+      continue
+    fi
 
     if removal=$("$worktrunk_bin" -C "$repository" remove --foreground --format=json "$path"); then
       ((removed_count += 1))
       printf 'removed\t%s\tbranch=%s\n' "$path" "$branch"
     else
-      printf 'error\t%s\treason=worktrunk-remove-failed\n' "$path" >&2
+      record_error "$path" worktrunk-remove-failed
       [[ -n $removal ]] && printf '%s\n' "$removal" >&2
-      ((error_count += 1))
     fi
-  done <<< "$rows"
+  done
 }
 
 while IFS= read -r -d '' git_dir; do

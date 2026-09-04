@@ -7,6 +7,7 @@ sweep="$script_dir/worktree-sweep.sh"
 claim="$script_dir/../harlan-agent-kit/scripts/worktree-claim.sh"
 test_root=$(mktemp -d)
 trap 'rm -rf "$test_root"' EXIT
+real_worktrunk=$(command -v wt)
 
 export HOME="$test_root/home"
 mkdir -p "$HOME/.config/worktrunk" "$test_root/bin"
@@ -15,7 +16,17 @@ ln -s "$(command -v jq)" "$test_root/bin/jq"
 ln -s "$(command -v realpath)" "$test_root/bin/realpath"
 ln -s "$(command -v sha256sum)" "$test_root/bin/sha256sum"
 ln -s "$(command -v flock)" "$test_root/bin/flock"
-ln -s "$(command -v wt)" "$test_root/bin/wt"
+ln -s "$real_worktrunk" "$test_root/bin/wt"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'if [[ " $* " == *" list "* ]]; then' \
+  '  printf '\''%s\n'\'' '\''The sweep asked Worktrunk to list every tree.'\'' >&2' \
+  '  exit 99' \
+  'fi' \
+  'exec "$WORKTREE_SWEEP_REAL_WT" "$@"' \
+  > "$test_root/bin/sweep-wt"
+chmod +x "$test_root/bin/sweep-wt"
+export WORKTREE_SWEEP_REAL_WT="$real_worktrunk"
 export PATH="$test_root/bin:/usr/bin:/bin"
 
 origin="$test_root/origin.git"
@@ -49,6 +60,7 @@ printf '%s\n' integrated > "$integrated/integrated.txt"
 git -C "$integrated" add integrated.txt
 git -C "$integrated" commit --quiet -m integrated
 git -C "$repository" cherry-pick --quiet integrated
+git -C "$repository" push --quiet origin main
 
 unintegrated=$(create_worktree unintegrated)
 printf '%s\n' unintegrated > "$unintegrated/unintegrated.txt"
@@ -62,7 +74,7 @@ claimed=$(create_worktree claimed)
 claim_session=$(bash "$claim" new-session)
 bash "$claim" acquire --path "$claimed" --session "$claim_session" >/dev/null
 
-dry_run=$(WORKTREE_SWEEP_WT="$(command -v wt)" WORKTREE_SWEEP_JQ="$(command -v jq)" \
+dry_run=$(WORKTREE_SWEEP_WT="$test_root/bin/sweep-wt" WORKTREE_SWEEP_JQ="$(command -v jq)" \
   bash "$sweep" --days 0 "$test_root")
 
 grep -F -- "ready"$'\t'"$integrated" <<< "$dry_run" >/dev/null
@@ -70,7 +82,7 @@ grep -F -- "kept"$'\t'"$unintegrated"$'\t'"reason=not-integrated" <<< "$dry_run"
 grep -F -- "kept"$'\t'"$dirty"$'\t'"reason=dirty" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$claimed"$'\t'"reason=claimed" <<< "$dry_run" >/dev/null
 
-WORKTREE_SWEEP_WT="$(command -v wt)" WORKTREE_SWEEP_JQ="$(command -v jq)" \
+WORKTREE_SWEEP_WT="$test_root/bin/sweep-wt" WORKTREE_SWEEP_JQ="$(command -v jq)" \
   bash "$sweep" --apply --days 0 "$test_root" >/dev/null
 
 test ! -e "$integrated"
