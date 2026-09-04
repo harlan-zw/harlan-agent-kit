@@ -298,7 +298,10 @@ export function reviewSnapshotDigest(snapshot: PullRequestReviewSnapshot): strin
   return createHash('sha256').update(JSON.stringify({ ...reviewed, pullRequest })).digest('hex')
 }
 
-export function issueSnapshotDigest(snapshot: { baseSha: string, body: string, comments: string[], state: string, title: string, updatedAt: string }): string {
+// The digest keys an issue's triage session, so it carries the issue and
+// nothing else. A branch tip here would retire every stored session each time
+// the default branch moved, and no issue triaged before that commit could run.
+export function issueSnapshotDigest(snapshot: { body: string, comments: string[], state: string, title: string, updatedAt: string }): string {
   const { updatedAt: _githubActivityAt, ...issue } = snapshot
   return createHash('sha256').update(JSON.stringify(issue)).digest('hex')
 }
@@ -1329,7 +1332,7 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
       const started = saveAgentProgress(options, task, { percent: 35, label: 'Git worktree ready' })
       if (started._tag === 'Err')
         return started
-      const scopeDigest = issueSnapshotDigest({ ...snapshot.value, baseSha: workspace.value.baseSha })
+      const scopeDigest = issueSnapshotDigest(snapshot.value)
       const turn = await runParsedAgentTurn({ ...options, parse: parseIssueTriageResponse }, {
         freshSession: task.state.fence > 1,
         number: task.issueNumber,
