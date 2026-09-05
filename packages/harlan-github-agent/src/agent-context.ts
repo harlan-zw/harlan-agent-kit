@@ -179,10 +179,33 @@ export async function listInstructionFiles(worktreePath: string): Promise<string
   return INSTRUCTION_FILE_NAMES.filter((_, index) => present[index])
 }
 
-/** The check budget every mutation Agent gets. CI runs the full suite. */
-export const CHECK_BUDGET_LINES = `Check budget: run the regression test file, its direct dependants, and lint and typecheck on the changed files only.
-Do not run the full test suite, the full typecheck, or a build. CI runs those.
+/**
+ * The exact checks one Agent turn may run.
+ *
+ * Every scope is narrow, because CI owns the repository-wide result. A worker
+ * picks the scope its own work defines, so the budget stays true for the turn.
+ */
+export const CHECK_SCOPES = {
+  /** A turn that changed source files and must prove that change. */
+  changedFiles: 'run the regression test file, its direct dependants, and lint and typecheck on the changed files only.',
+  /** Baseline repair, where the failing CI check already names the command. */
+  failingCheck: 'prefer a narrower command that reproduces the same failure; run the exact command of the failing check only when no narrower command reproduces it, then lint and typecheck on the changed files only.',
+  /** Conflict resolution, where the merge already names the files in scope. */
+  conflictedFiles: 'run eslint on the conflicted files, vitest on the test files that import them, and git diff --check.',
+} as const
+
+export type CheckScope = typeof CHECK_SCOPES[keyof typeof CHECK_SCOPES]
+
+/** The check budget every Agent turn that verifies its own change gets. */
+export function checkBudgetLines(scope: CheckScope): string {
+  const fullSuiteRule = 'Do not run the full test suite, the full typecheck, or a build. CI runs those.'
+  const lastResort = scope === CHECK_SCOPES.failingCheck
+    ? ' Exception: when no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.'
+    : ''
+  return `Check budget: ${scope}
+${fullSuiteRule}${lastResort}
 Failures outside the changed files are pre-existing. Do not stash changes to verify them.`
+}
 
 /** The core of the unit-tests skill, inlined so no Agent reads the file each session. */
 export const UNIT_TEST_LINES = `Unit test rules:
@@ -193,6 +216,6 @@ export const UNIT_TEST_LINES = `Unit test rules:
 - When behaviour changes on purpose, delete the old test and write the new one.
 - Prefer a real fixture over a mock.`
 
-/** Toolchain rules for every mutation Agent. */
+/** Toolchain rules for every Agent turn that may run a command. */
 export const TOOLCHAIN_LINES = `Use pnpm for every package command. Never use npx.
 Never add debug output to tracked files.`

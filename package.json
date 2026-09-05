@@ -6,7 +6,7 @@
     "build": "pnpm --filter harlan-github-agent build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "pnpm test:context && pnpm test:commit-hook && pnpm test:service && pnpm --filter harlan-github-agent test:run",
+    "test": "pnpm test:context && pnpm test:commit-hook && pnpm test:opencode-hooks && pnpm test:service && pnpm --filter harlan-github-agent test:run",
     "typecheck": "pnpm --filter harlan-github-agent typecheck",
     "check:context": "scripts/check-agent-context.sh",
     "sync:context": "bash scripts/sync-agent-context.sh local",
@@ -29,7 +29,8 @@
     "test:pr-skill-only": "bash harlan-agent-kit/hooks/pr-skill-only.test.sh",
     "test:wt-only": "bash harlan-agent-kit/hooks/wt-only.test.sh",
     "test:sentry-checkin": "python3 -m unittest discover -s harlan-agent-kit/skills/sentry-checkin/scripts -p 'test_*.py'",
-    "release": "node --experimental-strip-types scripts/release.ts"
+    "release": "node --experimental-strip-types scripts/release.ts",
+    "test:opencode-hooks": "vitest run harlan-agent-kit/plugins/opencode"
   },
   "dependencies": {
     "@antfu/eslint-config": "catalog:",
@@ -38,6 +39,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }
