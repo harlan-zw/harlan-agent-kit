@@ -52,6 +52,8 @@ accepts 'fix(store): keep the lease fence'
 accepts 'chore(deps): raise vitest'
 accepts 'feat!: drop the v1 route'
 accepts 'refactor(agent/worker): split the scan turn'
+accepts 'feat(Nuxt): rename the module'
+accepts 'feat(@harlan/agent-kit): widen the scope charset'
 
 refuses 'add the widget'
 refuses 'Feat: add the widget'
