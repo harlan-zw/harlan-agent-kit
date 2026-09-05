@@ -37,6 +37,7 @@ async function seedReadyRoutineIssues(store: ReturnType<typeof openJournalStore>
     runId,
     candidates: numbers.map(number => ({
       fingerprint: `src/file-${number}.ts`,
+      title: 'Fixture title',
       target: `src/file-${number}.ts`,
       // The stub publisher reads the issue number it should answer from the claim.
       claim: `Issue #${number} needs a fix.`,

@@ -66,6 +66,7 @@ function seed(store: ReturnType<typeof openJournalStore>): void {
 
 const candidate = {
   fingerprint: 'src/store.ts#openRoutineRun',
+  title: 'Fixture title',
   target: 'src/store.ts',
   claim: 'This helper is never called.',
   verification: 'pnpm test',
@@ -136,6 +137,7 @@ describe('building the scan prompt', () => {
         routineId: 'r1',
         runId: 'run-1',
         fingerprint: 'src/old.ts',
+        title: 'Fixture title',
         target: 'src/old.ts',
         claim: 'unused',
         verification: 'pnpm test',
@@ -159,6 +161,7 @@ describe('building the scan prompt', () => {
         routineId: 'r1',
         runId: 'run-1',
         fingerprint: 'src/open.ts',
+        title: 'Fixture title',
         target: 'src/open.ts',
         claim: 'unused',
         verification: 'pnpm test',

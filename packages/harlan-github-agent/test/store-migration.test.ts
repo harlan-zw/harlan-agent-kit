@@ -635,7 +635,7 @@ describe('gitHub vocabulary migration', () => {
 
     const database = new DatabaseSync(path)
     try {
-      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(62)
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(63)
       // The old words must be gone from the rows and from the constraints.
       expect(database.prepare(`SELECT count(*) AS total FROM worker_tasks WHERE state_tag = 'NeedsAttention'`).get())
         .toEqual({ total: 0 })
@@ -708,6 +708,55 @@ describe('agent selection migration', () => {
 
       expect(store.getAgentSelection()).toEqual({ _tag: 'FollowsConfiguration' })
       expect(store.getDashboardSnapshot('2026-08-18T01:00:01.000Z').agentProfile.provider).toBe('codex')
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
+describe('candidate title migration', () => {
+  it('reads the claim as the title for a Candidate recorded before titles existed', () => {
+    const path = join(directory, 'state.sqlite')
+    const seeded = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    seeded.syncRepositories([repositoryMapping()], '2026-09-05T00:00:00.000Z')
+    seeded.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'daily-checkin', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+      at: '2026-09-05T00:00:00.000Z',
+    })
+    seeded.openRoutineRun({
+      routineId: 'harlan-zw/example:daily-checkin',
+      scheduledFor: '2026-09-05T07:00:00.000Z',
+      specSha: 'abc123',
+      at: '2026-09-05T07:00:05.000Z',
+    })
+    seeded.recordCandidates({
+      routineId: 'harlan-zw/example:daily-checkin',
+      runId: 'harlan-zw/example:daily-checkin:2026-09-05T07:00:00.000Z',
+      candidates: [{
+        fingerprint: 'server/utils/cache.ts#cached',
+        title: 'Written after the column existed',
+        target: 'server/utils/cache.ts',
+        claim: 'The deploy gate cannot run the published binary.',
+        verification: 'pnpm test',
+        estimatedChangedFiles: 1,
+      }],
+      at: '2026-09-05T07:05:00.000Z',
+    })
+    seeded.close()
+
+    // Rewind the journal to the shape a service running version 62 wrote.
+    const database = new DatabaseSync(path)
+    database.exec('ALTER TABLE candidates DROP COLUMN title')
+    database.exec('PRAGMA user_version = 62')
+    database.close()
+
+    const store = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+    try {
+      const [candidate] = store.listCandidates('harlan-zw/example:daily-checkin')
+      expect(candidate?.title).toBe('The deploy gate cannot run the published binary.')
     }
     finally {
       store.close()
