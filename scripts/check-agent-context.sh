@@ -8,6 +8,11 @@ CLAUDE="$TARGET_HOME/.claude/CLAUDE.md"
 CODEX="$TARGET_HOME/.codex/AGENTS.md"
 COMMIT_HOOK="$TARGET_HOME/.config/git/hooks/commit-msg"
 SOURCE_HOOK="$REPO_ROOT/agent-context/git-hooks/commit-msg"
+PLUGIN_HOOKS_DIR="$REPO_ROOT/harlan-agent-kit/hooks"
+SOURCE_PLUGIN="$REPO_ROOT/harlan-agent-kit/plugins/opencode/harlan-hooks.ts"
+INSTALLED_HOOKS_DIR="$TARGET_HOME/.local/share/harlan-agent-kit/hooks"
+INSTALLED_PLUGIN="$TARGET_HOME/.config/opencode/plugins/harlan-hooks.ts"
+OPENCODE_HOOKS=(check-config.sh pnpm-only.sh wt-only.sh pr-skill-only.sh merged-branch-guard.sh pre-commit-push.sh eslint.sh)
 SKILL="$REPO_ROOT/harlan-agent-kit/skills/ts-design-patterns/SKILL.md"
 EXPECTED_HOME=$(mktemp -d)
 trap 'rm -rf "$EXPECTED_HOME"' EXIT
@@ -36,6 +41,23 @@ else
 fi
 [ "$(HOME="$TARGET_HOME" git config --global --get core.hooksPath)" = "$TARGET_HOME/.config/git/hooks" ] \
   || bad "core.hooksPath does not point at the installed hooks. Run pnpm sync:context."
+
+# opencode reads the plugin hooks from a stable path, so drift there is silent.
+for hook_file in "${OPENCODE_HOOKS[@]}"; do
+  if [ ! -f "$INSTALLED_HOOKS_DIR/$hook_file" ]; then
+    bad "The opencode hook is not installed: $hook_file. Run pnpm sync:context."
+    continue
+  fi
+  cmp -s "$PLUGIN_HOOKS_DIR/$hook_file" "$INSTALLED_HOOKS_DIR/$hook_file" \
+    || bad "The opencode hook differs: $hook_file. Run pnpm sync:context."
+  [ -x "$INSTALLED_HOOKS_DIR/$hook_file" ] \
+    || bad "The opencode hook is not executable: $hook_file. Run pnpm sync:context."
+done
+if [ ! -f "$INSTALLED_PLUGIN" ]; then
+  bad "The opencode plugin is not installed. Run pnpm sync:context."
+else
+  cmp -s "$SOURCE_PLUGIN" "$INSTALLED_PLUGIN" || bad "The opencode plugin differs. Run pnpm sync:context."
+fi
 
 # Each principle is a bullet opening with a bold clause; compare the whole set.
 principles() { grep -E '^- \*\*(Make illegal|Errors as|No silent|Parse, don|Explicit dep|Pure core)' "$1" | sort; }
