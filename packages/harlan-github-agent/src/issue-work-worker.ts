@@ -262,6 +262,8 @@ ${JSON.stringify(combined.map(issue => ({ number: issue.number, title: issue.tit
 /** The Issue work prompt. Exported so tests can assert its contract without an Agent. */
 export function issueWorkPrompt(input: IssueWorkPromptInput): string {
   const { task, routineSource } = input
+  const memory = repositoryMemoryLine(input.memory ?? null)
+  const memoryBlock = memory === '' ? '' : `${memory}\n`
   return `Continue working on the approved GitHub issue ${task.repository}#${task.issueNumber}.
 
 ${storedTriageLines(input.triage)}
@@ -269,8 +271,7 @@ Plan, implement, and verify the complete fix.
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 ${instructionFilesLine(input.instructionFiles)}
-${repositoryMemoryLine(input.memory ?? null)}
-Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or humanize-writing. Their rules are inlined below.
+${memoryBlock}Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or humanize-writing. Their rules are inlined below.
 ${UNIT_TEST_LINES}
 ${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}

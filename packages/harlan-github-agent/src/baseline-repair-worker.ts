@@ -242,6 +242,8 @@ export function baselineRepairPrompt(input: BaselineRepairPromptInput): string {
   const agents = input.workspace.hasAgentsFile
     ? 'Read AGENTS.md in this worktree before you change code.\n'
     : ''
+  const memory = repositoryMemoryLine(input.memory ?? null)
+  const memoryBlock = memory === '' ? '' : `${memory}\n`
   const nodeOptions = input.workspace.nodeOptions === null
     ? ''
     : `The workflow sets NODE_OPTIONS=${input.workspace.nodeOptions}. Use the same value for every local command.\n`
@@ -253,8 +255,7 @@ export function baselineRepairPrompt(input: BaselineRepairPromptInput): string {
 Own the work end to end. Find the root cause, implement the complete fix, and verify it.
 Work as a normal local agent session. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before you return a result.
-${agents}${repositoryMemoryLine(input.memory ?? null)}
-${UNIT_TEST_LINES}
+${agents}${memoryBlock}${UNIT_TEST_LINES}
 
 Failing checks:
 ${input.repairable.map(checkBlock).join('\n')}

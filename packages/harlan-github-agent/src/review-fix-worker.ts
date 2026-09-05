@@ -111,12 +111,13 @@ export interface ReviewFixPromptInput {
 /** The Repair prompt. Exported so tests can assert its contract without an Agent. */
 export function reviewFixPrompt(input: ReviewFixPromptInput): string {
   const { task, findings } = input
+  const memory = repositoryMemoryLine(input.memory ?? null)
+  const memoryBlock = memory === '' ? '' : `${memory}\n`
   return `Repair the exact material Review findings for ${task.repository}#${task.pullRequestNumber}.
 
 Work as a fresh local Agent session inside this prepared Git worktree.
 ${instructionFilesLine(input.instructionFiles)}
-${repositoryMemoryLine(input.memory ?? null)}
-Treat the findings below as the complete Repair scope.
+${memoryBlock}Treat the findings below as the complete Repair scope.
 ${repairRoundHistory(task.rounds)}
 ${UNIT_TEST_LINES}
 For each finding, write the named failing regression test first. Confirm it fails for the stated reason.
