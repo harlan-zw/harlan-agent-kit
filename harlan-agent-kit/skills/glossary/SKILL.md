@@ -116,7 +116,7 @@ Record scopes as a `## Scopes` table, placed after Banned. It uses the Banned co
 
 | Never | Use instead | Why |
 | --- | --- | --- |
-| `github-agent` | `agent` | One service, one word |
+| `agent` | `github-agent` | One service, one word |
 ```
 
 **List only retired spellings. Never list every allowed scope.** An allowlist looks tidier and fails in practice: 40 to 59 percent of scopes in these repositories appear exactly once, so the list churns while the real drift is a handful of synonym pairs. A scope absent from the table is allowed.

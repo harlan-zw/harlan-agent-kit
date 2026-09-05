@@ -75,7 +75,7 @@ cat > "$sandbox/pkg/inside/GLOSSARY.md" <<'GLOSSARY'
 
 | Never | Use instead | Why |
 | --- | --- | --- |
-| `github-agent` | `agent` | One service, one word |
+| `agent` | `github-agent` | One service, one word |
 | worktrunk | worktrees | The tool is not the concept |
 
 ## Banned
@@ -85,18 +85,18 @@ cat > "$sandbox/pkg/inside/GLOSSARY.md" <<'GLOSSARY'
 | `ci` | `workflows` | This row sits outside Scopes and must not apply |
 GLOSSARY
 git -C "$sandbox/pkg/inside" add GLOSSARY.md >/dev/null 2>&1
-git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(agent): add the glossary' >/dev/null 2>&1
+git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(github-agent): add the glossary' >/dev/null 2>&1
 
-refuses 'fix(github-agent): read the review label'
+refuses 'fix(agent): read the review label'
 refuses 'feat(worktrunk): seed the env file'
-accepts 'fix(agent): read the review label'
+accepts 'fix(github-agent): read the review label'
 accepts 'fix(worktrees): seed the env file'
 # An unknown scope passes, because the table is a denylist and not an allowlist.
 accepts 'fix(dashboard): show the queue depth'
 # A ban outside the Scopes table must not reach commit scopes.
 accepts 'chore(ci): keep four runners warm'
 
-if grep -q 'Use `agent` instead' <(cd "$sandbox/pkg/inside" && printf 'fix(github-agent): x\n' > "$sandbox/msg" && bash "$sandbox/hooks/commit-msg" "$sandbox/msg" 2>&1); then
+if grep -q 'Use `github-agent` instead' <(cd "$sandbox/pkg/inside" && printf 'fix(agent): x\n' > "$sandbox/msg" && bash "$sandbox/hooks/commit-msg" "$sandbox/msg" 2>&1); then
   pass 'names the replacement scope in the refusal'
 else
   bad 'the refusal does not name the replacement scope'
@@ -104,7 +104,7 @@ fi
 
 rm -f "$sandbox/pkg/inside/GLOSSARY.md"
 git -C "$sandbox/pkg/inside" rm --quiet --cached GLOSSARY.md >/dev/null 2>&1 || true
-git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(agent): drop the glossary' >/dev/null 2>&1 || true
+git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(github-agent): drop the glossary' >/dev/null 2>&1 || true
 # With no GLOSSARY.md the scope rule does not fire at all.
 accepts 'fix(github-agent): read the review label'
 
@@ -113,6 +113,41 @@ if try_commit "$sandbox/elsewhere/outside" 'no convention here'; then
   pass 'ignores a repository outside ~/pkg and ~/sites'
 else
   bad 'refused a commit outside the trusted roots'
+fi
+
+# The root Scopes table is canonical, and the glossary Skill teaches it through
+# its example row. A Skill example that rules a pair the reverse way makes the
+# hook and the readers disagree, so the example must never retire the
+# replacement back to the retired spelling.
+pairs_rows() {
+  awk -F'|' '
+    /^## Scopes[[:space:]]*$/ { inside = 1; next }
+    /^## / { inside = 0 }
+    inside && NF >= 4 {
+      never = $2; use = $3
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", never)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", use)
+      gsub(/`/, "", never)
+      gsub(/`/, "", use)
+      if (never != "" && never != "Never" && never != "---" && use != "" && use != "Use instead" && use != "---")
+        print never "\t" use
+    }
+  ' "$repo_root/GLOSSARY.md"
+}
+
+skill="$repo_root/harlan-agent-kit/skills/glossary/SKILL.md"
+if [ ! -f "$repo_root/GLOSSARY.md" ] || [ ! -f "$skill" ]; then
+  bad 'missing the root GLOSSARY.md or the glossary SKILL.md for the consistency check'
+else
+  consistent=1
+  while IFS=$'\t' read -r never use; do
+    pattern="^[[:space:]]*[|][[:space:]]*\`${use}\`[[:space:]]*[|][[:space:]]*\`${never}\`[[:space:]]*[|]"
+    if grep -Eq "$pattern" "$skill"; then
+      bad "the glossary Skill example retires \`$use\` to \`$never\`, the reverse of the root Scopes row"
+      consistent=0
+    fi
+  done < <(pairs_rows)
+  [ "$consistent" -eq 1 ] && pass 'the glossary Skill example matches the root Scopes table'
 fi
 
 [ "$fail" -eq 0 ] || exit 1

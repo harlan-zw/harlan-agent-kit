@@ -211,15 +211,7 @@ Naming calls this file does not settle. Resolve one, fold the answer in, delete 
    - Split the hook to support a row with no replacement, refusing the scope and
      naming the candidates.
 
-4. **The glossary Skill's own example contradicts row 1 of `## Scopes`.**
-   `harlan-agent-kit/skills/glossary/SKILL.md` shows `| github-agent | agent | One service,
-   one word |`, and `scripts/commit-msg-hook.test.sh` uses the same pair as a fixture.
-   This table retires the reverse. A reader who copies the example gets the wrong winner.
-   - Flip the Skill example and the test fixture to match this table.
-   - Change the example to an invented pair, so no reader mistakes it for a decision.
-   - Leave it, and accept that the example reads as guidance.
-
-5. **Does `PR` in prose stay banned?**
+4. **Does `PR` in prose stay banned?**
    `packages/harlan-github-agent/GLOSSARY.md` bans "PR in prose" in favour of "pull request".
    `README.md` writes "PR" eight times, including a Skill table row and a feature bullet.
    README voice is landing-page copy, which Harlan's writing rules exempt from
