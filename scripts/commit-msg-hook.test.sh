@@ -75,7 +75,7 @@ cat > "$sandbox/pkg/inside/GLOSSARY.md" <<'GLOSSARY'
 
 | Never | Use instead | Why |
 | --- | --- | --- |
-| `agent` | `github-agent` | One service, one word |
+| `agent` | `github-agent` | The package and unit spell it `github-agent` |
 | worktrunk | worktrees | The tool is not the concept |
 
 ## Banned
@@ -85,7 +85,11 @@ cat > "$sandbox/pkg/inside/GLOSSARY.md" <<'GLOSSARY'
 | `ci` | `workflows` | This row sits outside Scopes and must not apply |
 GLOSSARY
 git -C "$sandbox/pkg/inside" add GLOSSARY.md >/dev/null 2>&1
-git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(github-agent): add the glossary' >/dev/null 2>&1
+if git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(github-agent): add the glossary' >/dev/null 2>&1; then
+  pass 'setup: commits the glossary under an allowed scope'
+else
+  bad 'setup: the glossary commit was refused'
+fi
 
 refuses 'fix(agent): read the review label'
 refuses 'feat(worktrunk): seed the env file'
@@ -104,9 +108,13 @@ fi
 
 rm -f "$sandbox/pkg/inside/GLOSSARY.md"
 git -C "$sandbox/pkg/inside" rm --quiet --cached GLOSSARY.md >/dev/null 2>&1 || true
-git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(github-agent): drop the glossary' >/dev/null 2>&1 || true
+if git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(github-agent): drop the glossary' >/dev/null 2>&1; then
+  pass 'setup: commits dropping the glossary'
+else
+  bad 'setup: the drop-the-glossary commit failed'
+fi
 # With no GLOSSARY.md the scope rule does not fire at all.
-accepts 'fix(github-agent): read the review label'
+accepts 'fix(agent): read the review label'
 
 # A repository outside the trusted roots keeps its own rules.
 if try_commit "$sandbox/elsewhere/outside" 'no convention here'; then
