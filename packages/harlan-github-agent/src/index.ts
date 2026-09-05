@@ -1,5 +1,5 @@
-export { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
-export type { AgentContext, AgentContextPaths } from './agent-context.ts'
+export { claudeProjectSlug, defaultAgentContextPaths, findRepositoryMemory, loadAgentContext, opencodeAgentEnvironment, opencodeTurnEnvironment, repositoryMemoryIndexPath, repositoryMemoryLine } from './agent-context.ts'
+export type { AgentContext, AgentContextPaths, RepositoryMemory } from './agent-context.ts'
 export { createAgentPermitPool } from './agent-permit-pool.ts'
 export { AGENT_MODELS, AGENT_PROVIDER_NAMES, AGENT_ROLES, agentProfile, CODEX_AGENT_PROFILE, createAgentRuntimeSource, OPENCODE_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection, roleProfile } from './agent-profile.ts'
 export type { AgentRuntime, AgentRuntimeSource } from './agent-profile.ts'

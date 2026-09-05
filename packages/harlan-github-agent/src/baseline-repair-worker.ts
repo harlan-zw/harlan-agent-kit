@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { FailedJobContext, GitHubAgentSource, GitHubCheck, PullRequestReviewSnapshot, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
@@ -8,7 +9,7 @@ import type { BaselineRepairWorktreeManager } from './worktree.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
-import { CHECK_SCOPES, checkBudgetLines, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { withBaselineRepairMarker } from './baseline-repair-state.ts'
 import { classifyCheckFailure } from './failure.ts'
@@ -59,6 +60,12 @@ export interface WorkspaceFile {
 const GITHUB_ACTIONS_APP_ID = 15368
 
 export interface BaselineRepairWorkerOptions {
+  /**
+   * Harlan's Claude Code home, which holds the per-repository memory.
+   *
+   * Absent means no memory reaches the turn, which is how a test runs.
+   */
+  claudeHome?: string
   github: Pick<GitHubAgentSource, 'findOpenPullRequestForBranch' | 'getFailedJobContext' | 'getPullRequestReviewSnapshot' | 'getPullRequestTemplate'>
   /** Reads the prepared worktree. `inspectWorkspaceFiles` reads it from disk. */
   inspectWorkspace: (path: string) => Promise<WorkspaceFacts>
@@ -226,6 +233,8 @@ export interface BaselineRepairPromptInput {
   repairable: FailedCheckContext[]
   infrastructure: Array<{ check: GitHubCheck, reason: string }>
   workspace: WorkspaceFacts
+  /** The memory index this repository has, or null when it has none. */
+  memory?: RepositoryMemory | null
 }
 
 /** Pure. Everything the Agent needs, in the order it needs it. */
@@ -244,7 +253,8 @@ export function baselineRepairPrompt(input: BaselineRepairPromptInput): string {
 Own the work end to end. Find the root cause, implement the complete fix, and verify it.
 Work as a normal local agent session. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before you return a result.
-${agents}${UNIT_TEST_LINES}
+${agents}${repositoryMemoryLine(input.memory ?? null)}
+${UNIT_TEST_LINES}
 
 Failing checks:
 ${input.repairable.map(checkBlock).join('\n')}
@@ -343,8 +353,13 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       if (ready._tag === 'Err')
         return ready
       const workspace = await options.inspectWorkspace(prepared.value.path)
+      // The slug comes from the primary checkout, never from this worktree.
+      const memory = options.claudeHome === undefined
+        ? null
+        : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
       const turn = await runAgentTurn(options, {
         freshSession: task.state.fence > 1,
+        ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: progress, work: 'baseline' },
         prompt: baselineRepairPrompt({
@@ -353,6 +368,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           repairable,
           infrastructure,
           workspace,
+          memory,
         }),
         repository: task.repository,
         role: 'baseline_repair',

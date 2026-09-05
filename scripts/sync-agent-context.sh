@@ -206,18 +206,132 @@ sync_hogwild() {
   printf '%s\n' 'Synced Hogwild Agent instructions.'
 }
 
+# ---------------------------------------------------------------------------
+# Project memory
+#
+# Harlan's desktop records per-repository memory under ~/.claude/projects. A
+# worker on Hogwild starts cold without it. This section copies it out.
+#
+# One direction only. The desktop owns memory. Workers read it and never write
+# it back, and nothing here ever copies from Hogwild to the desktop.
+#
+# Integrity: every single file above is verified by sha256 before its mv. A
+# directory sync cannot do that per file. rsync checks a digest of each file it
+# transfers and retries a mismatch, so a transferred file is whole or the run
+# fails. The tar fallback relies on tar's own exit status. Neither is atomic, so
+# a worker reading memory mid-sync can see a partly updated tree. Memory is
+# reference material a turn checks against the code, so a stale or missing note
+# costs context and never correctness.
+# ---------------------------------------------------------------------------
+memory_root="${HARLAN_AGENT_CONTEXT_MEMORY_ROOT:-$HOME/.claude/projects}"
+memory_checkout_roots="${HARLAN_AGENT_CONTEXT_CHECKOUT_ROOTS:-$HOME/pkg:$HOME/sites}"
+
+# Claude Code names a project directory after the checkout path. Every
+# character outside a-z, A-Z and 0-9 becomes one hyphen.
+project_slug() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'
+}
+
+# Prints the slug of every primary checkout that has memory, one per line.
+# A wt worktree carries a .git file, not a directory, so it never matches. A
+# project directory with no matching checkout is never copied.
+memory_slugs() {
+  local root checkout slug
+  [ -d "$memory_root" ] || return 0
+  while IFS= read -r root; do
+    [ -n "$root" ] && [ -d "$root" ] || continue
+    for checkout in "$root"/*; do
+      [ -d "$checkout/.git" ] || continue
+      slug=$(project_slug "$checkout")
+      [ -d "$memory_root/$slug/memory" ] || continue
+      printf '%s\n' "$slug"
+    done
+  done < <(printf '%s\n' "$memory_checkout_roots" | tr ':' '\n')
+}
+
+memory_enabled() {
+  [ "${HARLAN_AGENT_CONTEXT_SKIP_MEMORY:-0}" != 1 ]
+}
+
+# Mirrors one memory directory onto a local path.
+copy_memory_tree() {
+  local source=$1 destination=$2
+  mkdir -p "$destination"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$source/" "$destination/"
+    return
+  fi
+  # tar has no delete, so the destination starts empty. Every slug matches
+  # [A-Za-z0-9-], so the path this removes is always inside the memory tree.
+  rm -rf "${destination:?}"
+  mkdir -p "$destination"
+  tar -C "$source" -cf - . | tar -C "$destination" -xf -
+}
+
+sync_local_memory() {
+  local destination_root slug count
+  memory_enabled || return 0
+  validate_local_home
+  destination_root="$target_home/.claude/projects"
+  if [ "$memory_root" = "$destination_root" ]; then
+    printf '%s\n' 'Local project memory is already the source. Nothing to copy.'
+    return 0
+  fi
+  count=0
+  while IFS= read -r slug; do
+    mkdir -p "$destination_root/$slug"
+    copy_memory_tree "$memory_root/$slug/memory" "$destination_root/$slug/memory"
+    count=$((count + 1))
+  done < <(memory_slugs)
+  printf 'Synced project memory for %s repositories.\n' "$count"
+}
+
+sync_hogwild_memory() {
+  local slug source remote count remote_rsync
+  memory_enabled || return 0
+  validate_hogwild
+  count=0
+  remote_rsync=''
+  if command -v rsync >/dev/null 2>&1; then
+    remote_rsync=$(ssh -o BatchMode=yes "$hogwild_host" 'command -v rsync' 2>/dev/null || true)
+  fi
+  while IFS= read -r slug; do
+    source="$memory_root/$slug/memory"
+    remote="$hogwild_home/.claude/projects/$slug/memory"
+    if [ -n "$remote_rsync" ]; then
+      ssh -o BatchMode=yes "$hogwild_host" "mkdir -p '$remote'" \
+        || fail "Hogwild did not accept the memory directory for $slug."
+      rsync -a --delete -e 'ssh -o BatchMode=yes' "$source/" "$hogwild_host:$remote/" \
+        || fail "Hogwild did not receive the project memory for $slug."
+    else
+      # tar has no delete, so the remote directory starts empty. Every slug
+      # matches [A-Za-z0-9-], so this removes a path inside the memory tree.
+      ssh -o BatchMode=yes "$hogwild_host" "rm -rf '$remote' && mkdir -p '$remote'" \
+        || fail "Hogwild did not accept the memory directory for $slug."
+      tar -C "$source" -czf - . | ssh -o BatchMode=yes "$hogwild_host" "tar -C '$remote' -xzf -" \
+        || fail "Hogwild did not receive the project memory for $slug."
+    fi
+    count=$((count + 1))
+  done < <(memory_slugs)
+  printf 'Synced project memory for %s repositories to Hogwild.\n' "$count"
+}
+
 require_sources
 
 case "${1:-local}" in
   local)
     sync_local
+    sync_local_memory
     ;;
   hogwild)
     sync_hogwild
+    sync_hogwild_memory
     ;;
   all)
     sync_local
+    sync_local_memory
     sync_hogwild
+    sync_hogwild_memory
     ;;
   *)
     fail 'Use local, hogwild, or all.'

@@ -33,6 +33,8 @@ export interface AgentTurnOptions {
 export interface AgentTurnInput {
   /** Start without prior session context, while still saving the new session for Eject. */
   freshSession?: boolean
+  /** Absolute instruction files this turn adds, such as the memory index. */
+  instructionPaths?: readonly string[]
   /** Issue or pull request number the session belongs to. */
   number: number
   progress?: {
@@ -133,6 +135,7 @@ export async function runAgentTurn(
   const runtime = options.runtime()
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({
+    ...(input.instructionPaths === undefined ? {} : { instructionPaths: input.instructionPaths }),
     taskId: input.taskId,
     model: profile.model,
     ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }),

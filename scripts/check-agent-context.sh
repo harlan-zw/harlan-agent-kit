@@ -28,7 +28,12 @@ for f in "$REPO_ROOT/agent-context/context.md" "$REPO_ROOT/agent-context/CLAUDE.
 done
 [ "$fail" -eq 0 ] || exit 1
 
-HARLAN_AGENT_CONTEXT_HOME="$EXPECTED_HOME" bash "$REPO_ROOT/scripts/sync-agent-context.sh" local >/dev/null
+# Project memory is out of scope for this check. It compares installed files
+# against tracked sources in this repository. Memory has no tracked source: it
+# is Harlan's, it changes every session, so a difference is normal and reporting
+# it as drift would make the check meaningless. The sandbox run skips it.
+HARLAN_AGENT_CONTEXT_HOME="$EXPECTED_HOME" HARLAN_AGENT_CONTEXT_SKIP_MEMORY=1 \
+  bash "$REPO_ROOT/scripts/sync-agent-context.sh" local >/dev/null
 
 cmp -s "$EXPECTED_CLAUDE" "$CLAUDE" || bad "Claude instructions differ. Run pnpm sync:context."
 cmp -s "$EXPECTED_CODEX" "$CODEX" || bad "Codex instructions differ. Run pnpm sync:context."

@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
@@ -7,7 +8,7 @@ import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
 import type { ReviewFixWorktreeManager } from './worktree.ts'
 import { createHash } from 'node:crypto'
-import { CHECK_SCOPES, checkBudgetLines, instructionFilesLine, listInstructionFiles, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
@@ -44,6 +45,12 @@ interface AgentResponsePayload {
 
 export interface ReviewFixWorkerOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
+  /**
+   * Harlan's Claude Code home, which holds the per-repository memory.
+   *
+   * Absent means no memory reaches the turn, which is how a test runs.
+   */
+  claudeHome?: string
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'>
   now: () => Date
   onProgressPublishFailure?: (task: ClaimedReviewFixTask, reason: string) => void
@@ -97,6 +104,8 @@ export interface ReviewFixPromptInput {
   findings: readonly ReviewFinding[]
   /** Instruction file names that exist in the prepared worktree. */
   instructionFiles: readonly string[]
+  /** The memory index this repository has, or null when it has none. */
+  memory?: RepositoryMemory | null
 }
 
 /** The Repair prompt. Exported so tests can assert its contract without an Agent. */
@@ -106,6 +115,7 @@ export function reviewFixPrompt(input: ReviewFixPromptInput): string {
 
 Work as a fresh local Agent session inside this prepared Git worktree.
 ${instructionFilesLine(input.instructionFiles)}
+${repositoryMemoryLine(input.memory ?? null)}
 Treat the findings below as the complete Repair scope.
 ${repairRoundHistory(task.rounds)}
 ${UNIT_TEST_LINES}
@@ -190,12 +200,17 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       if (ready._tag === 'Err')
         return ready
       const instructionFiles = await listInstructionFiles(prepared.value.path)
+      // The slug comes from the primary checkout, never from this worktree.
+      const memory = options.claudeHome === undefined
+        ? null
+        : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
 
       const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
         freshSession: true,
+        ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Repair worktree ready' }, report: progress, work: 'fix' },
-        prompt: reviewFixPrompt({ task, findings, instructionFiles }),
+        prompt: reviewFixPrompt({ task, findings, instructionFiles, memory }),
         repository: task.repository,
         role: 'review_fix',
         schema: outputSchema,

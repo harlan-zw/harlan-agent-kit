@@ -2,11 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { defaultAgentContextPaths, instructionFilesLine, listInstructionFiles, loadAgentContext, opencodeAgentEnvironment } from '../src/agent-context.ts'
+import { claudeProjectSlug, defaultAgentContextPaths, findRepositoryMemory, instructionFilesLine, listInstructionFiles, loadAgentContext, opencodeAgentEnvironment, opencodeTurnEnvironment, repositoryMemoryIndexPath, repositoryMemoryLine } from '../src/agent-context.ts'
 
 describe('defaultAgentContextPaths', () => {
   it('resolves the copied service context from its working directory', () => {
-    expect(defaultAgentContextPaths({ CODEX_HOME: '/agent-home' }, '/service')).toEqual({
+    expect(defaultAgentContextPaths({ CODEX_HOME: '/agent-home', HOME: '/agent-home' }, '/service')).toEqual({
+      claudeHome: '/agent-home/.claude',
       instructionsPath: '/agent-home/AGENTS.md',
       skillsRoot: '/service/harlan-agent-kit/skills',
     })
@@ -26,9 +27,10 @@ describe('loadAgentContext', () => {
     }))
 
     try {
-      await expect(loadAgentContext({ instructionsPath, skillsRoot })).resolves.toEqual({
+      await expect(loadAgentContext({ claudeHome: join(root, '.claude'), instructionsPath, skillsRoot })).resolves.toEqual({
         _tag: 'Ok',
         value: {
+          claudeHome: join(root, '.claude'),
           instructionPaths: [instructionsPath],
           skillDirectories: [join(skillsRoot, 'pr'), join(skillsRoot, 'unit-tests')],
         },
@@ -44,6 +46,7 @@ describe('loadAgentContext', () => {
 
     try {
       await expect(loadAgentContext({
+        claudeHome: join(root, '.claude'),
         instructionsPath: join(root, 'missing.md'),
         skillsRoot: join(root, 'skills'),
       })).resolves.toEqual({
@@ -60,7 +63,7 @@ describe('loadAgentContext', () => {
 describe('opencodeAgentEnvironment', () => {
   it('keeps the standard OpenCode install reachable with a restricted service PATH', () => {
     const result = opencodeAgentEnvironment({
-      context: { instructionPaths: ['/global/AGENTS.md'], skillDirectories: ['/skills/pr'] },
+      context: { claudeHome: '/agent-home/.claude', instructionPaths: ['/global/AGENTS.md'], skillDirectories: ['/skills/pr'] },
       environment: { HOME: '/agent-home', PATH: '/usr/bin:/bin' },
     })
 
@@ -73,6 +76,7 @@ describe('opencodeAgentEnvironment', () => {
   it('adds global instructions and every skill without dropping existing configuration', () => {
     const result = opencodeAgentEnvironment({
       context: {
+        claudeHome: '/home/harlan/.claude',
         instructionPaths: ['/home/harlan/.codex/AGENTS.md'],
         skillDirectories: ['/kit/skills/pr', '/kit/skills/unit-tests'],
       },
@@ -103,7 +107,7 @@ describe('opencodeAgentEnvironment', () => {
 
   it('rejects malformed existing OpenCode configuration', () => {
     expect(opencodeAgentEnvironment({
-      context: { instructionPaths: ['/global/AGENTS.md'], skillDirectories: ['/skills/pr'] },
+      context: { claudeHome: '/agent-home/.claude', instructionPaths: ['/global/AGENTS.md'], skillDirectories: ['/skills/pr'] },
       environment: { OPENCODE_CONFIG_CONTENT: '{' },
     })).toEqual({
       _tag: 'Err',
@@ -141,5 +145,157 @@ describe('listInstructionFiles', () => {
 
   it('reports nothing for a worktree that does not exist', async () => {
     await expect(listInstructionFiles(join(tmpdir(), 'harlan-missing-worktree'))).resolves.toEqual([])
+  })
+})
+
+describe('claudeProjectSlug', () => {
+  it('names the project directory Claude Code writes for a real checkout', () => {
+    expect(claudeProjectSlug('/home/harlan/pkg/harlan-agent-kit'))
+      .toEqual({ _tag: 'Ok', value: '-home-harlan-pkg-harlan-agent-kit' })
+  })
+
+  it('turns every dot in a site checkout into one hyphen', () => {
+    expect(claudeProjectSlug('/home/harlan/sites/gscdump.com'))
+      .toEqual({ _tag: 'Ok', value: '-home-harlan-sites-gscdump-com' })
+    expect(claudeProjectSlug('/home/harlan/sites/scripts.nuxt.com'))
+      .toEqual({ _tag: 'Ok', value: '-home-harlan-sites-scripts-nuxt-com' })
+  })
+
+  it('doubles the hyphen for a hidden directory', () => {
+    expect(claudeProjectSlug('/home/harlan/.claude/skills/vue-skilld/.skilld'))
+      .toEqual({ _tag: 'Ok', value: '-home-harlan--claude-skills-vue-skilld--skilld' })
+  })
+
+  it('names a worktree sibling separately from its primary checkout', () => {
+    expect(claudeProjectSlug('/home/harlan/pkg/nuxt-pr-36208-control.fix-pr-36208-layer-scan'))
+      .toEqual({ _tag: 'Ok', value: '-home-harlan-pkg-nuxt-pr-36208-control-fix-pr-36208-layer-scan' })
+  })
+
+  it('refuses a relative path', () => {
+    expect(claudeProjectSlug('pkg/harlan-agent-kit'))
+      .toEqual({ _tag: 'Err', error: 'The checkout path must be absolute.' })
+  })
+
+  it('refuses a path whose project name Claude Code shortens with a hash', () => {
+    const result = claudeProjectSlug(`/home/harlan/pkg/${'a'.repeat(200)}`)
+
+    expect(result._tag).toBe('Err')
+  })
+})
+
+describe('repositoryMemoryIndexPath', () => {
+  it('points at the index inside the project memory directory', () => {
+    expect(repositoryMemoryIndexPath({
+      claudeHome: '/home/harlan/.claude',
+      checkoutPath: '/home/harlan/pkg/harlan-agent-kit',
+    })).toEqual({
+      _tag: 'Ok',
+      value: '/home/harlan/.claude/projects/-home-harlan-pkg-harlan-agent-kit/memory/MEMORY.md',
+    })
+  })
+})
+
+describe('findRepositoryMemory', () => {
+  it('names the index the desktop recorded for a primary checkout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harlan-agent-memory-'))
+    const claudeHome = join(root, '.claude')
+    const memory = join(claudeHome, 'projects', '-home-harlan-pkg-harlan-agent-kit', 'memory')
+    await mkdir(memory, { recursive: true })
+    await writeFile(join(memory, 'MEMORY.md'), '- [Deployment](deployment.md)\n')
+
+    try {
+      await expect(findRepositoryMemory({ claudeHome, checkoutPath: '/home/harlan/pkg/harlan-agent-kit' }))
+        .resolves
+        .toEqual({ indexPath: join(memory, 'MEMORY.md') })
+    }
+    finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  it('answers null when the repository has no memory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harlan-agent-memory-'))
+
+    try {
+      await expect(findRepositoryMemory({ claudeHome: join(root, '.claude'), checkoutPath: '/home/harlan/pkg/unwritten' }))
+        .resolves
+        .toBeNull()
+    }
+    finally {
+      await rm(root, { recursive: true })
+    }
+  })
+
+  it('answers null for a worktree whose primary checkout holds the memory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harlan-agent-memory-'))
+    const claudeHome = join(root, '.claude')
+    const memory = join(claudeHome, 'projects', '-home-harlan-pkg-harlan-agent-kit', 'memory')
+    await mkdir(memory, { recursive: true })
+    await writeFile(join(memory, 'MEMORY.md'), '- [Deployment](deployment.md)\n')
+
+    try {
+      await expect(findRepositoryMemory({ claudeHome, checkoutPath: '/home/harlan/pkg/harlan-agent-kit.feat-thing' }))
+        .resolves
+        .toBeNull()
+    }
+    finally {
+      await rm(root, { recursive: true })
+    }
+  })
+})
+
+describe('repositoryMemoryLine', () => {
+  it('says nothing when the repository has no memory', () => {
+    expect(repositoryMemoryLine(null)).toBe('')
+  })
+
+  it('names the index, the sibling files, and the age of what it records', () => {
+    const line = repositoryMemoryLine({ indexPath: '/home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md' })
+
+    expect(line).toContain('/home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md')
+    expect(line).toContain('links to a sibling file in the same directory by name')
+    expect(line).toContain('Check it against the code before you rely on it.')
+  })
+})
+
+describe('opencodeTurnEnvironment', () => {
+  it('adds one turn instruction file without dropping the shared context', () => {
+    const result = opencodeTurnEnvironment({
+      environment: {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          instructions: ['/home/harlan/.codex/AGENTS.md'],
+          skills: { paths: ['/kit/skills/pr'] },
+        }),
+      },
+      instructionPaths: ['/home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md'],
+    })
+
+    expect(result._tag).toBe('Ok')
+    if (result._tag === 'Err')
+      return
+    expect(JSON.parse(result.value.OPENCODE_CONFIG_CONTENT ?? '')).toEqual({
+      instructions: [
+        '/home/harlan/.codex/AGENTS.md',
+        '/home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md',
+      ],
+      skills: { paths: ['/kit/skills/pr'] },
+    })
+  })
+
+  it('answers the same environment when the turn adds nothing', () => {
+    const environment = { OPENCODE_CONFIG_CONTENT: '{"instructions":["/a.md"]}' }
+
+    expect(opencodeTurnEnvironment({ environment, instructionPaths: [] }))
+      .toEqual({ _tag: 'Ok', value: environment })
+  })
+
+  it('rejects malformed existing OpenCode configuration', () => {
+    expect(opencodeTurnEnvironment({
+      environment: { OPENCODE_CONFIG_CONTENT: '{' },
+      instructionPaths: ['/memory/MEMORY.md'],
+    })).toEqual({
+      _tag: 'Err',
+      error: 'OPENCODE_CONFIG_CONTENT must contain one JSON object.',
+    })
   })
 })

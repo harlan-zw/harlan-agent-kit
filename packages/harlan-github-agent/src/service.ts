@@ -487,6 +487,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       worker: createIssueWorkWorker({
         github: workerGithub,
         activityLog,
+        claudeHome: agentContext.value.claudeHome,
         now,
         runtime,
         store,
@@ -596,6 +597,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           source: tokens,
           worker: createBaselineRepairWorker({
             activityLog,
+            claudeHome: agentContext.value.claudeHome,
             github: workerGithub,
             inspectWorkspace: inspectWorkspaceFiles,
             now,
@@ -704,6 +706,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           source: tokens,
           worker: createReviewFixWorker({
             activityLog,
+            claudeHome: agentContext.value.claudeHome,
             github: workerGithub,
             now,
             onProgressPublishFailure: subjectWorkerOptions.onProgressPublishFailure,

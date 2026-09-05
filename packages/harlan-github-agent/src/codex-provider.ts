@@ -107,6 +107,9 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
     runTurn: (request: AgentTurnRequest) => (async function* () {
       // The SDK replaces the inherited environment when `env` is set, so the
       // whole service environment goes with the worktree's seeded .env on top.
+      // Codex takes no per-turn instruction file, so it ignores
+      // `request.instructionPaths`. The prompt names the memory index path, and
+      // the turn opens it as a file instead.
       const client = factory({ env: definedEntries(workspaceEnvironment(process.env, request.workspace)) })
       const baseOptions = {
         model: request.model,
