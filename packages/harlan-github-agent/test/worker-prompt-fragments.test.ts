@@ -169,9 +169,10 @@ describe('agent prompt fragments', () => {
     }
   })
 
-  it('resolves the full-suite contradiction for the baseline repair turn', () => {
+  it('states one precedence rule for the full-suite failing check in the baseline repair turn', () => {
     const prompt = prompts.baselineRepair.build()
     expect(prompt).toContain('failed step "Run pnpm test"')
-    expect(prompt).toMatch(/narrower command|prefer the narrower/i)
+    expect(prompt).toContain('run the exact command of the failing check only when no narrower command reproduces it')
+    expect(prompt).toContain('Exception: when no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.')
   })
 })

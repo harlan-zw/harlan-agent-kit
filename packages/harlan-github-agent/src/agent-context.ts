@@ -189,7 +189,7 @@ export const CHECK_SCOPES = {
   /** A turn that changed source files and must prove that change. */
   changedFiles: 'run the regression test file, its direct dependants, and lint and typecheck on the changed files only.',
   /** Baseline repair, where the failing CI check already names the command. */
-  failingCheck: 'run the exact command of the failing check, or a narrower command that reproduces the same failure, then lint and typecheck on the changed files only.',
+  failingCheck: 'prefer a narrower command that reproduces the same failure; run the exact command of the failing check only when no narrower command reproduces it, then lint and typecheck on the changed files only.',
   /** Conflict resolution, where the merge already names the files in scope. */
   conflictedFiles: 'run eslint on the conflicted files, vitest on the test files that import them, and git diff --check.',
 } as const
@@ -198,8 +198,12 @@ export type CheckScope = typeof CHECK_SCOPES[keyof typeof CHECK_SCOPES]
 
 /** The check budget every Agent turn that verifies its own change gets. */
 export function checkBudgetLines(scope: CheckScope): string {
+  const fullSuiteRule = 'Do not run the full test suite, the full typecheck, or a build. CI runs those.'
+  const lastResort = scope === CHECK_SCOPES.failingCheck
+    ? ' Exception: when no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.'
+    : ''
   return `Check budget: ${scope}
-Do not run the full test suite, the full typecheck, or a build. CI runs those.
+${fullSuiteRule}${lastResort}
 Failures outside the changed files are pre-existing. Do not stash changes to verify them.`
 }
 
