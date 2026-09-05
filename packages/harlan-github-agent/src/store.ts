@@ -12498,9 +12498,9 @@ export function openJournalStore(
     routineId: row.routine_id,
     runId: row.run_id,
     fingerprint: row.fingerprint,
-    // Rows written before the title column carry none. The claim was their
-    // title then, so it stays their title now.
-    title: row.title ?? row.claim,
+    // Rows written before the title column carry none, and a scan answer may
+    // leave it blank. Either way the claim was their title, so it stays it.
+    title: row.title || row.claim,
     target: row.target,
     claim: row.claim,
     verification: row.verification,

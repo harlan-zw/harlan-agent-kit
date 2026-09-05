@@ -301,7 +301,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         runId: task.id,
         candidates: withinSize.map(candidate => ({
           fingerprint: candidate.fingerprint,
-          title: candidate.title,
+          title: typeof candidate.title === 'string' ? candidate.title : '',
           target: candidate.target,
           claim: candidate.claim,
           verification: candidate.verification,
