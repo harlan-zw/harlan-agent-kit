@@ -116,7 +116,7 @@ Record scopes as a `## Scopes` table, placed after Banned. It uses the Banned co
 
 | Never | Use instead | Why |
 | --- | --- | --- |
-| `github-agent` | `agent` | One service, one word |
+| `agent` | `github-agent` | The package, unit and skill all spell it `github-agent` |
 ```
 
 **List only retired spellings. Never list every allowed scope.** An allowlist looks tidier and fails in practice: 40 to 59 percent of scopes in these repositories appear exactly once, so the list churns while the real drift is a handful of synonym pairs. A scope absent from the table is allowed.
@@ -125,7 +125,7 @@ Record scopes as a `## Scopes` table, placed after Banned. It uses the Banned co
 
 The `commit-msg` git hook reads this table. It refuses a retired scope and names the replacement. A repository with no `GLOSSARY.md` keeps every scope, so this is opt in.
 
-Add a row when `audit` finds two scopes naming one concept. Pick the winner by the same rule as any other term: the established word, weighted by surface, never the one that reads better.
+Add a row when `audit` finds two scopes naming one concept. Pick the winner by the same rule as any other term: weight by surface, never by count. In the example above `agent` had 111 uses against 65, and it still lost, because the package, the systemd unit and the skill directory all spell it `github-agent`. A frozen surface outranks a tally.
 
 ## Format
 
