@@ -108,6 +108,16 @@ Examples include dependencies, formatting, generated files, or comments in non-M
 The agent merges those after a READY review. Everything else waits for me.
 Unsure means no label. Rules: `harlan-agent-kit/references/auto-merge.md`.
 
+## Commits
+
+Every commit subject follows Conventional Commits: `type(scope): description`.
+
+- Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `perf`, `test`, `style`.
+- The scope is optional. Name the monorepo folder or the treeshakable export.
+- Keep the subject under 70 characters. Use the imperative mood: "add", never "added".
+- Never end the subject with a period. The body says why, because the diff says what.
+- A `commit-msg` git hook refuses a subject that breaks these rules under `~/pkg` and `~/sites`.
+
 ## Workflow
 
 - Ship the smallest thing that solves it. Add structure when it fails.
