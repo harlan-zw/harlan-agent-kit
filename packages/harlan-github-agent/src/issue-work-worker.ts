@@ -7,7 +7,7 @@ import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAgentPullRequest, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
 import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
-import { CHECK_BUDGET_LINES, instructionFilesLine, listInstructionFiles, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { CHECK_SCOPES, checkBudgetLines, instructionFilesLine, listInstructionFiles, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
@@ -262,7 +262,7 @@ This worktree was prepared fresh for this turn. No work from an earlier turn of 
 ${instructionFilesLine(input.instructionFiles)}
 Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or humanize-writing. Their rules are inlined below.
 ${UNIT_TEST_LINES}
-${CHECK_BUDGET_LINES}
+${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
 ${pullRequestMetadataLines}
 Choose a commit message that describes the implemented change. Avoid generic controller wording.
