@@ -3,6 +3,7 @@
 // The plugin exports only its default, because opencode loads every exported
 // function in a plugin file as a plugin. So every test goes through that.
 
+import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -20,7 +21,7 @@ afterAll(() => rmSync(workingDirectory, { recursive: true, force: true }))
 
 interface Hooks {
   'tool.execute.before': (input: { tool: string, sessionID?: string }, output: { args: any }) => Promise<void>
-  'tool.execute.after': (input: { tool: string, args: any }) => Promise<void>
+  'tool.execute.after': (input: { tool: string, sessionID?: string, args: any }, output?: { title?: string, output?: string, metadata?: any }) => Promise<void>
 }
 
 /** Loads the plugin the way opencode does, over a chosen hooks directory. */
@@ -106,5 +107,20 @@ describe('tool.execute.after', () => {
     await plugin['tool.execute.after']({ tool: 'bash', args: { command: 'ls' } })
     expect(() => readFileSync(project.log, 'utf8')).toThrow()
     rmSync(project.directory, { recursive: true, force: true })
+  })
+
+  it('appends a command-not-found suggestion to the shell output', async () => {
+    const command = `harlan-missing-${randomUUID()}`
+    const plugin = await loadPlugin(workingDirectory)
+    const output = { title: 'bash', output: `bash: ${command}: command not found`, metadata: {} }
+    await plugin['tool.execute.after']({ tool: 'bash', sessionID: randomUUID(), args: { command } }, output)
+    expect(output.output).toContain(`\`${command}\` is not installed`)
+  })
+
+  it('leaves shell output without a known failure alone', async () => {
+    const plugin = await loadPlugin(workingDirectory)
+    const output = { title: 'bash', output: 'src', metadata: {} }
+    await plugin['tool.execute.after']({ tool: 'bash', sessionID: randomUUID(), args: { command: 'ls' } }, output)
+    expect(output.output).toBe('src')
   })
 })

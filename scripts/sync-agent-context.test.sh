@@ -24,7 +24,7 @@ if rg -F 'Once work turns long with no name assigned' "$test_home/.claude/CLAUDE
   exit 1
 fi
 
-opencode_hooks=(check-config.sh pnpm-only.sh wt-only.sh pr-skill-only.sh merged-branch-guard.sh pre-commit-push.sh eslint.sh)
+opencode_hooks=(check-config.sh pnpm-only.sh wt-only.sh pr-skill-only.sh merged-branch-guard.sh pre-commit-push.sh eslint.sh command-not-found.sh)
 for hook_file in "${opencode_hooks[@]}"; do
   cmp "$repo_root/harlan-agent-kit/hooks/$hook_file" "$test_home/.local/share/harlan-agent-kit/hooks/$hook_file"
   if [ ! -x "$test_home/.local/share/harlan-agent-kit/hooks/$hook_file" ]; then

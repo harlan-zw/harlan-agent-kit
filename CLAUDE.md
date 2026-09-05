@@ -26,8 +26,9 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 - `SessionStart`: detect project type (Nuxt module/app, UnJS, Vue, Node), show git info, warn if not pnpm
 - `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); block raw `git worktree` mutation and `.claude/worktrees` paths (`wt-only.sh`); on `git commit` inject the commit-format rule (`pre-commit-push.sh`)
 - `PostToolUse` (Write|Edit): eslint autofix on the edited file
+- `PostToolUse` (Bash): append a `command-not-found.sh` install or BSD/GNU flag suggestion to the shell output, once per session per command
 
-Adding or renaming a PreToolUse Bash hook means updating `commandHooks` in the opencode plugin and `opencode_hook_files` in `scripts/sync-agent-context.sh`.
+Adding or renaming a PreToolUse Bash hook means updating `commandHooks` in the opencode plugin and `opencode_hook_files` in `scripts/sync-agent-context.sh`. A PostToolUse Bash hook joins `opencode_hook_files` the same way; the plugin appends its `followup_message` suggestion to the shell tool output, because opencode has no followup-message contract.
 
 **Disable hooks per-project**: `.claude/hooks.json` with `{"disabled": ["eslint", "pre-commit-push"]}`
 

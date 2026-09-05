@@ -19,6 +19,7 @@ opencode_hook_files=(
   merged-branch-guard.sh
   pre-commit-push.sh
   eslint.sh
+  command-not-found.sh
 )
 # The stable path the opencode plugin resolves the hooks from.
 hooks_install_suffix='.local/share/harlan-agent-kit/hooks'

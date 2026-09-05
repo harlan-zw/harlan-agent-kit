@@ -3,7 +3,9 @@
 // The GitHub agent workers run as opencode sessions. Those sessions never load
 // a Claude Code plugin, so none of the rules in `.claude-plugin/plugin.json`
 // reach them. This plugin runs the same bash scripts over the same stdin and
-// stdout contract, so one implementation serves both providers.
+// stdout contract, so one implementation serves both providers. PreToolUse
+// Bash hooks get their decisions from the hook stdout; `command-not-found.sh`
+// gets its `followup_message` appended to the shell tool output.
 //
 // `pnpm sync:context` installs the scripts to
 // `~/.local/share/harlan-agent-kit/hooks/` and this file to
@@ -62,6 +64,15 @@ const commandHooks: readonly HookEntry[] = [
 
 /** The PostToolUse hook for a file that a tool wrote. */
 const fileHook: HookEntry = { file: 'eslint.sh', timeoutMilliseconds: 30000 }
+
+/**
+ * The PostToolUse hook for a shell command that just failed.
+ *
+ * It answers with a `followup_message`. Claude Code shows that as a message;
+ * opencode has no such contract, so the plugin appends the suggestion to the
+ * shell tool output instead.
+ */
+const shellPostHook: HookEntry = { file: 'command-not-found.sh', timeoutMilliseconds: 5000 }
 
 /**
  * opencode names its shell tool `bash`.
@@ -180,6 +191,28 @@ function firstString(record: Record<string, unknown>, keys: readonly string[]): 
   return ''
 }
 
+/** Reads a followup message from a PostToolUse hook stdout. Empty when absent. */
+function readFollowupMessage(stdout: string): string {
+  const trimmed = stdout.trim()
+  if (trimmed === '')
+    return ''
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  }
+  catch {
+    // The contract treats unrecognised output as no message, so this is ignorable.
+    return ''
+  }
+  if (typeof parsed !== 'object' || parsed === null)
+    return ''
+  const specific = (parsed as { hookSpecificOutput?: unknown }).hookSpecificOutput
+  if (typeof specific !== 'object' || specific === null)
+    return ''
+  const message = (specific as { message?: unknown }).message
+  return typeof message === 'string' ? message : ''
+}
+
 /**
  * Runs every PreToolUse Bash hook over one shell command.
  *
@@ -223,6 +256,21 @@ async function lintWrittenFile(filePath: string, options: HarlanHookOptions): Pr
     reportHookFailure(run.reason)
 }
 
+/** Runs the PostToolUse shell hook over one finished command. Returns its suggestion, if any. */
+async function suggestForShellOutput(command: string, toolOutput: string, options: HarlanHookOptions): Promise<string> {
+  const run = await runHook(
+    join(options.hooksDirectory, shellPostHook.file),
+    { tool_input: { command }, tool_output: toolOutput },
+    shellPostHook,
+    options,
+  )
+  if (run._tag === 'Err') {
+    reportHookFailure(run.reason)
+    return ''
+  }
+  return readFollowupMessage(run.stdout)
+}
+
 /** Builds the opencode hooks over one installed hooks directory. */
 function createHarlanHooks(options: HarlanHookOptions) {
   return {
@@ -244,7 +292,17 @@ function createHarlanHooks(options: HarlanHookOptions) {
       if (verdict.command !== command)
         output.args.command = verdict.command
     },
-    'tool.execute.after': async (input: { tool: string, args: any }) => {
+    'tool.execute.after': async (input: { tool: string, sessionID?: string, args: any }, output: { output?: string }) => {
+      if (shellTools.has(input.tool)) {
+        const command = typeof input.args?.command === 'string' ? input.args.command : ''
+        const toolOutput = typeof output?.output === 'string' ? output.output : ''
+        if (command === '' || toolOutput === '')
+          return
+        const message = await suggestForShellOutput(command, toolOutput, { ...options, sessionId: input.sessionID })
+        if (message !== '')
+          output.output = `${toolOutput}\n\n${message}`
+        return
+      }
       if (!fileTools.has(input.tool))
         return
       const args = (input.args ?? {}) as Record<string, unknown>
