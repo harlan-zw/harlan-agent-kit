@@ -26,15 +26,19 @@ fi
 
 claude_hash=$(/usr/bin/sha256sum "$test_home/.claude/CLAUDE.md" | cut -d' ' -f1)
 codex_hash=$(/usr/bin/sha256sum "$test_home/.codex/AGENTS.md" | cut -d' ' -f1)
+hook_hash=$(/usr/bin/sha256sum "$repo_root/agent-context/git-hooks/commit-msg" | cut -d' ' -f1)
 export HARLAN_AGENT_CONTEXT_TEST_CALLS="$calls"
 export HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH="$claude_hash"
 export HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH="$codex_hash"
+export HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH="$hook_hash"
 
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''ssh %s\n'\'' "$*" >> "$HARLAN_AGENT_CONTEXT_TEST_CALLS"' \
   'if [[ "$*" == *CLAUDE.md.next*sha256sum* || "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH"; fi' \
   'if [[ "$*" == *AGENTS.md.next*sha256sum* || "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH"; fi' \
+  'if [[ "$*" == *commit-msg.next*sha256sum* || "$*" == *sha256sum*commit-msg.next* ]]; then printf '\''%s  commit-msg.next\n'\'' "$HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH"; fi' \
+  'if [[ -n "$HARLAN_AGENT_CONTEXT_TEST_SSH_FAIL" && "$*" == *core.hooksPath* ]]; then exit 42; fi' \
   > "$test_root/bin/ssh"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
@@ -51,8 +55,26 @@ grep -F 'hogwild:/home/harlan/.claude/CLAUDE.md.next' "$calls" >/dev/null
 grep -F 'hogwild:/home/harlan/.codex/AGENTS.md.next' "$calls" >/dev/null
 grep -F "mv '/home/harlan/.claude/CLAUDE.md.next' '/home/harlan/.claude/CLAUDE.md'" "$calls" >/dev/null
 grep -F "mv '/home/harlan/.codex/AGENTS.md.next' '/home/harlan/.codex/AGENTS.md'" "$calls" >/dev/null
+grep -F 'hogwild:/home/harlan/.config/git/hooks/commit-msg.next' "$calls" >/dev/null
+grep -F "mv '/home/harlan/.config/git/hooks/commit-msg.next' '/home/harlan/.config/git/hooks/commit-msg'" "$calls" >/dev/null
+grep -F "core.hooksPath '/home/harlan/.config/git/hooks'" "$calls" >/dev/null
+
+# A hook that arrives changed must stop the install, the same as the instructions.
+: > "$calls"
+saved_hook_hash="$HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH"
+export HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH=different
+if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >/dev/null 2>&1; then
+  printf '%s\n' 'Hogwild accepted a different commit-msg hook.' >&2
+  exit 1
+fi
+if grep -F "mv '" "$calls" >/dev/null; then
+  printf '%s\n' 'Hogwild installed an unverified commit-msg hook.' >&2
+  exit 1
+fi
+export HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH="$saved_hook_hash"
 
 : > "$calls"
+saved_codex_hash="$HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH"
 export HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH=different
 if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >/dev/null 2>&1; then
   printf '%s\n' 'Hogwild accepted different Agent instructions.' >&2
@@ -60,6 +82,27 @@ if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" 
 fi
 if grep -F "mv '" "$calls" >/dev/null; then
   printf '%s\n' 'Hogwild installed unverified Agent instructions.' >&2
+  exit 1
+fi
+export HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH="$saved_codex_hash"
+
+# A failed remote activation must fail the sync, the hook stays absent on Hogwild.
+: > "$calls"
+export HARLAN_AGENT_CONTEXT_TEST_SSH_FAIL=1
+activation_log="$test_root/activation.log"
+if PATH="$test_root/bin:/usr/bin:/bin" HARLAN_AGENT_CONTEXT_TEST_CALLS="$calls" \
+  bash "$script_dir/sync-agent-context.sh" hogwild >"$activation_log" 2>&1; then
+  printf '%s\n' 'Hogwild reported success on a failed remote activation.' >&2
+  exit 1
+fi
+unset HARLAN_AGENT_CONTEXT_TEST_SSH_FAIL
+activation_calls=$(grep -cF 'core.hooksPath' "$calls" || true)
+if [ "$activation_calls" -ne 1 ]; then
+  printf '%s\n' 'The activation test never reached the remote activation.' >&2
+  exit 1
+fi
+if grep -F 'Synced Hogwild Agent instructions.' "$activation_log" >/dev/null; then
+  printf '%s\n' 'Hogwild reported success on a failed remote activation.' >&2
   exit 1
 fi
 

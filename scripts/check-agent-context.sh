@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_HOME="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 CLAUDE="$TARGET_HOME/.claude/CLAUDE.md"
 CODEX="$TARGET_HOME/.codex/AGENTS.md"
+COMMIT_HOOK="$TARGET_HOME/.config/git/hooks/commit-msg"
+SOURCE_HOOK="$REPO_ROOT/agent-context/git-hooks/commit-msg"
 SKILL="$REPO_ROOT/harlan-agent-kit/skills/ts-design-patterns/SKILL.md"
 EXPECTED_HOME=$(mktemp -d)
 trap 'rm -rf "$EXPECTED_HOME"' EXIT
@@ -25,6 +27,15 @@ HARLAN_AGENT_CONTEXT_HOME="$EXPECTED_HOME" bash "$REPO_ROOT/scripts/sync-agent-c
 
 cmp -s "$EXPECTED_CLAUDE" "$CLAUDE" || bad "Claude instructions differ. Run pnpm sync:context."
 cmp -s "$EXPECTED_CODEX" "$CODEX" || bad "Codex instructions differ. Run pnpm sync:context."
+
+if [ ! -f "$COMMIT_HOOK" ]; then
+  bad "The commit-msg hook is not installed. Run pnpm sync:context."
+else
+  cmp -s "$SOURCE_HOOK" "$COMMIT_HOOK" || bad "The commit-msg hook differs. Run pnpm sync:context."
+  [ -x "$COMMIT_HOOK" ] || bad "The commit-msg hook is not executable. Run pnpm sync:context."
+fi
+[ "$(HOME="$TARGET_HOME" git config --global --get core.hooksPath)" = "$TARGET_HOME/.config/git/hooks" ] \
+  || bad "core.hooksPath does not point at the installed hooks. Run pnpm sync:context."
 
 # Each principle is a bullet opening with a bold clause; compare the whole set.
 principles() { grep -E '^- \*\*(Make illegal|Errors as|No silent|Parse, don|Explicit dep|Pure core)' "$1" | sort; }

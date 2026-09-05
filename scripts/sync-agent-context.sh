@@ -7,6 +7,7 @@ repo_root=$(cd "$script_dir/.." && pwd)
 shared_context="$repo_root/agent-context/context.md"
 template_claude="$repo_root/agent-context/CLAUDE.md"
 template_codex="$repo_root/agent-context/AGENTS.md"
+commit_hook="$repo_root/agent-context/git-hooks/commit-msg"
 target_home="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 hogwild_host="${HARLAN_AGENT_CONTEXT_HOGWILD_HOST:-hogwild}"
 hogwild_home="${HARLAN_AGENT_CONTEXT_HOGWILD_HOME:-/home/harlan}"
@@ -28,6 +29,7 @@ require_sources() {
   [ -f "$shared_context" ] || fail "Shared Agent instructions are missing: $shared_context"
   [ -f "$template_claude" ] || fail "Claude template is missing: $template_claude"
   [ -f "$template_codex" ] || fail "Codex template is missing: $template_codex"
+  [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
 }
 
 render_template() {
@@ -71,25 +73,33 @@ sync_local() {
   mv "$local_staging/AGENTS.md" "$target_home/.codex/AGENTS.md"
   rmdir "$local_staging"
   local_staging=''
+  mkdir -p "$target_home/.config/git/hooks"
+  install -m 755 "$commit_hook" "$target_home/.config/git/hooks/commit-msg"
+  # A repository with its own hook manager sets core.hooksPath locally, and that
+  # local value wins. This only reaches repositories that set none.
+  # HOME decides which global config git writes. The check script points
+  # target_home at a sandbox, and this keeps that run out of the real config.
+  HOME="$target_home" git config --global core.hooksPath "$target_home/.config/git/hooks"
   printf '%s\n' 'Synced local Agent instructions.'
 }
 
 cleanup_hogwild() {
   ssh -o BatchMode=yes "$hogwild_host" \
-    "rm -f '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.codex/AGENTS.md.next'" \
+    "rm -f '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.codex/AGENTS.md.next' '$hogwild_home/.config/git/hooks/commit-msg.next'" \
     >/dev/null 2>&1 || true
 }
 
 sync_hogwild() {
-  local claude_hash codex_hash remote_claude_hash remote_codex_hash
+  local claude_hash codex_hash hook_hash remote_claude_hash remote_codex_hash remote_hook_hash
   validate_hogwild
   local_staging=$(mktemp -d "${TMPDIR:-/tmp}/agent-context.XXXXXX")
   render_sources "$local_staging"
   claude_hash=$(sha256sum "$local_staging/CLAUDE.md" | cut -d' ' -f1)
   codex_hash=$(sha256sum "$local_staging/AGENTS.md" | cut -d' ' -f1)
+  hook_hash=$(sha256sum "$commit_hook" | cut -d' ' -f1)
 
   ssh -o BatchMode=yes "$hogwild_host" \
-    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex'"
+    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks'"
   if ! scp "$local_staging/CLAUDE.md" "$hogwild_host:$hogwild_home/.claude/CLAUDE.md.next"; then
     cleanup_hogwild
     fail 'Hogwild did not receive Claude instructions.'
@@ -98,18 +108,25 @@ sync_hogwild() {
     cleanup_hogwild
     fail 'Hogwild did not receive Codex instructions.'
   fi
+  if ! scp "$commit_hook" "$hogwild_host:$hogwild_home/.config/git/hooks/commit-msg.next"; then
+    cleanup_hogwild
+    fail 'Hogwild did not receive the commit-msg hook.'
+  fi
 
   remote_claude_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
     "sha256sum '$hogwild_home/.claude/CLAUDE.md.next'" | cut -d' ' -f1)
   remote_codex_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
     "sha256sum '$hogwild_home/.codex/AGENTS.md.next'" | cut -d' ' -f1)
-  if [ "$claude_hash" != "$remote_claude_hash" ] || [ "$codex_hash" != "$remote_codex_hash" ]; then
+  remote_hook_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
+    "sha256sum '$hogwild_home/.config/git/hooks/commit-msg.next'" | cut -d' ' -f1)
+  if [ "$claude_hash" != "$remote_claude_hash" ] || [ "$codex_hash" != "$remote_codex_hash" ] \
+    || [ "$hook_hash" != "$remote_hook_hash" ]; then
     cleanup_hogwild
     fail 'Hogwild received different Agent instructions.'
   fi
 
   ssh -o BatchMode=yes "$hogwild_host" \
-    "chmod 644 '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.codex/AGENTS.md.next' && mv '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.claude/CLAUDE.md' && mv '$hogwild_home/.codex/AGENTS.md.next' '$hogwild_home/.codex/AGENTS.md'"
+    "chmod 644 '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.codex/AGENTS.md.next' && mv '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.claude/CLAUDE.md' && mv '$hogwild_home/.codex/AGENTS.md.next' '$hogwild_home/.codex/AGENTS.md' && chmod 755 '$hogwild_home/.config/git/hooks/commit-msg.next' && mv '$hogwild_home/.config/git/hooks/commit-msg.next' '$hogwild_home/.config/git/hooks/commit-msg' && git config --global core.hooksPath '$hogwild_home/.config/git/hooks'"
   printf '%s\n' 'Synced Hogwild Agent instructions.'
 }
 
