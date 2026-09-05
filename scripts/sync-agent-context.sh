@@ -301,20 +301,23 @@ sync_hogwild_memory() {
   count=0
   remote_rsync=''
   if command -v rsync >/dev/null 2>&1; then
-    remote_rsync=$(ssh -o BatchMode=yes "$hogwild_host" 'command -v rsync' 2>/dev/null || true)
+    remote_rsync=$(ssh -n -o BatchMode=yes "$hogwild_host" 'command -v rsync' 2>/dev/null || true)
   fi
+
+  # Every ssh below runs with -n. Without it the first one reads the rest of
+  # the slug list from stdin, and the loop copies exactly one repository.
   while IFS= read -r slug; do
     source="$memory_root/$slug/memory"
     remote="$hogwild_home/.claude/projects/$slug/memory"
     if [ -n "$remote_rsync" ]; then
-      ssh -o BatchMode=yes "$hogwild_host" "mkdir -p '$remote'" \
+      ssh -n -o BatchMode=yes "$hogwild_host" "mkdir -p '$remote'" \
         || fail "Hogwild did not accept the memory directory for $slug."
       rsync -a --delete -e 'ssh -o BatchMode=yes' "$source/" "$hogwild_host:$remote/" \
         || fail "Hogwild did not receive the project memory for $slug."
     else
       # tar has no delete, so the remote directory starts empty. Every slug
       # matches [A-Za-z0-9-], so this removes a path inside the memory tree.
-      ssh -o BatchMode=yes "$hogwild_host" "rm -rf '$remote' && mkdir -p '$remote'" \
+      ssh -n -o BatchMode=yes "$hogwild_host" "rm -rf '$remote' && mkdir -p '$remote'" \
         || fail "Hogwild did not accept the memory directory for $slug."
       tar -C "$source" -czf - . | ssh -o BatchMode=yes "$hogwild_host" "tar -C '$remote' -xzf -" \
         || fail "Hogwild did not receive the project memory for $slug."

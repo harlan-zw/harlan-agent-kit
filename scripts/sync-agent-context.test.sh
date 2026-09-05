@@ -99,9 +99,11 @@ export HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH="$hook_hash"
 cat > "$test_root/bin/ssh" <<'FAKE_SSH'
 #!/usr/bin/env bash
 printf 'ssh %s\n' "$*" >> "$HARLAN_AGENT_CONTEXT_TEST_CALLS"
-# Real ssh reads the piped stream. The memory tar fallback would take SIGPIPE
-# without this.
-if [[ "$*" == *"tar -C"* ]]; then cat >/dev/null; fi
+# Real ssh reads stdin unless it is given -n, and that is exactly how the
+# memory loop lost every slug after the first. Copy that for the memory calls
+# only. Draining every call would hang the ones made in command substitution,
+# because their stdin is the caller's and nothing closes it.
+if [[ "$1" != '-n' && ( "$*" == *"tar -C"* || "$*" == *"/memory'"* ) ]]; then cat >/dev/null; fi
 if [[ "$*" == *CLAUDE.md.next*sha256sum* || "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '%s  CLAUDE.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH"; fi
 if [[ "$*" == *AGENTS.md.next*sha256sum* || "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '%s  AGENTS.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH"; fi
 if [[ "$*" == *commit-msg.next*sha256sum* || "$*" == *sha256sum*commit-msg.next* ]]; then printf '%s  commit-msg.next\n' "$HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH"; fi
@@ -150,6 +152,23 @@ grep -F 'hogwild:/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next' "$c
 # Memory reaches Hogwild for the primary checkout only, over the tar fallback
 # because the fake ssh reports no remote rsync.
 grep -F "tar -C '/home/harlan/.claude/projects/$primary_slug/memory' -xzf -" "$calls" >/dev/null
+
+# A second primary checkout proves the loop survives its own ssh calls. Without
+# -n the first ssh eats the slug list and only one repository ever syncs.
+second_slug=$(printf '%s' "$test_root/pkg/second" | tr -c 'A-Za-z0-9' '-')
+mkdir -p "$test_root/pkg/second/.git" "$memory_root/$second_slug/memory"
+printf '%s\n' '- [Second](second.md)' > "$memory_root/$second_slug/memory/MEMORY.md"
+: > "$calls"
+PATH="$test_root/bin:/usr/bin:/bin" \
+  HARLAN_AGENT_CONTEXT_HOGWILD_HOST=hogwild \
+  HARLAN_AGENT_CONTEXT_HOGWILD_HOME=/home/harlan \
+  bash "$script_dir/sync-agent-context.sh" hogwild >/dev/null
+for slug in "$primary_slug" "$second_slug"; do
+  if ! grep -F "tar -C '/home/harlan/.claude/projects/$slug/memory' -xzf -" "$calls" >/dev/null; then
+    printf '%s\n' "Hogwild memory sync stopped before $slug. An ssh call read the slug list." >&2
+    exit 1
+  fi
+done
 if grep -F "/home/harlan/.claude/projects/$worktree_slug" "$calls" >/dev/null; then
   printf '%s\n' 'Hogwild received memory for a wt worktree sibling.' >&2
   exit 1
