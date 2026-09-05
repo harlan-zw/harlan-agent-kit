@@ -8,8 +8,9 @@ Agent plugin for Nuxt/Vue/TypeScript workflows. No build step: bash hooks plus m
 check              # Parallel lint + typecheck + test (installed to ~/.local/bin)
 pnpm lint:fix      # ESLint autofix
 pnpm check:context # Verify installed Agent instructions match agent-context/
-pnpm sync:context # Install tracked Claude and Codex instructions, plus the commit-msg hook
+pnpm sync:context # Install tracked Claude and Codex instructions, the commit-msg hook, and the opencode plugin
 pnpm sync:context:hogwild # Install tracked instructions on Hogwild
+pnpm test:opencode-hooks # Run the opencode plugin against the real hook scripts
 pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, marketplace.json, skill frontmatter)
 ```
 
@@ -19,10 +20,14 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Git hook** (`agent-context/git-hooks/commit-msg`): refuses a commit subject that is not Conventional Commits, under `~/pkg` and `~/sites` only. `pnpm sync:context` installs it to `~/.config/git/hooks/` and points global `core.hooksPath` at that directory. It runs for every provider, because the GitHub agent workers use opencode or codex and never load a Claude Code plugin. A repository that sets `core.hooksPath` locally, through husky for example, overrides it.
 
+**opencode parity** (`harlan-agent-kit/plugins/opencode/harlan-hooks.ts`): the same provider gap reaches the tool hooks below. This plugin runs the same bash scripts over the same stdin and stdout contract. It denies a tool call by throwing, which opencode turns into a tool error the model reads. It rewrites a command by mutating `output.args` in place, because opencode hands that same object to the tool. A hook that fails, times out, or is missing logs to stderr and allows the call. `pnpm sync:context` installs the scripts to `~/.local/share/harlan-agent-kit/hooks/` and the plugin to `~/.config/opencode/plugins/harlan-hooks.ts`, locally and on Hogwild.
+
 **Hook lifecycle** (`harlan-agent-kit/hooks/`, wired in `.claude-plugin/plugin.json`):
 - `SessionStart`: detect project type (Nuxt module/app, UnJS, Vue, Node), show git info, warn if not pnpm
 - `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); block raw `git worktree` mutation and `.claude/worktrees` paths (`wt-only.sh`); on `git commit` inject the commit-format rule (`pre-commit-push.sh`)
 - `PostToolUse` (Write|Edit): eslint autofix on the edited file
+
+Adding or renaming a PreToolUse Bash hook means updating `commandHooks` in the opencode plugin and `opencode_hook_files` in `scripts/sync-agent-context.sh`.
 
 **Disable hooks per-project**: `.claude/hooks.json` with `{"disabled": ["eslint", "pre-commit-push"]}`
 
