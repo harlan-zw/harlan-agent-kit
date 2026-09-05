@@ -1,0 +1,109 @@
+name: Test
+
+# The pull request gate for this repository.
+#
+# Runners: GitHub hosted, not the desktop. This repository is public. A self
+# hosted runner on a public repository lets a fork pull request run code on that
+# host. No self hosted runner is registered here either.
+#
+# Markdown: every event ignores `**/*.md`. Harlan pushes Markdown only changes
+# straight to `main` with no pull request, so this workflow must not block them.
+# Some tests do read tracked Markdown, so a Markdown only change can still break
+# `pnpm test`. The next non Markdown commit reports it.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm typecheck
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+
+  # This job mirrors `pnpm test`, plus the hook suites that aggregate leaves out.
+  # Add a new suite here when you add one to `package.json`.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      # `pnpm check:context` stays out of this workflow. It compares installed
+      # files in a home directory against tracked sources. A runner installs
+      # nothing, so it reports drift that does not exist. `pnpm test:context`
+      # renders the same sources into a temporary home and compares them there.
+      - name: Agent instructions
+        run: pnpm test:context
+
+      - name: Git hook
+        run: pnpm test:commit-hook
+
+      - name: Himalaya read only
+        run: pnpm test:himalaya
+
+      - name: Opencode hooks
+        run: pnpm test:opencode-hooks
+
+      # These three enforce the worktree and pull request rules. `pnpm test`
+      # does not run them.
+      - name: Plugin hooks
+        run: |
+          pnpm test:wt-only
+          pnpm test:pr-skill-only
+          pnpm test:worktree-claim
+
+      - name: Sentry check in
+        run: pnpm test:sentry-checkin
+
+      # `pnpm test:service` chains six scripts. Three of them cannot run here.
+      # `worktrunk-config.test.sh` and `worktree-sweep.test.sh` need the `wt`
+      # binary, which a GitHub hosted runner does not install.
+      # `hogwild-service.test.sh` already fails on `main`, before this workflow.
+      # Repair those three in their own pull requests, then add them back.
+      - name: Service scripts
+        run: |
+          bash scripts/service.test.sh
+          bash scripts/repository-env.test.sh
+          bash scripts/worktree-sweep-service.test.sh
+
+      - name: Service package
+        run: pnpm --filter harlan-github-agent test:run
