@@ -24,11 +24,13 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Hook lifecycle** (`harlan-agent-kit/hooks/`, wired in `.claude-plugin/plugin.json`):
 - `SessionStart`: detect project type (Nuxt module/app, UnJS, Vue, Node), show git info, warn if not pnpm
-- `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); block raw `git worktree` mutation and `.claude/worktrees` paths (`wt-only.sh`); on `git commit` inject the commit-format rule (`pre-commit-push.sh`)
+- `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); block raw `git worktree` mutation and `.claude/worktrees` paths (`wt-only.sh`); keep email read only (`himalaya-read-only.sh`); require the PR skill (`pr-skill-only.sh`); on `git commit` inject the commit-format rule (`pre-commit-push.sh`)
 - `PostToolUse` (Write|Edit): eslint autofix on the edited file
 - `PostToolUse` (Bash): append a `command-not-found.sh` install or BSD/GNU flag suggestion to the shell output, once per session per command
 
 Adding or renaming a PreToolUse Bash hook means updating `commandHooks` in the opencode plugin and `opencode_hook_files` in `scripts/sync-agent-context.sh`. A PostToolUse Bash hook joins `opencode_hook_files` the same way; the plugin appends its `followup_message` suggestion to the shell tool output, because opencode has no followup-message contract.
+
+**Email is read only** (`hooks/himalaya-read-only.sh`): an agent may read mail and must never change or send it. The hook allows a fixed read set and denies everything else, because a denylist would miss the next subcommand himalaya adds. Hogwild carries a second, stronger guarantee: its `~/.config/himalaya/config.toml` has no send backend at all, so a send fails there whatever the agent does.
 
 **Disable hooks per-project**: `.claude/hooks.json` with `{"disabled": ["eslint", "pre-commit-push"]}`
 
