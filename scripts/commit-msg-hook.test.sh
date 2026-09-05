@@ -67,6 +67,47 @@ accepts 'Merge origin/main into fix/thing'
 accepts 'Revert "feat: add the widget"'
 accepts 'fixup! feat: add the widget'
 
+# A `## Scopes` table in GLOSSARY.md retires a scope and names its replacement.
+cat > "$sandbox/pkg/inside/GLOSSARY.md" <<'GLOSSARY'
+# Glossary
+
+## Scopes
+
+| Never | Use instead | Why |
+| --- | --- | --- |
+| `github-agent` | `agent` | One service, one word |
+| worktrunk | worktrees | The tool is not the concept |
+
+## Banned
+
+| Never | Use instead | Why |
+| --- | --- | --- |
+| `ci` | `workflows` | This row sits outside Scopes and must not apply |
+GLOSSARY
+git -C "$sandbox/pkg/inside" add GLOSSARY.md >/dev/null 2>&1
+git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(agent): add the glossary' >/dev/null 2>&1
+
+refuses 'fix(github-agent): read the review label'
+refuses 'feat(worktrunk): seed the env file'
+accepts 'fix(agent): read the review label'
+accepts 'fix(worktrees): seed the env file'
+# An unknown scope passes, because the table is a denylist and not an allowlist.
+accepts 'fix(dashboard): show the queue depth'
+# A ban outside the Scopes table must not reach commit scopes.
+accepts 'chore(ci): keep four runners warm'
+
+if grep -q 'Use `agent` instead' <(cd "$sandbox/pkg/inside" && printf 'fix(github-agent): x\n' > "$sandbox/msg" && bash "$sandbox/hooks/commit-msg" "$sandbox/msg" 2>&1); then
+  pass 'names the replacement scope in the refusal'
+else
+  bad 'the refusal does not name the replacement scope'
+fi
+
+rm -f "$sandbox/pkg/inside/GLOSSARY.md"
+git -C "$sandbox/pkg/inside" rm --quiet --cached GLOSSARY.md >/dev/null 2>&1 || true
+git -C "$sandbox/pkg/inside" commit --quiet --message 'docs(agent): drop the glossary' >/dev/null 2>&1 || true
+# With no GLOSSARY.md the scope rule does not fire at all.
+accepts 'fix(github-agent): read the review label'
+
 # A repository outside the trusted roots keeps its own rules.
 if try_commit "$sandbox/elsewhere/outside" 'no convention here'; then
   pass 'ignores a repository outside ~/pkg and ~/sites'
