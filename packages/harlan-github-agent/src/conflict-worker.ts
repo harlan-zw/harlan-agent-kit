@@ -5,6 +5,7 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { ConflictWorktreeManager, PreparedConflictWorktree } from './worktree.ts'
+import { CHECK_SCOPES, checkBudgetLines, TOOLCHAIN_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
 import { err, ok } from './result.ts'
@@ -43,7 +44,8 @@ const outputSchema = {
   },
 }
 
-function workerPrompt(task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree): string {
+/** The conflict resolution prompt. Exported so tests can assert its contract without an Agent. */
+export function conflictResolutionPrompt(task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree): string {
   const baseRef = task.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch
   const files = worktree.conflictedFiles.map(file => `- ${file}`).join('\n')
   return `Resolve the existing merge conflicts for ${task.repository}#${task.pullRequestNumber}.
@@ -61,12 +63,9 @@ Leave no conflict markers in any file. Search for <<<<<<<, =======, and >>>>>>> 
 Follow repository AGENTS.md and contributor instructions. Preserve the pull request intent.
 Use GitHub read commands when issue or pull request history clarifies intent. Do not post comments.
 
-Run only these focused checks:
-- eslint on the conflicted files
-- vitest on the test files that import the conflicted files
-- git diff --check
-Run package scripts with pnpm exec. Never use npx.
-Do not run the full test suite, the full typecheck, a build, or a toolchain install. CI runs those after publication.
+${checkBudgetLines(CHECK_SCOPES.conflictedFiles)}
+${TOOLCHAIN_LINES}
+Do not install or update the toolchain. The controller prepared this worktree.
 A failure in a file that neither side of the merge changed is pre-existing. Do not chase it.
 If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
 
@@ -153,7 +152,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'conflict' },
-        prompt: workerPrompt(currentTask, worktree),
+        prompt: conflictResolutionPrompt(currentTask, worktree),
         repository: task.repository,
         role: 'conflict_resolution',
         schema: outputSchema,

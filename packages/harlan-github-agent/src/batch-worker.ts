@@ -7,6 +7,7 @@ import type { JournalStore } from './store.ts'
 import type { ClaimedTaskResult, ClaimedTaskStore } from './task-scheduler.ts'
 import type { BatchIssue, BatchUnit, ClaimedBatch, ClaimedIssueWorkTask, PlannedBatchUnit, PullRequestBase, RepositoryMapping } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
+import { TOOLCHAIN_LINES } from './agent-context.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { err, ok } from './result.ts'
 import { runClaimedTask } from './task-scheduler.ts'
@@ -90,6 +91,7 @@ export function batchPlanPrompt(input: BatchPlanPromptInput): string {
 
 Work as a normal local agent session inside this Git worktree, checked out at the default branch. Read code as needed to see which issues touch the same files or share one cause. Do not edit files, commit, push, or post comments.
 Every issue below was triaged Ready to implement, and each one is Routine-filed, so its target file is known.
+${TOOLCHAIN_LINES}
 
 Decide units. One unit is one pull request. Rules:
 - Combine issues into one unit only when one change fixes them all, or when fixing them apart would conflict in the same lines.

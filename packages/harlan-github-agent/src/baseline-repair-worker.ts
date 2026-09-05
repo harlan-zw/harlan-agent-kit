@@ -8,6 +8,7 @@ import type { BaselineRepairWorktreeManager } from './worktree.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
+import { CHECK_SCOPES, checkBudgetLines, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { withBaselineRepairMarker } from './baseline-repair-state.ts'
 import { classifyCheckFailure } from './failure.ts'
@@ -243,12 +244,13 @@ export function baselineRepairPrompt(input: BaselineRepairPromptInput): string {
 Own the work end to end. Find the root cause, implement the complete fix, and verify it.
 Work as a normal local agent session. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before you return a result.
-${agents}Apply the unit-tests skill for a bug fix.
+${agents}${UNIT_TEST_LINES}
 
 Failing checks:
 ${input.repairable.map(checkBlock).join('\n')}
 ${outOfScope}
-Verify with the exact command of the failing check only. Never run the full test suite, the full lint, or the full build when a narrower command reproduces the failure.
+${checkBudgetLines(CHECK_SCOPES.failingCheck)}
+${TOOLCHAIN_LINES}
 ${nodeOptions}Never run sudo or systemctl. Never start, stop, or change a host service, a runner, or a container. If the fix needs a host change, return blocked and say why.
 Do not hide a failure with a retry wrapper, a concurrency limit, or a longer timeout. Fix the cause.
 Do not stage, commit, push, or publish. The controller owns those steps.

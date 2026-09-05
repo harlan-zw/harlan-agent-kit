@@ -170,7 +170,7 @@ describe('baseline repair worker', () => {
     expect(prompt).toContain('NODE_OPTIONS=--max-old-space-size=8192')
     expect(prompt).toContain('Read AGENTS.md')
     expect(prompt).toContain('Never run sudo or systemctl.')
-    expect(prompt).toContain('exact command of the failing check only')
+    expect(prompt).toContain('Check budget: prefer a narrower command that reproduces the same failure')
     expect(prompt).not.toMatch(/PR skill|pull request template/i)
   })
 
