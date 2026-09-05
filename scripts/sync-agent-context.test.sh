@@ -24,7 +24,9 @@ if rg -F 'Once work turns long with no name assigned' "$test_home/.claude/CLAUDE
   exit 1
 fi
 
-opencode_hooks=(check-config.sh pnpm-only.sh wt-only.sh pr-skill-only.sh merged-branch-guard.sh pre-commit-push.sh eslint.sh command-not-found.sh)
+# Every hook plugin.json registers, plus the loader they source. The sync
+# script derives this list, so a hook missing here never deployed.
+opencode_hooks=(check-config.sh session-start.sh pnpm-only.sh wt-only.sh himalaya-read-only.sh pr-skill-only.sh merged-branch-guard.sh pre-commit-push.sh eslint.sh command-not-found.sh)
 for hook_file in "${opencode_hooks[@]}"; do
   cmp "$repo_root/harlan-agent-kit/hooks/$hook_file" "$test_home/.local/share/harlan-agent-kit/hooks/$hook_file"
   if [ ! -x "$test_home/.local/share/harlan-agent-kit/hooks/$hook_file" ]; then
@@ -33,6 +35,9 @@ for hook_file in "${opencode_hooks[@]}"; do
   fi
 done
 cmp "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" "$test_home/.config/opencode/plugins/harlan-hooks.ts"
+# The opencode plugin reads its hook list from the installed manifest.
+cmp "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json" \
+  "$test_home/.local/share/harlan-agent-kit/.claude-plugin/plugin.json"
 
 # The fake ssh answers a batched sha256sum from this basename to hash table.
 opencode_hashes="$test_root/opencode-hashes"
@@ -43,6 +48,8 @@ for hook_file in "${opencode_hooks[@]}"; do
 done
 printf '%s %s\n' harlan-hooks.ts \
   "$(/usr/bin/sha256sum "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' plugin.json \
+  "$(/usr/bin/sha256sum "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json" | cut -d' ' -f1)" >> "$opencode_hashes"
 export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$opencode_hashes"
 export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_BAD=''
 
@@ -103,6 +110,64 @@ done
 grep -F 'hogwild:/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next' "$calls" >/dev/null
 grep -F "mv '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next' '/home/harlan/.config/opencode/plugins/harlan-hooks.ts'" "$calls" >/dev/null
 grep -F "chmod 644 '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next'" "$calls" >/dev/null
+manifest_target=/home/harlan/.local/share/harlan-agent-kit/.claude-plugin/plugin.json
+grep -F "hogwild:$manifest_target.next" "$calls" >/dev/null
+grep -F "mv '$manifest_target.next' '$manifest_target'" "$calls" >/dev/null
+grep -F "chmod 644 '$manifest_target.next'" "$calls" >/dev/null
+
+# A hook added to plugin.json must reach both installs with no other edit.
+fixture="$test_root/fixture"
+mkdir -p "$fixture/scripts" "$fixture/harlan-agent-kit/hooks" \
+  "$fixture/harlan-agent-kit/.claude-plugin" "$fixture/harlan-agent-kit/plugins/opencode"
+cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$fixture/scripts/"
+cp -r "$repo_root/agent-context" "$fixture/agent-context"
+cp "$repo_root/harlan-agent-kit/hooks/"*.sh "$fixture/harlan-agent-kit/hooks/"
+cp "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" "$fixture/harlan-agent-kit/plugins/opencode/"
+printf '%s\n' '#!/usr/bin/env bash' 'source "$(dirname "$0")/check-config.sh"' 'exit 0' \
+  > "$fixture/harlan-agent-kit/hooks/proof-hook.sh"
+jq '.hooks.PreToolUse[0].hooks += [{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/proof-hook.sh","timeout":7000}]' \
+  "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json" \
+  > "$fixture/harlan-agent-kit/.claude-plugin/plugin.json"
+
+fixture_home="$test_root/fixture-home"
+mkdir -p "$fixture_home"
+HARLAN_AGENT_CONTEXT_HOME="$fixture_home" bash "$fixture/scripts/sync-agent-context.sh" local >/dev/null
+fixture_hooks_dir="$fixture_home/.local/share/harlan-agent-kit/hooks"
+if [ ! -x "$fixture_hooks_dir/proof-hook.sh" ]; then
+  printf '%s\n' 'A hook added to plugin.json did not reach the local install.' >&2
+  exit 1
+fi
+if [ ! -x "$fixture_hooks_dir/check-config.sh" ]; then
+  printf '%s\n' 'The config loader did not reach the local install.' >&2
+  exit 1
+fi
+cmp "$fixture/harlan-agent-kit/.claude-plugin/plugin.json" \
+  "$fixture_home/.local/share/harlan-agent-kit/.claude-plugin/plugin.json"
+
+source "$repo_root/scripts/agent-context-hooks.sh"
+mapfile -t fixture_hook_files < <(agent_context_installed_hooks \
+  "$fixture/harlan-agent-kit/hooks" "$fixture/harlan-agent-kit/.claude-plugin/plugin.json")
+fixture_hashes="$test_root/fixture-hashes"
+: > "$fixture_hashes"
+for hook_file in "${fixture_hook_files[@]}"; do
+  printf '%s %s\n' "$hook_file" \
+    "$(/usr/bin/sha256sum "$fixture/harlan-agent-kit/hooks/$hook_file" | cut -d' ' -f1)" >> "$fixture_hashes"
+done
+printf '%s %s\n' plugin.json \
+  "$(/usr/bin/sha256sum "$fixture/harlan-agent-kit/.claude-plugin/plugin.json" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' harlan-hooks.ts \
+  "$(/usr/bin/sha256sum "$fixture/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
+
+: > "$calls"
+PATH="$test_root/bin:/usr/bin:/bin" \
+  HARLAN_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$fixture_hashes" \
+  HARLAN_AGENT_CONTEXT_HOGWILD_HOST=hogwild \
+  HARLAN_AGENT_CONTEXT_HOGWILD_HOME=/home/harlan \
+  bash "$fixture/scripts/sync-agent-context.sh" hogwild >/dev/null
+proof_target=/home/harlan/.local/share/harlan-agent-kit/hooks/proof-hook.sh
+grep -F "hogwild:$proof_target.next" "$calls" >/dev/null
+grep -F "mv '$proof_target.next' '$proof_target'" "$calls" >/dev/null
+: > "$calls"
 
 # An opencode hook that arrives changed must stop the whole install.
 : > "$calls"
@@ -112,7 +177,7 @@ if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" 
   printf '%s\n' 'Hogwild accepted a different opencode hook.' >&2
   exit 1
 fi
-if ! grep -F 'Hogwild received different opencode hook files.' "$opencode_log" >/dev/null; then
+if ! grep -F 'Hogwild received different hook files.' "$opencode_log" >/dev/null; then
   printf '%s\n' 'The opencode hook refusal named the wrong failure.' >&2
   exit 1
 fi
@@ -130,7 +195,7 @@ if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" 
   printf '%s\n' 'Hogwild accepted a different opencode plugin.' >&2
   exit 1
 fi
-if ! grep -F 'Hogwild received different opencode hook files.' "$opencode_log" >/dev/null; then
+if ! grep -F 'Hogwild received different hook files.' "$opencode_log" >/dev/null; then
   printf '%s\n' 'The opencode plugin refusal named the wrong failure.' >&2
   exit 1
 fi

@@ -9,20 +9,18 @@ template_claude="$repo_root/agent-context/CLAUDE.md"
 template_codex="$repo_root/agent-context/AGENTS.md"
 commit_hook="$repo_root/agent-context/git-hooks/commit-msg"
 plugin_hooks_dir="$repo_root/harlan-agent-kit/hooks"
+plugin_manifest="$repo_root/harlan-agent-kit/.claude-plugin/plugin.json"
 opencode_plugin="$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts"
-# The hooks the opencode plugin runs, plus the config loader they source.
-opencode_hook_files=(
-  check-config.sh
-  pnpm-only.sh
-  wt-only.sh
-  pr-skill-only.sh
-  merged-branch-guard.sh
-  pre-commit-push.sh
-  eslint.sh
-  command-not-found.sh
-)
-# The stable path the opencode plugin resolves the hooks from.
+# The manifest registers every hook, so the list below is derived, never typed.
+if [ ! -f "$script_dir/agent-context-hooks.sh" ]; then
+  printf '%s\n' "The hook list library is missing: $script_dir/agent-context-hooks.sh" >&2
+  exit 1
+fi
+source "$script_dir/agent-context-hooks.sh"
+installed_hook_files=()
+# The stable paths the opencode plugin resolves the hooks and the manifest from.
 hooks_install_suffix='.local/share/harlan-agent-kit/hooks'
+manifest_install_suffix='.local/share/harlan-agent-kit/.claude-plugin/plugin.json'
 plugin_install_suffix='.config/opencode/plugins/harlan-hooks.ts'
 target_home="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 hogwild_host="${HARLAN_AGENT_CONTEXT_HOGWILD_HOST:-hogwild}"
@@ -47,8 +45,11 @@ require_sources() {
   [ -f "$template_codex" ] || fail "Codex template is missing: $template_codex"
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
   [ -f "$opencode_plugin" ] || fail "The opencode plugin is missing: $opencode_plugin"
+  [ -f "$plugin_manifest" ] || fail "The plugin manifest is missing: $plugin_manifest"
+  mapfile -t installed_hook_files < <(agent_context_installed_hooks "$plugin_hooks_dir" "$plugin_manifest")
+  [ "${#installed_hook_files[@]}" -gt 0 ] || fail "The plugin manifest registers no hooks: $plugin_manifest"
   local hook_file
-  for hook_file in "${opencode_hook_files[@]}"; do
+  for hook_file in "${installed_hook_files[@]}"; do
     [ -f "$plugin_hooks_dir/$hook_file" ] || fail "A plugin hook is missing: $plugin_hooks_dir/$hook_file"
   done
 }
@@ -102,30 +103,37 @@ sync_local() {
   # target_home at a sandbox, and this keeps that run out of the real config.
   HOME="$target_home" git config --global core.hooksPath "$target_home/.config/git/hooks"
   # opencode loads no Claude Code plugin, so it reads the same hooks from here.
-  mkdir -p "$target_home/$hooks_install_suffix" "$target_home/$(dirname "$plugin_install_suffix")"
+  # The manifest travels with them, because the opencode plugin reads its hook
+  # list, its order, and its timeouts from the manifest at runtime.
+  mkdir -p "$target_home/$hooks_install_suffix" \
+    "$target_home/$(dirname "$manifest_install_suffix")" \
+    "$target_home/$(dirname "$plugin_install_suffix")"
   local hook_file
-  for hook_file in "${opencode_hook_files[@]}"; do
+  for hook_file in "${installed_hook_files[@]}"; do
     install -m 755 "$plugin_hooks_dir/$hook_file" "$target_home/$hooks_install_suffix/$hook_file"
   done
+  install -m 644 "$plugin_manifest" "$target_home/$manifest_install_suffix"
   install -m 644 "$opencode_plugin" "$target_home/$plugin_install_suffix"
   printf '%s\n' 'Synced local Agent instructions.'
 }
 
-# Remote paths the opencode files land on, in the order sha256sum reads them.
+# Remote paths the hook files land on, in the order sha256sum reads them.
 opencode_remote_targets() {
   local hook_file
-  for hook_file in "${opencode_hook_files[@]}"; do
+  for hook_file in "${installed_hook_files[@]}"; do
     printf '%s\n' "$hogwild_home/$hooks_install_suffix/$hook_file"
   done
+  printf '%s\n' "$hogwild_home/$manifest_install_suffix"
   printf '%s\n' "$hogwild_home/$plugin_install_suffix"
 }
 
 # Local sources in the same order, so the two hash lists line up.
 opencode_local_sources() {
   local hook_file
-  for hook_file in "${opencode_hook_files[@]}"; do
+  for hook_file in "${installed_hook_files[@]}"; do
     printf '%s\n' "$plugin_hooks_dir/$hook_file"
   done
+  printf '%s\n' "$plugin_manifest"
   printf '%s\n' "$opencode_plugin"
 }
 
@@ -151,7 +159,7 @@ sync_hogwild() {
   hook_hash=$(sha256sum "$commit_hook" | cut -d' ' -f1)
 
   ssh -o BatchMode=yes "$hogwild_host" \
-    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$plugin_install_suffix")'"
+    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$manifest_install_suffix")' '$hogwild_home/$(dirname "$plugin_install_suffix")'"
   if ! scp "$local_staging/CLAUDE.md" "$hogwild_host:$hogwild_home/.claude/CLAUDE.md.next"; then
     cleanup_hogwild
     fail 'Hogwild did not receive Claude instructions.'
@@ -172,10 +180,10 @@ sync_hogwild() {
       cleanup_hogwild
       fail "Hogwild did not receive $(basename "$source")."
     fi
-    mode=755
-    if [ "$target" = "$hogwild_home/$plugin_install_suffix" ]; then
-      mode=644
-    fi
+    case "$target" in
+      "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$plugin_install_suffix") mode=644 ;;
+      *) mode=755 ;;
+    esac
     staged_list="$staged_list '$target.next'"
     activation="$activation && chmod $mode '$target.next' && mv '$target.next' '$target'"
   done < <(opencode_local_sources) 3< <(opencode_remote_targets)
@@ -198,7 +206,7 @@ sync_hogwild() {
   fi
   if [ "$opencode_hashes" != "$remote_opencode_hashes" ]; then
     cleanup_hogwild
-    fail 'Hogwild received different opencode hook files.'
+    fail 'Hogwild received different hook files.'
   fi
 
   ssh -o BatchMode=yes "$hogwild_host" \

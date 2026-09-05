@@ -7,9 +7,14 @@
 // Bash hooks get their decisions from the hook stdout; `command-not-found.sh`
 // gets its `followup_message` appended to the shell tool output.
 //
+// `.claude-plugin/plugin.json` is the only place a hook is registered. This
+// plugin reads its chains, their order, and their timeouts from that manifest,
+// so a new hook needs no edit here.
+//
 // `pnpm sync:context` installs the scripts to
-// `~/.local/share/harlan-agent-kit/hooks/` and this file to
-// `~/.config/opencode/plugins/harlan-hooks.ts`.
+// `~/.local/share/harlan-agent-kit/hooks/`, the manifest to
+// `~/.local/share/harlan-agent-kit/.claude-plugin/plugin.json`, and this file
+// to `~/.config/opencode/plugins/harlan-hooks.ts`.
 //
 // This file exports one value. opencode loads every exported function in a
 // plugin file as its own plugin, and calls it with the plugin input. A second
@@ -18,6 +23,7 @@
 
 import type { Plugin } from '@opencode-ai/plugin'
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -39,40 +45,55 @@ type HookRun
   = | { _tag: 'Ok', stdout: string }
     | { _tag: 'Err', reason: string }
 
+/**
+ * The hook chains this plugin runs, read from the plugin manifest.
+ *
+ * `command` holds the PreToolUse Bash chain, in manifest order.
+ * `pre-commit-push.sh` only prints `additionalContext`. opencode has no place
+ * to put that, so the output is dropped. It stays in the chain for parity.
+ *
+ * `file` holds the PostToolUse Write and Edit chain.
+ *
+ * `shellPost` holds the PostToolUse Bash chain. Those hooks answer with a
+ * `followup_message`. Claude Code shows that as a message; opencode has no
+ * such contract, so the plugin appends the suggestion to the shell tool
+ * output instead.
+ */
+interface HookChains {
+  command: readonly HookEntry[]
+  file: readonly HookEntry[]
+  shellPost: readonly HookEntry[]
+}
+
+/** The manifest read, so a broken manifest names its own failure. */
+type ChainsRead
+  = | { _tag: 'Ok', chains: HookChains }
+    | { _tag: 'Err', reason: string }
+
 interface HarlanHookOptions {
   /** Directory holding the installed hook scripts. */
   hooksDirectory: string
   /** Directory the hooks run in, so git and `.claude/hooks.json` resolve. */
   workingDirectory: string
+  /** The hook chains the manifest registered. */
+  chains: HookChains
   /** Session id, so `merged-branch-guard.sh` can cache its GitHub lookup. */
   sessionId?: string
 }
 
-/**
- * PreToolUse Bash hooks, in the order `.claude-plugin/plugin.json` lists them.
- *
- * `pre-commit-push.sh` only prints `additionalContext`. opencode has no place
- * to put that, so the output is dropped. It stays in the chain for parity.
- */
-const commandHooks: readonly HookEntry[] = [
-  { file: 'pnpm-only.sh', timeoutMilliseconds: 5000 },
-  { file: 'wt-only.sh', timeoutMilliseconds: 5000 },
-  { file: 'pr-skill-only.sh', timeoutMilliseconds: 5000 },
-  { file: 'merged-branch-guard.sh', timeoutMilliseconds: 10000 },
-  { file: 'pre-commit-push.sh', timeoutMilliseconds: 5000 },
-]
+/** Claude Code hook events this plugin maps onto opencode tools. */
+const preToolUse = 'PreToolUse'
+const postToolUse = 'PostToolUse'
 
-/** The PostToolUse hook for a file that a tool wrote. */
-const fileHook: HookEntry = { file: 'eslint.sh', timeoutMilliseconds: 30000 }
+/** Claude Code tool names, as the manifest matchers spell them. */
+const claudeShellTool = 'Bash'
+const claudeFileTools = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 
-/**
- * The PostToolUse hook for a shell command that just failed.
- *
- * It answers with a `followup_message`. Claude Code shows that as a message;
- * opencode has no such contract, so the plugin appends the suggestion to the
- * shell tool output instead.
- */
-const shellPostHook: HookEntry = { file: 'command-not-found.sh', timeoutMilliseconds: 5000 }
+/** The time a hook may take when the manifest sets no timeout. */
+const defaultTimeoutMilliseconds = 5000
+
+/** No hooks at all, used when the manifest cannot be read. */
+const emptyChains: HookChains = { command: [], file: [], shellPost: [] }
 
 /**
  * opencode names its shell tool `bash`.
@@ -87,6 +108,104 @@ const shellTools = new Set(['bash'])
 const fileTools = new Set(['write', 'edit', 'apply_patch', 'patch', 'multiedit'])
 
 const defaultHooksDirectory = join(homedir(), '.local', 'share', 'harlan-agent-kit', 'hooks')
+
+/**
+ * The manifest that registers every hook.
+ *
+ * It sits beside the hooks in the repository and in the install, so one
+ * relative path resolves both. `pnpm sync:context` copies it there.
+ */
+function manifestPathFor(hooksDirectory: string): string {
+  return join(hooksDirectory, '..', '.claude-plugin', 'plugin.json')
+}
+
+/**
+ * Reads a matcher as the tool names it lists.
+ *
+ * Claude Code treats a matcher as a regular expression. Every matcher in this
+ * manifest is a plain name or a `|` list of names, so this reads it as a list.
+ */
+function matcherTools(matcher: unknown): readonly string[] {
+  if (typeof matcher !== 'string')
+    return []
+  return matcher.split('|').map(name => name.trim()).filter(name => name !== '')
+}
+
+/** Reads one manifest hook. Anything without a command file is skipped. */
+function readEntry(hook: unknown): HookEntry | undefined {
+  if (typeof hook !== 'object' || hook === null)
+    return undefined
+  const { command, timeout } = hook as { command?: unknown, timeout?: unknown }
+  if (typeof command !== 'string')
+    return undefined
+  // The manifest prefixes every command with `${CLAUDE_PLUGIN_ROOT}/hooks/`.
+  const file = command.split('/').pop() ?? ''
+  if (file === '')
+    return undefined
+  return {
+    file,
+    timeoutMilliseconds: typeof timeout === 'number' && timeout > 0 ? timeout : defaultTimeoutMilliseconds,
+  }
+}
+
+/** Reads one chain: every hook of one event whose matcher names a wanted tool. */
+function readChain(events: unknown, event: string, wanted: (tool: string) => boolean): HookEntry[] {
+  if (typeof events !== 'object' || events === null)
+    return []
+  const groups = (events as Record<string, unknown>)[event]
+  if (!Array.isArray(groups))
+    return []
+  const entries: HookEntry[] = []
+  for (const group of groups) {
+    if (typeof group !== 'object' || group === null)
+      continue
+    const { matcher, hooks } = group as { matcher?: unknown, hooks?: unknown }
+    if (!matcherTools(matcher).some(wanted))
+      continue
+    if (!Array.isArray(hooks))
+      continue
+    for (const hook of hooks) {
+      const entry = readEntry(hook)
+      if (entry !== undefined)
+        entries.push(entry)
+    }
+  }
+  return entries
+}
+
+/**
+ * Parses the manifest into the three chains, once, at plugin load.
+ *
+ * The manifest is the only place a hook is registered, so a hook added there
+ * reaches opencode with no second edit.
+ */
+function readChains(manifestPath: string): ChainsRead {
+  let text: string
+  try {
+    text = readFileSync(manifestPath, 'utf8')
+  }
+  catch (error) {
+    return { _tag: 'Err', reason: `no hook manifest at ${manifestPath}: ${String(error)}` }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  }
+  catch (error) {
+    return { _tag: 'Err', reason: `the hook manifest is not valid JSON: ${String(error)}` }
+  }
+  if (typeof parsed !== 'object' || parsed === null)
+    return { _tag: 'Err', reason: `the hook manifest holds no object: ${manifestPath}` }
+  const events = (parsed as { hooks?: unknown }).hooks
+  return {
+    _tag: 'Ok',
+    chains: {
+      command: readChain(events, preToolUse, tool => tool === claudeShellTool),
+      file: readChain(events, postToolUse, tool => claudeFileTools.has(tool)),
+      shellPost: readChain(events, postToolUse, tool => tool === claudeShellTool),
+    },
+  }
+}
 
 /** Reports a hook that could not run. The tool call still goes ahead. */
 function reportHookFailure(reason: string): void {
@@ -224,7 +343,7 @@ async function decideCommand(
   options: HarlanHookOptions,
 ): Promise<{ _tag: 'Allow', command: string } | { _tag: 'Deny', reason: string }> {
   let current = command
-  for (const entry of commandHooks) {
+  for (const entry of options.chains.command) {
     const run = await runHook(
       join(options.hooksDirectory, entry.file),
       { tool_input: { command: current } },
@@ -244,31 +363,38 @@ async function decideCommand(
   return { _tag: 'Allow', command: current }
 }
 
-/** Runs the PostToolUse file hook over one written path. */
+/** Runs the PostToolUse file hooks over one written path. */
 async function lintWrittenFile(filePath: string, options: HarlanHookOptions): Promise<void> {
-  const run = await runHook(
-    join(options.hooksDirectory, fileHook.file),
-    { tool_input: { file_path: filePath } },
-    fileHook,
-    options,
-  )
-  if (run._tag === 'Err')
-    reportHookFailure(run.reason)
+  for (const entry of options.chains.file) {
+    const run = await runHook(
+      join(options.hooksDirectory, entry.file),
+      { tool_input: { file_path: filePath } },
+      entry,
+      options,
+    )
+    if (run._tag === 'Err')
+      reportHookFailure(run.reason)
+  }
 }
 
-/** Runs the PostToolUse shell hook over one finished command. Returns its suggestion, if any. */
+/** Runs the PostToolUse shell hooks over one finished command. Returns the first suggestion. */
 async function suggestForShellOutput(command: string, toolOutput: string, options: HarlanHookOptions): Promise<string> {
-  const run = await runHook(
-    join(options.hooksDirectory, shellPostHook.file),
-    { tool_input: { command }, tool_output: toolOutput },
-    shellPostHook,
-    options,
-  )
-  if (run._tag === 'Err') {
-    reportHookFailure(run.reason)
-    return ''
+  for (const entry of options.chains.shellPost) {
+    const run = await runHook(
+      join(options.hooksDirectory, entry.file),
+      { tool_input: { command }, tool_output: toolOutput },
+      entry,
+      options,
+    )
+    if (run._tag === 'Err') {
+      reportHookFailure(run.reason)
+      continue
+    }
+    const message = readFollowupMessage(run.stdout)
+    if (message !== '')
+      return message
   }
-  return readFollowupMessage(run.stdout)
+  return ''
 }
 
 /** Builds the opencode hooks over one installed hooks directory. */
@@ -314,7 +440,16 @@ function createHarlanHooks(options: HarlanHookOptions) {
   }
 }
 
-export default (async ({ directory }) => createHarlanHooks({
-  hooksDirectory: process.env.HARLAN_AGENT_HOOKS_DIR ?? defaultHooksDirectory,
-  workingDirectory: directory,
-})) satisfies Plugin
+export default (async ({ directory }) => {
+  const hooksDirectory = process.env.HARLAN_AGENT_HOOKS_DIR ?? defaultHooksDirectory
+  const read = readChains(manifestPathFor(hooksDirectory))
+  // A broken enforcement layer must not stop the fleet, so this reports and
+  // runs no hooks. The drift check catches a missing install first.
+  if (read._tag === 'Err')
+    reportHookFailure(read.reason)
+  return createHarlanHooks({
+    hooksDirectory,
+    workingDirectory: directory,
+    chains: read._tag === 'Ok' ? read.chains : emptyChains,
+  })
+}) satisfies Plugin

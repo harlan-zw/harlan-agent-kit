@@ -4,7 +4,7 @@
 // function in a plugin file as a plugin. So every test goes through that.
 
 import { randomUUID } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -12,7 +12,27 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import harlanHooks from './harlan-hooks.ts'
 
-const hooksDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks')
+const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const hooksDirectory = join(pluginRoot, 'hooks')
+const manifest = join(pluginRoot, '.claude-plugin', 'plugin.json')
+
+/** Every PreToolUse Bash hook the manifest registers, in order. */
+function manifestCommandHooks(): string[] {
+  const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as {
+    hooks: { PreToolUse: { matcher: string, hooks: { command: string }[] }[] }
+  }
+  return parsed.hooks.PreToolUse
+    .filter(group => group.matcher.split('|').includes('Bash'))
+    .flatMap(group => group.hooks.map(hook => hook.command.split('/').pop() ?? ''))
+}
+
+/** A hooks directory that holds the manifest but no hook scripts. */
+function manifestWithoutScripts(): string {
+  const root = mkdtempSync(join(tmpdir(), 'harlan-hooks-manifest-'))
+  mkdirSync(join(root, '.claude-plugin'), { recursive: true })
+  copyFileSync(manifest, join(root, '.claude-plugin', 'plugin.json'))
+  return join(root, 'hooks')
+}
 
 /** A directory with no git repository, so merged-branch-guard.sh exits early. */
 const workingDirectory = mkdtempSync(join(tmpdir(), 'harlan-hooks-'))
@@ -81,13 +101,29 @@ describe('tool.execute.before', () => {
     expect(args.command).toBe('npm install')
   })
 
-  it('allows the command and reports when the hooks are missing', async () => {
+  it('denies a himalaya call that changes mail', async () => {
+    await expect(runShellHook('himalaya message delete 12')).rejects.toThrow(/read only/)
+  })
+
+  it('runs every PreToolUse Bash hook the manifest registers', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const plugin = await loadPlugin(workingDirectory, manifestWithoutScripts())
+    const args = { command: 'npm install' }
+    await plugin['tool.execute.before']({ tool: 'bash' }, { args })
+    // Every script is absent, so each one reports and none of them denies.
+    expect(args.command).toBe('npm install')
+    expect(stderr.mock.calls).toHaveLength(manifestCommandHooks().length)
+    stderr.mockRestore()
+  })
+
+  it('allows the command and reports when the manifest is missing', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     const plugin = await loadPlugin(workingDirectory, join(workingDirectory, 'absent'))
     const args = { command: 'npm install' }
     await plugin['tool.execute.before']({ tool: 'bash' }, { args })
     expect(args.command).toBe('npm install')
-    expect(stderr.mock.calls).toHaveLength(5)
+    expect(stderr.mock.calls).toHaveLength(1)
+    expect(String(stderr.mock.calls[0][0])).toContain('no hook manifest at')
     stderr.mockRestore()
   })
 })
