@@ -5,6 +5,7 @@ import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentFeedbackSignal, Candidate, ClaimedRoutineRun } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
+import { TOOLCHAIN_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
@@ -141,6 +142,8 @@ or push anything. Report what you find and stop.`
   return `Run the ${input.name} routine against ${input.repository}.
 
 ${turn}
+
+${TOOLCHAIN_LINES}
 
 Return every proposal you would make as a Candidate. Give each one a fingerprint
 that stays the same next time you find it. Use a file path or a symbol path.

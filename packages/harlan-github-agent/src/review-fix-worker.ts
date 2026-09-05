@@ -7,7 +7,7 @@ import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
 import type { ReviewFixWorktreeManager } from './worktree.ts'
 import { createHash } from 'node:crypto'
-import { CHECK_BUDGET_LINES, instructionFilesLine, listInstructionFiles, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { CHECK_SCOPES, checkBudgetLines, instructionFilesLine, listInstructionFiles, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairPullRequestHead } from './repository-policy.ts'
@@ -111,7 +111,7 @@ ${repairRoundHistory(task.rounds)}
 ${UNIT_TEST_LINES}
 For each finding, write the named failing regression test first. Confirm it fails for the stated reason.
 Fix every finding.
-${CHECK_BUDGET_LINES}
+${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
 For a visual finding, read the pull request image and reproduce the defect at the shown viewport.
 Download images only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths).

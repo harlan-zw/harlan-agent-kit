@@ -105,9 +105,31 @@ The subtlest finding a map produces: one word used as a value on two independent
 
 When it appears, do not rename either axis reflexively. Record both, state the axis each belongs to, and only then ask whether the collision is worth the cost of renaming.
 
+## Commit scopes
+
+A commit scope is vocabulary, and it drifts the same way every other surface does. Measured across Harlan's seven repositories, 176 of 240 scoped commits in one repo named a single service under two words, `agent` and `github-agent`.
+
+Record scopes as a `## Scopes` table, placed after Banned. It uses the Banned column shape.
+
+```md
+## Scopes
+
+| Never | Use instead | Why |
+| --- | --- | --- |
+| `agent` | `github-agent` | The package, unit and skill all spell it `github-agent` |
+```
+
+**List only retired spellings. Never list every allowed scope.** An allowlist looks tidier and fails in practice: 40 to 59 percent of scopes in these repositories appear exactly once, so the list churns while the real drift is a handful of synonym pairs. A scope absent from the table is allowed.
+
+**Do not derive scopes from the directory tree.** A structural list matched between 5 and 70 percent of real scopes, and under 25 percent in every application repository. Roughly half of real scopes name a process lane such as `ci` or `deps`, or a subsystem that crosses directories such as `crawl` or `overlay`.
+
+The `commit-msg` git hook reads this table. It refuses a retired scope and names the replacement. A repository with no `GLOSSARY.md` keeps every scope, so this is opt in.
+
+Add a row when `audit` finds two scopes naming one concept. Pick the winner by the same rule as any other term: weight by surface, never by count. In the example above `agent` had 111 uses against 65, and it still lost, because the package, the systemd unit and the skill directory all spell it `github-agent`. A frozen surface outranks a tally.
+
 ## Format
 
-`GLOSSARY.md` has four sections in this order: Map, Terms, Banned, Open questions.
+`GLOSSARY.md` has four sections in this order: Map, Terms, Banned, Open questions. A repository that enforces commit scopes adds Scopes after Banned.
 Read [references/format.md](references/format.md) for the Mermaid map syntax, the term entry shape, and a worked example before writing or auditing the file.
 
 ## Workflows

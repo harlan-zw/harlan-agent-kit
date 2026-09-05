@@ -1,6 +1,6 @@
 # GLOSSARY.md format
 
-`GLOSSARY.md` has four sections in this order: Map, Terms, Banned, Open questions.
+`GLOSSARY.md` has four sections in this order: Map, Terms, Banned, Open questions. A repository that enforces commit scopes adds Scopes after Banned.
 
 ## Map syntax
 
@@ -73,6 +73,20 @@ Naming calls this file does not settle. Resolve one, fold the answer in, delete 
    - Keep both, record the axis on each, accept that readers must infer.
 ```
 
+## `## Scopes` format
+
+Optional section, placed after Banned. A repository opts in to commit-scope vocabulary by adding it; a glossary without one keeps every scope. It uses the Banned column shape, one row per retired scope spelling.
+
+```md
+## Scopes
+
+| Never | Use instead | Why |
+| --- | --- | --- |
+| `agent` | `github-agent` | The package, unit and skill all spell it `github-agent` |
+```
+
+List only retired spellings. Never list every allowed scope; a scope absent from the table is allowed. The `commit-msg` git hook reads this table. It refuses a retired scope and names the replacement. Add a row when `audit` finds two scopes naming one concept.
+
 ## The rest
 
 ```md
@@ -106,6 +120,12 @@ name, doc heading, and route segment uses these terms and no synonyms.
 | audit (noun) | Sprint | Overloaded with the compliance meaning |
 | user | customer | "user" means the end visitor of a customer's site |
 | powerful, seamless, robust | (cut) | Marketing filler, says nothing |
+
+## Scopes
+
+| Never | Use instead | Why |
+| --- | --- | --- |
+| `agent` | `github-agent` | The package and unit spell it `github-agent` |
 ```
 
 The `Never:` line per term is what makes this enforceable. A term without its displaced synonyms recorded cannot be audited for.

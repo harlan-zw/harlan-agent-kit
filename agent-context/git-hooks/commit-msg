@@ -52,4 +52,37 @@ case "$subject" in
   *.) refuse 'the subject ends with a period.' ;;
 esac
 
+# A repository opts in to scope names by adding a `## Scopes` table to
+# GLOSSARY.md. The table lists retired spellings only, never every allowed
+# scope. An allowlist would churn: across Harlan's repositories 40 to 59
+# percent of scopes appear exactly once, so the list would need constant
+# edits while the real drift is a handful of synonym pairs.
+glossary="$repository_root/GLOSSARY.md"
+[ -f "$glossary" ] || exit 0
+
+scope=$(printf '%s' "$subject" | sed -n 's/^[a-z]*(\([^)]*\))\{0,1\}.*/\1/p')
+[ -n "$scope" ] || exit 0
+
+# Reads the `| Never | Use instead | Why |` rows under `## Scopes` only.
+replacement=$(awk -F'|' -v want="$scope" '
+  /^## Scopes[[:space:]]*$/ { inside = 1; next }
+  /^## / { inside = 0 }
+  inside && NF >= 4 {
+    never = $2; use = $3
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", never)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", use)
+    gsub(/`/, "", never)
+    gsub(/`/, "", use)
+    if (never == want) { print use; exit }
+  }
+' "$glossary")
+
+if [ -n "$replacement" ]; then
+  printf '\nCommit refused: GLOSSARY.md retires the scope `%s`.\n\n' "$scope" >&2
+  printf 'Subject: %s\n\n' "$subject" >&2
+  printf 'Use `%s` instead.\n' "$replacement" >&2
+  printf 'The Scopes table in GLOSSARY.md names the canonical scope.\n' >&2
+  exit 1
+fi
+
 exit 0
