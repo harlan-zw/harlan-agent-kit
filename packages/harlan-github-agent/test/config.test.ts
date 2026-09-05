@@ -1,5 +1,5 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadGitHubAppPrivateKey, normalizeGitHubRemote, parseConfigText, validateRepositoryMappings } from '../src/config.ts'
@@ -20,7 +20,7 @@ server:
   port: 3210
   allowed_origin: https://harlan-github-agent.localhost
 storage:
-  path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
+  path: ${homedir()}/.local/share/harlan-github-agent/state.sqlite
 mutations_enabled: false
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14
@@ -29,7 +29,7 @@ external_repositories:
     issues: [658]
 repositories:
   - github: harlan-zw/example
-    checkout: /home/harlan/pkg/example
+    checkout: ${homedir()}/pkg/example
     enabled: true
     ownership: owned
     default_branch: main

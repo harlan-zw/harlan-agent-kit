@@ -67,6 +67,22 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
 
+      # `wt` owns every worktree in this repository, and several suites drive
+      # the real binary. Pin the version, and check the archive before it runs.
+      - name: Install Worktrunk
+        env:
+          WORKTRUNK_VERSION: v0.74.0
+          WORKTRUNK_SHA256: 28392033912ab0a9027192d9975284787b29f080b4f2fd6298c89fffecf34c1f
+        run: |
+          archive=worktrunk-x86_64-unknown-linux-musl.tar.xz
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/max-sixty/worktrunk/releases/download/$WORKTRUNK_VERSION/$archive"
+          echo "$WORKTRUNK_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" --strip-components=1 \
+            "worktrunk-x86_64-unknown-linux-musl/wt"
+          sudo install "$RUNNER_TEMP/wt" /usr/local/bin/wt
+          wt --version
+
       # `pnpm check:context` stays out of this workflow. It compares installed
       # files in a home directory against tracked sources. A runner installs
       # nothing, so it reports drift that does not exist. `pnpm test:context`
@@ -94,15 +110,15 @@ jobs:
       - name: Sentry check in
         run: pnpm test:sentry-checkin
 
-      # `pnpm test:service` chains six scripts. Three of them cannot run here.
-      # `worktrunk-config.test.sh` and `worktree-sweep.test.sh` need the `wt`
-      # binary, which a GitHub hosted runner does not install.
+      # `pnpm test:service` chains six scripts. Five of them run here.
       # `hogwild-service.test.sh` already fails on `main`, before this workflow.
-      # Repair those three in their own pull requests, then add them back.
+      # Repair it in its own pull request, then add it back.
       - name: Service scripts
         run: |
           bash scripts/service.test.sh
           bash scripts/repository-env.test.sh
+          bash scripts/worktrunk-config.test.sh
+          bash scripts/worktree-sweep.test.sh
           bash scripts/worktree-sweep-service.test.sh
 
       - name: Service package

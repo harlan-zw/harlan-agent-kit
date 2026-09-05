@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { parseConfigText } from '../src/config.ts'
 import { dashboardSnapshotForTriggers, recordRoutineOnlyRepositoryHealth } from '../src/service.ts'
@@ -13,7 +14,7 @@ server:
   port: 3210
   allowed_origin: https://harlan-github-agent.localhost
 storage:
-  path: /home/harlan/.local/share/harlan-github-agent/state.sqlite
+  path: ${homedir()}/.local/share/harlan-github-agent/state.sqlite
 mutations_enabled: false
 max_open_pull_requests: 8
 poll_interval_seconds: 60
