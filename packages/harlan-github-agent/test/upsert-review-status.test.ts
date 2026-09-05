@@ -81,7 +81,7 @@ describe('review status actor handoff', () => {
 
     const result = await source.editReviewStatus(repositoryMapping(), 24, 5, 'Human review comment', newBody, new AbortController().signal)
 
-    expect(result).toEqual({ _tag: 'Err', error: 'The stored automated review comment belongs to another GitHub actor.' })
+    expect(result).toEqual(ok({ _tag: 'Foreign', reason: 'The stored automated review comment belongs to another GitHub actor.' }))
     expect(userUpdate).not.toHaveBeenCalled()
     expect(appUpdate).not.toHaveBeenCalled()
   })

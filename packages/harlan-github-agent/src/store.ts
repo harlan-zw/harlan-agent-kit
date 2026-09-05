@@ -1,7 +1,9 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
+import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
+import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { IssueTriageState } from './issue-triage.ts'
-import type { RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
+import type { PullRequestTriageStatsOutcome, RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
   AgentFeedback,
@@ -79,6 +81,7 @@ import type {
   ReviewResolution,
   ReviewRun,
   ReviewStatusTaskPhase,
+  RoleReasoningEfforts,
   Routine,
   RoutineIssueSource,
   RoutineReportCommand,
@@ -102,6 +105,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
+import { createBatchStore } from './batch-store.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { isIssueTriageState } from './issue-triage.ts'
@@ -109,6 +113,7 @@ import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { buildStats } from './stats.ts'
 import { cleanLine } from './text.ts'
+import { parseConflictCleanMergeEvidence } from './worktree.ts'
 
 export interface RecordIncidentInput {
   scope: IncidentScope
@@ -276,6 +281,66 @@ function resolveTaskIncidents(database: DatabaseSync, taskId: string, at: string
     UPDATE incidents SET resolved_at = ?
     WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?
   `).run(at, taskId)
+}
+
+/**
+ * Names a conflict Task whose real base merged cleanly while GitHub still said
+ * it conflicts.
+ *
+ * Nothing failed, so this is a warning and not an error, and it spends no
+ * Recovery budget. It is recorded after the Task completes, because completion
+ * closes every Incident the Task raised while it ran. The Task id already
+ * identifies one head and base pair, so a stale state seen twice stays one row.
+ */
+function recordCleanMergeIncident(database: DatabaseSync, taskId: string, evidence: string, at: string): void {
+  const cleanMerge = parseConflictCleanMergeEvidence(evidence)
+  if (cleanMerge === undefined)
+    return
+  const row = database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number
+    FROM tasks
+    JOIN subjects ON subjects.id = tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE tasks.id = ?
+  `).get(taskId) as { repository: string, github_number: number } | undefined
+  if (row === undefined)
+    return
+  upsertIncident(database, {
+    scope: { _tag: 'Task', taskId, repository: row.repository, itemNumber: row.github_number },
+    kind: 'subject_changed',
+    severity: 'warning',
+    operation: 'resolve_conflict',
+    message: `GitHub reports ${row.repository}#${row.github_number} as conflicting, but ${cleanMerge.baseRef} at ${cleanMerge.baseSha.slice(0, 12)} merges cleanly into head ${cleanMerge.headSha.slice(0, 12)}. GitHub's merge state is stale. Update the branch on GitHub, or push a new commit.`,
+    recovery: { _tag: 'ActionRequired' },
+    at,
+  })
+}
+
+/**
+ * Whether a completed conflict Task already proved this head and base merge cleanly.
+ *
+ * GitHub's stale state survives a Revision change that touches neither SHA,
+ * such as a title edit, so the Revision alone cannot answer this.
+ */
+function hasCleanMergeCompletion(database: DatabaseSync, subjectId: number, headSha: string, baseSha: string): boolean {
+  const rows = database.prepare(`
+    SELECT evidence FROM tasks
+    WHERE subject_id = ? AND kind = 'resolve_conflict' AND state_tag = 'Completed' AND evidence LIKE '{%'
+  `).all(subjectId) as unknown as Array<{ evidence: string }>
+  return rows.some((row) => {
+    const cleanMerge = parseConflictCleanMergeEvidence(row.evidence)
+    return cleanMerge !== undefined && cleanMerge.headSha === headSha && cleanMerge.baseSha === baseSha
+  })
+}
+
+/** Closes the stale-state warnings once the head or base moved, or GitHub agrees. */
+function resolveCleanMergeIncidents(database: DatabaseSync, subjectId: number, at: string): void {
+  database.prepare(`
+    UPDATE incidents SET resolved_at = ?
+    WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id IN (
+      SELECT id FROM tasks WHERE subject_id = ? AND kind = 'resolve_conflict' AND state_tag = 'Completed'
+    )
+  `).run(at, subjectId)
 }
 
 /** Failure kinds an outage causes, and that a healthy GitHub therefore clears. */
@@ -604,7 +669,13 @@ type UnpositionedQueueEntry = QueueEntry extends infer Entry
   ? Entry extends QueueEntry ? Omit<Entry, 'position'> : never
   : never
 
-export interface JournalStore {
+export interface LatestPullRequestTriageRun {
+  outcome: PullRequestTriageStatsOutcome
+  reason: string
+  completedAt: string
+}
+
+export interface JournalStore extends BatchStore {
   approveIssueWork: (input: {
     repository: string
     issueNumber: number
@@ -622,6 +693,8 @@ export interface JournalStore {
   authorizePublication: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
   cancelTask: (input: { taskId: string, at: string }) => CancelTaskResult
   recordPullRequestTriageRun: (input: RecordPullRequestTriageRunInput) => RecordPullRequestTriageRunResult
+  /** The newest recorded Pull request triage decision for one exact head commit, or null. */
+  getLatestPullRequestTriageRun: (repository: string, pullRequestNumber: number, headSha: string) => LatestPullRequestTriageRun | null
   claimNextAdversarialReviewTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedAdversarialReviewTask | null
   claimNextBaselineRepairTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedBaselineRepairTask | null
   claimNextConflictTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedConflictResolutionTask | null
@@ -737,7 +810,7 @@ export interface JournalStore {
     commentId?: number
     url?: string
   }) => boolean
-  completePublication: (input: { commandId: string, workerId: string, fence: number, at: string, evidence: string }) => boolean
+  completePublication: (input: { commandId: string, workerId: string, fence: number, at: string, evidence: string, pullRequestNumber?: number }) => boolean
   deferPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   failTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   failWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
@@ -868,7 +941,7 @@ export interface JournalStore {
     taskId: string
     commentId: number
     at: string
-    reason: 'A person deleted the comment.' | 'Another Task replaced the canonical comment.'
+    reason: 'A person deleted the comment.' | 'Another Task replaced the canonical comment.' | ForeignReviewCommentReason
   }) => boolean
   recordStoppedReviewStatus: (input: {
     taskId: string
@@ -896,6 +969,8 @@ export interface JournalStore {
   recordAgentFeedback: (input: { reviewRunId: string, feedback: AgentFeedbackInput, at: string }) => RecordAgentFeedbackResult
   /** Newest explicit judgments with the Review evidence needed by the feedback Routine. */
   listAgentFeedback: (limit?: number) => AgentFeedbackSignal[]
+  /** Evidence JSON of the Completed Issue triage Task for one issue Revision. */
+  getIssueTriageEvidence: (repository: string, issueNumber: number, revisionId: string) => string | null
   /** Exact open findings the current Review handed to its Repair Task. */
   getReviewFixFindings: (repository: string, pullRequestNumber: number, revisionId: string) => ReviewFinding[]
   /**
@@ -2709,6 +2784,7 @@ function dashboardQueue(
   currentSelectionMode: SelectionMode,
   reviewResolutions: Map<string, ReviewResolution>,
   desiredReviewOutcomes: Map<string, ReviewDesiredOutcome>,
+  batchReservationReasons: Map<string, string> = new Map(),
 ): QueueEntry[] {
   const currentTasks = new Map<string, DashboardTask>()
   tasks.forEach((task) => {
@@ -2746,6 +2822,9 @@ function dashboardQueue(
           case 'Running':
           case 'Publishing': return [{ ...base, kind: 'issue', state: { _tag: 'Active', work: 'issue_work' } }]
           case 'Queued': {
+            const reserved = batchReservationReasons.get(work.id)
+            if (reserved !== undefined)
+              return [{ ...base, kind: 'issue', state: { _tag: 'Pending', reason: reserved } }]
             const limit = mapping.maxOpenPullRequests
             const openPullRequests = openPullRequestsByRepository.get(subject.repository) ?? 0
             if (currentSelectionMode === 'auto' && limit !== null && openPullRequests >= limit) {
@@ -3457,6 +3536,21 @@ function supersedeTasks(
   })
 }
 
+/**
+ * Whether the last supersede of a Task caught it after it had left Queued.
+ *
+ * The state machine records this, not the reason text: a task superseded while
+ * Running or Publishing had finished or started agent work for its head commit.
+ */
+function supersededAfterStarting(database: DatabaseSync, taskId: string): boolean {
+  const row = database.prepare(`
+    SELECT from_tag FROM task_transitions
+    WHERE task_id = ? AND to_tag = 'Superseded'
+    ORDER BY id DESC LIMIT 1
+  `).get(taskId) as { from_tag: TaskRow['state_tag'] | null } | undefined
+  return row?.from_tag === 'Running' || row?.from_tag === 'Publishing'
+}
+
 function planConflictResolution(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -3475,6 +3569,7 @@ function planConflictResolution(
 
   if (!eligible) {
     supersedeTasks(database, subjectId, observedAt, 'The pull request no longer needs conflict resolution.')
+    resolveCleanMergeIncidents(database, subjectId, observedAt)
     return
   }
 
@@ -3497,6 +3592,25 @@ function planConflictResolution(
     && existing.reason !== null
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
     && isTransientFailure({ message: existing.reason })
+  // A Superseded task that had already left Queued spent an agent turn on this
+  // exact head commit, and the controller then threw that work away. Doing it
+  // again is a retry, so it spends recovery budget. One stacked pull request
+  // lost the publication base check two hundred times in two days because this
+  // path requeued it free of charge. A task superseded while still Queued
+  // never ran, so GitHub reporting the same conflict again stays unbudgeted.
+  const repeatedTurn = existing?.state_tag === 'Superseded'
+    && existing.cancelled === 0
+    && supersededAfterStarting(database, existing.id)
+  if (repeatedTurn && existing.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS) {
+    const reason = `${existing.reason ?? 'The publication was retired.'} The controller resolved this conflict ${existing.recovery_attempts + 1} times without publishing. Resolve it by hand, or push a new commit to the pull request.`
+    database.prepare(`
+      UPDATE tasks
+      SET state_tag = 'ActionRequired', reason = ?, updated_at = ?
+      WHERE id = ? AND state_tag = 'Superseded'
+    `).run(reason, observedAt, existing.id)
+    recordTransition(database, { taskId: existing.id, from: 'Superseded', to: 'ActionRequired', reason, fence: existing.fence, at: observedAt })
+    return
+  }
   if ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure) {
     database.prepare(`
       UPDATE tasks
@@ -3504,14 +3618,16 @@ function planConflictResolution(
         command_id = NULL, lease_expires_at = NULL, updated_at = ?,
         recovery_attempts = recovery_attempts + ?
       WHERE id = ? AND state_tag = ?
-    `).run(observedAt, recoverableFailure ? 1 : 0, existing.id, existing.state_tag)
+    `).run(observedAt, recoverableFailure || repeatedTurn ? 1 : 0, existing.id, existing.state_tag)
     recordTransition(database, {
       taskId: existing.id,
       from: existing.state_tag,
       to: 'Queued',
       reason: recoverableFailure
         ? 'The previous conflict resolution failed for a transient reason.'
-        : 'GitHub reports merge conflicts again.',
+        : repeatedTurn
+          ? 'The previous conflict resolution was retired before publication.'
+          : 'GitHub reports merge conflicts again.',
       fence: existing.fence,
       at: observedAt,
     })
@@ -3521,7 +3637,9 @@ function planConflictResolution(
   const canWriteHead = canWritePullRequestHead(mapping, subject)
   const canRepairHead = canRepairPullRequestHead(mapping, subject) && reviewApproved
   const ready = canWriteHead || canRepairHead
-  if (existing?.state_tag === 'ActionRequired' && existing.cancelled === 0 && ready) {
+  // An exhausted budget waits for a person. A new head commit makes a new task.
+  if (existing?.state_tag === 'ActionRequired' && existing.cancelled === 0 && ready
+    && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS) {
     database.prepare(`
       UPDATE tasks
       SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
@@ -3540,6 +3658,11 @@ function planConflictResolution(
   }
   if (existing !== undefined)
     return
+  // The base merged cleanly for this exact head and base, and GitHub has not
+  // caught up. Another turn proves the same thing and raises the same warning.
+  if (hasCleanMergeCompletion(database, subjectId, subject.headSha, subject.baseSha))
+    return
+  resolveCleanMergeIncidents(database, subjectId, observedAt)
 
   const state: TaskState = ready
     ? { _tag: 'Queued' }
@@ -3724,6 +3847,145 @@ function planReviewFix(
   if (existing.state_tag === 'Completed')
     return { _tag: 'Refused', reason: REVIEW_REPAIR_REFUSALS.published }
   return { _tag: 'Refused', reason: REVIEW_REPAIR_REFUSALS.owned }
+}
+
+/**
+ * The Revision a Review write lands on.
+ *
+ * A Review answers a head commit. The Revision an Agent claimed can be replaced
+ * while it works, when the base branch moves or GitHub recomputes mergeability,
+ * and the Review rows follow the subject's current Revision. A write that names
+ * the claimed Revision lands on the current one while both share the head
+ * commit. A different head commit keeps the claimed id, and the caller's own
+ * checks refuse it.
+ */
+function currentSameHeadRevision(database: DatabaseSync, revisionId: string): string {
+  const row = database.prepare(`
+    SELECT subjects.current_revision_id AS current_id
+    FROM revisions AS claimed
+    JOIN subjects ON subjects.id = claimed.subject_id
+    JOIN revisions AS current ON current.id = subjects.current_revision_id
+    WHERE claimed.id = ? AND subjects.kind = 'pull_request'
+      AND json_extract(current.payload, '$.state') = 'open'
+      AND json_extract(current.payload, '$.headSha') = json_extract(claimed.payload, '$.headSha')
+  `).get(revisionId) as { current_id: string } | undefined
+  return row?.current_id ?? revisionId
+}
+
+/**
+ * Moves Review work to the Revision that now carries the same head commit.
+ *
+ * A Review answers a head commit. The base branch moving, or GitHub
+ * recomputing mergeability, makes a new Revision of the same head, and every
+ * Review row keyed by Revision read as stale: the running Review was
+ * superseded, a READY verdict stopped refreshing, and a Repair lost its
+ * findings. 208 Reviews died that way in one fortnight. Rows follow the head.
+ *
+ * Conflict resolution and Baseline repair answer a base commit, so they stay.
+ */
+function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId: string, headSha: string): void {
+  const sameHead = `
+    SELECT id FROM revisions
+    WHERE subject_id = ? AND id != ? AND json_extract(payload, '$.headSha') = ?
+  `
+  const sameHeadArgs = [subjectId, revisionId, headSha]
+  database.prepare(`
+    UPDATE review_runs SET revision_id = ?
+    WHERE subject_id = ? AND head_sha = ? AND revision_id != ?
+  `).run(revisionId, subjectId, headSha, revisionId)
+  // A Review that queued a Baseline repair answers that base commit. It stays,
+  // and the moved base gets a fresh Review that can read the repaired base.
+  const waitsOnBaseline = `
+    SELECT revision_id FROM tasks WHERE subject_id = ? AND kind = 'baseline_repair'
+  `
+  database.prepare(`
+    UPDATE worker_tasks SET revision_id = ?
+    WHERE subject_id = ? AND kind = 'adversarial_review' AND state_tag != 'Superseded'
+      AND revision_id IN (${sameHead})
+      AND revision_id NOT IN (${waitsOnBaseline})
+  `).run(revisionId, subjectId, ...sameHeadArgs, subjectId)
+  database.prepare(`
+    UPDATE tasks SET revision_id = ?
+    WHERE subject_id = ? AND kind = 'review_fix' AND state_tag != 'Superseded'
+      AND revision_id IN (${sameHead})
+  `).run(revisionId, subjectId, ...sameHeadArgs)
+  database.prepare(`
+    UPDATE review_status_commands SET revision_id = ?
+    WHERE revision_id IN (${sameHead})
+      AND (
+        (task_kind = 'adversarial_review' AND task_id IN (SELECT id FROM worker_tasks WHERE subject_id = ? AND revision_id = ?))
+        OR (task_kind = 'review_fix' AND task_id IN (SELECT id FROM tasks WHERE subject_id = ? AND revision_id = ?))
+      )
+  `).run(revisionId, ...sameHeadArgs, subjectId, revisionId, subjectId, revisionId)
+  // One row per subject and Revision. The row a Task recorded outranks one a
+  // poll derived, then the newest wins.
+  database.prepare(`
+    DELETE FROM review_resolutions
+    WHERE subject_id = ? AND (revision_id = ? OR revision_id IN (${sameHead}))
+      AND resolution_tag != 'WaitingForBaselineRepair'
+      AND rowid != (
+        SELECT rowid FROM review_resolutions
+        WHERE subject_id = ? AND (revision_id = ? OR revision_id IN (${sameHead}))
+          AND resolution_tag != 'WaitingForBaselineRepair'
+        ORDER BY (task_id IS NOT NULL) DESC, created_at DESC, rowid DESC
+        LIMIT 1
+      )
+  `).run(subjectId, revisionId, ...sameHeadArgs, subjectId, revisionId, ...sameHeadArgs)
+  database.prepare(`
+    UPDATE review_resolutions SET revision_id = ?
+    WHERE subject_id = ? AND revision_id IN (${sameHead})
+      AND resolution_tag != 'WaitingForBaselineRepair'
+      AND NOT EXISTS (SELECT 1 FROM review_resolutions AS held WHERE held.subject_id = ? AND held.revision_id = ?)
+  `).run(revisionId, subjectId, ...sameHeadArgs, subjectId, revisionId)
+  database.prepare(`
+    DELETE FROM pull_request_triage_runs
+    WHERE subject_id = ? AND (revision_id = ? OR revision_id IN (${sameHead}))
+      AND rowid != (
+        SELECT rowid FROM pull_request_triage_runs
+        WHERE subject_id = ? AND (revision_id = ? OR revision_id IN (${sameHead}))
+        ORDER BY completed_at DESC, rowid DESC
+        LIMIT 1
+      )
+  `).run(subjectId, revisionId, ...sameHeadArgs, subjectId, revisionId, ...sameHeadArgs)
+  database.prepare(`
+    UPDATE pull_request_triage_runs SET revision_id = ?
+    WHERE subject_id = ? AND revision_id IN (${sameHead})
+  `).run(revisionId, subjectId, ...sameHeadArgs)
+  database.prepare(`
+    DELETE FROM approval_prompt_comments
+    WHERE subject_id = ? AND (revision_id = ? OR revision_id IN (${sameHead}))
+      AND rowid != (
+        SELECT rowid FROM approval_prompt_comments
+        WHERE subject_id = ? AND (revision_id = ? OR revision_id IN (${sameHead}))
+        ORDER BY updated_at DESC, rowid DESC
+        LIMIT 1
+      )
+  `).run(subjectId, revisionId, ...sameHeadArgs, subjectId, revisionId, ...sameHeadArgs)
+  database.prepare(`
+    UPDATE approval_prompt_comments SET revision_id = ?
+    WHERE subject_id = ? AND revision_id IN (${sameHead})
+  `).run(revisionId, subjectId, ...sameHeadArgs)
+  // A person approved this head commit, whatever the base was at the time.
+  database.prepare(`
+    INSERT OR IGNORE INTO pull_request_approvals (subject_id, revision_id, kind, approved_at)
+    SELECT subject_id, ?, kind, MIN(approved_at)
+    FROM pull_request_approvals
+    WHERE subject_id = ? AND revision_id IN (${sameHead})
+    GROUP BY kind
+  `).run(revisionId, subjectId, ...sameHeadArgs)
+}
+
+/**
+ * A Review Task id no other row holds.
+ *
+ * Review Tasks follow the head commit across Revisions, and a Superseded one
+ * keeps the id of the Revision it started on. A later visit to that Revision
+ * must not reuse it.
+ */
+function unusedWorkerTaskId(database: DatabaseSync, taskId: string, at: string): string {
+  return database.prepare('SELECT 1 FROM worker_tasks WHERE id = ?').get(taskId) === undefined
+    ? taskId
+    : digest(`${taskId}:${at}`)
 }
 
 function supersedeWorkerTasks(
@@ -3911,7 +4173,37 @@ function planAdversarialReview(
 
   const eligible = reviewable && subject.mergeState === 'clean'
 
-  if (alreadyReviewed && subject.kind === 'pull_request' && subject.priorAutomatedReview._tag === 'Found') {
+  // This service's own Review run outranks a comment it finds on GitHub, which
+  // is usually that same run. Read the other way round, a base branch move
+  // filed every verdict as someone else's review.
+  if (alreadyReviewed && localAttempt.head_review_run_id !== null) {
+    const stored = database.prepare(`
+      INSERT INTO review_resolutions (
+        subject_id, revision_id, task_id, task_fence, resolution_tag,
+        review_run_id, baseline_task_id, github_url, reason, created_at
+      ) VALUES (?, ?, NULL, 0, 'Reviewed', ?, NULL, NULL, NULL, ?)
+      ON CONFLICT(subject_id, revision_id) DO UPDATE SET
+        task_id = NULL, task_fence = 0, resolution_tag = 'Reviewed',
+        review_run_id = excluded.review_run_id, baseline_task_id = NULL, github_url = NULL,
+        reason = NULL, created_at = excluded.created_at
+      WHERE review_resolutions.task_id IS NULL
+        AND review_resolutions.resolution_tag IN ('UnknownNeedsReconciliation', 'ExistingReview')
+    `).run(subjectId, revisionId, localAttempt.head_review_run_id, observedAt)
+    if (stored.changes === 1) {
+      recordWorkflowEvent(database, {
+        stream: 'review_resolution',
+        event: 'Reused',
+        entityId: `${subjectId}:${revisionId}`,
+        repository: mapping.github,
+        itemNumber: subject.number,
+        revisionId,
+        from: null,
+        to: 'Reviewed',
+        at: observedAt,
+      })
+    }
+  }
+  else if (alreadyReviewed && subject.kind === 'pull_request' && subject.priorAutomatedReview._tag === 'Found') {
     const stored = database.prepare(`
       INSERT INTO review_resolutions (
         subject_id, revision_id, task_id, task_fence, resolution_tag,
@@ -3937,28 +4229,6 @@ function planAdversarialReview(
       })
     }
   }
-  else if (alreadyReviewed && localAttempt.head_review_run_id !== null) {
-    const stored = database.prepare(`
-      INSERT INTO review_resolutions (
-        subject_id, revision_id, task_id, task_fence, resolution_tag,
-        review_run_id, baseline_task_id, github_url, reason, created_at
-      ) VALUES (?, ?, NULL, 0, 'Reviewed', ?, NULL, NULL, NULL, ?)
-      ON CONFLICT(subject_id, revision_id) DO NOTHING
-    `).run(subjectId, revisionId, localAttempt.head_review_run_id, observedAt)
-    if (stored.changes === 1) {
-      recordWorkflowEvent(database, {
-        stream: 'review_resolution',
-        event: 'Reused',
-        entityId: `${subjectId}:${revisionId}`,
-        repository: mapping.github,
-        itemNumber: subject.number,
-        revisionId,
-        from: null,
-        to: 'Reviewed',
-        at: observedAt,
-      })
-    }
-  }
 
   if (!eligible) {
     supersedeWorkerTasks(
@@ -3974,9 +4244,18 @@ function planAdversarialReview(
   }
 
   supersedeWorkerTasks(database, subjectId, 'adversarial_review', observedAt, 'A newer pull request head commit replaced this review.', revisionId)
+  // Review Tasks follow the head commit, so one Revision can hold several.
+  // The live one answers, then the last one that ran.
   const existing = database.prepare(`
     SELECT id, state_tag, reason, fence, recovery_attempts FROM worker_tasks
     WHERE subject_id = ? AND kind = 'adversarial_review' AND revision_id = ?
+    ORDER BY
+      CASE state_tag
+        WHEN 'Running' THEN 0 WHEN 'Queued' THEN 0 WHEN 'ActionRequired' THEN 0
+        WHEN 'Completed' THEN 1 WHEN 'Failed' THEN 2 ELSE 3
+      END,
+      updated_at DESC, id DESC
+    LIMIT 1
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number } | undefined
   // The failure taxonomy decides, never a list of exact wordings. The list this
   // replaces was collected from past incidents, so rewording any one of those
@@ -4073,7 +4352,7 @@ function planAdversarialReview(
   if (existing !== undefined)
     return
 
-  const taskId = digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:adversarial_review`)
+  const taskId = unusedWorkerTaskId(database, digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:adversarial_review`), observedAt)
   database.prepare(`
     INSERT INTO worker_tasks (id, subject_id, revision_id, kind, state_tag, updated_at)
     VALUES (?, ?, ?, 'adversarial_review', 'Queued', ?)
@@ -5184,6 +5463,86 @@ const repairReportMigration = `
   PRAGMA user_version = 61;
 `
 
+/**
+ * Batches: one planned group of Ready issues per repository.
+ *
+ * `batch_tasks` is the reservation. A Task in it belongs to its Batch and the
+ * plain Issue work claim skips it. `batch_units` is the plan, one row per pull
+ * request the Batch produces. A Batch owns no Item, like a Routine, so its
+ * lease lives on its own row.
+ *
+ * `publication_commands.pull_request_number` lets a unit that stacks read the
+ * pull request its dependency opened without waiting for the next GitHub poll.
+ */
+/**
+ * Gives a Candidate its own issue title.
+ *
+ * The title was built as `<routine name>: <claim>`, and the claim is a whole
+ * sentence. Issue lists read as truncated prose, and the routine name repeated
+ * the `routine:<name>` label the same code already applies. The Agent now
+ * writes a short title, and this column keeps it.
+ */
+const candidateTitleMigration = `
+  ALTER TABLE candidates ADD COLUMN title TEXT;
+
+  PRAGMA user_version = 63;
+`
+
+const batchMigration = `
+  CREATE TABLE IF NOT EXISTS batches (
+    id TEXT PRIMARY KEY,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Queued', 'Running', 'Completed', 'Failed')),
+    reason TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 2,
+    lease_expires_at TEXT,
+    plan TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (state_tag != 'Failed' OR reason IS NOT NULL)
+  );
+
+  CREATE INDEX IF NOT EXISTS batches_repository_state ON batches(repository_id, state_tag);
+
+  CREATE TABLE IF NOT EXISTS batch_units (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    primary_task_id TEXT NOT NULL REFERENCES tasks(id),
+    issue_numbers TEXT NOT NULL CHECK (json_valid(issue_numbers)),
+    depends_on_unit_id TEXT REFERENCES batch_units(id),
+    rationale TEXT NOT NULL,
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Waiting', 'Running', 'Published', 'ActionRequired', 'Failed')),
+    reason TEXT,
+    pull_request_number INTEGER,
+    head_ref TEXT,
+    head_sha TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE (batch_id, position),
+    CHECK (state_tag NOT IN ('ActionRequired', 'Failed') OR reason IS NOT NULL),
+    CHECK (state_tag != 'Published' OR (pull_request_number IS NOT NULL AND head_ref IS NOT NULL AND head_sha IS NOT NULL))
+  );
+
+  CREATE INDEX IF NOT EXISTS batch_units_batch ON batch_units(batch_id, position);
+
+  CREATE TABLE IF NOT EXISTS batch_tasks (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+    batch_id TEXT NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    unit_id TEXT REFERENCES batch_units(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS batch_tasks_batch ON batch_tasks(batch_id);
+
+  PRAGMA user_version = 62;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -5456,9 +5815,27 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 60) {
     applyMigration(database, repairReportMigration)
+    version = 61
+  }
+  if (version === 61) {
+    // A journal rewound for replay already carries the column and the tables,
+    // and SQLite has no ADD COLUMN IF NOT EXISTS.
+    const columns = (database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>)
+      .map(column => column.name)
+    applyMigration(database, columns.includes('pull_request_number')
+      ? batchMigration
+      : `ALTER TABLE publication_commands ADD COLUMN pull_request_number INTEGER;\n${batchMigration}`)
+    version = 62
+  }
+  if (version === 62) {
+    // A journal rewound for replay already carries the column, and SQLite has
+    // no ADD COLUMN IF NOT EXISTS.
+    const columns = (database.prepare('PRAGMA table_info(candidates)').all() as unknown as Array<{ name: string }>)
+      .map(column => column.name)
+    applyMigration(database, columns.includes('title') ? 'PRAGMA user_version = 63;' : candidateTitleMigration)
     return
   }
-  if (version === 61)
+  if (version === 63)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -5715,6 +6092,8 @@ export function openJournalStore(
   /** Issue work stops when open pull requests reach this limit. Matches the configuration default. */
   maxOpenPullRequests = 8,
   serviceUpdate: () => ServiceUpdateStatus = () => ({ _tag: 'Checking', deployedCommit: '' }),
+  /** Reasoning effort overrides the configuration names, per Agent provider and role. */
+  roleReasoningEfforts: RoleReasoningEfforts = {},
 ): JournalStore {
   const database = openDatabase(path)
   const configuredSelection = providerAgentSelection(profile.provider)
@@ -5847,6 +6226,7 @@ export function openJournalStore(
   }
 
   const requestReviewRerun: JournalStore['requestReviewRerun'] = (input) => {
+    const revisionId = currentSameHeadRevision(database, input.revisionId)
     database.exec('BEGIN IMMEDIATE')
     try {
       const duplicate = database.prepare(`
@@ -5887,7 +6267,7 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
       }
-      if (row.current_revision_id !== input.revisionId) {
+      if (row.current_revision_id !== revisionId) {
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
       }
@@ -5903,7 +6283,7 @@ export function openJournalStore(
             AND worker_tasks.subject_id = ?
             AND worker_tasks.revision_id = ?
           LIMIT 1
-        `).get(row.subject_id, input.revisionId) !== undefined
+        `).get(row.subject_id, revisionId) !== undefined
         if (priorDispute) {
           database.exec('COMMIT')
           return { _tag: 'Rejected', reason: { _tag: 'DisputeCapReached' } }
@@ -5923,7 +6303,7 @@ export function openJournalStore(
         || database.prepare(`
           SELECT 1 FROM pull_request_approvals
           WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
-        `).get(row.subject_id, input.revisionId) !== undefined
+        `).get(row.subject_id, revisionId) !== undefined
       if (
         pullRequest.state !== 'open'
         || pullRequest.draft
@@ -5935,12 +6315,12 @@ export function openJournalStore(
         return { _tag: 'Rejected', reason: { _tag: 'ReviewNotReady' } }
       }
 
-      const taskId = row.task_id ?? digest(`${mapping.github}:pull_request:${pullRequest.number}:${input.revisionId}:adversarial_review`)
+      const taskId = row.task_id ?? unusedWorkerTaskId(database, digest(`${mapping.github}:pull_request:${pullRequest.number}:${revisionId}:adversarial_review`), input.at)
       if (row.task_id === null) {
         database.prepare(`
           INSERT INTO worker_tasks (id, subject_id, revision_id, kind, state_tag, updated_at)
           VALUES (?, ?, ?, 'adversarial_review', 'Queued', ?)
-        `).run(taskId, row.subject_id, input.revisionId, input.at)
+        `).run(taskId, row.subject_id, revisionId, input.at)
         recordWorkerTransition(database, { taskId, from: null, to: 'Queued', reason: 'Review rerun requested.', fence: 0, at: input.at })
       }
       else if (row.state_tag !== 'Queued' && row.state_tag !== 'Running') {
@@ -6032,6 +6412,8 @@ export function openJournalStore(
           return
         }
         if (input.subject.kind === 'pull_request') {
+          if (subject.current_revision_id !== revisionId)
+            followHeadCommit(database, subject.id, revisionId, input.subject.headSha)
           // Every mutation Task is claimable only on the subject's current
           // Revision, so one left on an older Revision can never run again. It
           // still holds the one active Task slot for its kind, which blocked
@@ -6633,6 +7015,7 @@ export function openJournalStore(
   }
 
   const recordPullRequestTriageRun: JournalStore['recordPullRequestTriageRun'] = (input) => {
+    const revisionId = currentSameHeadRevision(database, input.revisionId)
     const revision = database.prepare(`
       SELECT worker_tasks.subject_id, revisions.payload
       FROM worker_tasks
@@ -6646,8 +7029,8 @@ export function openJournalStore(
       input.taskId,
       input.repository,
       input.pullRequestNumber,
-      input.revisionId,
-      input.revisionId,
+      revisionId,
+      revisionId,
     ) as { subject_id: number, payload: string } | undefined
     const subject = revision === undefined ? undefined : JSON.parse(revision.payload) as GitHubItem
     if (revision === undefined || subject?.kind !== 'pull_request' || subject.headSha !== input.headSha)
@@ -6659,7 +7042,7 @@ export function openJournalStore(
       const existing = database.prepare(`
         SELECT head_sha, outcome_tag FROM pull_request_triage_runs
         WHERE task_id = ? OR (subject_id = ? AND revision_id = ?)
-      `).get(input.taskId, revision.subject_id, input.revisionId) as {
+      `).get(input.taskId, revision.subject_id, revisionId) as {
         head_sha: string
         outcome_tag: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure'
       } | undefined
@@ -6680,7 +7063,7 @@ export function openJournalStore(
       `).run(
         input.taskId,
         revision.subject_id,
-        input.revisionId,
+        revisionId,
         input.headSha,
         input.startedAt,
         input.completedAt,
@@ -6701,7 +7084,28 @@ export function openJournalStore(
     }
   }
 
+  const getLatestPullRequestTriageRun: JournalStore['getLatestPullRequestTriageRun'] = (repository, pullRequestNumber, headSha) => {
+    const row = database.prepare(`
+      SELECT pull_request_triage_runs.outcome_tag, pull_request_triage_runs.reason, pull_request_triage_runs.completed_at
+      FROM pull_request_triage_runs
+      JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND pull_request_triage_runs.head_sha = ?
+      ORDER BY pull_request_triage_runs.completed_at DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, headSha) as {
+      outcome_tag: PullRequestTriageStatsOutcome
+      reason: string
+      completed_at: string
+    } | undefined
+    return row === undefined
+      ? null
+      : { outcome: row.outcome_tag, reason: row.reason, completedAt: row.completed_at }
+  }
+
   const recordReviewRun: JournalStore['recordReviewRun'] = (input) => {
+    const revisionId = currentSameHeadRevision(database, input.revisionId)
     const outcome = reviewOutcome(input)
     if (outcome._tag === 'Rejected')
       return outcome
@@ -6733,7 +7137,7 @@ export function openJournalStore(
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND revisions.id = ?
         AND subjects.current_revision_id = revisions.id
-    `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
+    `).get(input.repository, input.pullRequestNumber, revisionId) as {
       subject_id: number
       payload: string
       policy_json: string
@@ -6752,6 +7156,8 @@ export function openJournalStore(
     const gates = JSON.stringify(input.gates)
     const findings = JSON.stringify(input.findings)
     const usage = JSON.stringify(runUsage)
+    // The digest names the Revision the Agent claimed, so a retry after the
+    // base branch moved still reads as the same run.
     const contentDigest = digest(JSON.stringify({
       repository: input.repository,
       pullRequestNumber: input.pullRequestNumber,
@@ -6789,7 +7195,7 @@ export function openJournalStore(
       `).run(
         input.id,
         revision.subject_id,
-        input.revisionId,
+        revisionId,
         input.provider,
         input.sessionId,
         input.model,
@@ -6820,7 +7226,7 @@ export function openJournalStore(
         entityId: input.id,
         repository: input.repository,
         itemNumber: input.pullRequestNumber,
-        revisionId: input.revisionId,
+        revisionId,
         taskId: revision.review_task_id,
         from: 'Running',
         to: 'Completed',
@@ -6849,6 +7255,7 @@ export function openJournalStore(
   }
 
   const supersedeReviewRun: JournalStore['supersedeReviewRun'] = (input) => {
+    const revisionId = currentSameHeadRevision(database, input.revisionId)
     const outcome = reviewOutcome(input)
     if (outcome._tag === 'Rejected')
       return outcome
@@ -6865,7 +7272,7 @@ export function openJournalStore(
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND revisions.id = ?
         AND subjects.current_revision_id = revisions.id
-    `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
+    `).get(input.repository, input.pullRequestNumber, revisionId) as {
       subject_id: number
       payload: string
       policy_json: string
@@ -6926,7 +7333,7 @@ export function openJournalStore(
       `).get(
         input.supersedesReviewRunId,
         revision.subject_id,
-        input.revisionId,
+        revisionId,
         input.headSha,
       )
       if (parent === undefined) {
@@ -6945,7 +7352,7 @@ export function openJournalStore(
       `).run(
         input.id,
         revision.subject_id,
-        input.revisionId,
+        revisionId,
         input.provider,
         input.sessionId,
         input.model,
@@ -7216,20 +7623,39 @@ export function openJournalStore(
   }
 
   const getReviewFixFindings: JournalStore['getReviewFixFindings'] = (repository, pullRequestNumber, revisionId) => {
+    // The Review answers the head commit the Revision names, whichever
+    // Revision of that head the run sits on now.
     const row = database.prepare(`
       SELECT review_runs.findings
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = ? AND revisions.subject_id = subjects.id
       WHERE repositories.github = ? AND subjects.github_number = ?
-        AND subjects.kind = 'pull_request' AND review_runs.revision_id = ?
+        AND subjects.kind = 'pull_request'
+        AND review_runs.head_sha = json_extract(revisions.payload, '$.headSha')
         AND review_runs.kind = 'adversarial_review'
       ORDER BY review_runs.completed_at DESC, review_runs.id DESC
       LIMIT 1
-    `).get(repository, pullRequestNumber, revisionId) as { findings: string } | undefined
+    `).get(revisionId, repository, pullRequestNumber) as { findings: string } | undefined
     return row === undefined
       ? []
       : (JSON.parse(row.findings) as ReviewFinding[]).filter(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
+  }
+
+  const getIssueTriageEvidence: JournalStore['getIssueTriageEvidence'] = (repository, issueNumber, revisionId) => {
+    const row = database.prepare(`
+      SELECT worker_tasks.evidence
+      FROM worker_tasks
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
+        AND worker_tasks.revision_id = ?
+        AND worker_tasks.kind = 'issue_triage' AND worker_tasks.state_tag = 'Completed'
+      ORDER BY worker_tasks.updated_at DESC, worker_tasks.id DESC
+      LIMIT 1
+    `).get(repository, issueNumber, revisionId) as { evidence: string } | undefined
+    return row === undefined ? null : row.evidence
   }
 
   const getRepairedHeadFindings: JournalStore['getRepairedHeadFindings'] = (repository, pullRequestNumber, commitSha) => {
@@ -7304,6 +7730,9 @@ export function openJournalStore(
         JOIN revisions ON revisions.id = tasks.revision_id
         WHERE tasks.kind = ? AND tasks.state_tag = 'Queued'
           AND (? IS NULL OR tasks.id = ?)
+          -- A Task a Batch reserved runs under that Batch's lease. Only the
+          -- exact-Task claim the Batch makes may take it.
+          AND (? IS NOT NULL OR NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id))
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
@@ -7372,7 +7801,7 @@ export function openJournalStore(
           )
         ORDER BY tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, exactTaskId ?? null, exactTaskId ?? null, maxOpenPullRequests) as ClaimRow | undefined
+      `).get(kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, maxOpenPullRequests) as ClaimRow | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -7439,6 +7868,16 @@ export function openJournalStore(
       throw error
     }
   }
+
+  const batchStore = createBatchStore(database, {
+    claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
+      const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)
+      if (task === null || task.kind === 'issue_work')
+        return task
+      throw new Error(`Batch unit claim returned a ${task.kind} Task.`)
+    },
+    recordTransition: input => recordTransition(database, input),
+  })
 
   const claimNextConflictTask: JournalStore['claimNextConflictTask'] = (workerId, now, leaseMilliseconds) => {
     const task = claimMutationTask('resolve_conflict', workerId, now, leaseMilliseconds)
@@ -8616,6 +9055,7 @@ export function openJournalStore(
   }
 
   const stageReviewStatus: JournalStore['stageReviewStatus'] = (input) => {
+    const revisionId = currentSameHeadRevision(database, input.revisionId)
     const bodySha256 = digest(input.body)
     const desiredOutcome = input.desiredOutcome ?? reviewDesiredOutcomeFromBody(input.body)
     const commandId = digest(`${input.taskKind}:${input.taskId}:${input.fence}:${input.phase}:${input.reviewRunId ?? ''}:${desiredOutcome ?? ''}:${bodySha256}`)
@@ -8642,8 +9082,8 @@ export function openJournalStore(
         input.workerId,
         input.fence,
         input.at,
-        input.revisionId,
-        input.revisionId,
+        revisionId,
+        revisionId,
         input.expectedHeadSha,
       )
       if (authorized === undefined) {
@@ -8686,7 +9126,7 @@ export function openJournalStore(
         input.taskKind,
         input.taskId,
         input.fence,
-        input.revisionId,
+        revisionId,
         input.expectedHeadSha,
         input.phase,
         input.body,
@@ -9305,6 +9745,7 @@ export function openJournalStore(
       if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
         resolveTaskIncidents(database, input.taskId, input.at)
+        recordCleanMergeIncident(database, input.taskId, input.evidence, input.at)
       }
       database.exec('COMMIT')
       return result.changes === 1
@@ -9742,7 +10183,7 @@ export function openJournalStore(
       const command = database.prepare(`
         UPDATE publication_commands
         SET state_tag = 'Published', worker_id = NULL, lease_expires_at = NULL,
-          published_at = ?, updated_at = ?
+          published_at = ?, updated_at = ?, pull_request_number = COALESCE(?, pull_request_number)
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND task_id IN (
             SELECT tasks.id FROM tasks
@@ -9750,7 +10191,7 @@ export function openJournalStore(
             WHERE tasks.state_tag = 'Publishing' AND tasks.command_id = publication_commands.id
               AND tasks.revision_id = subjects.current_revision_id
           )
-      `).run(input.at, input.at, input.commandId, input.workerId, input.fence)
+      `).run(input.at, input.at, input.pullRequestNumber ?? null, input.commandId, input.workerId, input.fence)
       if (command.changes !== 1) {
         database.exec('COMMIT')
         return false
@@ -10888,7 +11329,7 @@ export function openJournalStore(
       selectionMode: currentSelectionMode,
       openPullRequests: countOpenPullRequests(),
       maxOpenPullRequests,
-      agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents),
+      agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents, roleReasoningEfforts),
       agentSelection: getAgentSelection(),
       agentStart: !mutationsEnabled
         ? { _tag: 'WritesDisabled' }
@@ -10914,12 +11355,14 @@ export function openJournalStore(
         currentSelectionMode,
         reviewResolutions,
         desiredReviewOutcomes,
+        batchStore.batchReservationReasons(),
       ),
       repositories,
       items,
       tasks,
       routines,
       routineRuns,
+      batches: batchStore.listBatches(10),
     }
   }
 
@@ -12025,6 +12468,7 @@ export function openJournalStore(
     routine_id: string
     run_id: string
     fingerprint: string
+    title: string | null
     target: string
     claim: string
     verification: string
@@ -12054,6 +12498,9 @@ export function openJournalStore(
     routineId: row.routine_id,
     runId: row.run_id,
     fingerprint: row.fingerprint,
+    // Rows written before the title column carry none, and a scan answer may
+    // leave it blank. Either way the claim was their title, so it stays it.
+    title: row.title || row.claim,
     target: row.target,
     claim: row.claim,
     verification: row.verification,
@@ -12074,10 +12521,10 @@ export function openJournalStore(
   const recordCandidates: JournalStore['recordCandidates'] = (input) => {
     const statement = database.prepare(`
       INSERT INTO candidates (
-        id, routine_id, run_id, fingerprint, target, claim, verification,
+        id, routine_id, run_id, fingerprint, title, target, claim, verification,
         estimated_changed_files, result_tag, pull_request, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Proposed', NULL, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Proposed', NULL, ?, ?)
       ON CONFLICT (routine_id, fingerprint) DO NOTHING
     `)
     const fresh: string[] = []
@@ -12090,6 +12537,7 @@ export function openJournalStore(
           input.routineId,
           input.runId,
           candidate.fingerprint,
+          candidate.title,
           candidate.target,
           candidate.claim,
           candidate.verification,
@@ -12893,6 +13341,7 @@ export function openJournalStore(
     listUnverifiedClosedPullRequestNumbers,
     recordExactPullRequestObservation,
     recordVerifiedPullRequestClosure,
+    ...batchStore,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
     listRunningTaskItems,
@@ -12909,6 +13358,7 @@ export function openJournalStore(
     authorizePublication,
     cancelTask,
     recordPullRequestTriageRun,
+    getLatestPullRequestTriageRun,
     claimNextAdversarialReviewTask,
     claimNextBaselineRepairTask,
     claimNextConflictTask,
@@ -12955,6 +13405,7 @@ export function openJournalStore(
     heartbeatTask,
     heartbeatWorkerTask,
     countOpenPullRequests,
+    getIssueTriageEvidence,
     getReviewFixFindings,
     getRepairedHeadFindings,
     listAgentFeedback,

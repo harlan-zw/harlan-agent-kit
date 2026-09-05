@@ -1,9 +1,11 @@
-import type { RecordReviewRunInput } from '../src/types.ts'
+import type { RecordPullRequestTriageRunInput } from '../src/stats.ts'
+import type { GitHubPullRequestItem, RecordReviewRunInput } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createIssueTriageWorker, createReviewWorker, issueMovedUnderTriage, reviewSnapshotDigest } from '../src/item-agent.ts'
-import { ok } from '../src/result.ts'
+import { createPullRequestTriageAgent } from '../src/pull-request-triage.ts'
+import { err, ok } from '../src/result.ts'
 import { agentRuntime, issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('subject Workers', () => {
@@ -58,6 +60,8 @@ describe('subject Workers', () => {
           stamped.push(outcome)
           return Promise.resolve(ok(undefined))
         },
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -137,7 +141,7 @@ describe('subject Workers', () => {
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
     expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
-    expect(capture.requests[0]?.prompt).toContain('Limit local commands to changed files, their direct dependants, and focused behavior')
+    expect(capture.requests[0]?.prompt).toContain('Read only the changed hunks plus the symbols they call.')
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
     expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
     expect(capture.requests[0]?.prompt).toContain('private-user-images.githubusercontent.com')
@@ -145,63 +149,101 @@ describe('subject Workers', () => {
     expect(capture.requests[0]?.prompt).toContain('stays inaccessible after authenticated retrieval')
   })
 
-  it('runs Review directly without pull request triage', async () => {
+  /**
+   * One Review worker whose Pull request triage is the real Agent over a stub
+   * provider. `providerReply` is what the provider answers, and the
+   * captured requests say which role asked.
+   */
+  function triagedReviewWorker(input: {
+    approvalLabels?: GitHubPullRequestItem['approvalLabels']
+    changedFiles: string[]
+    providerReply: unknown
+    title: string
+    triageFailure?: string
+    lateApprovalLabels?: GitHubPullRequestItem['approvalLabels']
+    rereadFailure?: string
+  }) {
     const pullRequest = pullRequestItem({
+      approvalLabels: input.approvalLabels ?? [],
       mergeState: 'clean',
-      title: 'chore: update workspace dependencies',
+      title: input.title,
     })
+    const capture: ProviderCapture = { requests: [] }
     const comments: string[] = []
     const stamped: string[] = []
-    let triageCalls = 0
-    let fileReads = 0
-    const capture: ProviderCapture = { requests: [] }
-    const worker = createReviewWorker({
-      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        premise: { verdict: 'sound', reason: 'The dependency update remains valid.' },
-        findings: [],
-        confidence: 94,
-      }), capture)),
-      github: {
-        consumeApprovalLabel: () => Promise.reject(new Error('A direct Review must not consume a missing manual override.')),
-        editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
-        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
-        clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
-        clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
-        listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
-        stampAgentLabel: (_repository, _number, outcome) => {
-          stamped.push(outcome)
-          return Promise.resolve(ok(undefined))
-        },
-        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
-        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
-        listPullRequestFiles: () => {
-          fileReads += 1
-          return Promise.resolve(ok(['package.json', 'pnpm-lock.yaml']))
-        },
-        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+    const triageRuns: RecordPullRequestTriageRunInput[] = []
+    const worktrees: string[] = []
+    const consumedApprovalLabels: string[] = []
+    let snapshotReads = 0
+    const replies = Array.isArray(input.providerReply) ? input.providerReply : [input.providerReply]
+    let providerCalls = 0
+    const runtime = agentRuntime(CODEX_AGENT_PROFILE, {
+      name: 'codex',
+      runTurn: (request) => {
+        capture.requests.push(request)
+        const reply = replies[Math.min(providerCalls, replies.length - 1)]
+        providerCalls += 1
+        async function* replay() {
+          yield* turnEvents(reply)
+        }
+        return replay()
+      },
+    })
+    const github: Parameters<typeof createReviewWorker>[0]['github'] = {
+      consumeApprovalLabel: (_repository, _subjectKind, _number, label) => {
+        consumedApprovalLabels.push(label)
+        return Promise.resolve(ok(undefined))
+      },
+      editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+      ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+      clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
+      clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
+      listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
+      stampAgentLabel: (_repository, _number, outcome) => {
+        stamped.push(outcome)
+        return Promise.resolve(ok(undefined))
+      },
+      findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+      getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
+      getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+      getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+      listPullRequestFiles: () => Promise.resolve(input.triageFailure === undefined ? ok(input.changedFiles) : err(input.triageFailure)),
+      getPullRequestReviewSnapshot: () => {
+        snapshotReads += 1
+        if (snapshotReads === 2 && input.rereadFailure !== undefined)
+          return Promise.resolve(err(input.rereadFailure))
+        const readPullRequest = snapshotReads === 2 && input.lateApprovalLabels !== undefined
+          ? { ...pullRequest, approvalLabels: input.lateApprovalLabels }
+          : pullRequest
+        return Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
-          body: 'Update workspace dependencies.',
+          body: 'Pull request body.',
           checks: { _tag: 'Available', checks: [] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
-          pullRequest,
+          pullRequest: readPullRequest,
           requiredChecks: { _tag: 'None' },
           reviews: [],
-        })),
-        upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
-        upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
+        }))
       },
+      upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
+      upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
+    }
+    const worker = createReviewWorker({
+      runtime,
+      github,
       now: () => new Date('2026-08-28T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
-      pullRequestTriage: {
-        run: () => {
-          triageCalls += 1
-          return Promise.resolve(ok({
-            _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-            reason: 'The old triage Agent waived this Review.',
-          }))
+      pullRequestTriage: createPullRequestTriageAgent({
+        now: () => new Date('2026-08-28T01:00:00.000Z'),
+        runtime,
+        store: {
+          getLatestPullRequestTriageRun: () => null,
+          getWorkerSession: () => null,
+          saveWorkerSession: () => undefined,
         },
-      },
+        workspace: '/tmp/harlan-github-agent',
+      }),
       store: {
         queueReviewFixTaskForReview: () => { throw new Error('A clean Review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
@@ -209,7 +251,10 @@ describe('subject Workers', () => {
         listReviewRuns: () => [],
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('A direct Review must not record pull request triage.') },
+        recordPullRequestTriageRun: (run) => {
+          triageRuns.push(run)
+          return { _tag: 'Inserted' }
+        },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -226,12 +271,14 @@ describe('subject Workers', () => {
       triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
       workspaces: {
         prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
-        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        prepareReview: () => {
+          worktrees.push(pullRequest.headSha)
+          return Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha }))
+        },
         verifyReview: () => Promise.resolve(ok(undefined)),
       },
     })
-
-    const result = await worker.run({
+    const run = () => worker.run({
       id: 'review-task',
       kind: 'adversarial_review',
       repository: 'harlan-zw/example',
@@ -243,15 +290,130 @@ describe('subject Workers', () => {
       pullRequest,
       rerun: { _tag: 'NotRequested' },
     }, new AbortController().signal)
+    return { capture, comments, consumedApprovalLabels, run, stamped, triageRuns, worktrees }
+  }
+
+  const cleanReview = {
+    premise: { verdict: 'sound', reason: 'The change remains valid.' },
+    findings: [],
+    confidence: 94,
+  }
+
+  it('skips Review for a Markdown-only pull request without a Review Agent', async () => {
+    const harness = triagedReviewWorker({
+      changedFiles: ['README.md', 'docs/guide.md'],
+      providerReply: { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
+      title: 'docs: fix a typo in the guide',
+    })
+
+    const result = await harness.run()
+
+    expect(result).toEqual(ok({
+      evidence: JSON.stringify({ _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'model: Only a typo in the guide changed.' }),
+      resolution: { _tag: 'ReviewSkipped', reason: 'model: Only a typo in the guide changed.' },
+    }))
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna'])
+    expect(harness.worktrees).toEqual([])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_SKIPPED'])
+    expect(harness.comments).toHaveLength(1)
+    expect(harness.comments[0]).toContain('REVIEW SKIPPED')
+    expect(harness.comments[0]).toContain('harlan-agent-review')
+    expect(harness.triageRuns).toEqual([expect.objectContaining({
+      taskId: 'review-task',
+      headSha: 'abc123',
+      outcome: { _tag: 'ReviewSkipped', reason: 'model: Only a typo in the guide changed.' },
+    })])
+  })
+
+  it('reaches Review for a TypeScript pull request without a triage model call', async () => {
+    const harness = triagedReviewWorker({
+      changedFiles: ['README.md', 'src/deployment.ts'],
+      providerReply: cleanReview,
+      title: 'chore: update workspace dependencies',
+    })
+
+    const result = await harness.run()
 
     expect(result._tag).toBe('Ok')
-    expect(triageCalls).toBe(0)
-    expect(fileReads).toBe(0)
-    expect(stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
-    expect(comments.at(-1)).toContain('READY · 94/100')
-    expect(capture.requests).toEqual([expect.objectContaining({
-      model: 'gpt-5.6-sol',
-      reasoningEffort: 'high',
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-sol'])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(harness.comments.at(-1)).toContain('READY · 94/100')
+    expect(harness.triageRuns).toEqual([expect.objectContaining({
+      outcome: { _tag: 'ReviewRequired', reason: 'rule: src/deployment.ts is outside the prose set.' },
+    })])
+  })
+
+  it('reviews a prose-only pull request that carries the manual override label', async () => {
+    const harness = triagedReviewWorker({
+      approvalLabels: ['review'],
+      changedFiles: ['README.md'],
+      providerReply: cleanReview,
+      title: 'docs: fix a typo in the guide',
+    })
+
+    const result = await harness.run()
+
+    expect(result._tag).toBe('Ok')
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-sol'])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(harness.triageRuns).toEqual([])
+  })
+
+  it('reviews the pull request when the late override re-read fails', async () => {
+    const harness = triagedReviewWorker({
+      changedFiles: ['README.md'],
+      providerReply: [
+        { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
+        cleanReview,
+      ],
+      rereadFailure: 'GitHub rate limited the label re-read.',
+      title: 'docs: fix a typo in the guide',
+    })
+
+    const result = await harness.run()
+
+    expect(result._tag).toBe('Ok')
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(harness.triageRuns).toEqual([expect.objectContaining({
+      outcome: { _tag: 'ReviewRequired', reason: 'rule: The harlan-agent-review label requires Review for this head commit.' },
+    })])
+  })
+
+  it('consumes the override label that arrives while triage runs', async () => {
+    const harness = triagedReviewWorker({
+      changedFiles: ['README.md'],
+      lateApprovalLabels: ['review'],
+      providerReply: [
+        { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
+        cleanReview,
+      ],
+      title: 'docs: fix a typo in the guide',
+    })
+
+    const result = await harness.run()
+
+    expect(result._tag).toBe('Ok')
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(harness.consumedApprovalLabels).toEqual(['harlan-agent-review'])
+  })
+
+  it('reviews the pull request anyway when triage fails', async () => {
+    const harness = triagedReviewWorker({
+      changedFiles: ['README.md'],
+      providerReply: cleanReview,
+      title: 'docs: fix a typo in the guide',
+      triageFailure: 'GitHub could not list the changed files.',
+    })
+
+    const result = await harness.run()
+
+    expect(result._tag).toBe('Ok')
+    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-sol'])
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
+    expect(harness.triageRuns).toEqual([expect.objectContaining({
+      outcome: { _tag: 'ReviewRequiredAfterFailure', reason: 'GitHub could not list the changed files.' },
     })])
   })
 
@@ -269,6 +431,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -374,6 +538,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -460,6 +626,114 @@ describe('subject Workers', () => {
     expect(worktreeVerified).toBe(true)
   })
 
+  it('hands Repair the whole proof, regression test, and next action', async () => {
+    const repository = repositoryMapping({ ownership: 'maintained' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const longProof = `Byte 0x80 opens a sequence at line 42.\n${'The buffer drops it when the chunk ends there. '.repeat(21)}`.trim()
+    const longRegressionTest = `Split one sequence across two chunks.\n- assert the original string\n${'x'.repeat(300)}`
+    const longNextAction = `Preserve the buffered bytes.\t${'Carry the tail into the next chunk. '.repeat(10)}`.trim()
+    let attempt: RecordReviewRunInput | undefined
+    let queued = false
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
+        findings: [{
+          identity: 'buffered-byte-loss',
+          path: 'src/parser.ts',
+          line: 42,
+          proof: longProof,
+          regressionTest: longRegressionTest,
+          summary: 'The parser drops data.',
+          nextAction: longNextAction,
+        }],
+        confidence: 90,
+      }))),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
+        clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
+        listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          body: 'Fixes the parser.',
+          checks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      store: {
+        queueReviewFixTaskForReview: () => {
+          queued = true
+          return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
+        },
+        getRepairedHeadFindings: () => [],
+        getWorkerSession: () => null,
+        listReviewRuns: () => [],
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
+        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        recordReviewRun: (input) => {
+          attempt = input
+          return { _tag: 'Inserted', reviewRunId: input.id }
+        },
+        recordReviewPublication: () => { throw new Error('A repaired head must not publish the old terminal review.') },
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      status: {
+        publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verifyReview: () => Promise.resolve(ok(undefined)),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
+    expect(longProof.length).toBeGreaterThan(1_000)
+    expect(attempt?.findings).toEqual([expect.objectContaining({
+      _tag: 'Open',
+      nextAction: longNextAction,
+      details: expect.objectContaining({
+        proof: longProof,
+        regressionTest: longRegressionTest,
+      }),
+    })])
+    expect(queued).toBe(true)
+  })
+
   it('stamps a wrong premise for Dismissal without queuing Repair', async () => {
     const repository = repositoryMapping({ ownership: 'maintained' })
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -490,6 +764,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -588,6 +864,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -687,6 +965,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -779,6 +1059,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -867,6 +1149,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -952,6 +1236,8 @@ describe('subject Workers', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -1043,6 +1329,8 @@ describe('subject Workers', () => {
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
         // A later updatedAt than the Task observed: the Running label write
         // moves it, and triage must still run.
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:01:30.000Z' })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
         listPullRequestFiles: () => Promise.resolve(ok([])),
@@ -1093,11 +1381,13 @@ describe('subject Workers', () => {
           needsCodebaseReview: false,
           summary: 'The parser drops valid input.',
           nextAction: 'Write a regression test and repair the parser.',
+          relatedIssues: [],
         }),
         usage: { _tag: 'Unavailable' },
       },
     })
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium', sessionId: null })])
+    expect(capture.requests[0]?.prompt).toContain('Verify that the target file and symbol exist. Do not run test suites. Do not prove library types exist.')
     expect(triageResult).toEqual({
       _tag: 'READY_TO_IMPLEMENT',
       difficulty: 2,
@@ -1106,6 +1396,7 @@ describe('subject Workers', () => {
       needsCodebaseReview: false,
       summary: 'The parser drops valid input.',
       nextAction: 'Write a regression test and repair the parser.',
+      relatedIssues: [],
     })
   })
 })

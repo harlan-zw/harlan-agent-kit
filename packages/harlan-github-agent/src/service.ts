@@ -20,7 +20,9 @@ import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
-import { createBaselineRepairWorker } from './baseline-repair-worker.ts'
+import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-repair-worker.ts'
+import { createBatchScheduler } from './batch-scheduler.ts'
+import { createBatchWorker } from './batch-worker.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
 import { createCodexProvider } from './codex-provider.ts'
@@ -270,7 +272,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ...providerProfile,
     maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
   }
-  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read)
+  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort)
   const processId = randomUUID()
   const restartController = createRestartController({
     store,
@@ -320,6 +322,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     chooseProvider,
     configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
+    roleReasoningEfforts: config.agent.reasoningEffort,
     providers: {
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,
@@ -476,6 +479,22 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const current = validated.value.repositories[0]
       return current === undefined ? err('Repository mapping disappeared during validation.') : ok(current)
     }
+    const canClaimIssueWork = (): boolean => canClaim()
+      && (store.getSelectionMode() === 'manual' || store.countOpenPullRequests() < config.maxOpenPullRequests)
+    const issueWorkWorker = withGitHubWritePreflight({
+      accesses: ['item_write', 'contents_write'],
+      source: tokens,
+      worker: createIssueWorkWorker({
+        github: workerGithub,
+        activityLog,
+        now,
+        runtime,
+        store,
+        validateMapping,
+        worktrees: issueWorktrees,
+      }),
+    })
+    const batchWorkerId = randomUUID()
     const conflictWorker = withGitHubWritePreflight({
       accesses: ['item_write', 'contents_write'],
       source: tokens,
@@ -578,6 +597,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           worker: createBaselineRepairWorker({
             activityLog,
             github: workerGithub,
+            inspectWorkspace: inspectWorkspaceFiles,
             now,
             runtime,
             store,
@@ -720,8 +740,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // New work waits while the open pull requests already need Harlan.
         // Manual Selection mode makes Harlan the throttle, so the count stops
         // counting: every pull request the agent opens was already selected.
-        canClaim: () => canClaim()
-          && (store.getSelectionMode() === 'manual' || store.countOpenPullRequests() < config.maxOpenPullRequests),
+        canClaim: canClaimIssueWork,
         claim: store.claimNextIssueWorkTask,
         intervalMilliseconds: 5_000,
         leaseMilliseconds: 45 * 60_000,
@@ -731,20 +750,40 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onTaskSettled: settleTask,
         permits,
         store,
-        worker: withGitHubWritePreflight({
-          accesses: ['item_write', 'contents_write'],
-          source: tokens,
-          worker: createIssueWorkWorker({
-            github: workerGithub,
-            activityLog,
-            now,
-            runtime,
-            store,
-            validateMapping,
-            worktrees: issueWorktrees,
-          }),
-        }),
+        worker: issueWorkWorker,
         workerId: randomUUID(),
+      }),
+      // One permit per Batch. Its units run as sub agents under that permit,
+      // each with its own Task lease and worktree, and each publishes the
+      // moment it finishes.
+      batches: createBatchScheduler({
+        canClaim,
+        intervalMilliseconds: 5_000,
+        leaseMilliseconds: 4 * 60 * 60_000,
+        now,
+        onError: error => options.logger.error(error),
+        permits,
+        store,
+        worker: createBatchWorker({
+          activityLog,
+          canClaimIssueWork,
+          github: workerGithub,
+          issueWork: issueWorkWorker,
+          leaseMilliseconds: 45 * 60_000,
+          logger: {
+            error: message => options.logger.error(message),
+            info: message => options.logger.info(message),
+          },
+          now,
+          onTaskSettled: settleTask,
+          onTaskStarted: stampRunningLabel,
+          runtime,
+          store,
+          validateMapping,
+          workerId: batchWorkerId,
+          workspaces,
+        }),
+        workerId: batchWorkerId,
       }),
       tasks: createTaskScheduler({
         canClaim,
@@ -885,6 +924,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // machine skips it and never reads or writes another machine's work.
       if (!config.triggers.includes('github'))
         return
+      if (config.mutationsEnabled && config.issueBatches) {
+        const batches = await guarded('Batch planning', () => Promise.resolve(store.planBatches(now().toISOString())), [])
+        batches.forEach(batch => options.logger.info(`${batch.repository}: opened a Batch for issues ${batch.issueNumbers.map(number => `#${number}`).join(', ')}.`))
+      }
       const reruns = await guarded('Review rerun sync', () => syncOpenReviewRerunRequests(config.repositories, {
         allowedAuthors: config.github.allowedOwners,
         github,
@@ -944,7 +987,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the stopped review comment was deleted, so nothing was written.`
               : result.value._tag === 'Superseded'
                 ? `${result.value.repository}#${result.value.pullRequestNumber}: another writer took the comment, so it was left alone.`
-                : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
+                : result.value._tag === 'Retired'
+                  ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
+                  : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`)
           }
           else {
             options.logger.error(`Stopped review comment: ${result.error}`)
@@ -963,6 +1008,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: queued the ${result.value.outcome} Review status.`)
             else if (result.value._tag === 'Superseded')
               options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the head commit moved, so the prior Review was left alone.`)
+            else if (result.value._tag === 'Retired')
+              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The Review left the refresh list.`)
           }
           else {
             options.logger.error(`Waiting review: ${result.error}`)
@@ -981,9 +1028,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               ? `${result.value.repository}#${result.value.pullRequestNumber}: the automated comment was deleted, so nothing was written.`
               : result.value._tag === 'Superseded'
                 ? `${result.value.repository}#${result.value.pullRequestNumber}: an agent claimed the Task, so the Queue position comment was left to it.`
-                : result.value.queue._tag === 'Paused'
-                  ? `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads that the repository is paused.`
-                  : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.queue.position} of ${result.value.queue.total}.`)
+                : result.value._tag === 'Retired'
+                  ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
+                  : result.value.queue._tag === 'Paused'
+                    ? `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads that the repository is paused.`
+                    : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.queue.position} of ${result.value.queue.total}.`)
           }
           else {
             options.logger.error(`Queue position comment: ${result.error}`)
@@ -1069,6 +1118,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       approveIssueWork: store.approveIssueWork,
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
+      listRoutines: store.listRoutines,
+      openRoutineRun: store.openRoutineRun,
       getDashboardSnapshot: (at) => {
         const snapshot = dashboardSnapshotForTriggers(
           pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),
@@ -1182,6 +1233,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     mutationSchedulers?.baselineRepairs.start()
   if (answers('github'))
     mutationSchedulers?.issueWork.start()
+  mutationSchedulers?.batches.start()
   if (answers('github'))
     mutationSchedulers?.publications.start()
   if (answers('github'))
@@ -1210,6 +1262,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         mutationSchedulers?.tasks.stop() ?? Promise.resolve(),
         mutationSchedulers?.baselineRepairs.stop() ?? Promise.resolve(),
         mutationSchedulers?.issueWork.stop() ?? Promise.resolve(),
+        mutationSchedulers?.batches.stop() ?? Promise.resolve(),
         mutationSchedulers?.publications.stop() ?? Promise.resolve(),
         mutationSchedulers?.reviewStatuses.stop() ?? Promise.resolve(),
         ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),

@@ -5,6 +5,7 @@ import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
+import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
@@ -165,12 +166,55 @@ export interface PublishedReviewStatus {
  * `Missing` means a person deleted the comment, so there is nothing to correct.
  * `Changed` means somebody wrote it after the caller last read it.
  */
+/**
+ * Why a stored comment id names a comment this service must never edit.
+ *
+ * Neither reason changes on a later pass, so a caller retires the publication
+ * that holds the id instead of asking GitHub the same question every pass.
+ */
+export type ForeignReviewCommentReason
+  = | 'The stored automated review comment belongs to another pull request.'
+    | 'The stored automated review comment belongs to another GitHub actor.'
+
 export type EditedReviewStatus
   = | { _tag: 'Edited', commentId: number, url: string }
     | { _tag: 'Changed' }
     | { _tag: 'Missing' }
+    | { _tag: 'Foreign', reason: ForeignReviewCommentReason }
+
+/** One open pull request found by its head branch. */
+export interface OpenPullRequestReference {
+  number: number
+  url: string
+}
+
+/**
+ * What one failed GitHub Actions job can tell an Agent before it starts.
+ *
+ * Every Baseline repair session used to spend its first minutes finding the
+ * run, and four found the log already expired. The controller reads it once.
+ */
+export interface FailedJobContext {
+  runId: number
+  jobName: string
+  /** The name of the first failed step, or null when no step reports failure. */
+  failedStep: string | null
+  /** The last lines of the job log, oldest first. */
+  logTail: string[]
+}
+
+export const FAILED_JOB_LOG_TAIL_LINES = 80
 
 export interface GitHubAgentSource {
+  /** Finds the open pull request whose head is `headRef`, if one exists. */
+  findOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal: AbortSignal) => Promise<Result<OpenPullRequestReference | null, string>>
+  /**
+   * Reads one failed Actions job: its run, its failed step, and its log tail.
+   *
+   * For a GitHub Actions check run, the check run id is also the job id. An
+   * expired log answers `Err`, and the caller says so instead of guessing.
+   */
+  getFailedJobContext: (repository: RepositoryMapping, jobId: number, signal: AbortSignal) => Promise<Result<FailedJobContext, string>>
   consumeApprovalLabel: (repository: RepositoryMapping, subjectKind: 'issue' | 'pull_request', itemNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   ensureApprovalLabel: (repository: RepositoryMapping, label: string, signal: AbortSignal) => Promise<Result<void, string>>
   /**
@@ -305,7 +349,10 @@ function pullRequestItem(
   const labels = pull.labels.flatMap(label => label.name === undefined ? [] : [label.name])
   return {
     kind: 'pull_request',
-    approvalLabels: [],
+    // The poller reads the same labels. An empty list here let the manual
+    // Review label survive every Review, and each new Revision then reviewed
+    // the same head commit again as a fresh manual request.
+    approvalLabels: approvalLabels(labels),
     autoMerge: hasAutoMergeLabel(labels),
     repository: repository.github,
     number: pull.number,
@@ -356,6 +403,42 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     clientWith(options.tokens, repository, access, signal)
 
   return {
+    async findOpenPullRequestForBranch(repository, headRef, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return octokit.value.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${headRef}`, per_page: 1, request: { signal } })
+        .then((response): Result<OpenPullRequestReference | null, string> => {
+          const pull = response.data[0]
+          return ok(pull === undefined ? null : { number: pull.number, url: pull.html_url })
+        })
+        .catch((error: unknown): Result<OpenPullRequestReference | null, string> => err(message(error)))
+    },
+
+    async getFailedJobContext(repository, jobId, signal) {
+      const octokit = await client(repository.github, 'checks_read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return Promise.all([
+        octokit.value.rest.actions.getJobForWorkflowRun({ owner, repo, job_id: jobId, request: { signal } }),
+        octokit.value.rest.actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: jobId, request: { signal } }),
+      ]).then(([job, log]): Result<FailedJobContext, string> => {
+        if (typeof log.data !== 'string')
+          return err(`GitHub returned no log text for job ${jobId}.`)
+        const lines = log.data.split(/\r?\n/)
+        while (lines.length > 0 && lines[lines.length - 1]?.trim() === '')
+          lines.pop()
+        return ok({
+          runId: job.data.run_id,
+          jobName: job.data.name,
+          failedStep: job.data.steps?.find(step => step.conclusion === 'failure')?.name ?? null,
+          logTail: lines.slice(-FAILED_JOB_LOG_TAIL_LINES),
+        })
+      }).catch((error: unknown): Result<FailedJobContext, string> => err(message(error)))
+    },
+
     async listPullRequestFiles(repository, pullRequestNumber, signal) {
       const octokit = await client(repository.github, 'read', signal)
       if (octokit._tag === 'Err')
@@ -727,7 +810,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
         .then(async (existing) => {
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
-            return err('The stored automated review comment belongs to another pull request.')
+            return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another pull request.' as const })
           const legacyActor = options.legacyActor
           const existingHead = automatedReviewHead(existing.data.body ?? '')?.toLowerCase()
           const expectedHead = automatedReviewHead(expectedBody)?.toLowerCase()
@@ -741,7 +824,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             && existingHead === expectedHead
             && existingHead === nextHead
           if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
-            return err('The stored automated review comment belongs to another GitHub actor.')
+            return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another GitHub actor.' as const })
           if (existing.data.body === body && existing.data.html_url !== undefined)
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           if (existing.data.body !== expectedBody)

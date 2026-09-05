@@ -48,6 +48,7 @@ did not cover it.
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
 | Issue triage label | `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-spec`, `harlan-agent-needs-info`, or `harlan-agent-wait-to-implement` | GitHub | One per triaged issue Revision | triage route |
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
+| Batch | `batches`, `batch_units`, `batch_tasks` | Scheduler | One per repository at a time, 1 to N Issue work Tasks, 1 to N units | Batch |
 | Pull request triage | Pull request title, `pull_request_triage` Agent role, or `pull_request_triage_runs` | Controller, Runner | One deterministic or low-cost decision per pull request head commit | pull request triage |
 | Take Ownership | `repositories.take_ownership` | Controller | One policy per Repository mapping | Take Ownership |
 | Publication command | `publication_commands` | Controller | One to one Task | none |
@@ -398,6 +399,16 @@ An issue with the Ready to implement route authorizes Issue work. An outside con
 
 The Issue triage Agent continues its own session for Issue work.
 
+### Batch
+
+One planned group of Ready issues in one repository, worked under one Agent permit.
+
+A Batch reserves its Issue work Tasks when it opens, so plain Issue work leaves them alone. One Batch planning turn then decides the units: which issues one pull request closes, and which pull request stacks on which. Each unit runs as its own Issue work Agent in its own worktree and publishes the moment it finishes. Nothing waits for the whole Batch.
+
+A Batch owns no Item, like a Routine, so it holds its own lease. Only Routine-filed issues join a Batch for now. `issue_batches: false` turns planning off.
+
+Use Batch. Do not use group, bundle, orchestration, or wave. The Agent that plans it is the Batch planning turn, never an orchestrator. A unit's Agent is an Agent, never a sub agent or worker.
+
 ### Issue triage
 
 One agent Task that assesses one exact issue state.
@@ -420,9 +431,9 @@ One self identified automated triage record on an issue. Re-runs update the cano
 
 One routing decision for one exact pull request head commit.
 
-A conventional non-breaking `chore:` title skips Review without starting an Agent.
+The path rule decides first. One changed path outside the prose set requires Review without starting an Agent. Agent instruction files and `.github/**` count as behaviour, not prose.
 
-Every other pull request uses a low-cost Agent decision. It requires or skips an adversarial Review. Any uncertainty requires Review.
+A prose-only pull request reuses the stored decision for the same head commit. Otherwise it uses a low-cost Agent decision from the title and changed paths. Any uncertainty requires Review.
 
 `harlan-agent-review-required` records the automatic route to Review. `harlan-agent-review-skipped` records a skipped Review.
 

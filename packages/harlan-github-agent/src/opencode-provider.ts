@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { agentProviderFailureReason, agentTextEvent, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
+import { workspaceEnvironment } from './workspace-environment.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
 const fileTools = new Set(['edit', 'write', 'patch', 'multiedit'])
@@ -183,7 +184,8 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
   }))
 
   async function* runOnce(request: AgentTurnRequest, prompt: string): AsyncGenerator<AgentEvent> {
-    const child = spawnOpencode(opencodeArguments(request, prompt), request.workspace, environment)
+    // The worktree's seeded .env carries the tokens its own scripts read.
+    const child = spawnOpencode(opencodeArguments(request, prompt), request.workspace, workspaceEnvironment(environment, request.workspace))
     const abort = () => child.kill('SIGTERM')
     request.signal.addEventListener('abort', abort, { once: true })
     let standardError = ''

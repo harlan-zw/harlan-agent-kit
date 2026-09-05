@@ -291,6 +291,37 @@ describe('publishQueuePositions', () => {
     expect(recorded).toBe(0)
     expect(retired).toEqual([42])
   })
+
+  it('retires the publication once the comment belongs to another actor', async () => {
+    const retired: Array<{ commentId: number, reason: string }> = []
+    let recorded = 0
+    const reason = 'The stored automated review comment belongs to another GitHub actor.' as const
+    const results = await publishQueuePositions({
+      github: {
+        clearAgentLabels: () => Promise.resolve(ok(undefined)),
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Foreign', reason })),
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        recordDeletedReviewComment: (input) => {
+          retired.push({ commentId: input.commentId, reason: input.reason })
+          return true
+        },
+        listQueuedReviewStatuses: () => [queuedRepair()],
+        isQueuedReviewStatus: () => true,
+        recordQueuedReviewStatus: () => {
+          recorded += 1
+          return true
+        },
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({ _tag: 'Retired', repository: 'harlan-zw/example', pullRequestNumber: 24, reason })])
+    expect(recorded).toBe(0)
+    expect(retired).toEqual([{ commentId: 42, reason }])
+  })
   it('leaves the comment alone once the head commit moves', async () => {
     let writes = 0
     const results = await publishQueuePositions({

@@ -8,6 +8,7 @@ import {
   createProviderCapacitySource,
   hasSpendableCapacity,
   readZaiApiKey,
+  readZaiCapacity,
   WEEKLY_WINDOW_MINUTES,
   weeklyCodexCapacity,
   zaiPlanCapacity,
@@ -458,6 +459,24 @@ describe('reading the GLM Coding Plan quota', () => {
 
   it('ignores a window whose allowance is zero, so it never divides by it', () => {
     expect(zaiPlanCapacity({ data: { limits: [{ usage: 0, currentValue: 0 }] } })).toMatchObject({ _tag: 'Unavailable' })
+  })
+
+  it('names the HTTP status when the plan refuses the quota read', async () => {
+    const capacity = await readZaiCapacity({
+      apiKey: 'key',
+      fetchQuota: async () => { throw new Error('The GLM Coding Plan answered 429.') },
+    })
+
+    expect(capacity).toEqual({ _tag: 'Unavailable', reason: 'The GLM Coding Plan answered 429.' })
+  })
+
+  it('names the socket error when the quota request never connects', async () => {
+    const capacity = await readZaiCapacity({
+      apiKey: 'key',
+      fetchQuota: async () => { throw new TypeError('fetch failed', { cause: { code: 'ENETUNREACH' } }) },
+    })
+
+    expect(capacity).toEqual({ _tag: 'Unavailable', reason: 'The GLM Coding Plan quota could not be read: ENETUNREACH.' })
   })
 
   it('answers no key when opencode declares no plan, which is not a fault', () => {

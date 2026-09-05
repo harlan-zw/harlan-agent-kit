@@ -19,13 +19,13 @@ Keep the primary checkout read only. Before a mutating `--apply`, run `wt list -
 ## Invocation
 
 ```bash
-npx -y @ripast/cli <command> ...
+pnpm dlx @ripast/cli <command> ...
 ```
 
 Or install once:
 
 ```bash
-npm i -g @ripast/cli
+pnpm add -g @ripast/cli
 ripast <command> ...
 ```
 
@@ -62,4 +62,4 @@ Mutating commands default to **dry-run** (unified diff). Pass `--apply` to write
 
 When in doubt, start with `scan` — its output tells you which of rename/move/Edit fits.
 
-Run `npx -y @ripast/cli <cmd> --help` for full flags.
+Run `pnpm dlx @ripast/cli <cmd> --help` for full flags.

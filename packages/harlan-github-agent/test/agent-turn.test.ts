@@ -48,7 +48,71 @@ const input = {
   workspace: '/tmp/worktree',
 }
 
+function rawReplies(texts: string[], capture: { prompts: string[] }): AgentProvider {
+  return {
+    name: 'opencode',
+    runTurn: (request) => {
+      capture.prompts.push(request.prompt)
+      const text = texts[capture.prompts.length - 1] ?? ''
+      return (async function* () {
+        yield { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent
+        yield { _tag: 'Message', text } as AgentEvent
+        yield { _tag: 'TurnCompleted' } as AgentEvent
+      })()
+    },
+  }
+}
+
+function malformedAware(provider: AgentProvider) {
+  return {
+    ...options(provider),
+    parse: (response: string): Result<{ outcome: string }, string> => {
+      let value: { outcome?: string }
+      try {
+        value = JSON.parse(response) as { outcome?: string }
+      }
+      catch {
+        return err('The agent returned malformed conflict resolution JSON.')
+      }
+      return value.outcome === 'resolved'
+        ? ok({ outcome: value.outcome })
+        : err('The agent returned an invalid conflict resolution result.')
+    },
+  }
+}
+
 describe('runParsedAgentTurn', () => {
+  it('reads JSON inside a Markdown code fence without a repair turn', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = rawReplies(['```json\n{"outcome": "resolved"}\n```'], capture)
+
+    const result = await runParsedAgentTurn(malformedAware(provider), input, new AbortController().signal)
+
+    expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }))
+    expect(capture.prompts).toHaveLength(1)
+  })
+
+  it('reads JSON after leading prose when the remainder parses', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = rawReplies(['Here is the result:\n{"outcome": "resolved", "note": "a {brace} inside"}'], capture)
+
+    const result = await runParsedAgentTurn(malformedAware(provider), input, new AbortController().signal)
+
+    expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }))
+    expect(capture.prompts).toHaveLength(1)
+  })
+
+  it('still rejects an answer with no JSON object with the parser error', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = rawReplies(['I fixed it {but never', 'still prose'], capture)
+
+    const result = await runParsedAgentTurn(malformedAware(provider), input, new AbortController().signal)
+
+    expect(result).toEqual(err('The agent returned malformed conflict resolution JSON.'))
+    expect(capture.prompts).toHaveLength(2)
+    expect(capture.prompts[1]).toContain('The agent returned malformed conflict resolution JSON.')
+  })
+
   it('asks once for a corrected result, keeping the work behind it', async () => {
     const capture = { prompts: [] as string[] }
     const provider = replies([{ outcome: 'nearly' }, { outcome: 'resolved' }], capture)

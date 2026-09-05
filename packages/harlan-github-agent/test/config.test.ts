@@ -85,6 +85,63 @@ agent:
     expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain('$.agent.maximum_active_agents')
   })
 
+  it('reads one Reasoning effort override per Agent provider and role', () => {
+    const parsed = parseConfigText(`${configText}
+agent:
+  provider: opencode
+  reasoning_effort:
+    opencode:
+      review_fix: medium
+      pull_request_triage: low
+`)
+
+    expect(parsed._tag === 'Ok' && parsed.value.agent.reasoningEffort).toEqual({
+      opencode: { review_fix: 'medium', pull_request_triage: 'low' },
+    })
+  })
+
+  it('keeps every provider default when the file names no Reasoning effort override', () => {
+    const parsed = parseConfigText(configText)
+
+    expect(parsed._tag === 'Ok' && parsed.value.agent.reasoningEffort).toEqual({})
+  })
+
+  it('refuses a Reasoning effort override for a role no Agent has', () => {
+    const parsed = parseConfigText(`${configText}
+agent:
+  provider: opencode
+  reasoning_effort:
+    opencode:
+      repair: medium
+`)
+
+    expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain('$.agent.reasoning_effort.opencode.repair')
+  })
+
+  it('refuses a Reasoning effort no Agent provider offers', () => {
+    const parsed = parseConfigText(`${configText}
+agent:
+  provider: opencode
+  reasoning_effort:
+    opencode:
+      review_fix: ultra
+`)
+
+    expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain('$.agent.reasoning_effort.opencode.review_fix')
+  })
+
+  it('refuses a Reasoning effort override for an unknown Agent provider', () => {
+    const parsed = parseConfigText(`${configText}
+agent:
+  provider: opencode
+  reasoning_effort:
+    claude:
+      review_fix: medium
+`)
+
+    expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain('$.agent.reasoning_effort.claude')
+  })
+
   it('accepts an HTTPS Tailscale dashboard origin', () => {
     const parsed = parseConfigText(configText.replace(
       'https://harlan-github-agent.localhost',

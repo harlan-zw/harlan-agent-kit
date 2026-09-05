@@ -37,7 +37,7 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
     },
     validateMapping: () => Promise.resolve(ok(repository)),
     worktrees: {
-      prepare: () => Promise.resolve(ok({ path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'] })),
+      prepare: () => Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'] } })),
       verify: () => Promise.resolve(ok({ digest: 'digest', changedFiles: 1 })),
       commit: () => Promise.resolve(ok({ commitSha: 'commit', baseSha: current.baseSha, artifactRef: 'artifact', digest: 'digest', changedFiles: 1 })),
     },
@@ -45,6 +45,37 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 }
 
 describe('conflict worker', () => {
+  it('completes a clean merge without an agent turn and asks GitHub to recompute once', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const capture: ProviderCapture = { requests: [] }
+    let reads = 0
+    const options = conflictWorkerOptions(repository, current)
+    const worker = createConflictWorker({
+      ...options,
+      github: { getPullRequest: () => {
+        reads += 1
+        return Promise.resolve(ok(current))
+      } },
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
+      worktrees: {
+        ...options.worktrees,
+        prepare: () => Promise.resolve(ok({ _tag: 'CleanMerge' as const, headSha: current.headSha, baseSha: 'current-base', baseRef: 'main' })),
+      },
+    })
+
+    const result = await worker.run(conflictTask(repository), new AbortController().signal)
+
+    expect(result).toEqual(ok({
+      _tag: 'Completed',
+      evidence: JSON.stringify({ _tag: 'CleanMerge', headSha: current.headSha, baseSha: 'current-base', baseRef: 'main' }),
+    }))
+    expect(capture.requests).toEqual([])
+    // The first read claims the pull request. The second is the GET that makes
+    // GitHub recompute the stale mergeable state.
+    expect(reads).toBe(2)
+  })
+
   it('runs the Codex profile\'s conflict model against the prepared worktree', async () => {
     const repository = repositoryMapping()
     const current = pullRequestItem({ baseSha: 'current-base' })
@@ -133,7 +164,7 @@ describe('conflict worker', () => {
       worktrees: {
         prepare: (task) => {
           preparedBaseSha = task.pullRequest.baseSha
-          return Promise.resolve(ok({ path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'] }))
+          return Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'] } }))
         },
         verify: () => Promise.resolve(ok({ digest: 'digest', changedFiles: 1 })),
         commit: (_task, _worktree, _patch, message) => {
@@ -147,5 +178,34 @@ describe('conflict worker', () => {
 
     expect(result._tag).toBe('Ok')
     expect(preparedBaseSha).toBe('current-base')
+  })
+
+  it('tells the agent the conflicted files, both SHAs, and the check budget', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base', headSha: 'head-sha', baseRef: 'feat/parent' })
+    const capture: ProviderCapture = { requests: [] }
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
+      worktrees: {
+        ...conflictWorkerOptions(repository, current).worktrees,
+        prepare: () => Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: 'head-sha', baseSha: 'current-base', conflictedFiles: ['src/a.ts', 'src/b.vue'] } })),
+      },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    const prompt = capture.requests[0]?.prompt ?? ''
+    expect(prompt).toContain('Pull request head: head-sha')
+    expect(prompt).toContain('Base branch: feat/parent at current-base')
+    expect(prompt).toContain('- src/a.ts\n- src/b.vue')
+    expect(prompt).toContain('- eslint on the conflicted files')
+    expect(prompt).toContain('- vitest on the test files that import the conflicted files')
+    expect(prompt).toContain('- git diff --check')
+    expect(prompt).toContain('Do not run the full test suite, the full typecheck, a build, or a toolchain install.')
+    expect(prompt).toContain('Never use npx.')
+    expect(prompt).toContain('Leave no conflict markers in any file.')
+    expect(prompt).not.toContain('unit-tests skill')
   })
 })

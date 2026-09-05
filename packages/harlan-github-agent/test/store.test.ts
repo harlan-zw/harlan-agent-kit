@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { agentProfile, CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { MAXIMUM_RECOVERY_ATTEMPTS } from '../src/failure.ts'
 import { repositoryQuarantineReason } from '../src/github-write-gate.ts'
 import { routineReportCommand } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -905,6 +906,121 @@ describe('journal store', () => {
     })
   })
 
+  it('requeues a re-conflict free of recovery budget', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const conflicting = pullRequestItem({ mergeState: 'conflicting' })
+    let elapsed = 0
+    const at = (): string => new Date(Date.parse('2026-08-13T01:00:00.000Z') + (elapsed += 1000)).toISOString()
+    store.recordObservation({ externalId: 'flapping', observedAt: at(), source: 'poll', subject: conflicting })
+    // More rounds than the recovery budget. GitHub changing its mind is not
+    // the controller's failure, so none of these spend budget.
+    for (let round = 0; round < MAXIMUM_RECOVERY_ATTEMPTS + 2; round += 1) {
+      store.recordObservation({ externalId: 'clean', observedAt: at(), source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+      store.recordObservation({ externalId: 'flapping', observedAt: at(), source: 'poll', subject: conflicting })
+    }
+
+    expect(store.getDashboardSnapshot(at()).queue[0]?.state).toEqual({
+      _tag: 'Queued',
+      work: 'conflict_resolution',
+    })
+  })
+
+  it('stops requeueing a conflict whose publication keeps losing the base branch race', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'conflicting' })
+    let elapsed = 0
+    const at = (): string => new Date(Date.parse('2026-08-13T01:00:00.000Z') + (elapsed += 1000)).toISOString()
+    store.recordObservation({ externalId: 'base-race', observedAt: at(), source: 'poll', subject })
+    const supersededPublication = (): boolean => {
+      const task = store.claimNextConflictTask('worker-1', at(), 600_000)
+      if (task === null)
+        return false
+      const staged = store.stagePublication({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: at(),
+        publication: {
+          _tag: 'UpdatePullRequest',
+          taskKind: 'resolve_conflict',
+          pullRequestNumber: task.pullRequestNumber,
+          commitSha: `merge-${elapsed}`,
+          baseSha: task.pullRequest.baseSha,
+          baseRef: 'main',
+          expectedHeadSha: task.pullRequest.headSha,
+          headRef: task.pullRequest.headRef,
+          artifactRef: `refs/harlan-github-agent/publications/${elapsed}`,
+          patchDigest: 'patch',
+          changedFiles: 1,
+        },
+      })
+      if (staged._tag !== 'Staged')
+        throw new Error(`Expected a staged publication, got ${staged._tag}.`)
+      const command = store.claimNextPublication('publisher-1', at(), 600_000)
+      if (command === null)
+        throw new Error('Expected a claimed publication.')
+      store.supersedePublication({
+        commandId: command.id,
+        workerId: command.workerId,
+        fence: command.fence,
+        at: at(),
+        reason: 'The base branch changed before publication.',
+      })
+      // The next poll still sees the same head commit conflicting.
+      store.recordObservation({ externalId: 'base-race', observedAt: at(), source: 'poll', subject })
+      return true
+    }
+
+    // Each lost race repeats one whole agent turn for the same head commit.
+    // The first turn is free; every requeue after it spends one recovery.
+    for (let round = 0; round < MAXIMUM_RECOVERY_ATTEMPTS + 1; round += 1)
+      expect(supersededPublication()).toBe(true)
+
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    expect(store.getDashboardSnapshot(at()).queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'The base branch changed before publication. The controller resolved this conflict 6 times without publishing. Resolve it by hand, or push a new commit to the pull request.',
+    })
+    // A later poll of the same head commit must not wake it again.
+    store.recordObservation({ externalId: 'base-race', observedAt: at(), source: 'poll', subject })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+  })
+
+  it('does not requeue a conflict whose base merges cleanly until the head or the base changes', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'conflicting', headSha: 'head-1', baseSha: 'base-1' })
+    let elapsed = 0
+    const at = (): string => new Date(Date.parse('2026-08-13T01:00:00.000Z') + (elapsed += 1000)).toISOString()
+    store.recordObservation({ externalId: 'clean-merge', observedAt: at(), source: 'poll', subject })
+    const task = store.claimNextConflictTask('worker-1', at(), 600_000)
+    if (task === null)
+      throw new Error('Expected a running conflict task.')
+    const cleanMerge = JSON.stringify({ _tag: 'CleanMerge', headSha: 'head-1', baseSha: 'base-1', baseRef: 'main' })
+
+    expect(store.completeTask({ taskId: task.id, workerId: 'worker-1', fence: task.state.fence, at: at(), evidence: cleanMerge })).toBe(true)
+
+    // GitHub keeps reporting the same stale state for the same head and base.
+    store.recordObservation({ externalId: 'clean-merge', observedAt: at(), source: 'poll', subject })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    // A new Revision with the same head and base, such as a title edit, must not spend a turn either.
+    store.recordObservation({ externalId: 'clean-merge-renamed', observedAt: at(), source: 'poll', subject: { ...subject, title: 'Renamed' } })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    expect(store.listIncidents()).toEqual([expect.objectContaining({
+      scope: { _tag: 'Task', taskId: task.id, repository: 'harlan-zw/example', itemNumber: subject.number },
+      severity: 'warning',
+      operation: 'resolve_conflict',
+      occurrences: 1,
+    })])
+
+    // The base moved, so the merge must be redone and the stale warning closes.
+    store.recordObservation({ externalId: 'clean-merge-moved', observedAt: at(), source: 'poll', subject: { ...subject, baseSha: 'base-2' } })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).not.toBeNull()
+    expect(store.listIncidents()).toEqual([])
+  })
+
   it('keeps a manually cancelled task cancelled across later polls', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -1298,6 +1414,33 @@ describe('journal store', () => {
       { number: 23, position: 3, state: { _tag: 'Queued', work: 'adversarial_review' } },
       { number: 12, position: 4, state: { _tag: 'Queued', work: 'issue_triage' } },
     ])
+  })
+
+  it('reads the completed issue triage evidence back by Revision', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'issue-triage',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem(),
+    })
+    const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
+    if (task === null)
+      throw new Error('Expected an issue triage Task.')
+    const evidence = JSON.stringify({ _tag: 'READY_TO_IMPLEMENT', summary: 'The parser drops the last byte.' })
+
+    expect(store.getIssueTriageEvidence('harlan-zw/example', 12, task.revisionId)).toBeNull()
+    store.completeWorkerTask({
+      taskId: task.id,
+      workerId: 'issue-worker',
+      fence: task.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      evidence,
+    })
+
+    expect(store.getIssueTriageEvidence('harlan-zw/example', 12, task.revisionId)).toBe(evidence)
+    expect(store.getIssueTriageEvidence('harlan-zw/example', 12, 'other-revision')).toBeNull()
   })
 
   it('queues outside contributor issue work after approval and keeps the same agent session', () => {
@@ -3743,9 +3886,12 @@ describe('journal store', () => {
       throw new Error('Expected the new base revision.')
 
     expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 10_000)).toBeNull()
-    expect(store.listWorkflowEvents({ stream: 'review_resolution', limit: 10 })).toContainEqual(expect.objectContaining({
-      event: 'Recorded',
+    // The run answers the head commit, so it follows the head to the new base.
+    expect(store.listReviewRuns('harlan-zw/example', 24)).toEqual([expect.objectContaining({
+      id: 'old-base-attempt',
       revisionId: secondObservation.revisionId,
+    })])
+    expect(store.listWorkflowEvents({ stream: 'review_resolution', limit: 10 })).not.toContainEqual(expect.objectContaining({
       to: 'ExistingReview',
     }))
   })

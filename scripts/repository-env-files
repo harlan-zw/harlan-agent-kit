@@ -7,3 +7,5 @@ harlan-zw/nuxtseo.com sites/nuxtseo.com/apps/admin/.env
 skilld-dev/skilld.dev sites/skilld.dev/.env
 skilld-dev/skilld.dev sites/skilld.dev/.dev.vars
 harlan-zw/scripts.nuxt.com sites/scripts.nuxt.com/.env
+harlan-zw/gscdump.com sites/gscdump.com/.env
+harlan-zw/unlighthouse.dev sites/unlighthouse.dev/.env

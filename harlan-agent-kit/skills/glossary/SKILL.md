@@ -108,114 +108,7 @@ When it appears, do not rename either axis reflexively. Record both, state the a
 ## Format
 
 `GLOSSARY.md` has four sections in this order: Map, Terms, Banned, Open questions.
-
-### Map syntax
-
-`## Map` is the first section, before any term definition. Write it in Mermaid, which GitHub renders natively inside a fenced ```` ```mermaid ```` block in any `.md` file, plus the table from the section above. No image files, no external tooling, still a plain-text diff.
-
-Use `flowchart LR` and stage the pipeline left to right: sources, the detected concept, its consumers, what each is persisted as. Give every internal term a class, and attach the customer word as its own node so a shared word is visibly shared rather than repeated as text.
-
-````md
-## Map
-
-```mermaid
-flowchart LR
-  subgraph sources[Sources]
-    A[Audit<br/><small>audits</small>]
-    S[Scan<br/><small>lh_scans</small>]
-  end
-
-  F[Finding<br/><small>findings · pro/audit</small>]
-  P[Page Issue<br/><small>site_page_issues · pro/sites</small>]
-  T[Ticket<br/><small>sprint_tickets · pro/sprint</small>]
-
-  A --> F
-  S --> F
-  F -- ranked --> T
-  F -- indexed --> P
-
-  UI(("&quot;issue&quot;<br/>customer word"))
-  F -.-> UI
-  P -.-> UI
-  T -.-> UI
-
-  classDef internal fill:#E7EFF6,stroke:#34648A,color:#16202B;
-  classDef customer fill:#F8EEDC,stroke:#9A6714,color:#16202B;
-  class A,S,F,P,T internal
-  class UI customer
-```
-
-Collisions
-  "issue"   Finding, Page Issue, Ticket all surface here — three producers, one word
-  "problem" a value on both `kind` and `materiality`, different meaning on each
-````
-
-Rules for the map:
-
-- **One customer word, one node.** Three dotted arrows converging on a single `"issue"` node is the drift argument. Repeating the word as a label on three boxes hides it.
-- **Solid arrows for production, dotted for surface crossing.** They are different relationships and should not read alike.
-- **Label the arrow with what moves** (`ranked`, `indexed`, `deduped`), not with a verb like `has`.
-- Use `classDef` to separate internal from customer-facing. Two colours is enough; a third for collisions if the diagram earns it.
-- Keep node text to the term plus its table and owner. Definitions live in `## Terms`, not in the box.
-- Follow the diagram with a plain-text `Collisions` list. Mermaid does not render everywhere, and the collisions are the part that must survive a plain-text read.
-- Redraw whenever a term is added or a collision is resolved.
-- **`## Map` holds three things and nothing else**: the table, an optional diagram, and the `Collisions` list. No narrative, no rationale, no per-term commentary. Reasoning about a term belongs in `## Terms`; reasoning about an unresolved choice belongs in `## Open questions`. A real run let the Map section grow to 223 lines around a 63-line diagram, which buried the one artefact a reviewer opens the file for. The budget is on **prose, which should be zero**, not on the artefacts: a table needs one row per term and a diagram costs what it costs, so never drop a term or a required diagram to hit a line count.
-
-The worked examples in this skill use a Sprint/Finding/Ticket domain. They are illustrative only. Do not grep the target repo for the example's words; on a real run that produced a wasted sweep returning one hit.
-
-### `## Open questions` format
-
-Mandatory section, and on a real run the most useful one in the file. One entry per decision you could not make. Each carries the evidence, the options with their costs, and no recommendation dressed as a conclusion.
-
-```md
-## Open questions
-
-Naming calls this file does not settle. Resolve one, fold the answer in, delete the entry.
-
-1. **Does `indexing status` mean the GSC verdict or our derived state?**
-   Both, today: `pages.indexing_status` stores the derived value, and the
-   dashboard column of the same name shows the GSC verdict.
-   - Rename the derived column, migration, no customer impact.
-   - Rename the UI column, no migration, changes a screen customers know.
-   - Keep both, record the axis on each, accept that readers must infer.
-```
-
-### The rest
-
-```md
-# Glossary
-
-Canonical vocabulary for this project. Every user-visible string, public API
-name, doc heading, and route segment uses these terms and no synonyms.
-
-## Map
-
-<!-- Mermaid diagram plus the Term/Table/Owner/Cardinality/Customer word table -->
-
-## Terms
-
-### Sprint
-**Is:** a scheduled group of crawls run against one site.
-**Use for:** the dashboard object, `sprint*` exports, `/sprints` routes, docs headings.
-**Never:** run, batch, job, campaign, session, sweep.
-**Casing:** `Sprint` in prose and UI, `sprint` in identifiers and URLs.
-
-### Finding
-**Is:** a single actionable issue attached to a Sprint.
-**Use for:** ...
-**Never:** issue, problem, error, violation, alert.
-**Casing:** `Finding` in prose and UI, `finding` in identifiers.
-
-## Banned
-
-| Never | Use instead | Why |
-| --- | --- | --- |
-| audit (noun) | Sprint | Overloaded with the compliance meaning |
-| user | customer | "user" means the end visitor of a customer's site |
-| powerful, seamless, robust | (cut) | Marketing filler, says nothing |
-```
-
-The `Never:` line per term is what makes this enforceable. A term without its displaced synonyms recorded cannot be audited for.
+Read [references/format.md](references/format.md) for the Mermaid map syntax, the term entry shape, and a worked example before writing or auditing the file.
 
 ## Workflows
 
@@ -227,10 +120,10 @@ Do not invent the vocabulary. Recover the one already in use, then pick winners.
 
 **Harvest three surfaces separately, and do the customer one first.** A schema is engineering vocabulary. It is evidence of what the team calls things, not of what the product calls them, and it may have drifted from the business names years ago. Starting from tables produces a tidy glossary that quietly contradicts the UI.
 
-0. **Find the glossary that already exists.** Before harvesting anything, grep the repo for an informal one: a Vocabulary, Terminology, Naming, Say/Don't say, or Copy section in `COPY.md`, `CONTEXT.md`, `STYLE.md`, `CONTRIBUTING.md`, `README.md`, or the docs tree. Projects that care about wording usually wrote one down without calling it `GLOSSARY.md`. Missing this ships a third competing list and is the worst outcome this skill can produce. One real repo had two, in `COPY.md` and `CONTEXT.md`, holding a ratified Say/Not table and 20 protocol terms. Never silently override a wording decision someone already made, and never write a second list beside an existing one without saying which wins.
+0. **Find the glossary that already exists.** Before harvesting anything, grep the repo for an informal one: a Vocabulary, Terminology, Naming, Say/Don't say, or Copy section in `COPY.md`, `CONTEXT.md`, `STYLE.md`, `CONTRIBUTING.md`, `README.md`, or the docs tree. Projects that care about wording usually wrote one down without calling it `GLOSSARY.md`. Missing this ships a third competing list and is the worst outcome this skill can produce. Never silently override a wording decision someone already made, and never write a second list beside an existing one without saying which wins.
 
    **0.5. Decide how you relate to what you found, and record the decision.** Three outcomes, and the skill will not choose for you:
-   - **Point to it** — the existing list is complete and better established than anything you would write. Cite it as authoritative, cover only what it omits, and say so in the intro. One real run found a 145-line vocabulary with 25 terms, per-term avoid lines, and dated ambiguity flags; writing a competing list would have been pure harm.
+   - **Point to it** — the existing list is complete and better established than anything you would write. Cite it as authoritative, cover only what it omits, and say so in the intro.
    - **Fold it in** — the existing list is partial or scattered. Move it in verbatim, credit where it came from, and leave a pointer behind in the old file so the two cannot drift.
    - **Supersede it** — the existing list is stale or contradicted by shipped surfaces. Say which entries you are overriding and why, one line each.
 
@@ -239,7 +132,7 @@ Do not invent the vocabulary. Recover the one already in use, then pick winners.
 2. **Internal surface**: table names, stored enum values, protocol contracts, layer and module directory names, unexported helpers. **Exported types are not internal** in a published package; file them under the customer surface, since an importer feels a rename exactly like a customer feels a changed route.
 3. **Decision surface**: `docs/adr/`, `docs/decisions/`, RFCs, whatever the project's decision log is called. Grep it for every candidate term. Skipping this step is how an agent proposes to "fix" a collapse the team ratified on purpose, which is worse than leaving the drift alone.
 4. Cluster synonyms within each surface, then across them. Look for the same concept appearing under 2 or more words, the exact drift being fixed.
-5. **Weight by surface, not by frequency.** Note where each variant appears and rank by switching cost: live URL, published protocol or MCP tool name, stored enum value, then UI string, then internal identifier, then prose. Do not spend effort counting occurrences; on a real run the counts decided nothing and location decided everything.
+5. **Weight by surface, not by frequency.** Note where each variant appears and rank by switching cost: live URL, published protocol or MCP tool name, stored enum value, then UI string, then internal identifier, then prose. Do not spend effort counting occurrences; location decides, counts do not.
 6. **Diff the surfaces and lead with the mismatch.** Where they disagree, that table is the most valuable output of `init`, more than the term list. Expect the internal surface to draw distinctions the UI collapses: three tables surfacing under one customer word is the common shape, and one of those words is usually already in a route. Then check the decision log: a ratified umbrella is recorded, never reopened.
 7. Present each cluster with a recommended canonical term and the evidence. **Ask before writing.** Naming is the user's call, not the agent's, and a surface mismatch is a product decision, not a refactor.
 

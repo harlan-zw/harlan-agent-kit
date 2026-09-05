@@ -6,8 +6,8 @@ Dyslexia + ADHD. Answer first, short lines, plain words, bullets. Need-to-knows 
 
 ## Replies
 
-- Extremely concise; sacrifice grammar. Under 6 lines.
-- Work done: state outcome, stop. No recap, tables, or rationale.
+- Extremely concise; sacrifice grammar. A few short lines, never a wall.
+- Work done: state the outcome, stop. Rationale only when the outcome is surprising.
 - End a work task with confidence /100 that it works end to end. Score what you verified, not how code reads. Below 90, name the untested path in one line.
 - 5+ tool calls: print `▓▓▓░░ 57% next-step` at real progress. Orchestrating: relay `(docs: 80%, cache: done)`.
 
@@ -39,12 +39,12 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 - Never introduce a synonym for a term it defines. Never use a banned term.
 - Unnamed concept: propose the term, say which synonyms it displaces, confirm.
-- Bootstrap, audit, drift: read `skills/glossary/SKILL.md` (see Reference material).
+- Bootstrap, audit, drift: read the `glossary` skill.
 
 ## Tools
 
 - Find and search files: ripgrep (`rg`).
-- Rename, move, or import update spanning 2+ files: `npx -y @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
+- Rename, move, or import update spanning 2+ files: `pnpm dlx @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
 - Browser testing and automation: `dev-browser` (`--help`).
 - Give each task its own `dev-browser` name. Close every named page when browser work ends. Never run `dev-browser stop`; it stops shared browsers.
 
@@ -68,7 +68,7 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 ### Design patterns (Effect-inspired, no Effect dependency)
 
-Canonical copy + review rubric: `skills/ts-design-patterns/SKILL.md`.
+Canonical copy + review rubric: the `ts-design-patterns` skill.
 
 - **Make illegal states unrepresentable.** `_tag` discriminated unions, not optional-field + boolean soup.
 - **Errors as values.** Tagged `Ok | Err` for expected domain failures, so signatures show them. Unexpected and infra errors propagate; prefer `.catch()` over try/catch when handling is needed.
@@ -88,7 +88,7 @@ Latest APIs (reactive prop destructure, array event defines). Prefer vueuse over
 - Bug fixes and validation logic: failing test first.
 - Unit tests exercise exported APIs: build an input, call the export, assert the return, throw, or boundary side effect. Never assert on file contents, module shape, key counts, or that a symbol exists.
 - Tests are scratchpad. Delete freely. Behaviour changed on purpose: delete the test, write the new one.
-- Full rubric: read `skills/unit-tests/SKILL.md`.
+- Full rubric: read the `unit-tests` skill.
 
 ## Agents
 
@@ -108,12 +108,23 @@ Examples include dependencies, formatting, generated files, or comments in non-M
 The agent merges those after a READY review. Everything else waits for me.
 Unsure means no label. Rules: `harlan-agent-kit/references/auto-merge.md`.
 
+## Commits
+
+Every commit subject follows Conventional Commits: `type(scope): description`.
+
+- Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `perf`, `test`, `style`.
+- The scope is optional. Name the monorepo folder or the treeshakable export.
+- Keep the subject under 70 characters. Use the imperative mood: "add", never "added".
+- Never end the subject with a period. The body says why, because the diff says what.
+- A `commit-msg` git hook refuses a subject that breaks these rules under `~/pkg` and `~/sites`.
+
 ## Workflow
 
 - Ship the smallest thing that solves it. Add structure when it fails.
+- A pull request that crosses three or more modules, a boundary, or a sequence carries a PR Lens diagram in its description. Smaller ones do not. Read the `pr-lens` skill.
 - Production error: fix the category, not the instance.
 - Refactors and architecture audits: finish the whole change before stopping (imports updated, old code removed, tests pass).
 
 ## Reference material
 
-Rubrics and procedures live under `~/pkg/harlan-agent-kit/harlan-agent-kit/skills/*/SKILL.md`. Claude auto-loads them; you must read the file yourself. At the start of a coding task, list that directory and read any `SKILL.md` matching the work. Trust the listing, not memory.
+Rubrics and procedures live in `~/pkg/harlan-agent-kit/harlan-agent-kit/skills/*/SKILL.md`. The plugin lists them. Read the SKILL.md that matches the work before starting it. Trust the file, not memory.

@@ -83,6 +83,14 @@ export interface AgentConfig {
      * not against core count: each Agent runs a whole coding session.
      */
     maximumActiveAgents: number | null
+    /**
+     * Reasoning effort overrides per Agent provider and role.
+     *
+     * A listed role replaces that provider's own per-role default. An absent
+     * provider or role keeps the default. A pinned Agent selection with an
+     * explicit Reasoning effort still wins over this.
+     */
+    reasoningEffort: RoleReasoningEfforts
   }
   github: {
     appId: number
@@ -111,6 +119,8 @@ export interface AgentConfig {
   autoMerge: AutoMergePolicy
   /** New issue work stops when open pull requests reach this limit. */
   maxOpenPullRequests: number
+  /** Whether Ready Routine-filed issues are planned as Batches before Issue work starts. */
+  issueBatches: boolean
   pollIntervalSeconds: number
   issueCutoff: string
   externalRepositories: ExternalRepositoryWatch[]
@@ -582,7 +592,7 @@ export type AgentTask = ConflictResolutionTask | ReviewFixTask | BaselineRepairT
 export type ClaimedAgentTask = ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask
 /** A Task as shown by the dashboard, including its last durable phase. */
 export type DashboardTask = AgentTask & { progress: AgentProgress }
-export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'pull_request_triage' | 'issue_triage' | 'issue_work' | 'routine_scan' | 'routine_fix'
+export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'pull_request_triage' | 'issue_triage' | 'issue_work' | 'batch_plan' | 'routine_scan' | 'routine_fix'
 
 /**
  * Every Routine the service knows how to run.
@@ -590,7 +600,7 @@ export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair'
  * A repository spec selects from this list and never extends it, so a pull
  * request can change a schedule and can never name new work.
  */
-export type RoutineName = 'sentry-checkin' | 'pr-triage' | 'agent-feedback'
+export type RoutineName = 'sentry-checkin' | 'pr-triage' | 'agent-feedback' | 'daily-checkin'
 
 /**
  * What a Routine run does with what it finds.
@@ -637,6 +647,85 @@ export interface RoutineIssueSource {
   routineName: RoutineName
   target: string
 }
+
+/**
+ * One planned group of Ready issues in one repository.
+ *
+ * A Batch reserves its Issue work Tasks the moment it is opened, so the plain
+ * Issue work scheduler leaves them alone. One Batch planning turn then decides
+ * which issues share one pull request and which pull requests stack on which.
+ * Every unit publishes the moment its Agent finishes. Nothing waits for the
+ * whole Batch.
+ */
+export type BatchState
+  = | { _tag: 'Queued' }
+    | { _tag: 'Running', workerId: string, fence: number, leaseExpiresAt: string }
+    | { _tag: 'Completed' }
+    | { _tag: 'Failed', reason: string }
+
+/** One issue a Batch reserved, with the text the planning turn reads. */
+export interface BatchIssue {
+  taskId: string
+  issueNumber: number
+  title: string
+  body: string
+  triageSummary: string | null
+  /** Open issues the Issue triage named as fix-together partners. */
+  relatedIssues: readonly number[]
+  /** The Routine target file, when a Routine filed the issue. */
+  target: string | null
+}
+
+/** One pull request the Batch plan produces. */
+export interface BatchUnit {
+  id: string
+  position: number
+  /** The Issue work Task whose lease runs this unit and whose head branch names the pull request. */
+  primaryTaskId: string
+  /** Issue numbers this unit closes, the primary first. */
+  issueNumbers: readonly number[]
+  /** The unit whose published head branch this unit stacks on, or null for the default branch. */
+  dependsOnUnitId: string | null
+  rationale: string
+  state: BatchUnitState
+}
+
+export type BatchUnitState
+  = | { _tag: 'Waiting' }
+    | { _tag: 'Running' }
+    | { _tag: 'Published', pullRequestNumber: number, headRef: string, headSha: string }
+    | { _tag: 'ActionRequired', reason: string }
+    | { _tag: 'Failed', reason: string }
+
+export interface Batch {
+  id: string
+  repository: string
+  state: BatchState
+  issues: readonly BatchIssue[]
+  /** Null until the Batch planning turn answered. */
+  units: readonly BatchUnit[] | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ClaimedBatch extends Batch {
+  state: Extract<BatchState, { _tag: 'Running' }>
+  repositoryMapping: RepositoryMapping
+}
+
+/** What the planning turn decides for one unit, before the store assigns ids. */
+export interface PlannedBatchUnit {
+  issueNumbers: readonly number[]
+  /** Zero-based position of the unit this one stacks on, or null. */
+  dependsOn: number | null
+  rationale: string
+}
+
+/** Where one unit's dependency stands, read by the unit that waits on it. */
+export type BatchDependency
+  = | { _tag: 'Pending' }
+    | { _tag: 'Published', pullRequestNumber: number, headRef: string, headSha: string }
+    | { _tag: 'Unavailable', reason: string }
 
 /** One leased Candidate issue command, ready for the controller to file. */
 export interface ClaimedCandidateIssueCommand extends CandidateIssueCommand {
@@ -775,6 +864,13 @@ export interface Candidate {
   runId: string
   /** Stable across runs. Never derived from a line number. */
   fingerprint: string
+  /**
+   * The issue title, written by the Agent that proposed this Candidate.
+   *
+   * The claim is a whole sentence, so it reads badly in an issue list. Older
+   * rows carry no title and fall back to the claim at read time.
+   */
+  title: string
   target: string
   claim: string
   verification: string
@@ -975,6 +1071,12 @@ export type MutationWorkerOutcome
   = | { _tag: 'Publish', publication: PreparedPublication, usage?: AgentTokenUsage }
     | { _tag: 'ActionRequired', reason: string, evidence: string, usage?: AgentTokenUsage }
     /**
+     * The work this Task existed for is already on GitHub.
+     *
+     * The evidence names it, so nobody spends an agent turn producing it again.
+     */
+    | { _tag: 'Completed', evidence: string, usage?: AgentTokenUsage }
+    /**
      * The world fixed the problem this Task existed for.
      *
      * Retrying cannot help and nobody needs to act, so the Task completes
@@ -1117,6 +1219,9 @@ export type OpencodeAgentModel
     | 'opencode-go/qwen3.7-plus'
 export type AgentModel = CodexAgentModel | OpencodeAgentModel
 export type CodexReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** Reasoning effort overrides keyed by Agent provider, then by Agent role. */
+export type RoleReasoningEfforts = Partial<Record<AgentProviderName, Partial<Record<AgentRole, CodexReasoningEffort>>>>
 
 export interface RoleProfile {
   model: AgentModel
@@ -1316,6 +1421,8 @@ export interface DashboardSnapshot {
   tasks: DashboardTask[]
   routines: Routine[]
   routineRuns: DashboardRoutineRun[]
+  /** Open Batches first, then the most recent finished ones. */
+  batches: Batch[]
 }
 
 export type StoredAgentControl

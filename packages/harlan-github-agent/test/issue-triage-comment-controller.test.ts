@@ -29,6 +29,7 @@ const readyResult = {
   needsCodebaseReview: true,
   summary: 'The goal is clear, but the API shape is undecided.',
   nextAction: 'Write a technical specification.',
+  relatedIssues: [],
 } as const
 
 function controllerWithSnapshot(snapshot: IssueTriageSnapshot) {
@@ -144,6 +145,7 @@ describe('issue triage publication', () => {
       needsCodebaseReview: true,
       summary: 'The goal is clear, but the API shape is undecided.',
       nextAction: 'Write a technical specification.',
+      relatedIssues: [],
     }, new AbortController().signal)
 
     expect(result).toEqual(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/issues/12#issuecomment-42' }))

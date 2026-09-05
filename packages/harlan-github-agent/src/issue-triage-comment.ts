@@ -16,5 +16,5 @@ ${automatedDisclosure({ kind: 'triage', disclaimer: `It is not Harlan's personal
 - **Reproduction:** ${input.hasReproduction ? 'Yes' : 'No'}
 - **Codebase review:** ${input.needsCodebaseReview ? 'Needed' : 'Not needed'}
 - **Summary:** ${input.summary}
-- **Next action:** ${input.nextAction}`
+- **Next action:** ${input.nextAction}${input.relatedIssues.length === 0 ? '' : `\n- **Fix with:** ${input.relatedIssues.map(number => `#${number}`).join(', ')}`}`
 }

@@ -1,13 +1,16 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
-import type { GitHubAgentSource, PullRequestReviewSnapshot, PullRequestTemplate } from './github-agent-source.ts'
+import type { FailedJobContext, GitHubAgentSource, GitHubCheck, PullRequestReviewSnapshot, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { BaselineRepairWorktreeManager } from './worktree.ts'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { withBaselineRepairMarker } from './baseline-repair-state.ts'
+import { classifyCheckFailure } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
@@ -38,8 +41,26 @@ interface AgentResponsePayload {
   pullRequestBody?: string
 }
 
+/** What the prepared worktree says about how the repository expects to be worked on. */
+export interface WorkspaceFacts {
+  hasAgentsFile: boolean
+  /** The `NODE_OPTIONS` value the first workflow sets, or null when none does. */
+  nodeOptions: string | null
+}
+
+export interface WorkspaceFile {
+  /** Relative to the worktree root, with `/` separators. */
+  path: string
+  content: string
+}
+
+/** GitHub's own app id for Actions. Only its check run id is also a job id. */
+const GITHUB_ACTIONS_APP_ID = 15368
+
 export interface BaselineRepairWorkerOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'getPullRequestTemplate'>
+  github: Pick<GitHubAgentSource, 'findOpenPullRequestForBranch' | 'getFailedJobContext' | 'getPullRequestReviewSnapshot' | 'getPullRequestTemplate'>
+  /** Reads the prepared worktree. `inspectWorkspaceFiles` reads it from disk. */
+  inspectWorkspace: (path: string) => Promise<WorkspaceFacts>
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
@@ -69,10 +90,55 @@ const outputSchema = {
 const disclosure = '> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
 const failedConclusions = new Set(['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'])
 
-function failedChecks(snapshot: PullRequestReviewSnapshot): string[] {
+function failedChecks(snapshot: PullRequestReviewSnapshot): GitHubCheck[] {
   return snapshot.baseChecks._tag === 'Available'
-    ? snapshot.baseChecks.checks.filter(check => failedConclusions.has(check.conclusion ?? '')).map(check => check.name)
+    ? snapshot.baseChecks.checks.filter(check => failedConclusions.has(check.conclusion ?? ''))
     : []
+}
+
+/** The head branch one Baseline repair publishes for one base commit. */
+export function baselineRepairHeadRef(prefix: string, baseSha: string): string {
+  return `${prefix}baseline-ci-${baseSha.slice(0, 12)}`
+}
+
+/** What the controller could read about one failed check before the Agent starts. */
+export type FailedCheckContext
+  = | { _tag: 'Available', check: GitHubCheck, job: FailedJobContext }
+    | { _tag: 'Unavailable', check: GitHubCheck, reason: string }
+
+const nodeOptionsPattern = /^\s*NODE_OPTIONS:\s*(?:"([^"]*)"|'([^']*)'|([^#\n]*))/m
+
+/** Pure. Decides what the prompt may say about the worktree from the files it holds. */
+export function workspaceFactsFromFiles(files: WorkspaceFile[]): WorkspaceFacts {
+  const nodeOptions = files
+    .filter(file => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(file.path))
+    .map(file => file.content.match(nodeOptionsPattern))
+    .map(match => (match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim())
+    .find(value => value.length > 0)
+  return {
+    hasAgentsFile: files.some(file => file.path === 'AGENTS.md'),
+    nodeOptions: nodeOptions ?? null,
+  }
+}
+
+/** Reads the files `workspaceFactsFromFiles` decides from. */
+export function inspectWorkspaceFiles(path: string): Promise<WorkspaceFacts> {
+  const workflows = join(path, '.github', 'workflows')
+  const files: WorkspaceFile[] = existsSync(workflows)
+    ? readdirSync(workflows)
+        .filter(name => /\.ya?ml$/.test(name))
+        .map(name => ({ path: `.github/workflows/${name}`, content: readFileSync(join(workflows, name), 'utf8') }))
+    : []
+  if (existsSync(join(path, 'AGENTS.md')))
+    files.push({ path: 'AGENTS.md', content: '' })
+  return Promise.resolve(workspaceFactsFromFiles(files))
+}
+
+/** The controller owns the pull request body. The Agent supplies only the why. */
+function pullRequestBody(template: PullRequestTemplate, why: string): string {
+  return template._tag === 'Found'
+    ? `${template.body.trimEnd()}\n\n${why}`
+    : why
 }
 
 function withDisclosure(body: string): string {
@@ -84,7 +150,7 @@ function withDisclosure(body: string): string {
   return `${description}\n\n${disclosure}`
 }
 
-function controllerBaselineMetadata(template: PullRequestTemplate): RepairedResponse {
+function controllerBaselineMetadata(): RepairedResponse {
   const title = 'fix: repair default branch CI'
   return {
     outcome: 'repaired',
@@ -92,9 +158,7 @@ function controllerBaselineMetadata(template: PullRequestTemplate): RepairedResp
     checks: [],
     commitMessage: title,
     pullRequestTitle: title,
-    pullRequestBody: template._tag === 'Found'
-      ? `${template.body.trimEnd()}\n\nRepairs failing default branch CI.`
-      : 'Repairs failing default branch CI.',
+    pullRequestBody: 'Repairs failing default branch CI.',
   }
 }
 
@@ -144,22 +208,57 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
     .catch(() => err('The agent returned malformed Baseline repair JSON.'))
 }
 
-function prompt(task: ClaimedBaselineRepairTask, checks: string[], template: PullRequestTemplate): string {
-  const templateInstruction = template._tag === 'Found'
-    ? `Use this pull request template when useful: ${JSON.stringify(template.body)}`
-    : 'No pull request template exists. Write a short description of the actual fix.'
-  return `Repair the failing default branch CI for ${task.repository} at commit ${task.pullRequest.baseSha}.
+function checkBlock(context: FailedCheckContext): string {
+  const head = `- Check "${context.check.name}", conclusion ${context.check.conclusion ?? 'unknown'}.`
+  if (context._tag === 'Unavailable')
+    return `${head}\n  Run id, job, step, and log: unavailable (${context.reason}).`
+  const step = context.job.failedStep === null ? 'no step reports failure' : `failed step "${context.job.failedStep}"`
+  const log = context.job.logTail.length === 0
+    ? '  Log: unavailable (the job log is empty).'
+    : `  Last ${context.job.logTail.length} log lines:\n  \`\`\`\n${context.job.logTail.map(line => `  ${line}`).join('\n')}\n  \`\`\``
+  return `${head}\n  Run id ${context.job.runId}, job "${context.job.jobName}", ${step}.\n${log}`
+}
 
-Own the work end to end. Diagnose the actual failure, implement the complete fix, and verify it.
+export interface BaselineRepairPromptInput {
+  repository: string
+  baseSha: string
+  repairable: FailedCheckContext[]
+  infrastructure: Array<{ check: GitHubCheck, reason: string }>
+  workspace: WorkspaceFacts
+}
+
+/** Pure. Everything the Agent needs, in the order it needs it. */
+export function baselineRepairPrompt(input: BaselineRepairPromptInput): string {
+  const agents = input.workspace.hasAgentsFile
+    ? 'Read AGENTS.md in this worktree before you change code.\n'
+    : ''
+  const nodeOptions = input.workspace.nodeOptions === null
+    ? ''
+    : `The workflow sets NODE_OPTIONS=${input.workspace.nodeOptions}. Use the same value for every local command.\n`
+  const outOfScope = input.infrastructure.length === 0
+    ? ''
+    : `\nThese checks failed for an infrastructure reason. Do not change the repository for them:\n${input.infrastructure.map(entry => `- Check "${entry.check.name}": ${entry.reason}`).join('\n')}\n`
+  return `Repair the failing default branch CI for ${input.repository} at commit ${input.baseSha}.
+
+Own the work end to end. Find the root cause, implement the complete fix, and verify it.
 Work as a normal local agent session. Use the user's global agent context and installed skills.
-This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
-Read repository AGENTS.md and contributor instructions. Apply the unit-tests skill for bug fixes.
-Use GitHub read commands to inspect the failed runs and logs. The failing checks are ${JSON.stringify(checks)}.
-Apply the PR skill to draft the pull request title and body.
-${templateInstruction}
-Choose a commit message that describes your actual fix. Avoid generic automated-review wording.
-Do not stage, commit, push, or publish. The controller handles those safety boundaries.
-Return blocked only when you cannot safely complete the fix. Return only the required JSON.`
+This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before you return a result.
+${agents}Apply the unit-tests skill for a bug fix.
+
+Failing checks:
+${input.repairable.map(checkBlock).join('\n')}
+${outOfScope}
+Verify with the exact command of the failing check only. Never run the full test suite, the full lint, or the full build when a narrower command reproduces the failure.
+${nodeOptions}Never run sudo or systemctl. Never start, stop, or change a host service, a runner, or a container. If the fix needs a host change, return blocked and say why.
+Do not hide a failure with a retry wrapper, a concurrency limit, or a longer timeout. Fix the cause.
+Do not stage, commit, push, or publish. The controller owns those steps.
+Do not write a pull request body. The controller writes it.
+Return only the required JSON:
+- commitMessage: one line, Conventional Commit format, names the actual fix.
+- pullRequestTitle: the same line as commitMessage.
+- pullRequestBody: two sentences that say why this change is needed.
+- checks: the exact commands you ran to verify the fix.
+Return blocked only when you cannot safely complete the fix.`
 }
 
 export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions): BaselineRepairWorker {
@@ -196,6 +295,43 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         return ok({ _tag: 'Superseded', reason: `The pull request now builds on ${snapshot.value.pullRequest.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
       if (checks.length === 0)
         return ok({ _tag: 'Superseded', reason: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
+      // One Baseline repair per base commit. The Journal learns about a
+      // published repair only when it next observes the pull request, so a
+      // second Task for the same commit asks GitHub before it spends a turn.
+      const headRef = baselineRepairHeadRef(prefix, task.pullRequest.baseSha)
+      const published = await options.github.findOpenPullRequestForBranch(validated.value, headRef, signal)
+      if (published._tag === 'Err')
+        return published
+      if (published.value !== null)
+        return ok({ _tag: 'Completed', evidence: `GitHub reports Baseline repair pull request #${published.value.number}: ${published.value.url}` })
+      const contexts = await Promise.all(checks.map(async (check): Promise<FailedCheckContext> => {
+        if (check.source._tag !== 'CheckRun' || check.source.appId !== GITHUB_ACTIONS_APP_ID)
+          return { _tag: 'Unavailable', check, reason: 'the check is not a GitHub Actions job' }
+        const job = await options.github.getFailedJobContext(validated.value, check.id, signal)
+        return job._tag === 'Ok'
+          ? { _tag: 'Available', check, job: job.value }
+          : { _tag: 'Unavailable', check, reason: job.error }
+      }))
+      const classified = contexts.map(context => ({
+        context,
+        failure: classifyCheckFailure({
+          name: context.check.name,
+          conclusion: context.check.conclusion,
+          runnerLost: context.check.failure._tag === 'RunnerLost',
+          logTail: context._tag === 'Available' ? context.job.logTail : [],
+        }),
+      }))
+      const infrastructure = classified.flatMap(entry => entry.failure._tag === 'Infrastructure' ? [{ check: entry.context.check, reason: entry.failure.reason }] : [])
+      const repairable = classified.flatMap(entry => entry.failure._tag === 'Repairable' ? [entry.context] : [])
+      // No change to the repository fixes a dead runner or a remote outage.
+      // Every Agent turn spent on one produced a mask, so none starts.
+      if (repairable.length === 0) {
+        return ok({
+          _tag: 'ActionRequired',
+          reason: cleanLine(`Infrastructure failure. ${infrastructure.map(entry => entry.reason).join(' ')} Repair the host, then re-run the check.`),
+          evidence: JSON.stringify(infrastructure.map(entry => ({ check: entry.check.name, reason: entry.reason }))),
+        })
+      }
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, signal)
       if (prepared._tag === 'Err')
         return prepared
@@ -204,11 +340,18 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       const ready = progress({ percent: 35, label: 'Git worktree ready' })
       if (ready._tag === 'Err')
         return ready
+      const workspace = await options.inspectWorkspace(prepared.value.path)
       const turn = await runAgentTurn(options, {
         freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: progress, work: 'baseline' },
-        prompt: prompt(task, checks, template.value),
+        prompt: baselineRepairPrompt({
+          repository: task.repository,
+          baseSha: task.pullRequest.baseSha,
+          repairable,
+          infrastructure,
+          workspace,
+        }),
         repository: task.repository,
         role: 'baseline_repair',
         schema: outputSchema,
@@ -228,7 +371,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           at: options.now().toISOString(),
           text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
         })
-        response = controllerBaselineMetadata(template.value)
+        response = controllerBaselineMetadata()
       }
       else {
         if (parsed.value.outcome === 'blocked') {
@@ -260,13 +403,13 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           taskKind: 'baseline_repair',
           pullRequestNumber: task.pullRequestNumber,
           pullRequestTitle: response.pullRequestTitle,
-          pullRequestBody: withBaselineRepairMarker(withDisclosure(response.pullRequestBody)),
+          pullRequestBody: withBaselineRepairMarker(withDisclosure(pullRequestBody(template.value, response.pullRequestBody))),
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
           // A Baseline repair fixes the default branch, so it never stacks.
           baseRef: validated.value.defaultBranch,
           expectedHeadSha: committed.value.baseSha,
-          headRef: `${prefix}baseline-ci-${task.pullRequest.baseSha.slice(0, 12)}`,
+          headRef,
           artifactRef: committed.value.artifactRef,
           patchDigest: committed.value.digest,
           changedFiles: committed.value.changedFiles,

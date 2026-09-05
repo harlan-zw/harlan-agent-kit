@@ -45,9 +45,11 @@ export function isRoutineTrackingIssue(input: {
   })
 }
 
+const MAXIMUM_REPORT_DETAIL_LENGTH = 20_000
+
 /** What one finished run did, in the words the log records. */
 export type RoutineRunReport
-  = | { _tag: 'Completed', evidence: string }
+  = | { _tag: 'Completed', evidence: string, detail?: string }
     | { _tag: 'Skipped', reason: string }
     | { _tag: 'Failed', reason: string }
 
@@ -75,7 +77,11 @@ export function routineReportBody(run: Pick<RoutineRun, 'scheduledFor'>, report:
     : report._tag === 'Skipped'
       ? `Skipped. ${report.reason}`
       : `Failed. ${report.reason}`
-  return `**${run.scheduledFor}** — ${headline}${candidateDetails(candidates)}`
+  // GitHub caps a comment at 65536 characters, and the Candidates follow.
+  const detail = report._tag === 'Completed' && report.detail !== undefined && report.detail !== ''
+    ? `\n\n${report.detail.slice(0, MAXIMUM_REPORT_DETAIL_LENGTH)}`
+    : ''
+  return `**${run.scheduledFor}** — ${headline}${detail}${candidateDetails(candidates)}`
 }
 
 /** One report request for one finished run. */

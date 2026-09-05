@@ -197,6 +197,23 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
     expect(launchedEnvironment).toBe(environment)
   })
 
+  it('layers the worktree .env over the Agent environment', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'opencode-env-'))
+    await writeFile(join(workspace, '.env'), 'NUXTSEO_TOKEN=from-repo\n')
+    let launchedEnvironment: NodeJS.ProcessEnv | undefined
+    const provider = createOpencodeProvider({
+      environment: { PATH: '/bin' },
+      spawnOpencode: (args, _workspace, receivedEnvironment) => {
+        launchedEnvironment = receivedEnvironment
+        return replay([textLine])(args)
+      },
+    })
+
+    await collect(provider.runTurn(request({ workspace })))
+
+    expect(launchedEnvironment).toEqual({ PATH: '/bin', NUXTSEO_TOKEN: 'from-repo' })
+  })
+
   it('reports the session before the events it produced', async () => {
     const provider = createOpencodeProvider({ spawnOpencode: replay([bashLine, textLine]) })
 

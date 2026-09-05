@@ -1,15 +1,6 @@
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
-import type {
-  AgentActivityItem,
-  DashboardSnapshot,
-  DashboardTask,
-  Incident,
-  RestartRequest,
-  StoredAgentControl,
-  WorkflowEvent,
-  WorkflowEventStream,
-} from './types.ts'
+import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { err, ok } from './result.ts'
 
@@ -69,6 +60,8 @@ export interface ControlClient {
   restart: () => Promise<Result<RestartRequest, ControlApiError>>
   update: () => Promise<Result<RestartRequest, ControlApiError>>
   cancelTask: (taskId: string) => Promise<Result<TaskCancellation, ControlApiError>>
+  /** Opens one run of a Routine for the current minute, ahead of its schedule. */
+  runRoutine: (routineId: string) => Promise<Result<RoutineRun, ControlApiError>>
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -133,6 +126,18 @@ function parseRestartRequest(value: unknown): Parsed<RestartRequest> {
     return err('The service returned an invalid Restart request.')
   }
   return ok(input as unknown as RestartRequest)
+}
+
+function parseRoutineRun(value: unknown): Parsed<RoutineRun> {
+  const input = record(value)
+  if (input === undefined
+    || typeof input.id !== 'string'
+    || typeof input.routineId !== 'string'
+    || typeof input.scheduledFor !== 'string'
+    || record(input.state) === undefined) {
+    return err('The service returned an invalid Routine run.')
+  }
+  return ok(input as unknown as RoutineRun)
 }
 
 function parseCancellation(value: unknown): Parsed<TaskCancellation> {
@@ -274,5 +279,6 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     restart: () => request({ method: 'POST', path: 'api/service/restart', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     update: () => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     cancelTask: taskId => request({ method: 'POST', path: 'api/tasks/cancel', body: { taskId }, parse: parseCancellation }),
+    runRoutine: routineId => request({ method: 'POST', path: 'api/routines/run', body: { routineId }, parse: parseRoutineRun, acceptedStatuses: [202] }),
   })
 }

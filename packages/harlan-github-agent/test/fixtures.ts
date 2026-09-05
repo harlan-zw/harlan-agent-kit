@@ -105,6 +105,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     tasks: [],
     routines: [],
     routineRuns: [],
+    batches: [],
     ...overrides,
   }
 }

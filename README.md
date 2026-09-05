@@ -128,6 +128,7 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`pkg-conform`](./harlan-agent-kit/skills/pkg-conform/SKILL.md) | Conform or scaffold a TypeScript package or Nuxt module |
 | [`plan-ceo`](./harlan-agent-kit/skills/plan-ceo/SKILL.md) | Challenge scope and strategy before anyone writes code |
 | [`pr`](./harlan-agent-kit/skills/pr/SKILL.md) | Create or update a pull request from current work |
+| [`pr-lens`](./harlan-agent-kit/skills/pr-lens/SKILL.md) | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev) |
 | [`pr-triage`](./harlan-agent-kit/skills/pr-triage/SKILL.md) | Repair, rank, and order the owned PR backlog |
 | [`release-notes`](./harlan-agent-kit/skills/release-notes/SKILL.md) | Draft changelogs, release notes, and upgrade guides |
 | [`ripast`](./harlan-agent-kit/skills/ripast/SKILL.md) | Run AST-aware refactors with [Ripast](https://github.com/harlan-zw/ripast) |

@@ -35,6 +35,23 @@ function displayableClaim(claim: string): string {
   return claim.length <= maximumClaimLength ? claim : `${claim.slice(0, maximumClaimLength)}…`
 }
 
+// GitHub refuses a title longer than 256 characters.
+const maximumTitleLength = 256
+
+/**
+ * The issue title one Candidate gets.
+ *
+ * The title used to be the routine name joined to the whole claim, so every
+ * issue list read as truncated prose, and the name repeated the
+ * `routine:<name>` label. The Agent now writes the title, and a title that
+ * arrives blank falls back to the claim rather than filing an untitled issue.
+ */
+export function candidateIssueTitle(candidate: Pick<Candidate, 'title' | 'claim'>): string {
+  const written = candidate.title.replace(/\s+/g, ' ').trim()
+  const title = written.length > 0 ? written : candidate.claim.replace(/\s+/g, ' ').trim()
+  return title.slice(0, maximumTitleLength)
+}
+
 /**
  * Writes the issue one Candidate proposes.
  *
@@ -70,7 +87,7 @@ export function candidateIssueCommands(
       candidateId: candidate.id,
       repository: routine.repository,
       routineName: routine.name,
-      title: `${routine.name}: ${claim}`.slice(0, 256),
+      title: candidateIssueTitle(candidate),
       body: candidateIssueBody({ ...candidate, claim }, routine),
     }
   })

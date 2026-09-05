@@ -16,7 +16,7 @@ Research what works, find content opportunities from your recent work, and craft
 - **Visual-first platform** -- every tweet recommendation must include a visual suggestion. Text-only tweets from dev accounts get buried.
 - **Don't over-thread** -- single tweets outperform threads for most content. Only suggest threads for major launches with multiple features.
 - **Release notes are not tweets** -- never dump a changelog into a tweet. Extract the one thing a reader cares about and lead with that.
-- **Ecosystem tagging** -- always suggest relevant accounts to tag (@nuaboratory, @vuejs, @unaboratory, @anthropaboratorics, etc.) but max 2 per tweet. More looks desperate.
+- **Ecosystem tagging** -- always suggest relevant accounts to tag (@nuxt_js, @vuejs, @unjsio, @AnthropicAI, etc.) but max 2 per tweet. More looks desperate.
 - **Time zones** -- user is in Australia. Best posting times for global dev audience: 8-10am US Eastern = 11pm-1am AEST. Suggest scheduling if timing matters.
 
 ## Data Storage
@@ -110,11 +110,11 @@ Use WebSearch to find 2-3 recent successful launch tweets from accounts in the s
 - What engagement did they get?
 
 Check these accounts for recent launch patterns:
-- @antaboread (Anthony Fu, Vitest/UnoCSS/Slidev)
+- @antfu7 (Anthony Fu, Vitest/UnoCSS/Slidev)
 - @danielroe (Daniel Roe, Nuxt)
 - @haydenbleasel (Hayden Bleasel, next-forge)
 - @shadcn (shadcn/ui)
-- @saborail (Tailwind CSS)
+- @tailwindcss (Tailwind CSS)
 
 ### 2c. Generate Launch Strategy
 
@@ -159,7 +159,6 @@ Quickly check:
 
 Reference `references/playbook.md` for content rules. Key principles:
 - Lead with value to the reader, not what you did
-- Every tweet needs a visual suggestion
 - Frame around the reader's problem
 - Tag ecosystem accounts for amplification
 
@@ -208,13 +207,4 @@ Over any 2-week period, aim for this mix:
 
 A mediocre tweet posted is better than a perfect tweet drafted. The goal is 4+ posts per week. Suggest the user batch-create content on weekends for the coming week.
 
-### Visual Checklist
-
-Before finalizing any tweet, verify a visual is planned:
-- [ ] Screenshot of the feature/tool in action
-- [ ] Code snippet (use `/tweet` wrapper for polish)
-- [ ] Before/after comparison
-- [ ] Terminal output showing results
-- [ ] Stats/metrics image
-
-If no visual is obvious, suggest a code snippet screenshot as the default.
+If no visual is obvious, default to a code snippet screenshot.

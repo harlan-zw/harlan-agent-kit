@@ -77,6 +77,7 @@ function snapshot(baseChecks: GitHubCheck[], headChecks: GitHubCheck[] = [check(
 
 interface Recorded {
   edited?: { commentId: number, expectedBody: string, body: string }
+  failed: Array<{ reviewRunId: string, reason: string }>
   staged: Array<{ reviewRunId: string, outcome: string, ci: string, reconciliationId?: string, body: string }>
   stamped: string[]
 }
@@ -86,7 +87,7 @@ function harness(options: {
   live?: ReturnType<typeof snapshot>
   edit?: () => Promise<any>
 }) {
-  const recorded: Recorded = { staged: [], stamped: [] }
+  const recorded: Recorded = { failed: [], staged: [], stamped: [] }
   const run = async () => refreshReviewGates({
     github: {
       getPullRequestReviewSnapshot: () => Promise.resolve(options.live ?? snapshot([check()])),
@@ -107,6 +108,11 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
+      recordReviewPublication: (input) => {
+        if (input.result._tag === 'Failed')
+          recorded.failed.push({ reviewRunId: input.reviewRunId, reason: input.result.reason })
+        return { _tag: 'Inserted', publicationId: input.id }
+      },
       stageReviewGateStatus: (input) => {
         recorded.staged.push({
           reviewRunId: input.reviewRunId,
@@ -263,6 +269,27 @@ describe('refreshReviewGates', () => {
     })])
     expect(recorded.stamped).toEqual([])
     expect(recorded.staged[0]?.reconciliationId).toContain('Missing:42:')
+  })
+
+  it('retires the Review instead of staging a status when another actor owns the comment', async () => {
+    const live = snapshot([check({ status: 'in_progress', conclusion: null })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    const reason = 'The stored automated review comment belongs to another GitHub actor.' as const
+    const { recorded, run } = harness({
+      live,
+      review: gateRefresh({
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+      }),
+      edit: () => Promise.resolve(ok({ _tag: 'Foreign', reason })),
+    })
+
+    const results = await run()
+
+    expect(results).toEqual([ok({ _tag: 'Retired', repository: 'harlan-zw/example', pullRequestNumber: 24, reason })])
+    expect(recorded.staged).toEqual([])
+    expect(recorded.stamped).toEqual([])
+    expect(recorded.failed).toEqual([{ reviewRunId: 'run-1', reason }])
   })
 })
 

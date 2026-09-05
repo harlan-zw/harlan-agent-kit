@@ -3,7 +3,7 @@ import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
 import type { Result } from './result.ts'
-import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -21,6 +21,37 @@ export interface PreparedConflictWorktree {
   headSha: string
   baseSha: string
   conflictedFiles: string[]
+}
+
+/**
+ * What merging the real base into the pull request head showed.
+ *
+ * GitHub reported two stacked pull requests as conflicting for days while
+ * their real base merged cleanly. A clean merge is a fact about GitHub's stale
+ * state, not a failure, so it is its own case and never spends Recovery budget.
+ */
+export type ConflictPrepareResult
+  = | { _tag: 'Conflicted', worktree: PreparedConflictWorktree }
+    | ConflictCleanMergeEvidence
+
+/** Stored as the Completed evidence of a conflict Task whose base merged cleanly. */
+export interface ConflictCleanMergeEvidence {
+  _tag: 'CleanMerge'
+  headSha: string
+  baseSha: string
+  baseRef: string
+}
+
+export function parseConflictCleanMergeEvidence(evidence: string | null): ConflictCleanMergeEvidence | undefined {
+  if (evidence === null || !evidence.startsWith('{'))
+    return undefined
+  const value = JSON.parse(evidence) as Partial<ConflictCleanMergeEvidence>
+  return value._tag === 'CleanMerge'
+    && typeof value.headSha === 'string'
+    && typeof value.baseSha === 'string'
+    && typeof value.baseRef === 'string'
+    ? { _tag: 'CleanMerge', headSha: value.headSha, baseSha: value.baseSha, baseRef: value.baseRef }
+    : undefined
 }
 
 export interface VerifiedConflictPatch {
@@ -41,7 +72,7 @@ export interface PreparedConflictPublication extends VerifiedConflictPatch {
 
 export interface ConflictWorktreeManager {
   commit: (task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree, patch: VerifiedConflictPatch, message: string, signal: AbortSignal) => Promise<Result<PreparedConflictPublication, string>>
-  prepare: (task: ClaimedConflictResolutionTask, signal: AbortSignal) => Promise<Result<PreparedConflictWorktree, string>>
+  prepare: (task: ClaimedConflictResolutionTask, signal: AbortSignal) => Promise<Result<ConflictPrepareResult, string>>
   verify: (task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree, signal: AbortSignal) => Promise<Result<VerifiedConflictPatch, string>>
 }
 
@@ -86,6 +117,8 @@ export interface AgentWorkspaceManager {
   prepareReview: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   /** A Routine scan reads the default branch. It never starts from a pull request head. */
   prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  /** A Batch planning turn reads the default branch, so it can see which issues touch the same code. */
+  prepareBatch: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
@@ -579,12 +612,18 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
   const gitIdentity = options.gitIdentity
-  async function prepare(task: ClaimedConflictResolutionTask, signal: AbortSignal): Promise<Result<PreparedConflictWorktree, string>> {
+  async function prepare(task: ClaimedConflictResolutionTask, signal: AbortSignal): Promise<Result<ConflictPrepareResult, string>> {
     const branch = agentWorktreeBranch(`pull-${task.pullRequestNumber}-${task.revisionId.slice(0, 12)}`, { taskId: task.id, fence: task.state.fence })
     const repository = task.repositoryMapping.checkout
 
     const headRef = `refs/harlan-github-agent/pull/${task.pullRequestNumber}`
     const baseRef = `refs/harlan-github-agent/base/${task.pullRequestNumber}`
+    // A stacked pull request merges into another pull request's head branch.
+    // Publication pins that same branch, so merging the default branch here
+    // resolved the wrong conflict and no publication ever matched its base.
+    const baseBranch = task.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch
+    if (!isSafeGitRef(baseBranch))
+      return err('The pull request base branch is unsafe.')
     const token = await options.tokens.getToken(task.repository, 'read', signal)
     if (token._tag === 'Err')
       return err(token.error.message)
@@ -594,7 +633,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       '--no-tags',
       remoteUrl,
       `+refs/pull/${task.pullRequestNumber}/head:${headRef}`,
-      `+refs/heads/${task.repositoryMapping.defaultBranch}:${baseRef}`,
+      `+refs/heads/${baseBranch}:${baseRef}`,
     ], signal, token.value.token, options.remoteUrl !== undefined)
     if (fetch.exitCode !== 0)
       return err(`Git fetch failed: ${fetch.stderr}`)
@@ -619,17 +658,31 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       '--no-ff',
       base.stdout,
     ], signal)
-    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '--diff-filter=U'], signal)
-    if (merge.exitCode === 0 || unmerged.stdout.length === 0) {
+    // `--no-commit` stops a clean merge before the commit and still exits 0.
+    // Only a conflict, or a merge that could not start, exits non-zero.
+    if (merge.exitCode === 0) {
       await runGit(worktree.value, ['merge', '--abort'], signal)
-      return err('Git no longer reports merge conflicts for this head commit.')
+      return ok({ _tag: 'CleanMerge', headSha: head.stdout, baseSha: base.stdout, baseRef: baseBranch })
+    }
+    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '--diff-filter=U'], signal)
+    if (unmerged.exitCode !== 0)
+      return err(`Could not list the conflicted files: ${unmerged.stderr}`)
+    // A merge that never started, for unrelated histories or a file in the way,
+    // has no unmerged files either. That used to read as "no longer conflicts"
+    // and hid the real error behind a retry.
+    if (unmerged.stdout.length === 0) {
+      await runGit(worktree.value, ['merge', '--abort'], signal)
+      return err(`Git could not merge ${baseBranch} into the pull request head: ${cleanLine(merge.stderr || merge.stdout)}`)
     }
 
     return ok({
-      path: worktree.value,
-      headSha: head.stdout,
-      baseSha: base.stdout,
-      conflictedFiles: unmerged.stdout.split('\n').filter(Boolean).sort(),
+      _tag: 'Conflicted',
+      worktree: {
+        path: worktree.value,
+        headSha: head.stdout,
+        baseSha: base.stdout,
+        conflictedFiles: unmerged.stdout.split('\n').filter(Boolean).sort(),
+      },
     })
   }
 
@@ -734,7 +787,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
 
 export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOptions): AgentWorkspaceManager {
   async function prepareRepository(
-    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun,
+    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun | ClaimedBatch,
     label: string,
     refs: string[],
     headRef: string,
@@ -761,6 +814,17 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
   }
 
   return {
+    async prepareBatch(batch, signal) {
+      const baseRef = `refs/harlan-github-agent/batches/${batch.id.slice(0, 12)}`
+      return prepareRepository(
+        batch,
+        `batch-${batch.id.slice(0, 12)}`,
+        [`+refs/heads/${batch.repositoryMapping.defaultBranch}:${baseRef}`],
+        baseRef,
+        signal,
+      )
+    },
+
     async prepareRoutine(task, signal) {
       // A Routine runs from the exact source commit stored when its Run opened.
       // A later default branch push cannot change queued work.
@@ -1332,7 +1396,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
     },
     async finalize(command, signal) {
       if (command._tag === 'UpdatePullRequest')
-        return ok(`Published ${command.commitSha}.`)
+        return ok({ evidence: `Published ${command.commitSha}.` })
       if (options.pullRequests === undefined)
         return err('Pull request publication is unavailable.')
       const pullRequest = await options.pullRequests.ensurePullRequest({
@@ -1346,7 +1410,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       }, signal)
       return pullRequest._tag === 'Err'
         ? err(pullRequest.error.message)
-        : ok(`Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}`)
+        : ok({ evidence: `Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}`, pullRequestNumber: pullRequest.value.number })
     },
   }
 }

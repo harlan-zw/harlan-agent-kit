@@ -4,7 +4,7 @@ import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
-import type { ConflictWorktreeManager } from './worktree.ts'
+import type { ConflictWorktreeManager, PreparedConflictWorktree } from './worktree.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
 import { err, ok } from './result.ts'
@@ -43,19 +43,36 @@ const outputSchema = {
   },
 }
 
-function workerPrompt(task: ClaimedConflictResolutionTask): string {
+function workerPrompt(task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree): string {
+  const baseRef = task.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch
+  const files = worktree.conflictedFiles.map(file => `- ${file}`).join('\n')
   return `Resolve the existing merge conflicts for ${task.repository}#${task.pullRequestNumber}.
 
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
-Select every installed skill whose trigger matches the work. Apply the unit-tests skill before regression repair.
-The controller already merged the current base into this worktree. Only resolve the conflicted files.
+The controller already merged the base branch into this worktree. Do not rediscover the merge state.
+Pull request head: ${worktree.headSha}
+Base branch: ${baseRef} at ${worktree.baseSha}
+Conflicted files:
+${files}
+
+Edit the conflicted files only. Do not change a file the merge did not touch. The controller rejects such a change.
+Leave no conflict markers in any file. Search for <<<<<<<, =======, and >>>>>>> before you return.
 Follow repository AGENTS.md and contributor instructions. Preserve the pull request intent.
-Use live search when useful. Run focused checks and repository-required checks.
-Edit the conflicted files only. Do not stage files. The controller stages verified conflict files.
+Use GitHub read commands when issue or pull request history clarifies intent. Do not post comments.
+
+Run only these focused checks:
+- eslint on the conflicted files
+- vitest on the test files that import the conflicted files
+- git diff --check
+Run package scripts with pnpm exec. Never use npx.
+Do not run the full test suite, the full typecheck, a build, or a toolchain install. CI runs those after publication.
+A failure in a file that neither side of the merge changed is pre-existing. Do not chase it.
+If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
+
+Do not stage files. The controller stages verified conflict files.
 Do not commit, push, amend, rebase, abort the merge, or edit Git configuration.
 Choose a commit message that describes the resolved conflict.
-Use GitHub read commands when issue or pull request history clarifies intent. Do not post comments.
 Return the required JSON result. Use outcome blocked when intent is ambiguous or safe verification cannot finish.
 The controller rejects a resolved outcome without a commit message. Return an empty commit message only with outcome blocked.`
 }
@@ -120,6 +137,14 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       const prepared = await options.worktrees.prepare(currentTask, signal)
       if (prepared._tag === 'Err')
         return prepared
+      if (prepared.value._tag === 'CleanMerge') {
+        // GitHub's conflicting state is stale. A GET on the pull request makes
+        // GitHub recompute mergeability in the background. Its answer is stale
+        // by definition, so it is not read; the next poll reads the result.
+        await options.github.getPullRequest(validated.value, task.pullRequestNumber, signal)
+        return ok({ _tag: 'Completed', evidence: JSON.stringify(prepared.value) })
+      }
+      const worktree = prepared.value.worktree
       const worktreeReady = reportProgress({ percent: 35, label: 'Git worktree ready' })
       if (worktreeReady._tag === 'Err')
         return worktreeReady
@@ -128,12 +153,12 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         freshSession: task.state.fence > 1,
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'conflict' },
-        prompt: workerPrompt(currentTask),
+        prompt: workerPrompt(currentTask, worktree),
         repository: task.repository,
         role: 'conflict_resolution',
         schema: outputSchema,
         taskId: task.id,
-        workspace: prepared.value.path,
+        workspace: worktree.path,
       }, signal)
       if (turn._tag === 'Err')
         return turn
@@ -150,7 +175,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         })
       }
 
-      const verified = await options.worktrees.verify(currentTask, prepared.value, signal)
+      const verified = await options.worktrees.verify(currentTask, worktree, signal)
       if (verified._tag === 'Err')
         return verified
       const checksPassed = reportProgress({ percent: 90, label: 'Conflict fix checked' })
@@ -165,7 +190,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         publishSnapshot.value.state !== 'open'
         || publishSnapshot.value.draft
         || publishSnapshot.value.mergeState !== 'conflicting'
-        || publishSnapshot.value.headSha !== prepared.value.headSha
+        || publishSnapshot.value.headSha !== worktree.headSha
         || (publishForkHead && publishSnapshot.value.maintainerCanModify !== true)
       ) {
         return err('The pull request changed before the fix was committed.')
@@ -173,7 +198,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
 
       const committed = await options.worktrees.commit(
         currentTask,
-        prepared.value,
+        worktree,
         verified.value,
         cleanLine(parsed.value.commitMessage),
         signal,

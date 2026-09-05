@@ -14,6 +14,16 @@ agent:
   reserve_percent:
     codex: 20
     opencode: 50
+  # Reasoning effort per Agent provider and role. A listed role replaces that
+  # provider's own default. A pinned Agent selection with an explicit
+  # Reasoning effort still wins. Values: none, low, medium, high, xhigh, max.
+  # Roles: adversarial_review, baseline_repair, conflict_resolution,
+  # pull_request_triage, issue_triage, issue_work, review_fix, routine_scan,
+  # routine_fix.
+  # reasoning_effort:
+  #   opencode:
+  #     review_fix: medium
+  #     pull_request_triage: low
 github:
   app_id: 12345
   private_key_path: /home/harlan/.config/harlan-github-agent/app.pem
@@ -46,6 +56,10 @@ auto_merge:
   method: squash
 # No new issue work starts when open pull requests reach this limit.
 max_open_pull_requests: 8
+# Plan Ready Routine-filed issues as Batches: one planning turn groups related
+# issues, and its units run as sub agents under one Agent permit. Set false to
+# run every issue alone.
+issue_batches: true
 # With webhooks on, polling only has to catch what a delivery missed.
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14

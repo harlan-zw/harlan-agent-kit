@@ -19,10 +19,12 @@ Require an explicit configuration file. Start from `config.example.yml` only whe
 
 Use `github.allowed_owners` before GitHub access. Ignore installations and personal-account repositories from every other GitHub owner. Scan only immediate directories under `~/pkg` and `~/sites` to find trusted local checkouts. Treat configured repositories as policy overrides. Never act on a checkout without matching its GitHub origin and discovered authentication.
 
-Skip a tracked pull request with a conventional non-breaking `chore:` title before starting an Agent.
-For every other tracked pull request authored by `harlan-zw`, run low-cost Pull request triage.
-Require an adversarial Review for code, tests, configuration, dependencies, workflows, schemas, generated runtime output, security boundaries, public APIs, performance-sensitive files, behavior claims, or uncertainty.
-Skip only clearly judgment-free prose, formatting, or comment-only changes.
+For every tracked pull request authored by `harlan-zw`, run Pull request triage. The path rule decides first.
+If one changed path is outside the prose set, require an adversarial Review without an Agent. The prose set is `*.md`, `*.mdx`, `*.txt`, `LICENSE*`, `CHANGELOG*`, and `docs/**`.
+Treat `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `.github/**`, `.claude/**`, and `.codex*/**` as behaviour, not prose. They always require Review.
+If every changed path is prose, reuse the stored decision for the same head commit. If none exists, ask the low-cost Agent with the title and changed paths only.
+The Agent skips only clearly judgment-free prose, formatting, or comment-only changes. Uncertainty requires Review.
+Store the decision source in the reason. A stored reason starts with `rule: ` or `model: `.
 Stamp `harlan-agent-review-skipped` when Review is skipped.
 Stamp `harlan-agent-review-required` when Pull request triage requires Review.
 Replace that route label with exactly one Review outcome label when Review finishes.
@@ -32,6 +34,8 @@ Treat `harlan-agent-review` as a manual override that always requires adversaria
 Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
 
 Start no new issue work above `max_open_pull_requests` open pull requests. Keep review, repair, and conflict fixes running.
+
+Plan Ready Routine-filed issues as one Batch per repository when two or more wait. The Batch reserves their Issue work Tasks, runs one Batch planning turn over every reserved issue, and stores units: the issues one pull request closes, and the unit each one stacks on. Units run as Issue work Agents under the Batch's one permit, three at a time, each in its own worktree. A unit publishes the moment its Agent finishes; a stacked unit waits only for its base pull request to open, then falls back to the default branch after ten minutes. A planning turn that fails or returns an invalid plan runs every issue alone. `issue_batches: false` turns planning off. Issue triage names fix-together partners as `Fix with #N`, and the planning turn reads them as hints.
 
 Enable issue triage by default on owned repositories. Keep it disabled on maintained repositories unless explicit policy enables it.
 
@@ -78,7 +82,12 @@ harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent
 harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config /absolute/path/to/harlan-github-agent.yml
 ```
+
+`routine-run` opens one Routine run for the current minute, ahead of its cron.
+
+A `daily-checkin` Routine runs the repository's own `.claude/skills/daily-checkin/SKILL.md`. Its data script reads Cloudflare, Sentry, and the `nuxtseo` CLI with tokens from the environment. Put `CLOUDFLARE_API_TOKEN` and `NUXTSEO_TOKEN` in that repository's `.env`, list the file in `scripts/repository-env-files`, and run `pnpm service:hogwild:sync-env`. Worktrunk seeds the file into every agent worktree, and the Agent turn loads it. The `nuxtseo` CLI is installed at `~/.local/bin/nuxtseo` on Hogwild.
 
 Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
 Every command prints one JSON value. A tagged JSON error exits with status 1.
@@ -93,7 +102,7 @@ Automatic selection picks the Agent provider by remaining capacity. It walks `or
 
 For `codex`, use `gpt-5.6-luna` with low reasoning for Pull request triage. Use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair.
 
-For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role.
+For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role. `agent.reasoning_effort.<provider>.<role>` in the configuration replaces one role's default, for example `agent.reasoning_effort.opencode.review_fix: medium`. A pinned Agent selection with an explicit Reasoning effort still wins over the file.
 
 A saved session belongs to the Agent provider that created it. Switching providers starts new sessions.
 

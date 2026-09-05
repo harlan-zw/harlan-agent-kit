@@ -115,6 +115,34 @@ describe('task scheduler', () => {
     store.close()
   })
 
+  it('completes a Task whose work is already on GitHub', async () => {
+    const store = openJournalStore(':memory:')
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'already-published',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    const scheduler = createTaskScheduler({
+      intervalMilliseconds: 60_000,
+      leaseMilliseconds: 10_000,
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
+      onError: (error) => { throw error },
+      permits: createAgentPermitPool(1),
+      store,
+      worker: { run: () => Promise.resolve(ok({ _tag: 'Completed', evidence: 'GitHub reports pull request #9.' })) },
+      workerId: 'worker-1',
+    })
+
+    await scheduler.runNow()
+
+    expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').tasks[0]?.state)
+      .toEqual({ _tag: 'Completed', evidence: 'GitHub reports pull request #9.' })
+    await scheduler.stop()
+    store.close()
+  })
+
   it('returns a thrown Worker error to the durable Queue', async () => {
     const store = openJournalStore(':memory:')
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
