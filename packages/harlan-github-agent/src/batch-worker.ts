@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { CombinedIssue, IssueWorkUnit, IssueWorkWorker } from './issue-work-worker.ts'
@@ -7,7 +8,7 @@ import type { JournalStore } from './store.ts'
 import type { ClaimedTaskResult, ClaimedTaskStore } from './task-scheduler.ts'
 import type { BatchIssue, BatchUnit, ClaimedBatch, ClaimedIssueWorkTask, PlannedBatchUnit, PullRequestBase, RepositoryMapping } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
-import { TOOLCHAIN_LINES } from './agent-context.ts'
+import { findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { err, ok } from './result.ts'
 import { runClaimedTask } from './task-scheduler.ts'
@@ -83,16 +84,19 @@ export function parseBatchPlan(text: string): Result<BatchPlan, string> {
 export interface BatchPlanPromptInput {
   repository: string
   issues: readonly BatchIssue[]
+  /** The memory index this repository has, or null when it has none. */
+  memory?: RepositoryMemory | null
 }
 
 /** The Batch planning prompt. Exported so tests can assert its contract without an Agent. */
 export function batchPlanPrompt(input: BatchPlanPromptInput): string {
+  const memoryLines = repositoryMemoryLine(input.memory ?? null)
   return `Plan how ${input.issues.length} Ready issues in ${input.repository} become pull requests.
 
 Work as a normal local agent session inside this Git worktree, checked out at the default branch. Read code as needed to see which issues touch the same files or share one cause. Do not edit files, commit, push, or post comments.
 Every issue below was triaged Ready to implement, and each one is Routine-filed, so its target file is known.
 ${TOOLCHAIN_LINES}
-
+${memoryLines === '' ? '' : `\n${memoryLines}\n`}
 Decide units. One unit is one pull request. Rules:
 - Combine issues into one unit only when one change fixes them all, or when fixing them apart would conflict in the same lines.
 - Keep issues apart when a reviewer would want to read them apart. Small pull requests merge sooner.
@@ -119,6 +123,12 @@ export interface BatchWorkerOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
   /** Whether Issue work may claim right now, the same gate the plain scheduler uses. */
   canClaimIssueWork: () => boolean
+  /**
+   * Harlan's Claude Code home, which holds the per-repository memory.
+   *
+   * Absent means no memory reaches the turn, which is how a test runs.
+   */
+  claudeHome?: string
   github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot'>
   issueWork: IssueWorkWorker
   leaseMilliseconds: number
@@ -190,6 +200,10 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
       return options.store.recordBatchPlan({ ...fenced, at: at(), units: singleUnits(batch.issues, `The planning worktree failed: ${workspace.error}`) })
     }
     const issues = await readIssueBodies(mapping, batch.issues, signal)
+    // The slug comes from the primary checkout, never from the planning worktree.
+    const memory = options.claudeHome === undefined
+      ? null
+      : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: mapping.checkout })
     const turn = await runParsedAgentTurn(
       {
         ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
@@ -200,9 +214,10 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
       },
       {
         freshSession: true,
+        ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         // A Batch belongs to several issues and to no single one, so no session is saved.
         number: 0,
-        prompt: batchPlanPrompt({ repository: batch.repository, issues }),
+        prompt: batchPlanPrompt({ repository: batch.repository, issues, memory }),
         repository: batch.repository,
         role: 'batch_plan',
         schema: BATCH_PLAN_SCHEMA,

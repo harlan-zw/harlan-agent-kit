@@ -107,7 +107,15 @@ function parseResponse(text: string): Promise<Result<PullRequestTriageResult, st
     .catch((): Result<PullRequestTriageResult, string> => err('The Agent returned malformed pull request triage JSON.'))
 }
 
-function prompt(task: ClaimedAdversarialReviewTask, changedFiles: string[]): string {
+/**
+ * The Pull request triage prompt. Exported so tests can assert its contract
+ * without an Agent.
+ *
+ * This turn gets no project memory. It runs in a service-owned directory with
+ * no repository checkout, and it may use no tools, so a memory index would name
+ * notes the turn cannot open.
+ */
+export function pullRequestTriagePrompt(task: ClaimedAdversarialReviewTask, changedFiles: string[]): string {
   return `Decide whether this pull request needs an adversarial Review.
 Every changed file is prose: Markdown, text, licence, changelog, or docs. Nothing else reached you.
 Do not use tools or inspect the repository. Use only the supplied title and changed file paths.
@@ -142,7 +150,7 @@ export function createPullRequestTriageAgent(options: PullRequestTriageAgentOpti
       const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
         freshSession: true,
         number: task.pullRequestNumber,
-        prompt: prompt(task, input.changedFiles),
+        prompt: pullRequestTriagePrompt(task, input.changedFiles),
         repository: task.repository,
         role: 'pull_request_triage',
         schema,

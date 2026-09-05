@@ -501,6 +501,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       source: tokens,
       worker: createConflictWorker({
         activityLog,
+        claudeHome: agentContext.value.claudeHome,
         github,
         now,
         runtime,
@@ -518,6 +519,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     })
     const subjectWorkerOptions = {
       activityLog,
+      claudeHome: agentContext.value.claudeHome,
       github: workerGithub,
       now,
       onProgressPublishFailure: (task: ClaimedAgentTask, reason: string) => {
@@ -770,6 +772,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         worker: createBatchWorker({
           activityLog,
           canClaimIssueWork,
+          claudeHome: agentContext.value.claudeHome,
           github: workerGithub,
           issueWork: issueWorkWorker,
           leaseMilliseconds: 45 * 60_000,

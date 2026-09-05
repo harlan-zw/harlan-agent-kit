@@ -1,11 +1,12 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { ConflictWorktreeManager, PreparedConflictWorktree } from './worktree.ts'
-import { CHECK_SCOPES, checkBudgetLines, TOOLCHAIN_LINES } from './agent-context.ts'
+import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
 import { err, ok } from './result.ts'
@@ -16,6 +17,12 @@ export interface ConflictWorker {
 }
 
 export interface ConflictWorkerOptions {
+  /**
+   * Harlan's Claude Code home, which holds the per-repository memory.
+   *
+   * Absent means no memory reaches the turn, which is how a test runs.
+   */
+  claudeHome?: string
   github: Pick<GitHubSource, 'getPullRequest'>
   now: () => Date
   runtime: AgentRuntimeSource
@@ -45,9 +52,10 @@ const outputSchema = {
 }
 
 /** The conflict resolution prompt. Exported so tests can assert its contract without an Agent. */
-export function conflictResolutionPrompt(task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree): string {
+export function conflictResolutionPrompt(task: ClaimedConflictResolutionTask, worktree: PreparedConflictWorktree, memory: RepositoryMemory | null = null): string {
   const baseRef = task.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch
   const files = worktree.conflictedFiles.map(file => `- ${file}`).join('\n')
+  const memoryLines = repositoryMemoryLine(memory)
   return `Resolve the existing merge conflicts for ${task.repository}#${task.pullRequestNumber}.
 
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
@@ -62,6 +70,7 @@ Edit the conflicted files only. Do not change a file the merge did not touch. Th
 Leave no conflict markers in any file. Search for <<<<<<<, =======, and >>>>>>> before you return.
 Follow repository AGENTS.md and contributor instructions. Preserve the pull request intent.
 Use GitHub read commands when issue or pull request history clarifies intent. Do not post comments.
+${memoryLines === '' ? '' : `\n${memoryLines}\n`}
 
 ${checkBudgetLines(CHECK_SCOPES.conflictedFiles)}
 ${TOOLCHAIN_LINES}
@@ -148,11 +157,17 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       if (worktreeReady._tag === 'Err')
         return worktreeReady
 
+      // The slug comes from the primary checkout, never from this worktree.
+      const memory = options.claudeHome === undefined
+        ? null
+        : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
+
       const turn = await runAgentTurn(options, {
         freshSession: task.state.fence > 1,
+        ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'conflict' },
-        prompt: conflictResolutionPrompt(currentTask, worktree),
+        prompt: conflictResolutionPrompt(currentTask, worktree, memory),
         repository: task.repository,
         role: 'conflict_resolution',
         schema: outputSchema,

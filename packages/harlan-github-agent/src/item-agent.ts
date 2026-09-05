@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentLabelState } from './agent-label.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
@@ -27,7 +28,7 @@ import type {
 } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { TOOLCHAIN_LINES } from './agent-context.ts'
+import { findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
@@ -66,6 +67,12 @@ export interface IssueTriageWorker {
 
 export interface ItemAgentOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
+  /**
+   * Harlan's Claude Code home, which holds the per-repository memory.
+   *
+   * Absent means no memory reaches the turn, which is how a test runs.
+   */
+  claudeHome?: string
   github: GitHubAgentSource
   now: () => Date
   /** Called when a cosmetic status update fails, which never stops the turn. */
@@ -812,7 +819,22 @@ function repairPreflight(task: ClaimedAdversarialReviewTask, snapshot: PullReque
   return { _tag: 'Authorized' }
 }
 
-function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, workspace: string, preflight: RepairPreflight, repairedHeadFindings: ReviewFinding[]): string {
+/**
+ * The memory block for a turn that must otherwise stay inside its worktree.
+ *
+ * Review reads nothing outside the worktree, and the notes live under Harlan's
+ * Claude Code home. Naming the exception here lets the turn open a note without
+ * widening any other search. The read never writes, so Review stays read only.
+ */
+function reviewMemoryBlock(memory: RepositoryMemory | null): string {
+  const lines = repositoryMemoryLine(memory)
+  return lines === ''
+    ? ''
+    : `\n${lines}\nThe memory index and its notes are the only read allowed outside the worktree.\n`
+}
+
+/** The adversarial Review prompt. Exported so tests can assert its contract without an Agent. */
+export function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, workspace: string, preflight: RepairPreflight, repairedHeadFindings: ReviewFinding[], memory: RepositoryMemory | null): string {
   const repairPolicy = preflight._tag === 'Authorized'
     ? 'Repair authority preflight passed. A separate fresh Repair Agent may fix findings after this read only Review.'
     : `Repair authority preflight requires action: ${preflight.reason}`
@@ -830,7 +852,7 @@ If one of these names the same defect you find, return its identity value exactl
   return `${reviewPolicy}
 
 ${repairPolicy}
-
+${reviewMemoryBlock(memory)}
 Repository: ${task.repository}
 Pull request: #${task.pullRequestNumber}
 Workspace: ${workspace}
@@ -845,9 +867,11 @@ ${JSON.stringify(reviewConversationContext(snapshot))}
 Fetch the full GitHub conversation only if omitted history matters to a material finding.`
 }
 
-function issuePrompt(task: ClaimedIssueTriageTask, snapshot: { body: string, comments: string[] }, workspace: string): string {
+/** The Issue triage prompt. Exported so tests can assert its contract without an Agent. */
+export function issuePrompt(task: ClaimedIssueTriageTask, snapshot: { body: string, comments: string[] }, workspace: string, memory: RepositoryMemory | null): string {
+  const memoryLines = repositoryMemoryLine(memory)
   return `${issuePolicy}
-
+${memoryLines === '' ? '' : `\n${memoryLines}\n`}
 Repository: ${task.repository}
 Issue: #${task.issueNumber}
 Workspace: ${workspace}
@@ -1197,10 +1221,15 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const reviewRuntime = options.runtime()
       const preflight = repairPreflight(task, snapshot.value, repairsBaseline, repairAccess)
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
+      // The slug comes from the primary checkout, never from this worktree.
+      const memory = options.claudeHome === undefined
+        ? null
+        : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: task.repositoryMapping.checkout })
       const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
         freshSession: task.state.fence > 1 || freshReviewSession,
+        ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
-        prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings),
+        prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings, memory),
         progress: {
           current: { percent: 35, label: 'Git worktree ready' },
           report: progress => reportReviewProgress(options, task, 'review', progress, signal),
@@ -1336,10 +1365,15 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
       if (started._tag === 'Err')
         return started
       const scopeDigest = issueSnapshotDigest(snapshot.value)
+      // The slug comes from the primary checkout, never from this worktree.
+      const memory = options.claudeHome === undefined
+        ? null
+        : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: task.repositoryMapping.checkout })
       const turn = await runParsedAgentTurn({ ...options, parse: parseIssueTriageResponse }, {
         freshSession: task.state.fence > 1,
+        ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.issueNumber,
-        prompt: issuePrompt(task, snapshot.value, workspace.value.path),
+        prompt: issuePrompt(task, snapshot.value, workspace.value.path, memory),
         progress: {
           current: { percent: 35, label: 'Git worktree ready' },
           report: progress => Promise.resolve(saveAgentProgress(options, task, progress)),
