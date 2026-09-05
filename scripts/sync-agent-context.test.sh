@@ -11,7 +11,42 @@ test_home="$test_root/home"
 calls="$test_root/calls"
 mkdir -p "$test_home" "$test_root/bin"
 
+# Project memory fixtures: one primary checkout, one wt worktree sibling, and
+# one project directory that no checkout matches.
+memory_root="$test_root/projects"
+checkout_root="$test_root/pkg"
+mkdir -p "$checkout_root/demo-pkg/.git" "$checkout_root/demo-pkg.feat-thing"
+printf '%s\n' 'gitdir: /elsewhere' > "$checkout_root/demo-pkg.feat-thing/.git"
+primary_slug=$(printf '%s' "$checkout_root/demo-pkg" | tr -c 'A-Za-z0-9' '-')
+worktree_slug=$(printf '%s' "$checkout_root/demo-pkg.feat-thing" | tr -c 'A-Za-z0-9' '-')
+mkdir -p "$memory_root/$primary_slug/memory" "$memory_root/$worktree_slug/memory" "$memory_root/-unrelated/memory"
+printf '%s\n' '- [Deployment](deployment.md)' > "$memory_root/$primary_slug/memory/MEMORY.md"
+printf '%s\n' '# Deployment' > "$memory_root/$primary_slug/memory/deployment.md"
+printf '%s\n' '- [Worktree](worktree.md)' > "$memory_root/$worktree_slug/memory/MEMORY.md"
+printf '%s\n' '- [Unrelated](unrelated.md)' > "$memory_root/-unrelated/memory/MEMORY.md"
+export HARLAN_AGENT_CONTEXT_MEMORY_ROOT="$memory_root"
+export HARLAN_AGENT_CONTEXT_CHECKOUT_ROOTS="$checkout_root"
+
 HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
+
+cmp "$memory_root/$primary_slug/memory/MEMORY.md" "$test_home/.claude/projects/$primary_slug/memory/MEMORY.md"
+cmp "$memory_root/$primary_slug/memory/deployment.md" "$test_home/.claude/projects/$primary_slug/memory/deployment.md"
+if [ -e "$test_home/.claude/projects/$worktree_slug" ]; then
+  printf '%s\n' 'The sync copied memory for a wt worktree sibling.' >&2
+  exit 1
+fi
+if [ -e "$test_home/.claude/projects/-unrelated" ]; then
+  printf '%s\n' 'The sync copied memory for a project with no checkout.' >&2
+  exit 1
+fi
+
+# A note the desktop deleted must not survive on the worker host.
+printf '%s\n' '# Stale' > "$test_home/.claude/projects/$primary_slug/memory/stale.md"
+HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
+if [ -e "$test_home/.claude/projects/$primary_slug/memory/stale.md" ]; then
+  printf '%s\n' 'The sync kept a note the desktop no longer has.' >&2
+  exit 1
+fi
 
 cmp "$repo_root/agent-context/context.md" "$test_home/.claude/CLAUDE.md"
 cmp "$repo_root/agent-context/context.md" "$test_home/.codex/AGENTS.md"
@@ -64,6 +99,9 @@ export HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH="$hook_hash"
 cat > "$test_root/bin/ssh" <<'FAKE_SSH'
 #!/usr/bin/env bash
 printf 'ssh %s\n' "$*" >> "$HARLAN_AGENT_CONTEXT_TEST_CALLS"
+# Real ssh reads the piped stream. The memory tar fallback would take SIGPIPE
+# without this.
+if [[ "$*" == *"tar -C"* ]]; then cat >/dev/null; fi
 if [[ "$*" == *CLAUDE.md.next*sha256sum* || "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '%s  CLAUDE.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH"; fi
 if [[ "$*" == *AGENTS.md.next*sha256sum* || "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '%s  AGENTS.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH"; fi
 if [[ "$*" == *commit-msg.next*sha256sum* || "$*" == *sha256sum*commit-msg.next* ]]; then printf '%s  commit-msg.next\n' "$HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH"; fi
@@ -108,6 +146,18 @@ for hook_file in "${opencode_hooks[@]}"; do
   grep -F "mv '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file.next' '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file'" "$calls" >/dev/null
 done
 grep -F 'hogwild:/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next' "$calls" >/dev/null
+
+# Memory reaches Hogwild for the primary checkout only, over the tar fallback
+# because the fake ssh reports no remote rsync.
+grep -F "tar -C '/home/harlan/.claude/projects/$primary_slug/memory' -xzf -" "$calls" >/dev/null
+if grep -F "/home/harlan/.claude/projects/$worktree_slug" "$calls" >/dev/null; then
+  printf '%s\n' 'Hogwild received memory for a wt worktree sibling.' >&2
+  exit 1
+fi
+if grep -F '/home/harlan/.claude/projects/-unrelated' "$calls" >/dev/null; then
+  printf '%s\n' 'Hogwild received memory for a project with no checkout.' >&2
+  exit 1
+fi
 grep -F "mv '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next' '/home/harlan/.config/opencode/plugins/harlan-hooks.ts'" "$calls" >/dev/null
 grep -F "chmod 644 '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next'" "$calls" >/dev/null
 manifest_target=/home/harlan/.local/share/harlan-agent-kit/.claude-plugin/plugin.json

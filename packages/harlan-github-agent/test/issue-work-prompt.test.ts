@@ -93,3 +93,36 @@ describe('parseStoredIssueTriage', () => {
     expect(parseStoredIssueTriage(evidence)).toBeNull()
   })
 })
+
+describe('issueWorkPrompt memory', () => {
+  it('names the memory index and how to treat it', () => {
+    const prompt = issueWorkPrompt({
+      task: task(),
+      body: 'Body',
+      comments: [],
+      template: { _tag: 'Missing' },
+      routineSource: null,
+      triage: parseStoredIssueTriage(null),
+      instructionFiles: [],
+      memory: { indexPath: '/home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md' },
+    })
+
+    expect(prompt).toContain('project memory index at /home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md')
+    expect(prompt).toContain('Check it against the code before you rely on it.')
+  })
+
+  it('says nothing about memory when the repository has none', () => {
+    const prompt = issueWorkPrompt({
+      task: task(),
+      body: 'Body',
+      comments: [],
+      template: { _tag: 'Missing' },
+      routineSource: null,
+      triage: parseStoredIssueTriage(null),
+      instructionFiles: [],
+      memory: null,
+    })
+
+    expect(prompt).not.toContain('project memory index')
+  })
+})

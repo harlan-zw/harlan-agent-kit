@@ -67,6 +67,12 @@ export function agentTextEvent(text: string): Extract<AgentEvent, { _tag: 'Messa
 }
 
 export interface AgentTurnRequest {
+  /**
+   * Absolute instruction files this turn adds to the shared Agent context.
+   *
+   * Repository memory lives here, because it belongs to one repository.
+   */
+  instructionPaths?: readonly string[]
   /** Durable Task identity used to fence one provider health canary. */
   taskId?: string
   /** Provider-specific model identifier taken from the worker profile. */

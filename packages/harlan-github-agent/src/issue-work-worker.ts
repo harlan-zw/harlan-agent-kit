@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { GitHubAgentSource, PullRequestTemplate } from './github-agent-source.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
@@ -7,7 +8,7 @@ import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAgentPullRequest, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
 import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
-import { CHECK_SCOPES, checkBudgetLines, instructionFilesLine, listInstructionFiles, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
@@ -67,6 +68,12 @@ export interface IssueWorkWorker {
 }
 
 export interface IssueWorkWorkerOptions {
+  /**
+   * Harlan's Claude Code home, which holds the per-repository memory.
+   *
+   * Absent means no memory reaches the turn, which is how a test runs.
+   */
+  claudeHome?: string
   github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'getPullRequestTemplate' | 'listPullRequestFiles'>
   now: () => Date
   runtime: AgentRuntimeSource
@@ -238,6 +245,8 @@ export interface IssueWorkPromptInput {
   instructionFiles: readonly string[]
   /** Other issues the same pull request closes, when a Batch combined them. */
   combinedIssues?: readonly CombinedIssue[]
+  /** The memory index this repository has, or null when it has none. */
+  memory?: RepositoryMemory | null
 }
 
 function combinedIssueLines(combined: readonly CombinedIssue[]): string {
@@ -253,6 +262,8 @@ ${JSON.stringify(combined.map(issue => ({ number: issue.number, title: issue.tit
 /** The Issue work prompt. Exported so tests can assert its contract without an Agent. */
 export function issueWorkPrompt(input: IssueWorkPromptInput): string {
   const { task, routineSource } = input
+  const memory = repositoryMemoryLine(input.memory ?? null)
+  const memoryBlock = memory === '' ? '' : `${memory}\n`
   return `Continue working on the approved GitHub issue ${task.repository}#${task.issueNumber}.
 
 ${storedTriageLines(input.triage)}
@@ -260,7 +271,7 @@ Plan, implement, and verify the complete fix.
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 ${instructionFilesLine(input.instructionFiles)}
-Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or humanize-writing. Their rules are inlined below.
+${memoryBlock}Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or humanize-writing. Their rules are inlined below.
 ${UNIT_TEST_LINES}
 ${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
@@ -371,6 +382,10 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (ready._tag === 'Err')
         return ready
       const instructionFiles = await listInstructionFiles(prepared.value.path)
+      // The slug comes from the primary checkout, never from this worktree.
+      const memory = options.claudeHome === undefined
+        ? null
+        : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
       const triage = parseStoredIssueTriage(options.store.getIssueTriageEvidence(task.repository, task.issueNumber, task.revisionId))
 
       // The triage session is keyed on the issue alone, so neither stacking nor
@@ -381,6 +396,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         return err('The issue changed before work started.')
       const turn = await runAgentTurn(options, {
         freshSession: task.state.fence > 1,
+        ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.issueNumber,
         progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'fix' },
         prompt: issueWorkPrompt({
@@ -392,6 +408,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           triage,
           instructionFiles,
           combinedIssues,
+          memory,
         }),
         repository: task.repository,
         role: 'issue_work',
