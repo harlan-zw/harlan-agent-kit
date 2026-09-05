@@ -189,7 +189,7 @@ export const CHECK_SCOPES = {
   /** A turn that changed source files and must prove that change. */
   changedFiles: 'run the regression test file, its direct dependants, and lint and typecheck on the changed files only.',
   /** Baseline repair, where the failing CI check already names the command. */
-  failingCheck: 'run the exact command of the failing check, then lint and typecheck on the changed files only.',
+  failingCheck: 'run the exact command of the failing check, or a narrower command that reproduces the same failure, then lint and typecheck on the changed files only.',
   /** Conflict resolution, where the merge already names the files in scope. */
   conflictedFiles: 'run eslint on the conflicted files, vitest on the test files that import them, and git diff --check.',
 } as const

@@ -168,4 +168,10 @@ describe('agent prompt fragments', () => {
         expect(worker.build()).toContain('Do not run the full test suite, the full typecheck, or a build. CI runs those.')
     }
   })
+
+  it('resolves the full-suite contradiction for the baseline repair turn', () => {
+    const prompt = prompts.baselineRepair.build()
+    expect(prompt).toContain('failed step "Run pnpm test"')
+    expect(prompt).toMatch(/narrower command|prefer the narrower/i)
+  })
 })
