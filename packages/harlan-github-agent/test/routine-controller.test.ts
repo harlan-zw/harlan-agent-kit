@@ -172,6 +172,7 @@ describe('syncing one repository Routine spec', () => {
         runId: run.id,
         candidates: [{
           fingerprint: 'src/cache.ts#stale-fallback',
+          title: 'Fixture title',
           target: 'src/cache.ts',
           claim: 'The stale fallback differs between cache readers.',
           verification: 'pnpm test',

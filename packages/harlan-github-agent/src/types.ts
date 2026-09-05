@@ -864,6 +864,13 @@ export interface Candidate {
   runId: string
   /** Stable across runs. Never derived from a line number. */
   fingerprint: string
+  /**
+   * The issue title, written by the Agent that proposed this Candidate.
+   *
+   * The claim is a whole sentence, so it reads badly in an issue list. Older
+   * rows carry no title and fall back to the claim at read time.
+   */
+  title: string
   target: string
   claim: string
   verification: string

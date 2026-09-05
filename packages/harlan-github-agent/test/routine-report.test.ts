@@ -88,6 +88,7 @@ describe('writing what one run did', () => {
       routineId,
       runId,
       fingerprint: 'src/store.ts#openRoutineRun',
+      title: 'Fixture title',
       target: 'src/store.ts',
       claim: 'The scheduler can open the same run twice.',
       verification: 'pnpm vitest run test/routine-controller.test.ts',
@@ -139,6 +140,7 @@ describe('publishing the run log', () => {
         runId,
         candidates: [{
           fingerprint: 'src/store.ts#openRoutineRun',
+          title: 'Fixture title',
           target: 'src/store.ts',
           claim: 'The scheduler can open the same run twice.',
           verification: 'pnpm vitest run test/routine-controller.test.ts',

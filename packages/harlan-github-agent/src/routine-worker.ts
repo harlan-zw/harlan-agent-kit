@@ -31,11 +31,15 @@ export const CANDIDATE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['fingerprint', 'target', 'claim', 'verification', 'estimatedChangedFiles'],
+        required: ['fingerprint', 'title', 'target', 'claim', 'verification', 'estimatedChangedFiles'],
         properties: {
           fingerprint: {
             type: 'string',
             description: 'Stable identity for this proposal. Use a file path or a symbol path. Never a line number.',
+          },
+          title: {
+            type: 'string',
+            description: 'The issue title. Name the defect in under 70 characters. Do not add the routine name, a prefix, or a trailing period.',
           },
           target: { type: 'string', description: 'The file or symbol this proposal changes.' },
           claim: { type: 'string', description: 'One sentence saying what is wrong.' },
@@ -51,6 +55,7 @@ interface ScanResponse {
   report?: string
   candidates: Array<{
     fingerprint: string
+    title: string
     target: string
     claim: string
     verification: string
@@ -88,7 +93,7 @@ const DAILY_CHECKIN_TURN = `Apply the daily-checkin skill at .claude/skills/dail
 
 Follow its workflow completely, including running its data script and writing its report and ledger files. This worktree is disposable and nothing in it is kept, so copy the whole Markdown report, from the verdict line through the proposed actions, into \`report\`. Do not commit or push anything. Keep production access read only.
 
-Return each proposed action as one Candidate. Use the ledger fingerprint as the Candidate fingerprint when the action has one. Put the action in \`claim\`, the file or system it changes in \`target\`, and the check that proves it in \`verification\`.`
+Return each proposed action as one Candidate. Use the ledger fingerprint as the Candidate fingerprint when the action has one. Put a short issue title in \`title\`, the action in \`claim\`, the file or system it changes in \`target\`, and the check that proves it in \`verification\`.`
 
 const agentFeedbackSkillTarget = /^harlan-agent-kit\/skills\/[^/]+\/SKILL\.md$/
 
@@ -141,6 +146,10 @@ Return every proposal you would make as a Candidate. Give each one a fingerprint
 that stays the same next time you find it. Use a file path or a symbol path.
 Never use a line number, because a line number changes when anything above it
 changes.
+
+Give each one a title. A person reads it in a list of issues, so name the defect
+in under 70 characters. Write it the way you would write a commit subject. Do not
+repeat the routine name, and do not end it with a period.
 
 Estimate how many files each proposal would change. Leave out anything that
 would change more than ${DEFAULT_MAXIMUM_CHANGED_FILES} files.
@@ -292,6 +301,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         runId: task.id,
         candidates: withinSize.map(candidate => ({
           fingerprint: candidate.fingerprint,
+          title: typeof candidate.title === 'string' ? candidate.title : '',
           target: candidate.target,
           claim: candidate.claim,
           verification: candidate.verification,

@@ -5474,6 +5474,20 @@ const repairReportMigration = `
  * `publication_commands.pull_request_number` lets a unit that stacks read the
  * pull request its dependency opened without waiting for the next GitHub poll.
  */
+/**
+ * Gives a Candidate its own issue title.
+ *
+ * The title was built as `<routine name>: <claim>`, and the claim is a whole
+ * sentence. Issue lists read as truncated prose, and the routine name repeated
+ * the `routine:<name>` label the same code already applies. The Agent now
+ * writes a short title, and this column keeps it.
+ */
+const candidateTitleMigration = `
+  ALTER TABLE candidates ADD COLUMN title TEXT;
+
+  PRAGMA user_version = 63;
+`
+
 const batchMigration = `
   CREATE TABLE IF NOT EXISTS batches (
     id TEXT PRIMARY KEY,
@@ -5811,9 +5825,17 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, columns.includes('pull_request_number')
       ? batchMigration
       : `ALTER TABLE publication_commands ADD COLUMN pull_request_number INTEGER;\n${batchMigration}`)
+    version = 62
+  }
+  if (version === 62) {
+    // A journal rewound for replay already carries the column, and SQLite has
+    // no ADD COLUMN IF NOT EXISTS.
+    const columns = (database.prepare('PRAGMA table_info(candidates)').all() as unknown as Array<{ name: string }>)
+      .map(column => column.name)
+    applyMigration(database, columns.includes('title') ? 'PRAGMA user_version = 63;' : candidateTitleMigration)
     return
   }
-  if (version === 62)
+  if (version === 63)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -12446,6 +12468,7 @@ export function openJournalStore(
     routine_id: string
     run_id: string
     fingerprint: string
+    title: string | null
     target: string
     claim: string
     verification: string
@@ -12475,6 +12498,9 @@ export function openJournalStore(
     routineId: row.routine_id,
     runId: row.run_id,
     fingerprint: row.fingerprint,
+    // Rows written before the title column carry none, and a scan answer may
+    // leave it blank. Either way the claim was their title, so it stays it.
+    title: row.title || row.claim,
     target: row.target,
     claim: row.claim,
     verification: row.verification,
@@ -12495,10 +12521,10 @@ export function openJournalStore(
   const recordCandidates: JournalStore['recordCandidates'] = (input) => {
     const statement = database.prepare(`
       INSERT INTO candidates (
-        id, routine_id, run_id, fingerprint, target, claim, verification,
+        id, routine_id, run_id, fingerprint, title, target, claim, verification,
         estimated_changed_files, result_tag, pull_request, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Proposed', NULL, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Proposed', NULL, ?, ?)
       ON CONFLICT (routine_id, fingerprint) DO NOTHING
     `)
     const fresh: string[] = []
@@ -12511,6 +12537,7 @@ export function openJournalStore(
           input.routineId,
           input.runId,
           candidate.fingerprint,
+          candidate.title,
           candidate.target,
           candidate.claim,
           candidate.verification,

@@ -414,6 +414,7 @@ describe('the Candidate ledger', () => {
 
   const candidate = {
     fingerprint: 'src/store.ts#openRoutineRun',
+    title: 'Fixture title',
     target: 'src/store.ts',
     claim: 'This helper is never called.',
     verification: 'pnpm test',

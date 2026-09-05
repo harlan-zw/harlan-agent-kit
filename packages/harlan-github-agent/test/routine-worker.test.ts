@@ -66,6 +66,7 @@ function seed(store: ReturnType<typeof openJournalStore>): void {
 
 const candidate = {
   fingerprint: 'src/store.ts#openRoutineRun',
+  title: 'Fixture title',
   target: 'src/store.ts',
   claim: 'This helper is never called.',
   verification: 'pnpm test',
@@ -136,6 +137,7 @@ describe('building the scan prompt', () => {
         routineId: 'r1',
         runId: 'run-1',
         fingerprint: 'src/old.ts',
+        title: 'Fixture title',
         target: 'src/old.ts',
         claim: 'unused',
         verification: 'pnpm test',
@@ -159,6 +161,7 @@ describe('building the scan prompt', () => {
         routineId: 'r1',
         runId: 'run-1',
         fingerprint: 'src/open.ts',
+        title: 'Fixture title',
         target: 'src/open.ts',
         claim: 'unused',
         verification: 'pnpm test',
@@ -285,6 +288,33 @@ describe('running one scan', () => {
       expect(report?.body).toContain('1 found | 1 new')
       expect(report?.body).toContain('AMBER. One probe failed.')
       expect(report?.body).toContain('- d1 unreachable')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps the run alive when a Candidate arrives without a usable title', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const untitled = {
+        fingerprint: candidate.fingerprint,
+        target: candidate.target,
+        claim: candidate.claim,
+        verification: candidate.verification,
+        estimatedChangedFiles: candidate.estimatedChangedFiles,
+      }
+      const numbered = { ...candidate, fingerprint: 'src/answer.ts#main', title: 42 }
+
+      const result = await workerFor(store, scanning({ candidates: [untitled, numbered] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+
+      expect(result).toMatchObject({ _tag: 'Ok' })
+      expect(store.listCandidates('harlan-zw/example:pr-triage')).toMatchObject([
+        { fingerprint: untitled.fingerprint, title: untitled.claim },
+        { fingerprint: numbered.fingerprint, title: numbered.claim },
+      ])
     }
     finally {
       store.close()
