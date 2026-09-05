@@ -34,6 +34,8 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Disable hooks per-project**: `.claude/hooks.json` with `{"disabled": ["eslint", "pre-commit-push"]}`
 
+**Workflow** (`.github/workflows/test.yml`): four jobs on GitHub hosted runners, lint, typecheck, build, and test. The test job installs a pinned `wt`, because several suites drive the real binary. Every event ignores `**/*.md`, so a Markdown only push to `main` runs nothing.
+
 **Worktrees**: `wt` (worktrunk) owns every worktree, at `<parent>/<repo>.<branch-slug>`. Full rules in `harlan-agent-kit/references/worktree-isolation.md`.
 
 ## Adding Components
