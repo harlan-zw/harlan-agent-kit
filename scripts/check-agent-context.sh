@@ -9,10 +9,14 @@ CODEX="$TARGET_HOME/.codex/AGENTS.md"
 COMMIT_HOOK="$TARGET_HOME/.config/git/hooks/commit-msg"
 SOURCE_HOOK="$REPO_ROOT/agent-context/git-hooks/commit-msg"
 PLUGIN_HOOKS_DIR="$REPO_ROOT/harlan-agent-kit/hooks"
+SOURCE_MANIFEST="$REPO_ROOT/harlan-agent-kit/.claude-plugin/plugin.json"
 SOURCE_PLUGIN="$REPO_ROOT/harlan-agent-kit/plugins/opencode/harlan-hooks.ts"
 INSTALLED_HOOKS_DIR="$TARGET_HOME/.local/share/harlan-agent-kit/hooks"
+INSTALLED_MANIFEST="$TARGET_HOME/.local/share/harlan-agent-kit/.claude-plugin/plugin.json"
 INSTALLED_PLUGIN="$TARGET_HOME/.config/opencode/plugins/harlan-hooks.ts"
-OPENCODE_HOOKS=(check-config.sh pnpm-only.sh wt-only.sh pr-skill-only.sh merged-branch-guard.sh pre-commit-push.sh eslint.sh)
+# The manifest owns the hook list, so this check derives it too.
+source "$REPO_ROOT/scripts/agent-context-hooks.sh"
+mapfile -t PLUGIN_HOOKS < <(agent_context_installed_hooks "$PLUGIN_HOOKS_DIR" "$SOURCE_MANIFEST")
 SKILL="$REPO_ROOT/harlan-agent-kit/skills/ts-design-patterns/SKILL.md"
 EXPECTED_HOME=$(mktemp -d)
 trap 'rm -rf "$EXPECTED_HOME"' EXIT
@@ -23,7 +27,7 @@ fail=0
 note() { printf '%s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
-for f in "$REPO_ROOT/agent-context/context.md" "$REPO_ROOT/agent-context/CLAUDE.md" "$REPO_ROOT/agent-context/AGENTS.md" "$CLAUDE" "$CODEX" "$SKILL"; do
+for f in "$REPO_ROOT/agent-context/context.md" "$REPO_ROOT/agent-context/CLAUDE.md" "$REPO_ROOT/agent-context/AGENTS.md" "$SOURCE_MANIFEST" "$CLAUDE" "$CODEX" "$SKILL"; do
   [ -f "$f" ] || { bad "Missing file: $f"; }
 done
 [ "$fail" -eq 0 ] || exit 1
@@ -43,16 +47,24 @@ fi
   || bad "core.hooksPath does not point at the installed hooks. Run pnpm sync:context."
 
 # opencode reads the plugin hooks from a stable path, so drift there is silent.
-for hook_file in "${OPENCODE_HOOKS[@]}"; do
+[ "${#PLUGIN_HOOKS[@]}" -gt 0 ] || bad "The plugin manifest registers no hooks: $SOURCE_MANIFEST"
+for hook_file in "${PLUGIN_HOOKS[@]}"; do
   if [ ! -f "$INSTALLED_HOOKS_DIR/$hook_file" ]; then
-    bad "The opencode hook is not installed: $hook_file. Run pnpm sync:context."
+    bad "The hook is not installed: $hook_file. Run pnpm sync:context."
     continue
   fi
   cmp -s "$PLUGIN_HOOKS_DIR/$hook_file" "$INSTALLED_HOOKS_DIR/$hook_file" \
-    || bad "The opencode hook differs: $hook_file. Run pnpm sync:context."
+    || bad "The hook differs: $hook_file. Run pnpm sync:context."
   [ -x "$INSTALLED_HOOKS_DIR/$hook_file" ] \
-    || bad "The opencode hook is not executable: $hook_file. Run pnpm sync:context."
+    || bad "The hook is not executable: $hook_file. Run pnpm sync:context."
 done
+# The opencode plugin reads its hook list from the installed manifest.
+if [ ! -f "$INSTALLED_MANIFEST" ]; then
+  bad "The plugin manifest is not installed. Run pnpm sync:context."
+else
+  cmp -s "$SOURCE_MANIFEST" "$INSTALLED_MANIFEST" \
+    || bad "The plugin manifest differs. Run pnpm sync:context."
+fi
 if [ ! -f "$INSTALLED_PLUGIN" ]; then
   bad "The opencode plugin is not installed. Run pnpm sync:context."
 else

@@ -141,6 +141,8 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 ## Hooks
 
 Claude Code reads the hooks from [`.claude-plugin/plugin.json`](./harlan-agent-kit/.claude-plugin/plugin.json).
+That manifest is the only place a hook is registered. The install script, the drift
+check, and the opencode plugin all derive their lists from it.
 Codex reads [`hooks/codex.json`](./harlan-agent-kit/hooks/codex.json) through
 [`.codex-plugin/plugin.json`](./harlan-agent-kit/.codex-plugin/plugin.json).
 
@@ -149,6 +151,7 @@ Codex reads [`hooks/codex.json`](./harlan-agent-kit/hooks/codex.json) through
 | SessionStart | [`session-start.sh`](./harlan-agent-kit/hooks/session-start.sh) | Detect the project type, print the Git state |
 | PreToolUse (Bash) | [`pnpm-only.sh`](./harlan-agent-kit/hooks/pnpm-only.sh) | Block [npm](https://npmjs.com), yarn, and npx |
 | PreToolUse (Bash) | [`wt-only.sh`](./harlan-agent-kit/hooks/wt-only.sh) | Keep every worktree owned by `wt` |
+| PreToolUse (Bash) | [`himalaya-read-only.sh`](./harlan-agent-kit/hooks/himalaya-read-only.sh) | Keep every agent's email access read only |
 | PreToolUse (Bash) | [`pr-skill-only.sh`](./harlan-agent-kit/hooks/pr-skill-only.sh) | Require the `pr` Skill to open a PR or edit its description |
 | PreToolUse (Bash) | [`merged-branch-guard.sh`](./harlan-agent-kit/hooks/merged-branch-guard.sh) | Block commits on an already merged branch |
 | PreToolUse (Bash) | [`pre-commit-push.sh`](./harlan-agent-kit/hooks/pre-commit-push.sh) | Run `check` before a commit, push, or PR |
