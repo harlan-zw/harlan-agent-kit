@@ -74,6 +74,32 @@ async function seedReadyRoutineIssues(store: ReturnType<typeof openJournalStore>
   }
 }
 
+/** Human-filed issues, no Routine behind them, triaged Ready by a writable author so Issue work waits without Approval. */
+function seedReadyHumanIssues(store: ReturnType<typeof openJournalStore>, numbers: readonly number[]): void {
+  store.syncRepositories([repositoryMapping()], at(0))
+  store.setRepositoryWritesEnabled('harlan-zw/example', true)
+  for (const number of numbers) {
+    store.recordObservation({
+      externalId: `issue-${number}`,
+      observedAt: at(3),
+      source: 'poll',
+      subject: issueItem({ number, author: 'harlan-zw', title: `Reported bug ${number}`, url: `https://github.com/harlan-zw/example/issues/${number}` }),
+    })
+  }
+  for (const number of numbers) {
+    const triage = store.claimNextIssueTriageTask('triage-worker', at(4), 600_000)
+    if (triage === null)
+      throw new Error(`Expected an Issue triage Task for #${number}.`)
+    store.completeWorkerTask({
+      taskId: triage.id,
+      workerId: 'triage-worker',
+      fence: triage.state.fence,
+      at: at(5),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT', difficulty: 4, impact: 3, hasReproduction: true, needsCodebaseReview: false, summary: `Summary ${triage.issueNumber}`, nextAction: 'Fix it', relatedIssues: numbers.filter(other => other !== triage.issueNumber) }),
+    })
+  }
+}
+
 describe('normalizeBatchPlan', () => {
   it('appends every reserved issue the plan forgot as its own unit', () => {
     expect(normalizeBatchPlan([{ issueNumbers: [101, 102], dependsOn: null, rationale: 'Same cause.' }], [101, 102, 103])).toEqual(ok([
@@ -187,11 +213,31 @@ describe('batches in the journal', () => {
     }
   })
 
-  it('opens no Batch for one issue or for a human issue', async () => {
+  it('opens no Batch for one issue', async () => {
     const store = openJournalStore(':memory:', true)
     try {
       await seedReadyRoutineIssues(store, [101])
       expect(store.planBatches(at(6))).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('batches human-filed issues and hands the plan their difficulty', () => {
+    const store = openJournalStore(':memory:', true)
+    try {
+      seedReadyHumanIssues(store, [885, 889])
+      const opened = store.planBatches(at(6))
+      expect(opened).toEqual([{ batchId: expect.any(String), repository: 'harlan-zw/example', issueNumbers: [885, 889] }])
+      const batch = store.listBatches().find(candidate => candidate.id === opened[0]!.batchId)
+      expect(batch?.issues.map(issue => ({ number: issue.issueNumber, target: issue.target, fixWith: issue.relatedIssues }))).toEqual([
+        { number: 885, target: null, fixWith: [889] },
+        { number: 889, target: null, fixWith: [885] },
+      ])
+      expect(batch?.issues[0]?.triageSummary).toContain('Difficulty 4 of 5.')
+      // The plain scheduler cannot take a reserved Task away from the Batch.
+      expect(store.claimNextIssueWorkTask('plain-worker', at(7), 600_000)).toBeNull()
     }
     finally {
       store.close()

@@ -13,7 +13,7 @@ export const BATCH_MAXIMUM_ISSUES = 12
 
 export interface BatchStore {
   /**
-   * Opens one Queued Batch per repository that has enough Ready Routine-filed
+   * Opens one Queued Batch per repository that has enough Ready
    * issues waiting and no Batch already open. Reserves their Issue work Tasks in
    * the same transaction, so the plain Issue work scheduler cannot claim them.
    */
@@ -181,7 +181,7 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
         issueNumber: row.issue_number,
         title: row.title,
         body: '',
-        triageSummary: triage === null ? null : `${triage.summary} Next action: ${triage.nextAction}`,
+        triageSummary: triage === null ? null : `${triage.summary} Difficulty ${triage.difficulty} of 5. Next action: ${triage.nextAction}`,
         relatedIssues: triage?.relatedIssues ?? [],
         target: row.target,
       }
@@ -252,14 +252,6 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
         AND NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id)
         AND NOT EXISTS (
           SELECT 1 FROM batches WHERE batches.repository_id = repositories.id AND batches.state_tag IN ('Queued', 'Running')
-        )
-        -- Routine-filed issues carry a target file and a fingerprint, so a plan
-        -- over them is reliable. Human issues join once this has run a while.
-        AND EXISTS (
-          SELECT 1 FROM candidate_issue_commands
-          WHERE candidate_issue_commands.repository = repositories.github
-            AND candidate_issue_commands.github_issue_number = subjects.github_number
-            AND candidate_issue_commands.state_tag = 'Published'
         )
       ORDER BY repositories.github, subjects.github_number
     `).all() as unknown as Array<{ task_id: string, repository_id: number, github: string, github_number: number }>

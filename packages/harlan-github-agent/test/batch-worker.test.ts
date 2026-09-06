@@ -44,6 +44,8 @@ describe('batchPlanPrompt', () => {
     expect(prompt).toContain('"target":"src/a.ts"')
     expect(prompt).toContain('Do not edit files, commit, push, or post comments.')
     expect(prompt).toContain('Every issue appears in exactly one unit.')
+    expect(prompt).toContain('A human-filed issue has a null target')
+    expect(prompt).toContain('difficulty is 4 or 5 stays in its own unit')
   })
 })
 
