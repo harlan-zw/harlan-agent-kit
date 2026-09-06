@@ -4643,6 +4643,52 @@ describe('journal store', () => {
     }))
   })
 
+  it('retries changed-scope issue work on a maintained repository', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ ownership: 'maintained' })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'issue-scope-retry-maintained',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: issueItem(),
+    })
+    const triage = store.claimNextIssueTriageTask('triage-worker', '2026-08-13T01:00:01.000Z', 10_000)
+    if (triage === null)
+      throw new Error('Expected issue triage.')
+    store.completeWorkerTask({
+      taskId: triage.id,
+      workerId: triage.state.workerId,
+      fence: triage.state.fence,
+      at: '2026-08-13T01:00:02.000Z',
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
+    })
+    expect(store.approveIssueWork({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: triage.revisionId,
+      at: '2026-08-13T01:00:03.000Z',
+    })).toEqual({ _tag: 'Approved', taskId: expect.any(String) })
+    for (const attempt of [1, 2, 3]) {
+      const at = `2026-08-13T01:00:0${attempt + 3}.000Z`
+      const task = store.claimNextIssueWorkTask(`issue-worker-${attempt}`, at, 10_000)
+      if (task === null)
+        throw new Error(`Expected issue work attempt ${attempt}.`)
+      store.failTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        reason: 'The issue changed before work started.',
+      })
+    }
+
+    // The same capability that claims the work decides the retry. Maintained
+    // repositories may work issues, so their changed-scope failures retriage.
+    expect(store.retryRecoverableWorkerFailures('2026-08-13T01:00:07.000Z')).toBe(1)
+    const retriage = store.claimNextIssueTriageTask('triage-worker-2', '2026-08-13T01:00:08.000Z', 10_000)
+    expect(retriage?.state.fence).toBe(2)
+  })
+
   it('invalidates triage and Approval when human Issue content changes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
