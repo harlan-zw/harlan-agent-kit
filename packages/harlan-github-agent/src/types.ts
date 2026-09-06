@@ -1340,9 +1340,10 @@ export type IncidentScope
 /**
  * What one Incident is about.
  *
- * Every kind except `runner_lost` comes from `classifyFailure`, which reads a
- * failure message. `runner_lost` comes from GitHub's own job steps instead, so
- * it is raised where the checks snapshot is built.
+ * Most kinds come from `classifyFailure`, which reads a failure message.
+ * `runner_lost` comes from GitHub's own job steps instead, so it is raised
+ * where the checks snapshot is built. `ci_gate_pending` comes from a clock
+ * reading against a gate that never moved, so no message exists to classify.
  */
 export type IncidentKind
   = | 'github_unavailable'
@@ -1363,6 +1364,15 @@ export type IncidentKind
      * under review is not broken, so its check runs read as PENDING.
      */
     | 'runner_lost'
+    /**
+     * A CI Review gate has read PENDING far longer than any healthy one does.
+     *
+     * No failure message exists, because nothing failed. The controller waits
+     * correctly, and that is the problem: a repository whose CI never starts
+     * used to read exactly like one whose CI is slow. The bounds and the
+     * wording live in `ci-gate-pending.ts`.
+     */
+    | 'ci_gate_pending'
     | 'unknown'
 
 /** What the controller will do about an Incident without being asked. */

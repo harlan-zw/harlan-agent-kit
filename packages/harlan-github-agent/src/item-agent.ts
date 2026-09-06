@@ -3,6 +3,7 @@ import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentLabelState } from './agent-label.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
+import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
@@ -449,23 +450,51 @@ function checksLostRunner(checks: GitHubChecksSnapshot): boolean {
   return checks._tag === 'Available' && checks.checks.some(checkRunnerLost)
 }
 
+function undecidedCause(check: GitHubCheck): CiGateCause {
+  return checkRunnerLost(check)
+    ? { _tag: 'RunnerLost', check: cleanLine(check.name) }
+    : { _tag: 'CheckRunning', check: cleanLine(check.name) }
+}
+
 function checksGate(
   checks: PullRequestReviewSnapshot['checks'],
   label: 'base-ci' | 'required-ci',
   failedTag: 'Failed' | 'Pending',
-): ReviewGateState {
+): CiGateResult {
   const checkEvidence = [evidence(label, JSON.stringify(checks))]
-  if (checks._tag === 'Unavailable')
-    return { _tag: 'Pending', reason: cleanLine(checks.reason), evidence: checkEvidence }
-  if (checks.checks.length === 0)
-    return { _tag: 'Pending', reason: label === 'base-ci' ? 'Base branch CI is unavailable.' : 'Required CI is unavailable.', evidence: checkEvidence }
+  const base = label === 'base-ci'
+  if (checks._tag === 'Unavailable') {
+    return {
+      state: { _tag: 'Pending', reason: cleanLine(checks.reason), evidence: checkEvidence },
+      reported: [],
+      cause: { _tag: 'ChecksUnreadable', reason: cleanLine(checks.reason) },
+    }
+  }
+  if (checks.checks.length === 0) {
+    return {
+      state: { _tag: 'Pending', reason: base ? 'Base branch CI is unavailable.' : 'Required CI is unavailable.', evidence: checkEvidence },
+      reported: [],
+      cause: { _tag: 'NoCheckRun', detail: base ? 'GitHub reported no check run for the base commit.' : 'GitHub reported no check run for the head commit.' },
+    }
+  }
   const failed = checks.checks.find(checkFailed)
-  if (failed !== undefined)
-    return { _tag: failedTag, reason: `${label === 'base-ci' ? 'Base branch CI: ' : ''}${cleanLine(failed.name)} failed.`, evidence: checkEvidence }
+  if (failed !== undefined) {
+    return {
+      state: { _tag: failedTag, reason: `${base ? 'Base branch CI: ' : ''}${cleanLine(failed.name)} failed.`, evidence: checkEvidence },
+      reported: [],
+      // A failed head check run is a verdict, so only a red base branch leaves
+      // the gate with nothing left to answer it.
+      cause: failedTag === 'Pending' ? { _tag: 'BaseBranchFailed', check: cleanLine(failed.name) } : { _tag: 'Settled' },
+    }
+  }
   const pending = checks.checks.find(checkUndecided)
-  return pending === undefined
-    ? { _tag: 'Passed', evidence: checkEvidence }
-    : { _tag: 'Pending', reason: `${label === 'base-ci' ? 'Base branch CI: ' : ''}${undecidedReason(pending)}`, evidence: checkEvidence }
+  if (pending === undefined)
+    return { state: { _tag: 'Passed', evidence: checkEvidence }, reported: [], cause: { _tag: 'Settled' } }
+  return {
+    state: { _tag: 'Pending', reason: `${base ? 'Base branch CI: ' : ''}${undecidedReason(pending)}`, evidence: checkEvidence },
+    reported: [],
+    cause: undecidedCause(pending),
+  }
 }
 
 /**
@@ -478,6 +507,8 @@ function checksGate(
 interface CiGateResult {
   state: ReviewGateState
   reported: string[]
+  /** Why the gate has not settled, for the Incident that names a long PENDING. */
+  cause: CiGateCause
 }
 
 /**
@@ -497,10 +528,15 @@ interface CiGateResult {
  */
 function headChecksGate(checks: PullRequestReviewSnapshot['checks'], required: RequiredChecks): CiGateResult {
   if (required._tag !== 'Declared')
-    return { state: checksGate(checks, 'required-ci', 'Failed'), reported: [] }
+    return checksGate(checks, 'required-ci', 'Failed')
   const checkEvidence = [evidence('required-ci', JSON.stringify({ checks, required }))]
-  if (checks._tag === 'Unavailable')
-    return { state: { _tag: 'Pending', reason: cleanLine(checks.reason), evidence: checkEvidence }, reported: [] }
+  if (checks._tag === 'Unavailable') {
+    return {
+      state: { _tag: 'Pending', reason: cleanLine(checks.reason), evidence: checkEvidence },
+      reported: [],
+      cause: { _tag: 'ChecksUnreadable', reason: cleanLine(checks.reason) },
+    }
+  }
   const isRequired = (check: GitHubCheck): boolean => required.contexts.includes(check.name)
   const reported = checks.checks
     .filter(check => checkFailed(check) && !isRequired(check))
@@ -508,14 +544,19 @@ function headChecksGate(checks: PullRequestReviewSnapshot['checks'], required: R
   const requiredChecks = checks.checks.filter(isRequired)
   const failed = requiredChecks.find(checkFailed)
   if (failed !== undefined)
-    return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported }
+    return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported, cause: { _tag: 'Settled' } }
   const running = requiredChecks.find(checkUndecided)
   if (running !== undefined)
-    return { state: { _tag: 'Pending', reason: undecidedReason(running), evidence: checkEvidence }, reported }
+    return { state: { _tag: 'Pending', reason: undecidedReason(running), evidence: checkEvidence }, reported, cause: undecidedCause(running) }
   const missing = required.contexts.find(context => !checks.checks.some(check => check.name === context))
-  if (missing !== undefined)
-    return { state: { _tag: 'Pending', reason: `${cleanLine(missing)} has not reported.`, evidence: checkEvidence }, reported }
-  return { state: { _tag: 'Passed', evidence: checkEvidence }, reported }
+  if (missing !== undefined) {
+    return {
+      state: { _tag: 'Pending', reason: `${cleanLine(missing)} has not reported.`, evidence: checkEvidence },
+      reported,
+      cause: { _tag: 'NoCheckRun', detail: `GitHub has not reported required check run "${cleanLine(missing)}".` },
+    }
+  }
+  return { state: { _tag: 'Passed', evidence: checkEvidence }, reported, cause: { _tag: 'Settled' } }
 }
 
 /** GitHub has no CI signal to wait for on either side of this change. */
@@ -548,13 +589,18 @@ function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): 
         }))],
       },
       reported: [],
+      cause: { _tag: 'Settled' },
     }
   }
   const base = checksGate(snapshot.baseChecks, 'base-ci', 'Pending')
-  if (base._tag !== 'Passed')
-    return { state: base, reported: [] }
+  if (base.state._tag !== 'Passed')
+    return base
   const head = headChecksGate(snapshot.checks, snapshot.requiredChecks)
-  return { state: { ...head.state, evidence: [...base.evidence, ...head.state.evidence] }, reported: head.reported }
+  return {
+    state: { ...head.state, evidence: [...base.state.evidence, ...head.state.evidence] },
+    reported: head.reported,
+    cause: head.cause,
+  }
 }
 
 /**
@@ -647,12 +693,12 @@ export function refreshControllerGates(
   gates: ReviewGates,
   snapshot: PullRequestReviewSnapshot,
   mapping: RepositoryMapping,
-): { gates: ReviewGates, reportedChecks: string[] } {
+): { gates: ReviewGates, reportedChecks: string[], ciCause: CiGateCause } {
   const repairsBaseline = snapshot.pullRequest.purpose._tag === 'BaselineRepair'
     || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
   const ci = ciGate(snapshot, repairsBaseline)
   const merge = mergeGate(snapshot.pullRequest)
-  return { gates: { ...gates, ci: ci.state, merge }, reportedChecks: ci.reported }
+  return { gates: { ...gates, ci: ci.state, merge }, reportedChecks: ci.reported, ciCause: ci.cause }
 }
 
 /**
@@ -813,7 +859,7 @@ function repairPreflight(task: ClaimedAdversarialReviewTask, snapshot: PullReque
   if (access._tag === 'Err')
     return { _tag: 'ActionRequired', reason: access.error }
   const baseAllowsRepair = snapshot.baseChecks._tag === 'Available'
-    && (snapshot.baseChecks.checks.length === 0 || checksGate(snapshot.baseChecks, 'base-ci', 'Pending')._tag === 'Passed')
+    && (snapshot.baseChecks.checks.length === 0 || checksGate(snapshot.baseChecks, 'base-ci', 'Pending').state._tag === 'Passed')
   if (!repairsBaseline && !baseAllowsRepair)
     return { _tag: 'ActionRequired', reason: 'The base branch must pass CI before Repair starts.' }
   return { _tag: 'Authorized' }

@@ -1,6 +1,6 @@
 import type { GitHubCheck } from '../src/github-agent-source.ts'
-import type { ReviewGateRefresh } from '../src/store.ts'
-import type { ReviewGates } from '../src/types.ts'
+import type { RecordIncidentInput, ReviewGateRefresh } from '../src/store.ts'
+import type { Incident, ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { refreshControllerGates } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
@@ -44,6 +44,7 @@ function gateRefresh(overrides: Partial<ReviewGateRefresh> = {}): ReviewGateRefr
     gates: pendingControllerGates(),
     findings: [],
     confidence: 88,
+    gatesUpdatedAt: '2026-08-27T08:20:00.000Z',
     commentId: 42,
     publishedBody: '### 🤖 PENDING',
     ...overrides,
@@ -77,6 +78,8 @@ function snapshot(baseChecks: GitHubCheck[], headChecks: GitHubCheck[] = [check(
 
 interface Recorded {
   edited?: { commentId: number, expectedBody: string, body: string }
+  incidents: RecordIncidentInput[]
+  resolved: Array<{ repository: string, operation: string | undefined, exceptMessages: readonly string[] }>
   failed: Array<{ reviewRunId: string, reason: string }>
   staged: Array<{ reviewRunId: string, outcome: string, ci: string, reconciliationId?: string, body: string }>
   stamped: string[]
@@ -87,7 +90,7 @@ function harness(options: {
   live?: ReturnType<typeof snapshot>
   edit?: () => Promise<any>
 }) {
-  const recorded: Recorded = { failed: [], staged: [], stamped: [] }
+  const recorded: Recorded = { failed: [], incidents: [], resolved: [], staged: [], stamped: [] }
   const run = async () => refreshReviewGates({
     github: {
       getPullRequestReviewSnapshot: () => Promise.resolve(options.live ?? snapshot([check()])),
@@ -108,6 +111,15 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
+      recordIncident: (incident) => {
+        recorded.incidents.push(incident)
+        return { ...incident, id: 'incident-1', occurrences: 1, firstSeenAt: incident.at, lastSeenAt: incident.at } satisfies Incident
+      },
+      resolveIncidents: (scope, _at, operation, exceptMessages = []) => {
+        if (scope._tag === 'Repository')
+          recorded.resolved.push({ repository: scope.repository, operation, exceptMessages })
+        return 0
+      },
       recordReviewPublication: (input) => {
         if (input.result._tag === 'Failed')
           recorded.failed.push({ reviewRunId: input.reviewRunId, reason: input.result.reason })
@@ -269,6 +281,69 @@ describe('refreshReviewGates', () => {
     })])
     expect(recorded.stamped).toEqual([])
     expect(recorded.staged[0]?.reconciliationId).toContain('Missing:42:')
+  })
+
+  it('raises one Incident when the CI Review gate has read PENDING for a day', async () => {
+    const live = snapshot([check({ conclusion: 'failure' })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    const { recorded, run } = harness({
+      live,
+      review: gateRefresh({
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gatesUpdatedAt: '2026-08-26T11:15:00.000Z',
+      }),
+    })
+
+    await run()
+
+    const message = 'harlan-zw/example#24: the CI Review gate reads PENDING for more than 4 hours. '
+      + 'The gate last moved at 2026-08-26 11:15 UTC. '
+      + 'Base branch check run "deploy (pro-admin)" failed. '
+      + 'If the default branch is broken, repair it and re-run the check run.'
+    expect(recorded.incidents).toEqual([{
+      scope: { _tag: 'Repository', repository: 'harlan-zw/example' },
+      kind: 'ci_gate_pending',
+      severity: 'warning',
+      operation: 'ci_gate_pending',
+      message,
+      recovery: { _tag: 'ActionRequired' },
+      at: '2026-08-27T11:15:00.000Z',
+    }])
+    expect(recorded.resolved).toEqual([{
+      repository: 'harlan-zw/example',
+      operation: 'ci_gate_pending',
+      exceptMessages: [message],
+    }])
+  })
+
+  it('raises no Incident while the CI Review gate is inside its bound', async () => {
+    const live = snapshot([check({ status: 'in_progress', conclusion: null })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    const { recorded, run } = harness({
+      live,
+      review: gateRefresh({
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+      }),
+    })
+
+    await run()
+
+    expect(recorded.incidents).toEqual([])
+  })
+
+  it('resolves the Incident once the CI Review gate moves', async () => {
+    const { recorded, run } = harness({})
+
+    await run()
+
+    expect(recorded.incidents).toEqual([])
+    expect(recorded.resolved).toEqual([{
+      repository: 'harlan-zw/example',
+      operation: 'ci_gate_pending',
+      exceptMessages: [],
+    }])
   })
 
   it('retires the Review instead of staging a status when another actor owns the comment', async () => {
@@ -479,5 +554,80 @@ describe('refreshReviewGates against the journal store', () => {
     expect(settledRun.outcome).toEqual({ _tag: 'Ready', confidence: 88 })
     expect(settledRun.gates.ci._tag).toBe('Passed')
     expect(settledRun.usage).toEqual({ _tag: 'Available', input: 10, cachedInput: 0, cacheWrite: 0, output: 5, reasoning: 0 })
+  })
+
+  it('names the pull request whose CI Review gate has not moved for a day', async () => {
+    const store = openJournalStore(':memory:')
+    stores.push(store)
+    store.syncRepositories([repositoryMapping()], '2026-08-26T08:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'stalled-ci-pr',
+      observedAt: '2026-08-26T08:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-26T08:01:30.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected the queued Review Task.')
+    store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: '2026-08-26T08:02:00.000Z', evidence: 'review-run' })
+
+    const red = snapshot([check({ conclusion: 'failure' })])
+    if (red._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    expect(store.recordReviewRun({
+      id: 'run-stalled',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      headSha: 'abc123',
+      provider: 'codex',
+      sessionId: 'session-1',
+      model: 'gpt-5.6-sol',
+      agentVersion: '0.0.0',
+      skillDigest: 'c'.repeat(64),
+      startedAt: '2026-08-26T08:11:00.000Z',
+      completedAt: '2026-08-26T08:20:00.000Z',
+      usage: { _tag: 'Unavailable' },
+      gates: refreshControllerGates(pendingControllerGates(), red.value, repositoryMapping()).gates,
+      confidence: 88,
+      findings: [],
+    })).toEqual({ _tag: 'Inserted', reviewRunId: 'run-stalled' })
+    expect(store.recordReviewPublication({
+      id: 'publication-stalled',
+      reviewRunId: 'run-stalled',
+      body: '### 🤖 PENDING',
+      at: '2026-08-26T08:21:00.000Z',
+      result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+    })).toEqual({ _tag: 'Inserted', publicationId: 'publication-stalled' })
+    expect(store.listReviewGateRefreshes()[0]?.gatesUpdatedAt).toBe('2026-08-26T08:20:00.000Z')
+
+    await refreshReviewGates({
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(red),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+      },
+      now: () => new Date('2026-08-27T11:15:00.000Z'),
+      repositories: [repositoryMapping()],
+      store,
+    }, new AbortController().signal)
+
+    expect(store.listIncidents()).toEqual([expect.objectContaining({
+      scope: { _tag: 'Repository', repository: 'harlan-zw/example' },
+      kind: 'ci_gate_pending',
+      occurrences: 1,
+      firstSeenAt: '2026-08-27T11:15:00.000Z',
+      message: 'harlan-zw/example#24: the CI Review gate reads PENDING for more than 4 hours. '
+        + 'The gate last moved at 2026-08-26 08:20 UTC. '
+        + 'Base branch check run "deploy (pro-admin)" failed. '
+        + 'If the default branch is broken, repair it and re-run the check run.',
+    })])
+
+    // A poll answers for GitHub, never for a gate that never moved.
+    store.recordPollSuccess('harlan-zw/example', '2026-08-27T11:20:00.000Z')
+
+    expect(store.listIncidents()).toHaveLength(1)
   })
 })

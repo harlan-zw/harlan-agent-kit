@@ -515,6 +515,14 @@ export interface ReviewGateRefresh {
   completedAt: string
   usage: AgentTokenUsage
   gates: ReviewGates
+  /**
+   * When these gates last changed.
+   *
+   * The projection is written only when the gates or the outcome move, so this
+   * is how long the current answer has stood. A CI Review gate that reads
+   * PENDING from here to now has held one repository still for that long.
+   */
+  gatesUpdatedAt: string
   findings: ReviewFinding[]
   /** The agent's own score, kept whatever the gates said. */
   confidence: number | undefined
@@ -538,6 +546,7 @@ interface ReviewGateRefreshRow {
   completed_at: string
   usage: string
   gates: string
+  gates_updated_at: string
   findings: string
   confidence: number | null
   github_comment_id: number
@@ -6913,7 +6922,16 @@ export function openJournalStore(
     database.prepare(`
       UPDATE repositories SET last_attempt_at = ?, last_success_at = ?, last_error = NULL WHERE github = ?
     `).run(at, at, github)
-    resolveIncidents({ _tag: 'Repository', repository: github }, at)
+    // A healthy poll proves GitHub answers for this repository, so it clears
+    // every Incident a failed read raised. It proves nothing about a Review
+    // gate that never moved, and the sweep that raises `ci_gate_pending` closes
+    // it when the gate moves. Clearing it here would hide a real stall for as
+    // long as GitHub kept answering.
+    database.prepare(`
+      UPDATE incidents SET resolved_at = ?
+      WHERE resolved_at IS NULL AND scope_tag = 'Repository' AND repository = ?
+        AND kind != 'ci_gate_pending'
+    `).run(at, github)
     // Edge triggered, on the poll that recovers. A long GitHub outage spends the
     // whole recovery budget of every Task it touches, and those Tasks would then
     // stay dead after GitHub came back. Checking `last_error` first keeps this
@@ -11667,6 +11685,7 @@ export function openJournalStore(
       ranked.completed_at,
       ranked.usage,
       COALESCE(projection.gates, ranked.gates) AS gates,
+      COALESCE(projection.updated_at, ranked.completed_at) AS gates_updated_at,
       ranked.findings,
       COALESCE(projection.confidence, ranked.confidence) AS confidence,
       published.github_comment_id,
@@ -11718,6 +11737,7 @@ export function openJournalStore(
     completedAt: row.completed_at,
     usage: agentTokenUsageFromJson(row.usage),
     gates: JSON.parse(row.gates) as ReviewGates,
+    gatesUpdatedAt: row.gates_updated_at,
     findings: JSON.parse(row.findings) as ReviewFinding[],
     confidence: row.confidence ?? undefined,
     commentId: row.github_comment_id,
