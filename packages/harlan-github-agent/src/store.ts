@@ -8541,9 +8541,12 @@ export function openJournalStore(
               AND newer.scheduled_for > routine_runs.scheduled_for
           )
       `).all() as unknown as RecoveryCandidateRow[]).filter(row => isRecoverable(row, at))
-      const issueScopeRows = database.prepare(`
+      // The capability that claims Issue work decides the retry, so a
+      // maintained repository never strands a changed-scope failure.
+      const issueScopeRows = (database.prepare(`
         SELECT tasks.id AS task_id, tasks.fence AS task_fence,
-          worker_tasks.id AS triage_id, worker_tasks.fence AS triage_fence
+          worker_tasks.id AS triage_id, worker_tasks.fence AS triage_fence,
+          repositories.policy_json AS policy_json
         FROM tasks
         JOIN subjects ON subjects.id = tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
@@ -8555,15 +8558,13 @@ export function openJournalStore(
           AND tasks.reason = 'The issue changed before work started.'
           AND tasks.revision_id = subjects.current_revision_id
           AND worker_tasks.state_tag = 'Completed'
-          AND repositories.enabled = 1
-          AND repositories.ownership = 'owned'
-          AND json_extract(repositories.policy_json, '$.issueWork') = 1
       `).all() as unknown as Array<{
         task_id: string
         task_fence: number
         triage_id: string
         triage_fence: number
-      }>
+        policy_json: string
+      }>).filter(row => canWorkIssues(JSON.parse(row.policy_json) as RepositoryMapping))
       const retry = database.prepare(`
         UPDATE worker_tasks
         SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
