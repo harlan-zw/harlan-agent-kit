@@ -1009,11 +1009,21 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         const settled = await guarded('Review gate refresh', () => refreshReviewGates({
           github: workerGithub,
           now,
+          preflightRepair: (repository, refreshSignal) => preflightGitHubWriteAccess(tokens, repository, ['contents_write'], refreshSignal),
           repositories: config.repositories,
           store,
         }, signal), [])
         settled.forEach((result) => {
           if (result._tag === 'Ok') {
+            if ((result.value._tag === 'PublicationQueued' || result.value._tag === 'Unchanged') && result.value.baselineRepair !== undefined) {
+              const repair = result.value.baselineRepair
+              const detail = 'reason' in repair
+                ? `no Baseline repair for the red default branch: ${repair.reason}`
+                : repair._tag === 'Queued'
+                  ? `queued Baseline repair ${repair.taskId} for the red default branch.`
+                  : `Baseline repair ${repair.taskId} already covers the red default branch.`
+              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: ${detail}`)
+            }
             if (result.value._tag === 'PublicationQueued')
               options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: queued the ${result.value.outcome} Review status.`)
             else if (result.value._tag === 'Superseded')
