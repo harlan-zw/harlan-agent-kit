@@ -1003,6 +1003,11 @@ export interface JournalStore extends BatchStore {
     at: string
   }) => boolean
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
+  /**
+   * The newest Review run for one head commit whose evidence was recorded
+   * under the repository's current policy, or null when policy moved since.
+   */
+  findCurrentPolicyReviewRun: (repository: string, pullRequestNumber: number, headSha: string) => ReviewRun | null
   /** Replaces one person's explicit judgment about one Review run. */
   recordAgentFeedback: (input: { reviewRunId: string, feedback: AgentFeedbackInput, at: string }) => RecordAgentFeedbackResult
   /** Newest explicit judgments with the Review evidence needed by the feedback Routine. */
@@ -7642,6 +7647,29 @@ export function openJournalStore(
     }))
   }
 
+  // The planner requeues a reviewed head when no evidence scope carries the
+  // repository's current policy digest. A worker that then resumed the old run
+  // completed with no new scope, and the planner requeued it on every poll.
+  // Only a run recorded under the current policy is worth resuming.
+  const findCurrentPolicyReviewRun: JournalStore['findCurrentPolicyReviewRun'] = (repository, pullRequestNumber, headSha) => {
+    const row = database.prepare(`
+      SELECT review_runs.id
+      FROM review_runs
+      JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN review_evidence_scopes ON review_evidence_scopes.review_run_id = review_runs.id
+      WHERE repositories.github = ? AND subjects.github_number = ?
+        AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
+        AND review_runs.head_sha = ?
+        AND review_evidence_scopes.policy_digest = repositories.policy_digest
+      ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, headSha) as { id: string } | undefined
+    if (row === undefined)
+      return null
+    return listReviewRuns(repository, pullRequestNumber).find(run => run.id === row.id) ?? null
+  }
+
   const listReviewRuns: JournalStore['listReviewRuns'] = (repository, pullRequestNumber) => {
     const reviewRuns = database.prepare(`
       SELECT
@@ -13524,6 +13552,7 @@ export function openJournalStore(
     getRepairedHeadFindings,
     listAgentFeedback,
     listReviewRuns,
+    findCurrentPolicyReviewRun,
     recordAgentFeedback,
     needsAttentionTask,
     requestRestart,

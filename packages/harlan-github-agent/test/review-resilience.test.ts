@@ -120,7 +120,7 @@ function harness(input: {
         return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
       }),
       getRepairedHeadFindings: () => [],
-      listReviewRuns: () => input.reviewRuns ?? [],
+      findCurrentPolicyReviewRun: (_repository, _pullRequestNumber, headSha) => (input.reviewRuns ?? []).find(run => run.headSha === headSha) ?? null,
       getWorkerSession: () => null,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
