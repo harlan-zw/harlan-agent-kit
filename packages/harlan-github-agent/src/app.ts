@@ -20,6 +20,8 @@ export interface AgentAppOptions {
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
   dashboardPassword: string
+  /** HTTPS origins allowed to frame the dashboard, such as a talk deck. Empty denies framing. */
+  frameAncestors?: readonly string[]
   dashboardRoot?: string
   now: () => Date
   eventIntervalMilliseconds?: number
@@ -35,7 +37,13 @@ const securityHeaders = {
   'cache-control': 'no-store',
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
-  'x-frame-options': 'DENY',
+}
+
+/** Framing headers: `frame-ancestors` is the source of truth; `x-frame-options` only backs up the default deny. */
+function framingHeaders(frameAncestors: readonly string[]): { securityHeaders: Record<string, string>, frameAncestors: string } {
+  if (frameAncestors.length === 0)
+    return { securityHeaders: { ...securityHeaders, 'x-frame-options': 'DENY' }, frameAncestors: '\'none\'' }
+  return { securityHeaders, frameAncestors: ['\'self\'', ...frameAncestors].join(' ') }
 }
 
 const contentTypes: Record<string, string> = {
@@ -290,6 +298,7 @@ async function changeDismissal(options: AgentAppOptions, event: { req: Request }
 export function createAgentApp(options: AgentAppOptions): H3 {
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot()
   const allowedHost = new URL(options.allowedOrigin).host
+  const framing = framingHeaders(options.frameAncestors ?? [])
   const app = new H3({
     onRequest(event) {
       if (event.req.headers.get('host') !== allowedHost)
@@ -307,10 +316,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       event.context.dashboardNonce = randomBytes(18).toString('base64')
     },
     onResponse(response, event) {
-      Object.entries(securityHeaders).forEach(([name, value]) => response.headers.set(name, value))
+      Object.entries(framing.securityHeaders).forEach(([name, value]) => response.headers.set(name, value))
       const nonce = String(event.context.dashboardNonce)
       // GitHub avatars come from github.com and redirect to avatars.githubusercontent.com.
-      response.headers.set('content-security-policy', `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`)
+      response.headers.set('content-security-policy', `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors ${framing.frameAncestors}; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`)
     },
   })
 
