@@ -5552,6 +5552,19 @@ const batchMigration = `
   PRAGMA user_version = 62;
 `
 
+/**
+ * The snapshot's Review agent query asks, for every Review run, whether a
+ * later run supersedes it. Without this index that is a full scan per row,
+ * about one second per snapshot on a journal with 1400 runs, and the event
+ * stream runs it every two seconds per client. That starved the controller
+ * and the poller on Hogwild on 7 September 2026.
+ */
+const reviewRunSupersedesIndexMigration = `
+  CREATE INDEX IF NOT EXISTS review_runs_supersedes ON review_runs(supersedes_review_run_id);
+
+  PRAGMA user_version = 64;
+`
+
 function applyMigration(database: DatabaseSync, migration: string): void {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -5842,9 +5855,13 @@ function installSchema(database: DatabaseSync): void {
     const columns = (database.prepare('PRAGMA table_info(candidates)').all() as unknown as Array<{ name: string }>)
       .map(column => column.name)
     applyMigration(database, columns.includes('title') ? 'PRAGMA user_version = 63;' : candidateTitleMigration)
+    version = 63
+  }
+  if (version === 63) {
+    applyMigration(database, reviewRunSupersedesIndexMigration)
     return
   }
-  if (version === 63)
+  if (version === 64)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
