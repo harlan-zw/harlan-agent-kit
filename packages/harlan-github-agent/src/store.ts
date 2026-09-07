@@ -5503,7 +5503,7 @@ const candidateTitleMigration = `
 const publicationDiagramMigration = `
   ALTER TABLE publication_commands ADD COLUMN diagram_json TEXT;
 
-  PRAGMA user_version = 64;
+  PRAGMA user_version = 65;
 `
 
 const batchMigration = `
@@ -5867,14 +5867,18 @@ function installSchema(database: DatabaseSync): void {
     version = 63
   }
   if (version === 63) {
+    applyMigration(database, reviewRunSupersedesIndexMigration)
+    version = 64
+  }
+  if (version === 64) {
     // A journal rewound for replay already carries the column, and SQLite has
     // no ADD COLUMN IF NOT EXISTS.
     const columns = (database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>)
       .map(column => column.name)
-    applyMigration(database, columns.includes('diagram_json') ? 'PRAGMA user_version = 64;' : publicationDiagramMigration)
+    applyMigration(database, columns.includes('diagram_json') ? 'PRAGMA user_version = 65;' : publicationDiagramMigration)
     return
   }
-  if (version === 64)
+  if (version === 65)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
