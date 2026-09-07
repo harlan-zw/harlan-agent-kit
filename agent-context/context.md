@@ -96,16 +96,16 @@ My review rate is the bottleneck, not tool limits. Agents prove their own work (
 
 Self-hosted runners run on Hogwild. Never start `harlan-desktop-github-runner.service` on the desktop.
 
-If every task-owned changed file ends in `.md`, commit and push it directly to `origin/main`.
-This applies to repositories I own or maintain. Never create a pull request for Markdown-only work.
-If the direct push fails, stop and report it.
+Every change opens a pull request. A Markdown-only change is no exception.
+Never push to `origin/main` directly.
 Test, build, and deploy workflow events ignore `**/*.md` by default.
 A workflow opts in only when its `paths` list includes Markdown.
 Never combine `paths` and `paths-ignore` on one event.
 
 Use `harlan-agent-auto-merge` only for changes with no judgement.
-Examples include dependencies, formatting, generated files, or comments in non-Markdown files.
-The agent merges those after a READY review. Everything else waits for me.
+Examples include dependencies, formatting, generated files, comments in non-Markdown files, and Markdown that nothing executes, such as a README, docs, or a blog post.
+Never label Markdown an agent reads as instructions: Skills, `agent-context/`, `CLAUDE.md`, `AGENTS.md`, `GLOSSARY.md`, or `.github` templates.
+The agent merges labelled changes after a READY review. Everything else waits for me.
 Unsure means no label. Rules: `harlan-agent-kit/references/auto-merge.md`.
 
 ## Commits
