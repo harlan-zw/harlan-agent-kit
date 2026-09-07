@@ -1,24 +1,30 @@
 import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
-import type { JournalStore, ReviewGateRefresh } from './store.ts'
+import type { BaselineRepairQueueResult, JournalStore, ReviewGateRefresh } from './store.ts'
 import type { RepositoryMapping, ReviewGates, ReviewOutcomeName } from './types.ts'
 import { createHash } from 'node:crypto'
 import { ciGatePendingMessage, readCiGate } from './ci-gate-pending.ts'
 import { refreshControllerGates, reviewOutcome, terminalComment } from './item-agent.ts'
 import { err, ok } from './result.ts'
 
+/**
+ * `baselineRepair` is present only when the default branch failed under this
+ * review. It says what the sweep did about that red base.
+ */
 export type ReviewGateRefreshOutcome
-  = | { _tag: 'PublicationQueued', repository: string, pullRequestNumber: number, outcome: ReviewOutcomeName }
-    | { _tag: 'Unchanged', repository: string, pullRequestNumber: number, outcome: ReviewOutcomeName, reason: string }
+  = | { _tag: 'PublicationQueued', repository: string, pullRequestNumber: number, outcome: ReviewOutcomeName, baselineRepair?: BaselineRepairQueueResult }
+    | { _tag: 'Unchanged', repository: string, pullRequestNumber: number, outcome: ReviewOutcomeName, reason: string, baselineRepair?: BaselineRepairQueueResult }
     | { _tag: 'Superseded', repository: string, pullRequestNumber: number }
     | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 export interface ReviewGateSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampAgentLabel'>
   now: () => Date
+  /** Proves the controller may push a Baseline repair branch to this repository. */
+  preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'recordIncident' | 'recordReviewPublication' | 'resolveIncidents' | 'stageReviewGateStatus'>
+  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'recordIncident' | 'recordReviewPublication' | 'resolveIncidents' | 'stageReviewGateStatus'>
 }
 
 /**
@@ -64,6 +70,12 @@ export async function refreshReviewGates(
     const outcome = reviewOutcome(gates)
     const confidence = outcome === 'READY' ? review.confidence : undefined
     const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, review.findings, confidence, reportedChecks)
+    // A red default branch holds this review PENDING until someone repairs
+    // it. No review lease exists here, so this is the only place that can
+    // queue that repair. The store answers Existing on every later pass.
+    const baselineRepair = ciCause._tag === 'BaseBranchFailed'
+      ? { baselineRepair: await queueBaselineRepair(options, review, live.value.pullRequest.baseSha, signal) }
+      : {}
     const gatesChanged = JSON.stringify(gates) !== JSON.stringify(review.gates)
     if (!gatesChanged) {
       // Only a gate that did not move can be overdue. A gate that changed this
@@ -113,7 +125,7 @@ export async function refreshReviewGates(
         })
         if (staged._tag === 'Rejected')
           return err(`${review.repository}#${review.pullRequestNumber}: ${staged.reason}`)
-        return ok({ _tag: 'PublicationQueued', repository: review.repository, pullRequestNumber: review.pullRequestNumber, outcome })
+        return ok({ _tag: 'PublicationQueued', repository: review.repository, pullRequestNumber: review.pullRequestNumber, outcome, ...baselineRepair })
       }
       const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal)
       if (stamped._tag === 'Err')
@@ -125,6 +137,7 @@ export async function refreshReviewGates(
         pullRequestNumber: review.pullRequestNumber,
         outcome,
         reason: unsettled === undefined ? 'The controller gates did not change.' : unsettled.reason,
+        ...baselineRepair,
       })
     }
 
@@ -142,7 +155,7 @@ export async function refreshReviewGates(
     })
     if (staged._tag === 'Rejected')
       return err(`${review.repository}#${review.pullRequestNumber}: ${staged.reason}`)
-    return ok({ _tag: 'PublicationQueued', repository: review.repository, pullRequestNumber: review.pullRequestNumber, outcome })
+    return ok({ _tag: 'PublicationQueued', repository: review.repository, pullRequestNumber: review.pullRequestNumber, outcome, ...baselineRepair })
   }
 
   const results: Array<Result<ReviewGateRefreshOutcome, string>> = []
@@ -150,6 +163,31 @@ export async function refreshReviewGates(
     results.push(await settle(review))
   resolveSettledCiGates(options, signal, unread, stalled)
   return results
+}
+
+/**
+ * Queues the Baseline repair for the red base commit under one review.
+ *
+ * Write access is proved first, because a repository Harlan only watches can
+ * never take a repair branch. The store then binds the repair to the reviewed
+ * Revision and refuses a stack, a moved base, or a policy that forbids it.
+ */
+async function queueBaselineRepair(
+  options: ReviewGateSweepOptions,
+  review: ReviewGateRefresh,
+  baseSha: string,
+  signal: AbortSignal,
+): Promise<BaselineRepairQueueResult> {
+  const access = await options.preflightRepair(review.repository, signal)
+  if (access._tag === 'Err')
+    return { _tag: 'NotAuthorized', reason: access.error }
+  return options.store.queueBaselineRepairForGate({
+    repository: review.repository,
+    pullRequestNumber: review.pullRequestNumber,
+    revisionId: review.revisionId,
+    baseSha,
+    at: options.now().toISOString(),
+  })
 }
 
 /**

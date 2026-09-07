@@ -208,6 +208,10 @@ If Review records `Repair` findings, queue all findings immediately under the ex
 
 Available empty base and head check sets with no declared required checks mean the repository has no CI. This passes the CI Review gate and permits Repair. An unavailable, running, or failed base check set does not permit Repair.
 
+Ignore a base check run that a `workflow_run` event attached to the base commit. It reports on another commit's workflow, not on the base commit.
+
+When the gate refresh of a settled review finds the default branch failed, queue one Baseline repair for that exact base commit. Report Existing on every later pass.
+
 Raise one `ci_gate_pending` Incident when a CI Review gate reads PENDING past its bound. Allow a check run with no conclusion 6 hours, because GitHub stops a job then. Allow a gate with nothing in flight 4 hours. Name the repository, the pull request, the cause, and when the gate last moved. Resolve the Incident when the gate moves. Report only. Never cancel, re-run, or repair a check run because of this Incident.
 
 Raise no Incident when the repository has no CI, when another Review gate holds the pull request, or when a runner lost its job. The last one raises `runner_lost` instead.

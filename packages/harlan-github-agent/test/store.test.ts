@@ -2828,6 +2828,70 @@ describe('journal store', () => {
     expect(queued._tag).toBe('Queued')
   })
 
+  it('queues a Baseline repair from a gate refresh of the current pull request Revision', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'baseline-gate-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the pull request Revision.')
+
+    const queued = store.queueBaselineRepairForGate({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      baseSha: 'base123',
+      at: '2026-08-13T01:02:00.000Z',
+    })
+    const again = store.queueBaselineRepairForGate({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      baseSha: 'base123',
+      at: '2026-08-13T01:03:00.000Z',
+    })
+    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:04:00.000Z', 600_000)
+
+    expect(queued._tag).toBe('Queued')
+    expect(again).toEqual({ _tag: 'Existing', taskId: queued._tag === 'Queued' ? queued.taskId : '' })
+    expect(repair).toEqual(expect.objectContaining({ kind: 'baseline_repair', pullRequestNumber: 24 }))
+    expect(repair?.pullRequest.baseSha).toBe('base123')
+  })
+
+  it('refuses a gate refresh Baseline repair for a superseded pull request Revision', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const observed = store.recordObservation({
+      externalId: 'baseline-gate-stale-pr',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the pull request Revision.')
+    store.recordObservation({
+      externalId: 'baseline-gate-stale-pr-moved',
+      observedAt: '2026-08-13T01:01:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean', headSha: 'moved-head-commit', updatedAt: '2026-08-13T01:01:00.000Z' }),
+    })
+
+    const queued = store.queueBaselineRepairForGate({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: observed.revisionId,
+      baseSha: 'base123',
+      at: '2026-08-13T01:02:00.000Z',
+    })
+
+    expect(queued).toEqual({ _tag: 'Rejected', reason: 'The reviewed pull request Revision is no longer current.' })
+    expect(store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:04:00.000Z', 600_000)).toBeNull()
+  })
+
   it('reports an external repository as unauthorized rather than rejected', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({ ownership: 'external' })], '2026-08-13T00:00:00.000Z')

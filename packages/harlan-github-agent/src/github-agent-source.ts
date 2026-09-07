@@ -87,6 +87,19 @@ export function currentGitHubChecks(checks: GitHubCheck[]): GitHubCheck[] {
   return [...current.values()]
 }
 
+/**
+ * The check suites of workflow runs a `workflow_run` event started.
+ *
+ * GitHub attaches such a run to the default branch tip, not to the commit
+ * whose workflow finished. A bundle-size comment job on `main` therefore
+ * appears as a running base check every time any pull request's CI ends, and
+ * the base gate read that as "the default branch has not passed" while Repair
+ * waited. Those suites answer for another commit, so they are dropped.
+ */
+export function derivedCheckSuiteIds(runs: ReadonlyArray<{ event: string, check_suite_id?: number | null }>): Set<number> {
+  return new Set(runs.flatMap(run => run.event === 'workflow_run' && typeof run.check_suite_id === 'number' ? [run.check_suite_id] : []))
+}
+
 export function chronologicalPullRequestComments(entries: Array<{ body: string, createdAt: string }>): string[] {
   return [...entries]
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
@@ -718,7 +731,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           : Promise.all([
               checksClient.value.paginate(checksClient.value.rest.checks.listForRef, { owner, repo, ref, per_page: 100, request: { signal } }),
               checksClient.value.rest.repos.getCombinedStatusForRef({ owner, repo, ref, per_page: 100, request: { signal } }),
-            ]).then(async ([runs, statuses]): Promise<GitHubChecksSnapshot> => {
+              checksClient.value.paginate(checksClient.value.rest.actions.listWorkflowRunsForRepo, { owner, repo, head_sha: ref, per_page: 100, request: { signal } }),
+            ]).then(async ([allRuns, statuses, workflowRuns]): Promise<GitHubChecksSnapshot> => {
+              const derivedSuites = derivedCheckSuiteIds(workflowRuns)
+              const runs = allRuns.filter(check => check.check_suite?.id === undefined || check.check_suite.id === null || !derivedSuites.has(check.check_suite.id))
               const current = currentGitHubChecks([
                 ...runs.map(check => ({
                   id: check.id,

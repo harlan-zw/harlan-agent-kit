@@ -3,7 +3,7 @@ import type { RecordIncidentInput, ReviewGateRefresh } from '../src/store.ts'
 import type { Incident, ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { refreshControllerGates } from '../src/item-agent.ts'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -83,15 +83,18 @@ interface Recorded {
   failed: Array<{ reviewRunId: string, reason: string }>
   staged: Array<{ reviewRunId: string, outcome: string, ci: string, reconciliationId?: string, body: string }>
   stamped: string[]
+  baselineQueued: Array<{ repository: string, pullRequestNumber: number, revisionId: string, baseSha: string }>
 }
 
 function harness(options: {
   review?: ReviewGateRefresh
   live?: ReturnType<typeof snapshot>
   edit?: () => Promise<any>
+  repairAccess?: string
 }) {
-  const recorded: Recorded = { failed: [], incidents: [], resolved: [], staged: [], stamped: [] }
+  const recorded: Recorded = { baselineQueued: [], failed: [], incidents: [], resolved: [], staged: [], stamped: [] }
   const run = async () => refreshReviewGates({
+    preflightRepair: () => Promise.resolve(options.repairAccess === undefined ? ok(undefined) : err(options.repairAccess)),
     github: {
       getPullRequestReviewSnapshot: () => Promise.resolve(options.live ?? snapshot([check()])),
       editReviewStatus: (_repository, _number, commentId, expectedBody, body) => {
@@ -111,6 +114,10 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
+      queueBaselineRepairForGate: ({ at: _at, ...input }) => {
+        recorded.baselineQueued.push(input)
+        return { _tag: 'Queued', taskId: 'baseline-1' }
+      },
       recordIncident: (incident) => {
         recorded.incidents.push(incident)
         return { ...incident, id: 'incident-1', occurrences: 1, firstSeenAt: incident.at, lastSeenAt: incident.at } satisfies Incident
@@ -141,6 +148,70 @@ function harness(options: {
 }
 
 describe('refreshReviewGates', () => {
+  it('queues a Baseline repair once the default branch fails under a settled review', async () => {
+    const live = snapshot([check({ name: 'Fuzz fuzz_options', conclusion: 'failure' })])
+    const { recorded, run } = harness({ live })
+
+    const results = await run()
+
+    expect(recorded.baselineQueued).toEqual([{
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: 'revision-1',
+      baseSha: 'base123',
+    }])
+    expect(results).toEqual([ok({
+      _tag: 'PublicationQueued',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      outcome: 'PENDING',
+      baselineRepair: { _tag: 'Queued', taskId: 'baseline-1' },
+    })])
+  })
+
+  it('keeps asking for the Baseline repair while the default branch stays red', async () => {
+    const live = snapshot([check({ name: 'Fuzz fuzz_options', conclusion: 'failure' })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    const { recorded, run } = harness({
+      live,
+      review: gateRefresh({
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+      }),
+    })
+
+    const results = await run()
+
+    expect(recorded.baselineQueued).toHaveLength(1)
+    expect(results).toEqual([ok(expect.objectContaining({
+      _tag: 'Unchanged',
+      outcome: 'PENDING',
+      baselineRepair: { _tag: 'Queued', taskId: 'baseline-1' },
+    }))])
+  })
+
+  it('queues no Baseline repair when the controller cannot push to the repository', async () => {
+    const live = snapshot([check({ name: 'Fuzz fuzz_options', conclusion: 'failure' })])
+    const { recorded, run } = harness({ live, repairAccess: 'The installation lacks contents write.' })
+
+    const results = await run()
+
+    expect(recorded.baselineQueued).toEqual([])
+    expect(results).toEqual([ok(expect.objectContaining({
+      baselineRepair: { _tag: 'NotAuthorized', reason: 'The installation lacks contents write.' },
+    }))])
+  })
+
+  it('queues no Baseline repair while the default branch is still running', async () => {
+    const live = snapshot([check({ status: 'in_progress', conclusion: null })])
+    const { recorded, run } = harness({ live })
+
+    const results = await run()
+
+    expect(recorded.baselineQueued).toEqual([])
+    expect(results[0]).toEqual(ok(expect.not.objectContaining({ baselineRepair: expect.anything() })))
+  })
+
   it('turns a review waiting on base branch CI into READY once CI passes', async () => {
     const { recorded, run } = harness({})
 
@@ -426,6 +497,7 @@ describe('refreshReviewGates against the journal store', () => {
 
     const stamped: string[] = []
     const results = await refreshReviewGates({
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -525,6 +597,7 @@ describe('refreshReviewGates against the journal store', () => {
     })).toEqual({ _tag: 'Inserted', publicationId: 'publication-pending' })
 
     const results = await refreshReviewGates({
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
@@ -604,6 +677,7 @@ describe('refreshReviewGates against the journal store', () => {
     expect(store.listReviewGateRefreshes()[0]?.gatesUpdatedAt).toBe('2026-08-26T08:20:00.000Z')
 
     await refreshReviewGates({
+      preflightRepair: () => Promise.resolve(ok(undefined)),
       github: {
         getPullRequestReviewSnapshot: () => Promise.resolve(red),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),

@@ -501,6 +501,20 @@ export interface StoppedReview {
 }
 
 /** A published clean Review whose moving controller gates need another read. */
+export type BaselineRepairQueueResult
+  = | { _tag: 'Queued' | 'Existing', taskId: string }
+    | { _tag: 'Rejected', reason: string }
+    | { _tag: 'NotAuthorized', reason: string }
+
+/** The pull request Revision one Baseline repair is queued for. */
+interface BaselineRepairSubjectRow {
+  subject_id: number
+  revision_id: string
+  payload: string
+  policy_json: string
+  github: string
+}
+
 export interface ReviewGateRefresh {
   reviewRunId: string
   repository: string
@@ -725,9 +739,23 @@ export interface JournalStore extends BatchStore {
     fence: number
     baseSha: string
     at: string
-  }) => { _tag: 'Queued' | 'Existing', taskId: string }
-    | { _tag: 'Rejected', reason: string }
-    | { _tag: 'NotAuthorized', reason: string }
+  }) => BaselineRepairQueueResult
+  /**
+   * Queues one Baseline repair from a completed review's gate refresh.
+   *
+   * A review that ended READY keeps its CI gate refreshed without an Agent.
+   * When the default branch turns red under it, nothing held a review lease,
+   * so the review path above could never queue the repair. This path binds
+   * the repair to the reviewed Revision instead, and refuses once that
+   * Revision is no longer the pull request's current one.
+   */
+  queueBaselineRepairForGate: (input: {
+    repository: string
+    pullRequestNumber: number
+    revisionId: string
+    baseSha: string
+    at: string
+  }) => BaselineRepairQueueResult
   /**
    * Retires a dead Baseline repair once a review proves the base is healthy.
    *
@@ -8040,30 +8068,25 @@ export function openJournalStore(
     }, 0)
   }
 
-  const queueBaselineRepairForReview: JournalStore['queueBaselineRepairForReview'] = (input) => {
+  /**
+   * Queues one Baseline repair for the red base commit of one pull request.
+   *
+   * `lookup` names the pull request Revision that authorizes the repair. The
+   * review path binds it to a live review lease; the gate refresh path binds it
+   * to the reviewed Revision that is still current. `missing` is the reason
+   * when the lookup finds nothing.
+   */
+  const queueBaselineRepairForSubject = (
+    lookup: () => BaselineRepairSubjectRow | undefined,
+    missing: string,
+    input: { baseSha: string, at: string },
+  ): BaselineRepairQueueResult => {
     database.exec('BEGIN IMMEDIATE')
     try {
-      const row = database.prepare(`
-        SELECT worker_tasks.subject_id, worker_tasks.revision_id, revisions.payload,
-          repositories.policy_json, repositories.github
-        FROM worker_tasks
-        JOIN subjects ON subjects.id = worker_tasks.subject_id
-        JOIN revisions ON revisions.id = worker_tasks.revision_id
-        JOIN repositories ON repositories.id = subjects.repository_id
-        WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
-          AND worker_tasks.state_tag = 'Running' AND worker_tasks.worker_id = ?
-          AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
-          AND repositories.enabled = 1
-      `).get(input.taskId, input.workerId, input.fence, input.at) as {
-        subject_id: number
-        revision_id: string
-        payload: string
-        policy_json: string
-        github: string
-      } | undefined
+      const row = lookup()
       if (row === undefined) {
         database.exec('COMMIT')
-        return { _tag: 'Rejected', reason: 'The active review no longer authorizes Baseline repair.' }
+        return { _tag: 'Rejected', reason: missing }
       }
       const subject = JSON.parse(row.payload) as GitHubItem
       const mapping = JSON.parse(row.policy_json) as RepositoryMapping
@@ -8157,6 +8180,38 @@ export function openJournalStore(
       throw error
     }
   }
+
+  const queueBaselineRepairForReview: JournalStore['queueBaselineRepairForReview'] = input => queueBaselineRepairForSubject(
+    () => database.prepare(`
+      SELECT worker_tasks.subject_id, worker_tasks.revision_id, revisions.payload,
+        repositories.policy_json, repositories.github
+      FROM worker_tasks
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+      JOIN revisions ON revisions.id = worker_tasks.revision_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
+        AND worker_tasks.state_tag = 'Running' AND worker_tasks.worker_id = ?
+        AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
+        AND repositories.enabled = 1
+    `).get(input.taskId, input.workerId, input.fence, input.at) as BaselineRepairSubjectRow | undefined,
+    'The active review no longer authorizes Baseline repair.',
+    input,
+  )
+
+  const queueBaselineRepairForGate: JournalStore['queueBaselineRepairForGate'] = input => queueBaselineRepairForSubject(
+    () => database.prepare(`
+      SELECT subjects.id AS subject_id, revisions.id AS revision_id, revisions.payload,
+        repositories.policy_json, repositories.github
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND subjects.kind = 'pull_request'
+        AND subjects.github_number = ? AND revisions.id = ?
+        AND repositories.enabled = 1
+    `).get(input.repository, input.pullRequestNumber, input.revisionId) as BaselineRepairSubjectRow | undefined,
+    'The reviewed pull request Revision is no longer current.',
+    input,
+  )
 
   const claimNextIssueWorkTask: JournalStore['claimNextIssueWorkTask'] = (workerId, now, leaseMilliseconds) => {
     const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds)
@@ -13426,6 +13481,7 @@ export function openJournalStore(
     queueReviewFixTaskForReview,
     recordRepairReport,
     queueBaselineRepairForReview,
+    queueBaselineRepairForGate,
     retireBaselineRepairForReview,
     claimNextPublication,
     claimIssueTriageComment,
