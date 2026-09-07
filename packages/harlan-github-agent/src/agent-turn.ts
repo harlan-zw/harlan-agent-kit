@@ -211,17 +211,24 @@ export interface ParsedAgentTurnOptions<Value> extends AgentTurnOptions {
   parse: (response: string) => Promise<Result<Value, string>> | Result<Value, string>
 }
 
+/** A completed turn whose answer either fit the parser or, after one repair, still did not. */
+export type RepairedAgentTurn<Value>
+  = | { _tag: 'Parsed', value: Value, sessionId: string, usage: AgentTokenUsage }
+    | { _tag: 'Unparsed', reason: string, response: string, sessionId: string, usage: AgentTokenUsage }
+
 /**
- * Runs one agent turn and returns its parsed result.
+ * Runs one agent turn, buys one repair for a rejected answer, and names the
+ * answer that still did not fit.
  *
- * One rejected result buys one repair attempt, because the work behind it stays
- * valid even when the answer arrives in the wrong shape.
+ * The work behind a rejected answer stays valid, so a worker whose patch
+ * outlives a bad envelope reads the Unparsed answer, keeps what it can, and
+ * publishes with its own metadata instead of throwing the change away.
  */
-export async function runParsedAgentTurn<Value>(
+export async function runRepairedAgentTurn<Value>(
   options: ParsedAgentTurnOptions<Value>,
   input: AgentTurnInput,
   signal: AbortSignal,
-): Promise<Result<{ value: Value, sessionId: string, usage: AgentTokenUsage }, string>> {
+): Promise<Result<RepairedAgentTurn<Value>, string>> {
   // The repair turn quotes the first answer, so both turns use one runtime even
   // when the Agent selection changes between them.
   const runtime = options.runtime()
@@ -231,7 +238,7 @@ export async function runParsedAgentTurn<Value>(
     return turn
   const parsed = await options.parse(unwrapJsonResponse(turn.value.response))
   if (parsed._tag === 'Ok')
-    return ok({ value: parsed.value, sessionId: turn.value.sessionId, usage: turn.value.usage })
+    return ok({ _tag: 'Parsed', value: parsed.value, sessionId: turn.value.sessionId, usage: turn.value.usage })
 
   const repaired = await runAgentTurn(frozen, {
     ...input,
@@ -240,13 +247,30 @@ export async function runParsedAgentTurn<Value>(
     ...(input.progress === undefined ? {} : { progress: { ...input.progress, current: { percent: 100, label: input.progress.current.label } } }),
   }, signal)
   if (repaired._tag === 'Err')
-    return err(parsed.error)
+    return ok({ _tag: 'Unparsed', reason: parsed.error, response: turn.value.response, sessionId: turn.value.sessionId, usage: turn.value.usage })
   const reparsed = await options.parse(unwrapJsonResponse(repaired.value.response))
+  const usage = addAgentTokenUsage(turn.value.usage, repaired.value.usage)
   return reparsed._tag === 'Ok'
-    ? ok({
-        value: reparsed.value,
-        sessionId: repaired.value.sessionId,
-        usage: addAgentTokenUsage(turn.value.usage, repaired.value.usage),
-      })
-    : err(parsed.error)
+    ? ok({ _tag: 'Parsed', value: reparsed.value, sessionId: repaired.value.sessionId, usage })
+    : ok({ _tag: 'Unparsed', reason: reparsed.error, response: repaired.value.response, sessionId: repaired.value.sessionId, usage })
+}
+
+/**
+ * Runs one agent turn and returns its parsed result.
+ *
+ * One rejected result buys one repair attempt, because the work behind it stays
+ * valid even when the answer arrives in the wrong shape. An answer that still
+ * does not fit fails the turn with the rule it broke.
+ */
+export async function runParsedAgentTurn<Value>(
+  options: ParsedAgentTurnOptions<Value>,
+  input: AgentTurnInput,
+  signal: AbortSignal,
+): Promise<Result<{ value: Value, sessionId: string, usage: AgentTokenUsage }, string>> {
+  const turn = await runRepairedAgentTurn(options, input, signal)
+  if (turn._tag === 'Err')
+    return turn
+  return turn.value._tag === 'Parsed'
+    ? ok({ value: turn.value.value, sessionId: turn.value.sessionId, usage: turn.value.usage })
+    : err(turn.value.reason)
 }

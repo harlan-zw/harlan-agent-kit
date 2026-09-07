@@ -3,7 +3,7 @@ import type { Result } from '../src/result.ts'
 import type { AgentProgress } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { runAgentTurn, runParsedAgentTurn } from '../src/agent-turn.ts'
+import { runAgentTurn, runParsedAgentTurn, runRepairedAgentTurn } from '../src/agent-turn.ts'
 import { mayRetryFailure } from '../src/failure.ts'
 import { err, ok } from '../src/result.ts'
 import { agentRuntime, turnEvents } from './fixtures.ts'
@@ -274,5 +274,23 @@ describe('agent turn progress', () => {
     await runAgentTurn({ ...options(provider), now }, reportingInput(reported), new AbortController().signal)
 
     expect(reported).toHaveLength(1)
+  })
+})
+
+describe('runRepairedAgentTurn', () => {
+  it('names the answer that still did not fit after one repair, with both turns counted', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = replies([{ outcome: 'nearly' }, { outcome: 'still wrong' }], capture)
+
+    const result = await runRepairedAgentTurn(options(provider), input, new AbortController().signal)
+
+    expect(result).toEqual(ok({
+      _tag: 'Unparsed',
+      reason: 'The agent returned an invalid conflict resolution result.',
+      response: JSON.stringify({ outcome: 'still wrong' }),
+      sessionId: 'session-1',
+      usage: { _tag: 'Unavailable' },
+    }))
+    expect(capture.prompts).toHaveLength(2)
   })
 })

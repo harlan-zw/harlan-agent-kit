@@ -86,7 +86,7 @@ const prompts = {
       task: issueWorkTask(),
       body: 'Body',
       comments: [],
-      template: { _tag: 'Missing' },
+      template: '### Description',
       routineSource: null,
       triage: null,
       instructionFiles: [],

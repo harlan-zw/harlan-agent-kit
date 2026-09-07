@@ -326,3 +326,19 @@ describe('workspaceFactsFromFiles', () => {
     expect(facts).toEqual({ hasAgentsFile: true, nodeOptions: null })
   })
 })
+
+describe('baseline repair metadata', () => {
+  it('publishes the Agent title when prose precedes its JSON', async () => {
+    const { result } = await runWorker({
+      events: [
+        { _tag: 'SessionStarted', sessionId: 'session-1' },
+        { _tag: 'Message', text: `All checks green.\n\n${JSON.stringify(repaired)}` },
+        { _tag: 'TurnCompleted' },
+      ],
+    })
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      publication: expect.objectContaining({ pullRequestTitle: 'fix(types): regenerate runtime declarations' }),
+    })))
+  })
+})
