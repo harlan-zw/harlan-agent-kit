@@ -270,7 +270,12 @@ After the push, invalidate old evidence and run `adversarial-review` again again
 
 Use fenced leases and durable Publication commands for every GitHub write.
 
-Route controller credentials by Repository mapping. Use repository-scoped GitHub App tokens when installed. Use Harlan's authenticated GitHub account only for an explicitly configured maintained repository.
+Route controller credentials by Repository mapping. Use repository-scoped GitHub App tokens when installed.
+For an explicitly configured maintained repository without the App, use Harlan's authenticated GitHub account.
+
+For an approved contributor fork conflict merge containing workflow files, use Harlan's authenticated GitHub account.
+Require the contributor's current permission for maintainer edits and Approval for the exact head commit.
+The controller rechecks the saved commit and both remote branches before pushing.
 
 Mint read and write App tokens separately.
 

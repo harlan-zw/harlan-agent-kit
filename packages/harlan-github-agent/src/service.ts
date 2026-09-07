@@ -671,6 +671,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         store,
         publisher: createGitPublicationRemote({
           github,
+          forkWorkflowTokens: gatedTokens(userTokens),
           pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
           root: controllerRoot,
           tokens,
