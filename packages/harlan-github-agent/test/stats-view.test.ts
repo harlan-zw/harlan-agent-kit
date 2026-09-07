@@ -1,6 +1,6 @@
 import type { StatsSnapshot, StatsWork } from '../src/stats.ts'
 import { describe, expect, it } from 'vitest'
-import { activeStatsPreset, barWidth, comparisonText, coverageText, dayTotal, hasStatsResults, historyQuery, labelFits, medianText, outcomeRows, outcomeScale, statsDateRange, statsRequestRange, workResultText, workRole } from '../dashboard/app/utils/stats.ts'
+import { activeStatsPreset, barWidth, coverageText, dayTotal, hasStatsResults, historyQuery, medianText, outcomeStats, statsDateRange, statsRequestRange, workResultText, workRole } from '../dashboard/app/utils/stats.ts'
 
 describe('stats date controls', () => {
   it('builds an inclusive 30 day preset', () => {
@@ -33,12 +33,6 @@ describe('stats date controls', () => {
       message: 'The end date must follow the start date.',
     })
   })
-
-  it('describes the previous period without percentages', () => {
-    expect(comparisonText({ value: 7, previous: 4 })).toBe('3 more than the previous period')
-    expect(comparisonText({ value: 2, previous: 5 })).toBe('3 fewer than the previous period')
-    expect(comparisonText({ value: 0, previous: 0 })).toBe('Same as the previous period')
-  })
 })
 
 describe('stats bars', () => {
@@ -53,32 +47,11 @@ describe('stats bars', () => {
     expect(barWidth(4, 0)).toBe('0%')
   })
 
-  it('shows a value label only when its glyphs fit the column', () => {
-    expect(labelFits(7, 9)).toBe(true)
-    expect(labelFits(12, 9)).toBe(false)
-    expect(labelFits(12, 17)).toBe(true)
-  })
-
-  it('scales every Outcomes row to the one largest value across both periods', () => {
-    const rows = outcomeRows({
-      changedPullRequests: { value: 20, previous: 12 },
-      fixCommits: { value: 34, previous: 21 },
-      conflictResolutions: { value: 4, previous: 5 },
-      openedPullRequests: { value: 3, previous: 1 },
-      reviewFindings: { value: 58, previous: 68 },
-    })
-    const scale = outcomeScale(rows)
-    expect(scale).toBe(68)
-    expect(barWidth(4, scale)).toBe('5.9%')
-    expect(barWidth(34, scale)).toBe('50%')
-    expect(outcomeScale([])).toBe(0)
-  })
-
   it('totals a day from its four outcomes', () => {
     expect(dayTotal({ date: '2026-08-01', fixCommits: 2, conflictResolutions: 1, openedPullRequests: 0, reviewFindings: 3 })).toBe(6)
   })
 
-  it('lists the five outcomes with their comparison sentence', () => {
+  it('builds the stats strip with a trend only where a previous period exists, and a daily shape where one exists', () => {
     const summary: StatsSnapshot['summary'] = {
       changedPullRequests: { value: 3, previous: 1 },
       conflictResolutions: { value: 0, previous: 0 },
@@ -86,13 +59,21 @@ describe('stats bars', () => {
       openedPullRequests: { value: 1, previous: 1 },
       reviewFindings: { value: 9, previous: 2 },
     }
-    expect(outcomeRows(summary).map(row => [row.label, row.text])).toEqual([
-      ['Pull requests changed', '2 more than the previous period'],
-      ['Repair commits', '2 fewer than the previous period'],
-      ['Conflicts resolved', 'Same as the previous period'],
-      ['Pull requests opened', 'Same as the previous period'],
-      ['Review issues found', '7 more than the previous period'],
+    const days = [
+      { date: '2026-08-01', fixCommits: 2, conflictResolutions: 0, openedPullRequests: 0, reviewFindings: 3 },
+      { date: '2026-08-02', fixCommits: 2, conflictResolutions: 0, openedPullRequests: 1, reviewFindings: 6 },
+    ]
+    const strip = outcomeStats(summary, days)
+
+    expect(strip.map(stat => [stat.title, stat.value, stat.trend])).toEqual([
+      ['Pull requests changed', 3, 200],
+      ['Repair commits', 4, -33],
+      ['Conflicts resolved', 0, undefined],
+      ['Pull requests opened', 1, 0],
+      ['Review issues found', 9, 350],
     ])
+    expect(strip[0]!.sparkline).toBeUndefined()
+    expect(strip[4]!.sparkline).toEqual([{ date: '2026-08-01', value: 3 }, { date: '2026-08-02', value: 6 }])
   })
 })
 

@@ -58,6 +58,7 @@
     "obuild": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "vue-tsc": "catalog:"
+    "vue-tsc": "catalog:",
+    "vue": "catalog:"
   }
 }

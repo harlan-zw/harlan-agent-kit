@@ -3,8 +3,8 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { BoardCard, CardAction } from '../utils/dashboard.ts'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import {
-  activeAgentActivity,
   approvalActionLabel,
+  avatarUrl,
   boardCardBadge,
   boardCardIdentity,
   boardCardWork,
@@ -13,6 +13,7 @@ import {
   cardStateLine,
   dismissConsequence,
   isProgressStalled,
+  repositoryName,
   runningPhaseLine,
   stalledLabel,
   taskNumber,
@@ -27,15 +28,15 @@ import BoardCardSlideover from './_BoardCardSlideover.vue'
  */
 const { card, tabindex = 0 } = defineProps<{
   card: BoardCard
-  /** Roving tabindex for the Needs you column. */
+  /** Roving tabindex for the Needs you list. */
   tabindex?: 0 | -1
 }>()
 
 const {
   snapshot,
   now,
-  relativeTime,
   duration,
+  relativeTime,
   approvalPending,
   approvalKeyFor,
   approvalErrorFor,
@@ -60,7 +61,7 @@ const {
 
 const face = ref<HTMLButtonElement | null>(null)
 const slideoverOpen = ref(false)
-const confirming = ref<'cancel' | 'dismiss' | undefined>()
+const confirming = ref<'cancel' | 'dismiss' | 'eject' | undefined>()
 
 const entry = computed(() => card._tag === 'Running' || card._tag === 'Done' ? undefined : card.entry)
 const agent = computed(() => card._tag === 'Running' ? card.agent : undefined)
@@ -73,7 +74,6 @@ const task = computed(() => entry.value === undefined ? undefined : taskFor(entr
 const taskId = computed(() => agent.value?.id ?? task.value?.id)
 const reviewAllowed = computed(() => entry.value !== undefined && canRunReview(entry.value))
 const actions = computed(() => cardActions(card, { canRunReview: reviewAllowed.value, hasTask: taskId.value !== undefined }))
-const activity = computed(() => agent.value === undefined ? undefined : activeAgentActivity(agent.value))
 const phase = computed(() => agent.value === undefined ? undefined : runningPhaseLine(agent.value))
 const stalled = computed(() => agent.value !== undefined && isProgressStalled(agent.value, now.value))
 
@@ -95,15 +95,18 @@ const busy = computed(() => approvalPending.value !== undefined
 
 const cancelError = computed(() => taskId.value === undefined ? undefined : cancelErrors.value[taskId.value])
 const dismissError = computed(() => dismissErrors.value[itemDismissKey.value])
+const ejectError = computed(() => agent.value === undefined ? undefined : ejectErrors.value[agent.value.id])
 
 /** Errors that belong under the face. Cancel and Dismiss errors show in their modal instead. */
 const faceErrors = computed(() => [
   entry.value === undefined ? undefined : approvalErrorFor(entry.value),
   rerunErrors.value[rerunKey.value],
-  agent.value === undefined ? undefined : ejectErrors.value[agent.value.id],
+  confirming.value === 'eject' ? undefined : ejectError.value,
   confirming.value === 'cancel' ? undefined : cancelError.value,
   confirming.value === 'dismiss' ? undefined : dismissError.value,
 ].filter((error): error is string => error !== undefined))
+
+const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-git-pull-request-16' }
 
 const actionLabels: Record<CardAction, string> = {
   open: 'Open on GitHub',
@@ -125,12 +128,22 @@ const menuItems = computed<DropdownMenuItem[][]>(() => {
   const item = (action: CardAction): DropdownMenuItem => action === 'open'
     ? { label: actionLabels.open, icon: actionIcons.open, to: identity.value?.url, target: '_blank', rel: 'noreferrer' }
     : { label: actionLabels[action], icon: actionIcons[action], color: action === 'rerun' ? undefined : 'error', disabled: busy.value, onSelect: () => act(action) }
-  return [quiet.map(item), destructive.map(item)].filter(group => group.length > 0)
+  /* Eject ends the automated turn, so it sits with the other consequential actions and confirms. */
+  const eject: DropdownMenuItem[] = canEject.value
+    ? [{ label: 'Eject to terminal', icon: 'i-octicon-terminal-16', disabled: busy.value, onSelect: () => { confirming.value = 'eject' } }]
+    : []
+  return [quiet.map(item), [...eject, ...destructive.map(item)]].filter(group => group.length > 0)
 })
 
-const consequence = computed(() => confirming.value === 'cancel'
-  ? cancelConsequence(work.value)
-  : dismissConsequence(identity.value?.kind ?? 'pull_request'))
+const canEject = computed(() => agent.value !== undefined && agent.value.session._tag === 'Connected')
+
+const consequence = computed(() => {
+  if (confirming.value === 'cancel')
+    return cancelConsequence(work.value)
+  if (confirming.value === 'eject')
+    return 'The automated turn stops and the saved session opens in Ghostty.'
+  return dismissConsequence(identity.value?.kind ?? 'pull_request')
+})
 
 function pressPrimary(): void {
   if (entry.value === undefined || primaryLabel.value === undefined || busy.value)
@@ -150,6 +163,13 @@ function act(action: CardAction): void {
 }
 
 async function confirm(): Promise<void> {
+  if (confirming.value === 'eject' && agent.value !== undefined) {
+    const id = agent.value.id
+    await ejectAgent(id)
+    if (ejectErrors.value[id] === undefined)
+      confirming.value = undefined
+    return
+  }
   if (confirming.value === 'cancel' && taskId.value !== undefined) {
     const id = taskId.value
     await cancelAgentTask(id)
@@ -178,14 +198,38 @@ const confirmOpen = computed({
   },
 })
 
-const surfaceClass = computed(() => {
-  switch (card._tag) {
-    case 'NeedsYou': return 'bg-elevated border-warning'
-    case 'Waiting': return 'bg-elevated border-dashed border-accented hover:border-inverted/40'
-    case 'Done': return 'bg-elevated/60 border-default hover:border-accented text-muted'
-    default: return 'bg-elevated border-default hover:border-accented'
-  }
+/**
+ * Three shapes for three questions. Needs you is a one-line priority row, so
+ * twenty decisions fit half a screen. Queued and Running are three-line cards.
+ * Done is a one-line row, because an outcome is read, not decided.
+ */
+const shape = computed<'row' | 'card' | 'done'>(() => {
+  if (card._tag === 'NeedsYou')
+    return 'row'
+  return card._tag === 'Done' ? 'done' : 'card'
 })
+
+/** The dot on a card's state line. Colour means state; grey means waiting its turn. */
+const stateDot = computed<{ tone: 'success' | 'warning' | 'error' | 'neutral', live: boolean }>(() => {
+  if (card._tag === 'Running')
+    return { tone: stalled.value ? 'warning' : 'success', live: !stalled.value }
+  if (stateLine.value?.tone === 'warning')
+    return { tone: 'warning', live: false }
+  if (stateLine.value?.tone === 'error')
+    return { tone: 'error', live: false }
+  return { tone: 'neutral', live: false }
+})
+
+/** The one truncated line under a card title, or beside a row title. */
+const meta = computed(() => {
+  if (card._tag === 'Running' && agent.value !== undefined)
+    return stalled.value ? stalledLabel(agent.value, now.value) : (phase.value ?? 'Working')
+  return stateLine.value?.text ?? ''
+})
+
+const doneAge = computed(() => card._tag === 'Done' ? shortAge(card.record.at, now.value) : '')
+
+const menuButtonClass = 'shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100'
 
 defineExpose({
   focus: () => face.value?.focus(),
@@ -194,37 +238,54 @@ defineExpose({
 </script>
 
 <template>
-  <article class="relative rounded-md border p-3 transition-colors" :class="surfaceClass">
+  <article
+    class="group relative"
+    :class="shape === 'card' ? 'rounded-md border border-default bg-elevated transition-colors hover:border-accented' : 'transition-colors hover:bg-muted'"
+  >
     <!-- The face. Stretched under the content so links and buttons stay their own controls. -->
     <button
       ref="face"
       type="button"
-      class="absolute inset-0 rounded-md"
+      class="absolute inset-0"
+      :class="shape === 'card' ? 'rounded-md' : undefined"
       :tabindex="tabindex"
       :aria-label="identity ? `Details for ${identity.repository} number ${identity.number}` : 'Details'"
       @click="slideoverOpen = true"
     />
 
-    <div class="pointer-events-none relative flex flex-col gap-2 [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
-      <div class="flex items-start justify-between gap-2">
-        <div class="flex min-w-0 flex-1 flex-col gap-2">
-          <div v-if="card._tag === 'Done'" class="flex items-center gap-2">
-            <StateBadge :tone="badge.tone" :label="badge.label" :confidence="badge.confidence" :uppercase="badge.uppercase" />
-          </div>
-          <EntityIdentity
-            v-if="identity"
-            :author="identity.author"
-            :title="identity.title"
-            :url="identity.url"
-            :repository="identity.repository"
-            :kind="identity.kind"
-            :number="identity.number"
-            :size="card._tag === 'Done' ? 'sm' : 'md'"
-          />
-          <p v-else-if="card._tag === 'Done' && card.record._tag === 'Task'" class="font-mono text-sm">
-            <a :href="taskSubjectUrl(card.record.task)" target="_blank" rel="noreferrer" class="entity-link">{{ card.record.task.repository }}#{{ taskNumber(card.record.task) }}</a>
-          </p>
-        </div>
+    <!--
+      Needs you: one decision. One line from md up; below md the fixed minimums
+      would force the page sideways, so the tracks stack into four short lines.
+    -->
+    <div
+      v-if="shape === 'row' && identity"
+      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_auto] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
+    >
+      <LiveDot class="[grid-area:dot]" :tone="badge.tone" :label="badge.label" />
+      <a :href="`https://github.com/${identity.author}`" target="_blank" rel="noreferrer" class="flex [grid-area:avatar]" :title="`@${identity.author}`">
+        <UAvatar :src="avatarUrl(identity.author)" :alt="`@${identity.author}`" size="2xs" />
+      </a>
+      <p class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-highlighted [grid-area:title]">
+        <UIcon :name="kindIcon[identity.kind]" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
+        <span class="sr-only">{{ identity.kind === 'issue' ? 'Issue' : 'Pull request' }}</span>
+        <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ identity.title }}<span class="sr-only"> on GitHub</span></a>
+      </p>
+      <p class="min-w-0 truncate text-sm text-muted [grid-area:repository]">
+        <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
+      </p>
+      <p class="min-w-0 truncate text-sm text-muted [grid-area:meta]" :title="meta">
+        {{ meta }}
+      </p>
+      <div class="flex items-center justify-end gap-1 [grid-area:actions]">
+        <UButton
+          v-if="primaryLabel"
+          size="xs"
+          :loading="primaryPending"
+          :disabled="busy"
+          @click="pressPrimary"
+        >
+          {{ primaryLabel }}
+        </UButton>
         <UDropdownMenu :items="menuItems" :content="{ align: 'end' }">
           <UButton
             icon="i-octicon-kebab-horizontal-16"
@@ -232,72 +293,89 @@ defineExpose({
             variant="ghost"
             size="xs"
             square
-            class="-mt-1 -mr-1 shrink-0"
+            :class="menuButtonClass"
+            :aria-label="`More actions for ${identity.repository} number ${identity.number}`"
+          />
+        </UDropdownMenu>
+      </div>
+    </div>
+
+    <!-- Done: an outcome, then what it was about. -->
+    <div
+      v-else-if="shape === 'done'"
+      class="pointer-events-none relative grid h-8 items-center gap-2.5 px-2.5 [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
+      style="grid-template-columns: 7.5rem minmax(0, 1fr) auto auto"
+    >
+      <StateBadge :tone="badge.tone" :label="badge.label" :confidence="badge.confidence" :uppercase="badge.uppercase" />
+      <p class="min-w-0 truncate text-sm text-toned">
+        <template v-if="identity">
+          <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link text-muted">{{ repositoryName(identity.repository) }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
+          <span class="ms-1">{{ identity.title }}</span>
+        </template>
+        <a v-else-if="card._tag === 'Done' && card.record._tag === 'Task'" :href="taskSubjectUrl(card.record.task)" target="_blank" rel="noreferrer" class="entity-link text-muted">{{ repositoryName(card.record.task.repository) }}<span class="text-dimmed"> #{{ taskNumber(card.record.task) }}</span></a>
+      </p>
+      <time class="font-mono text-sm text-dimmed" :datetime="card._tag === 'Done' ? card.record.at : undefined" :title="card._tag === 'Done' ? relativeTime(card.record.at) : undefined">{{ doneAge }}</time>
+      <UDropdownMenu :items="menuItems" :content="{ align: 'end' }">
+        <UButton
+          icon="i-octicon-kebab-horizontal-16"
+          color="neutral"
+          variant="ghost"
+          size="xs"
+          square
+          class="-me-1.5"
+          :class="menuButtonClass"
+          :aria-label="identity ? `More actions for ${identity.repository} number ${identity.number}` : 'More actions'"
+        />
+      </UDropdownMenu>
+    </div>
+
+    <!-- Queued, Waiting, Running: three lines and a fixed shape. -->
+    <div v-else class="pointer-events-none relative flex flex-col gap-0.5 py-2 pe-2 ps-2.5 [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
+      <div class="flex h-5 items-center gap-2">
+        <p v-if="identity" class="flex min-w-0 flex-1 items-center gap-1 text-sm text-muted">
+          <UIcon :name="kindIcon[identity.kind]" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
+          <span class="sr-only">{{ identity.kind === 'issue' ? 'Issue' : 'Pull request' }}</span>
+          <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
+        </p>
+        <span v-if="card._tag === 'Queued'" class="shrink-0 font-mono text-sm text-dimmed">{{ String(entry?.position).padStart(2, '0') }}</span>
+        <a
+          v-if="identity"
+          :href="`https://github.com/${identity.author}`"
+          target="_blank"
+          rel="noreferrer"
+          class="flex shrink-0"
+          :title="`@${identity.author}`"
+        >
+          <UAvatar :src="avatarUrl(identity.author)" :alt="`@${identity.author}`" size="3xs" class="size-[18px]" />
+        </a>
+        <UDropdownMenu :items="menuItems" :content="{ align: 'end' }">
+          <UButton
+            icon="i-octicon-kebab-horizontal-16"
+            color="neutral"
+            variant="ghost"
+            size="xs"
+            square
+            class="-my-1 -me-1"
+            :class="menuButtonClass"
             :aria-label="identity ? `More actions for ${identity.repository} number ${identity.number}` : 'More actions'"
           />
         </UDropdownMenu>
       </div>
 
-      <!-- The one state line. -->
-      <div v-if="card._tag === 'Running' && agent" class="flex flex-col gap-1.5">
-        <div class="flex flex-wrap items-center gap-2">
-          <WorkChip :work="agent.role" />
-          <LiveDot tone="success" live label="Agent running" />
-          <span v-if="phase" class="min-w-0 flex-1 truncate text-sm text-muted">{{ phase }}</span>
-          <span class="ms-auto font-mono text-sm text-dimmed">{{ duration(agent.startedAt) }}</span>
-        </div>
-        <p v-if="activity" class="flex min-w-0 items-center justify-between gap-2 font-mono text-sm">
-          <span class="min-w-0 truncate" :class="activity.tone === 'error' ? 'status-error' : 'text-dimmed'">{{ activity.text }}</span>
-          <time class="shrink-0 text-dimmed" :datetime="activity.at">{{ relativeTime(activity.at) }}</time>
-        </p>
-        <p v-if="stalled" class="status-warning flex items-center gap-1.5 text-sm">
-          <UIcon name="i-octicon-alert-16" class="size-3.5" aria-hidden="true" />
-          {{ stalledLabel(agent, now) }}
-        </p>
-      </div>
-      <div v-else-if="entry && stateLine" class="flex flex-col gap-1.5">
-        <div class="flex flex-wrap items-center gap-2">
-          <WorkChip v-if="work" :work="work" />
-          <span v-if="card._tag === 'Queued'" class="font-mono text-sm text-dimmed">{{ String(entry.position).padStart(2, '0') }}</span>
-        </div>
-        <p
-          class="text-sm"
-          :class="stateLine.tone === 'muted' ? 'text-muted' : stateLine.tone === 'warning' ? 'status-warning' : 'status-error'"
-        >
-          {{ stateLine.text }}
-        </p>
-      </div>
+      <p v-if="identity" class="line-clamp-2 text-sm font-medium text-highlighted">
+        <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link">{{ identity.title }}<span class="sr-only"> on GitHub</span></a>
+      </p>
 
-      <!-- One decision, inline. Everything else is in the menu. -->
-      <div v-if="primaryLabel || (agent && agent.session._tag === 'Connected')" class="flex flex-wrap items-center gap-1">
-        <UButton
-          v-if="primaryLabel"
-          size="sm"
-          :loading="primaryPending"
-          :disabled="busy"
-          @click="pressPrimary"
-        >
-          {{ primaryLabel }}
-        </UButton>
-        <ConfirmButton
-          v-else-if="agent && agent.session._tag === 'Connected'"
-          label="Eject"
-          confirm-label="Confirm eject"
-          aria-label="Eject this agent into your terminal"
-          confirm-aria-label="Confirm ejecting this agent into your terminal"
-          color="primary"
-          size="xs"
-          icon="i-octicon-terminal-16"
-          :loading="ejecting"
-          :disabled="busy"
-          @confirm="eject"
-        />
-      </div>
-
-      <p v-for="error in faceErrors" :key="error" role="alert" class="status-error text-sm">
-        {{ error }}
+      <p class="flex h-5 items-center gap-2 text-sm">
+        <LiveDot :tone="stateDot.tone" :live="stateDot.live" :label="card._tag === 'Running' ? 'Agent running' : undefined" />
+        <span class="min-w-0 flex-1 truncate" :class="stateDot.tone === 'neutral' || stateDot.tone === 'success' ? 'text-muted' : 'text-default'" :title="meta">{{ meta }}</span>
+        <span v-if="agent" class="shrink-0 font-mono text-dimmed">{{ duration(agent.startedAt) }}</span>
       </p>
     </div>
+
+    <p v-for="error in faceErrors" :key="error" role="alert" class="status-error relative px-2.5 pb-2 text-sm">
+      {{ error }}
+    </p>
 
     <BoardCardSlideover
       v-model:open="slideoverOpen"
@@ -316,11 +394,12 @@ defineExpose({
 
     <ConfirmModal
       v-model:open="confirmOpen"
-      :title="confirming === 'cancel' ? 'Cancel this task?' : `Dismiss this ${identity?.kind === 'issue' ? 'issue' : 'pull request'}?`"
+      :title="confirming === 'cancel' ? 'Cancel this task?' : confirming === 'eject' ? 'Eject this agent?' : `Dismiss this ${identity?.kind === 'issue' ? 'issue' : 'pull request'}?`"
       :consequence="consequence"
-      :confirm-label="confirming === 'cancel' ? 'Cancel task' : 'Dismiss'"
-      :pending="confirming === 'cancel' ? cancelling : dismissing"
-      :error="confirming === 'cancel' ? cancelError : dismissError"
+      :confirm-label="confirming === 'cancel' ? 'Cancel task' : confirming === 'eject' ? 'Eject' : 'Dismiss'"
+      :pending="confirming === 'cancel' ? cancelling : confirming === 'eject' ? ejecting : dismissing"
+      :tone="confirming === 'eject' ? 'primary' : 'error'"
+      :error="confirming === 'cancel' ? cancelError : confirming === 'eject' ? ejectError : dismissError"
       @confirm="confirm"
     />
   </article>

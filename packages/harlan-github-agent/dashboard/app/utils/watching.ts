@@ -67,14 +67,27 @@ export function repositoryActionIcon(action: RepositoryAction): string {
   }
 }
 
-export function repositoryWritesLabel(repository: RepositoryStatus): 'Enabled' | 'Disabled' | 'n/a' {
-  if (repository.ownership === 'external')
-    return 'n/a'
-  return repository.writesEnabled ? 'Enabled' : 'Disabled'
+export interface RepositoryFlag {
+  label: 'Action required' | 'Starting' | 'Paused' | 'Writes off'
+  tone: 'error' | 'warning' | 'neutral'
 }
 
-export function repositoryAgentsLabel(repository: RepositoryStatus): 'Running' | 'Paused' {
-  return repository.paused ? 'Paused' : 'Running'
+/**
+ * What is unusual about one repository, and nothing else. A healthy, running
+ * repository with writes on carries no flag, so the table reads as exceptions.
+ * An external watch never has writes, so it never reads as Writes off.
+ */
+export function repositoryFlags(repository: RepositoryStatus): RepositoryFlag[] {
+  const flags: RepositoryFlag[] = []
+  if (repository.lastError !== null)
+    flags.push({ label: 'Action required', tone: 'error' })
+  else if (repository.lastSuccessAt === null)
+    flags.push({ label: 'Starting', tone: 'warning' })
+  if (repository.paused)
+    flags.push({ label: 'Paused', tone: 'neutral' })
+  if (!repository.writesEnabled && repository.ownership !== 'external')
+    flags.push({ label: 'Writes off', tone: 'neutral' })
+  return flags
 }
 
 export type OpenItemsFilter = 'all' | 'issue' | 'pull_request'

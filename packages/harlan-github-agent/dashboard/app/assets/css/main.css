@@ -119,6 +119,17 @@ body {
   transform: none;
 }
 
+/*
+ * An sr-only span often follows truncated inline text, so its absolute static
+ * position can land past a narrow viewport and widen the page. Pinning the 1px
+ * box to the containing block's start edge makes that overflow impossible.
+ * Nothing renders either way, so reading order and focus are unchanged.
+ */
+.sr-only {
+  inset-block-start: 0;
+  inset-inline-start: 0;
+}
+
 
 /* The only micro label in the system: column headings, table headers, detail list terms. */
 .field-label {
@@ -129,17 +140,20 @@ body {
   text-transform: uppercase;
 }
 
-/* Anything that resolves to a GitHub URL. Underline stays quiet until hover. */
+/* Anything that resolves to a GitHub URL. Plain until hover or focus, so a page of links reads as text. */
 .entity-link {
-  text-decoration-color: var(--ui-border-accented);
-  text-decoration-line: underline;
+  text-decoration-line: none;
+  text-decoration-color: currentColor;
   text-underline-offset: 0.2em;
-  transition: text-decoration-color 120ms var(--ease-out);
+}
+
+.entity-link:focus-visible {
+  text-decoration-line: underline;
 }
 
 @media (hover: hover) {
   .entity-link:hover {
-    text-decoration-color: currentColor;
+    text-decoration-line: underline;
   }
 }
 

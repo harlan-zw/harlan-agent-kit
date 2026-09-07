@@ -225,14 +225,6 @@ export function isSnapshotStale(generatedAt: string, now: Date): boolean {
   return secondsSince(generatedAt, now) > staleSnapshotSeconds
 }
 
-export function repositoryState(repository: RepositoryStatus): { label: string, tone: 'error' | 'warning' | 'success' } {
-  if (repository.lastError !== null)
-    return { label: 'Action required', tone: 'error' }
-  if (repository.lastSuccessAt === null)
-    return { label: 'Starting', tone: 'warning' }
-  return { label: 'Healthy', tone: 'success' }
-}
-
 export function activeAgentProgress(agent: ActiveAgent): string {
   if (agent.state._tag === 'Publishing')
     return 'Fix verified. Waiting to push the commit.'
@@ -386,7 +378,7 @@ export function cardStateLine(entry: QueueEntry, snapshot: DashboardSnapshot, no
     case 'ActionRequired':
       return { text: entry.state.reason, tone: 'error' }
     case 'Pending':
-      return { text: entry.state.reason, tone: 'muted' }
+      return { text: entry.state.reason.length > 0 ? entry.state.reason : 'Waiting on GitHub.', tone: 'muted' }
     case 'Queued': {
       if (isIssueWorkThrottled(entry, queueContextOf(snapshot)))
         return { text: throttledLine(snapshot), tone: 'muted' }
@@ -605,6 +597,45 @@ export function taskStateDetail(task: AgentTask): string | undefined {
   if (task.state._tag === 'Failed' || task.state._tag === 'Superseded')
     return task.state.reason
   return undefined
+}
+
+/** Forty characters name nothing at a glance. Seven name a commit. */
+function shortenShas(text: string): string {
+  return text.replace(/\b[0-9a-f]{40}\b/g, sha => sha.slice(0, 7))
+}
+
+/**
+ * The one line a History row shows for a Task. Structured evidence gets a
+ * sentence or nothing; the raw record stays in the Evidence slideover.
+ */
+export function taskRowSummary(task: AgentTask): string | undefined {
+  const detail = taskStateDetail(task)
+  if (detail === undefined)
+    return undefined
+  const trimmed = detail.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('['))
+    return shortenShas(trimmed)
+  const merge = cleanMergeEvidence(parseJson(trimmed))
+  return merge === undefined ? undefined : `Merged ${merge.baseRef} cleanly at ${merge.baseSha.slice(0, 7)}.`
+}
+
+function cleanMergeEvidence(value: unknown): { baseRef: string, baseSha: string } | undefined {
+  if (typeof value !== 'object' || value === null)
+    return undefined
+  const record = value as Record<string, unknown>
+  return record._tag === 'CleanMerge' && typeof record.baseRef === 'string' && typeof record.baseSha === 'string'
+    ? { baseRef: record.baseRef, baseSha: record.baseSha }
+    : undefined
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  }
+  catch {
+    /* Evidence is free text the row cannot summarise; the slideover shows it whole. */
+    return undefined
+  }
 }
 
 export type HistoryCategory = 'ready' | 'issues' | 'pending' | 'failed' | 'superseded'
@@ -910,6 +941,24 @@ export function boardCardIdentity(card: BoardCard, snapshot: DashboardSnapshot):
   if (item === undefined)
     return undefined
   return { author: item.author, title: item.title, url: item.url, repository: task.repository, kind: item.kind, number }
+}
+
+/** `6m`, `3h`, `2d`: the age a dense row can afford. Under a minute reads as `now`. */
+export function shortAge(iso: string, now: Date): string {
+  const seconds = Math.max(0, secondsSince(iso, now))
+  if (seconds < 60)
+    return 'now'
+  if (seconds < 3_600)
+    return `${Math.floor(seconds / 60)}m`
+  if (seconds < 86_400)
+    return `${Math.floor(seconds / 3_600)}h`
+  return `${Math.floor(seconds / 86_400)}d`
+}
+
+/** `owner/repo` reads as `repo` where the owner is noise, such as a Done row. */
+export function repositoryName(repository: string): string {
+  const slash = repository.lastIndexOf('/')
+  return slash === -1 ? repository : repository.slice(slash + 1)
 }
 
 export interface CardBadge {

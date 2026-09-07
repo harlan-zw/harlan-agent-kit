@@ -49,15 +49,16 @@ const kindLabel = { issue: 'Issue', pull_request: 'Pull request' }
       <UAvatar :src="avatarUrl(author)" :alt="`@${author}`" :size="avatarSize[size]" />
     </a>
     <div class="min-w-0 flex-1">
-      <p class="flex items-center gap-1 font-mono text-sm text-dimmed">
-        <UIcon :name="kindIcon[kind]" class="size-3.5 shrink-0" aria-hidden="true" />
+      <!-- Same label as a board card: sans, muted, the number one step dimmer. Mono is for values that change. -->
+      <p class="flex items-center gap-1 text-sm text-muted">
+        <UIcon :name="kindIcon[kind]" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
         <span class="sr-only">{{ kindLabel[kind] }}</span>
-        <a :href="url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ repository }}#{{ number }}</a>
+        <a :href="url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ repository }}<span class="text-dimmed"> #{{ number }}</span></a>
       </p>
-      <a :href="url" target="_blank" rel="noreferrer" class="entity-link mt-0.5 block text-highlighted" :class="titleClass[size]">
-        {{ title }}
-        <span class="sr-only"> on GitHub</span>
-      </a>
+      <!-- The clamp lives on the paragraph. A block anchor would override the clamp's display. -->
+      <p class="mt-0.5 text-highlighted" :class="titleClass[size]">
+        <a :href="url" target="_blank" rel="noreferrer" class="entity-link">{{ title }}<span class="sr-only"> on GitHub</span></a>
+      </p>
     </div>
   </div>
 </template>

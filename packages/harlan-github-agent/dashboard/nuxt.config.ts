@@ -40,7 +40,7 @@ export default defineNuxtConfig({
   nitro: {
     prerender: {
       // `/kit` stays out on purpose. It is a dev page and nothing links to it.
-      routes: ['/', '/history', '/stats', '/watching', '/flow'],
+      routes: ['/', '/history', '/stats', '/watching', '/routines', '/flow'],
       ignore: ['/kit'],
     },
   },

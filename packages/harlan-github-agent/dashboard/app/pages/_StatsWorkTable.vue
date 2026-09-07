@@ -14,55 +14,46 @@ const maximumRuns = computed(() => Math.max(...work.map(entry => entry.runs), 0)
 
 <template>
   <section class="min-w-0" aria-labelledby="stats-work-heading">
-    <ColumnHeading id="stats-work-heading" label="Work" />
-    <div class="mt-3 max-w-full overflow-x-auto">
-      <table class="w-full min-w-[46rem] text-start text-sm" aria-labelledby="stats-work-heading">
-        <thead class="border-b border-default">
-          <tr>
-            <th scope="col" class="field-label px-3 py-2.5 text-start whitespace-nowrap">
-              Work
-            </th>
-            <th scope="col" class="field-label px-3 py-2.5 text-end whitespace-nowrap">
-              Runs
-            </th>
-            <th scope="col" class="field-label px-3 py-2.5 text-start whitespace-nowrap">
-              Results
-            </th>
-            <th scope="col" class="field-label px-3 py-2.5 text-end whitespace-nowrap">
-              Time
-            </th>
-            <th scope="col" class="field-label px-3 py-2.5 text-end whitespace-nowrap">
-              Evidence
-            </th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-default">
-          <tr v-for="entry in work" :key="workKey(entry)" class="transition-colors hover:bg-muted">
-            <th scope="row" class="px-3 py-3 text-start font-normal whitespace-nowrap">
-              <WorkChip :work="workRole(entry)" />
-            </th>
-            <td class="px-3 py-3 text-end whitespace-nowrap">
-              <span class="inline-flex items-center justify-end gap-2">
-                <span class="h-1 w-16 bg-muted" aria-hidden="true">
-                  <span class="block h-full bg-inverted" :style="{ width: barWidth(entry.runs, maximumRuns) }" />
-                </span>
-                <span class="font-mono font-medium">{{ entry.runs }}</span>
+    <UiSectionHeader id="stats-work-heading" title="Work" />
+    <UiTableShell label="Runs and results per kind of work" size="sm" row-hover>
+      <template #head>
+        <UiTableTh>Work</UiTableTh>
+        <UiTableTh numeric>
+          Runs
+        </UiTableTh>
+        <UiTableTh>Results</UiTableTh>
+        <UiTableTh numeric>
+          Median time
+        </UiTableTh>
+        <UiTableTh align="right">
+          <span class="sr-only">Evidence</span>
+        </UiTableTh>
+      </template>
+      <tr v-for="entry in work" :key="workKey(entry)">
+        <UiTableTd row-header size="sm">
+          <WorkChip :work="workRole(entry)" />
+        </UiTableTd>
+        <UiTableTd numeric size="sm">
+          <UiTableMetricCell :value="entry.runs">
+            <template #after>
+              <span class="h-1 w-16 rounded-sm bg-muted" aria-hidden="true">
+                <span class="block h-full rounded-sm bg-inverted" :style="{ width: barWidth(entry.runs, maximumRuns) }" />
               </span>
-            </td>
-            <td class="px-3 py-3 text-muted">
-              {{ workResultText(entry) }}
-            </td>
-            <td class="px-3 py-3 text-end font-mono whitespace-nowrap text-muted">
-              {{ medianText(entry.medianDurationMs) }}
-            </td>
-            <td class="px-3 py-3 text-end whitespace-nowrap">
-              <UButton :to="{ path: '/history', query: historyQuery(entry, { from, to }) }" size="xs" color="neutral" variant="ghost" trailing-icon="i-octicon-arrow-right-16">
-                Evidence
-              </UButton>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+            </template>
+          </UiTableMetricCell>
+        </UiTableTd>
+        <UiTableTd size="sm">
+          <span class="whitespace-normal text-sm text-muted">{{ workResultText(entry) }}</span>
+        </UiTableTd>
+        <UiTableTd numeric size="sm">
+          <UiTableMetricCell :value="entry.medianDurationMs" :display="medianText(entry.medianDurationMs)" muted />
+        </UiTableTd>
+        <UiTableTd align="right" size="sm">
+          <UButton :to="{ path: '/history', query: historyQuery(entry, { from, to }) }" size="xs" color="neutral" variant="ghost" trailing-icon="i-octicon-arrow-right-16">
+            Evidence
+          </UButton>
+        </UiTableTd>
+      </tr>
+    </UiTableShell>
   </section>
 </template>
