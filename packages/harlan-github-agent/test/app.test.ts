@@ -550,6 +550,13 @@ describe('dashboard HTTP app', () => {
     expect(await response.text()).toContain('How GitHub work moves through the agent')
   })
 
+  it('serves the Routines page', async () => {
+    const response = await createApp().request(`http://${allowedHost}/routines`, { headers: { authorization, host: allowedHost } })
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('Scheduled checks, soonest first.')
+  })
+
   it('serves the skew protection service worker', async () => {
     const response = await createApp().request(`http://${allowedHost}/_nuxt-skew-sw.js`, { headers: { authorization, host: allowedHost } })
 
