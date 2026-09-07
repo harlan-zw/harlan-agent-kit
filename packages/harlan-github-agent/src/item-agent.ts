@@ -90,7 +90,7 @@ export interface ItemAgentOptions {
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   pullRequestTriage?: PullRequestTriageAgent
-  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'findCurrentPolicyReviewRun' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -1152,12 +1152,13 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       if (checksLostRunner(snapshot.value.checks) || checksLostRunner(snapshot.value.baseChecks))
         recordRunnerLostIncident(options, task.repository)
 
+      const stored = task.rerun._tag === 'NotRequested' && !manualReview
+        ? options.store.storedReviewForHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
+        : { _tag: 'None' as const }
       // A later fence resumes the stored run, unless repository policy moved
       // since it ran: then the planner asked for a fresh Review, and resuming
       // would only requeue the same run on every poll.
-      const storedRun = task.state.fence > 1 && task.rerun._tag === 'NotRequested' && !manualReview
-        ? options.store.findCurrentPolicyReviewRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha) ?? undefined
-        : undefined
+      const storedRun = task.state.fence > 1 && stored._tag === 'Current' ? stored.run : undefined
       if (storedRun !== undefined) {
         const repairAccess = await options.preflightRepair(task.repository, signal)
         const repairsBaseline = snapshot.value.pullRequest.purpose._tag === 'BaselineRepair'
@@ -1172,7 +1173,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         )
       }
 
-      if (snapshot.value.priorAutomatedReview._tag === 'Found' && snapshot.value.priorAutomatedReview.state === 'complete' && task.rerun._tag === 'NotRequested' && !manualReview) {
+      // A complete comment stands in for a Review only when this service never
+      // reviewed the head. Its own comment under an older policy is what the
+      // planner queued this fresh Review to replace.
+      if (stored._tag === 'None' && snapshot.value.priorAutomatedReview._tag === 'Found' && snapshot.value.priorAutomatedReview.state === 'complete' && task.rerun._tag === 'NotRequested' && !manualReview) {
         return ok({
           evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}`,
           resolution: { _tag: 'ExistingReview', url: snapshot.value.priorAutomatedReview.url },

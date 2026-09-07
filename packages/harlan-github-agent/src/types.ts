@@ -395,6 +395,20 @@ export interface ReviewRun {
 }
 
 /** One explicit answer for every successfully completed Review Task. */
+/**
+ * What this service already holds for one head commit, from a worker's view.
+ *
+ * `Current` was recorded under the repository's current policy and may be
+ * resumed. `Stale` predates that policy: the planner queued a fresh Review to
+ * replace it, so neither it nor its comment on GitHub may stand in. `None`
+ * means this service never reviewed the head, so a complete comment from
+ * another actor may.
+ */
+export type StoredReviewForHead
+  = | { _tag: 'Current', run: ReviewRun }
+    | { _tag: 'Stale' }
+    | { _tag: 'None' }
+
 export type ReviewResolution
   = | { _tag: 'Reviewed', reviewRunId: string }
     | { _tag: 'ReviewSkipped', reason: string }
