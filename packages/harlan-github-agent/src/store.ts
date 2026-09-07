@@ -3511,7 +3511,21 @@ function recordPublicationEvent(database: DatabaseSync, input: {
  */
 const PUBLICATION_AUTHORITY_SQL = `
   (
-    (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1)
+    (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1
+      AND (
+        EXISTS (
+          SELECT 1 FROM revisions
+          WHERE revisions.id = tasks.revision_id
+            AND lower(json_extract(revisions.payload, '$.headRepository')) = lower(repositories.github)
+        )
+        OR EXISTS (
+          SELECT 1 FROM pull_request_approvals
+          WHERE pull_request_approvals.subject_id = subjects.id
+            AND pull_request_approvals.revision_id = tasks.revision_id
+            AND pull_request_approvals.kind = 'review'
+        )
+      )
+    )
     OR (
       tasks.kind = 'review_fix'
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
@@ -5534,6 +5548,57 @@ const publicationDiagramMigration = `
   PRAGMA user_version = 65;
 `
 
+/**
+ * Reuses saved fork merges rejected by the App's workflow permission boundary.
+ * This runs once. The normal publisher rechecks Approval, remote branches,
+ * artifact integrity, and write authority before retrying any saved commit.
+ */
+const forkWorkflowPublicationMigration = `
+  CREATE TEMP TABLE fork_workflow_publications AS
+    SELECT publication_commands.id AS command_id, tasks.id AS task_id,
+      tasks.fence AS task_fence, publication_commands.fence AS publication_fence
+    FROM publication_commands
+    JOIN tasks ON tasks.id = publication_commands.task_id
+    JOIN subjects ON subjects.id = tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = tasks.revision_id
+    WHERE publication_commands.state_tag = 'Failed' AND tasks.state_tag = 'Failed'
+      AND tasks.reason = publication_commands.reason
+      AND tasks.kind = 'resolve_conflict'
+      AND tasks.revision_id = subjects.current_revision_id
+      AND json_extract(revisions.payload, '$.state') = 'open'
+      AND json_extract(revisions.payload, '$.maintainerCanModify') = 1
+      AND lower(json_extract(revisions.payload, '$.headRepository')) != lower(repositories.github)
+      AND publication_commands.reason LIKE '%refusing to allow a GitHub App to create or update workflow%'
+      AND publication_commands.id = (
+        SELECT latest.id FROM publication_commands latest
+        WHERE latest.task_id = tasks.id ORDER BY latest.updated_at DESC, latest.id DESC LIMIT 1
+      )
+      AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id)
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+      AND EXISTS (
+        SELECT 1 FROM pull_request_approvals
+        WHERE subject_id = subjects.id AND revision_id = tasks.revision_id AND kind = 'review'
+      );
+
+  INSERT INTO task_transitions (task_id, from_tag, to_tag, reason, fence, created_at)
+    SELECT task_id, 'Failed', 'Publishing', 'Retry the saved conflict merge with maintainer authentication.',
+      task_fence, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM fork_workflow_publications;
+  INSERT INTO publication_events (command_id, from_tag, to_tag, reason, fence, created_at)
+    SELECT command_id, 'Failed', 'Pending', 'Retry the saved conflict merge with maintainer authentication.',
+      publication_fence, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM fork_workflow_publications;
+
+  UPDATE tasks SET state_tag = 'Publishing', reason = NULL,
+    command_id = (SELECT command_id FROM fork_workflow_publications WHERE task_id = tasks.id),
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE id IN (SELECT task_id FROM fork_workflow_publications);
+  UPDATE publication_commands SET state_tag = 'Pending', reason = NULL, attempts = 0,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE id IN (SELECT command_id FROM fork_workflow_publications);
+  DROP TABLE fork_workflow_publications;
+  PRAGMA user_version = 66;
+`
+
 const batchMigration = `
   CREATE TABLE IF NOT EXISTS batches (
     id TEXT PRIMARY KEY,
@@ -5904,9 +5969,13 @@ function installSchema(database: DatabaseSync): void {
     const columns = (database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>)
       .map(column => column.name)
     applyMigration(database, columns.includes('diagram_json') ? 'PRAGMA user_version = 65;' : publicationDiagramMigration)
+    version = 65
+  }
+  if (version === 65) {
+    applyMigration(database, forkWorkflowPublicationMigration)
     return
   }
-  if (version === 65)
+  if (version === 66)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -6519,7 +6588,7 @@ export function openJournalStore(
             SELECT 1
             FROM publication_commands
             JOIN tasks ON tasks.id = publication_commands.task_id
-            WHERE tasks.subject_id = ? AND tasks.kind = 'review_fix'
+            WHERE tasks.subject_id = ? AND tasks.kind IN ('review_fix', 'resolve_conflict')
               AND publication_commands.state_tag = 'Published'
               AND publication_commands.commit_sha = ?
               AND EXISTS (
@@ -10334,6 +10403,7 @@ export function openJournalStore(
         fence: task.task_fence,
         at: input.at,
       })
+      resolveTaskIncidents(database, task.task_id, input.at)
       database.exec('COMMIT')
       return true
     }

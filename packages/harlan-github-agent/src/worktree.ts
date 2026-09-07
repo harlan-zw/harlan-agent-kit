@@ -1223,6 +1223,8 @@ export interface GitPublicationRemoteOptions {
   root: string
   remoteUrl?: (repository: string) => string
   tokens: GitHubTokenProvider
+  /** Maintainer access for approved fork conflict merges containing workflow files. */
+  forkWorkflowTokens?: GitHubTokenProvider
 }
 
 function publicationRemoteUrl(repository: string): string {
@@ -1251,7 +1253,17 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
     const access = changed.stdout.split('\0').some(path => path.startsWith('.github/workflows/'))
       ? 'workflows_write'
       : 'contents_write'
-    const result = await options.tokens.getToken(command.repository, access, signal)
+    // The base repository's App installation cannot update workflow files in
+    // a contributor fork. Use the maintainer account for this exact approved
+    // conflict merge. GitHub and validateAuthority still require fork edits.
+    const forkWorkflowMerge = access === 'workflows_write'
+      && command._tag === 'UpdatePullRequest'
+      && command.taskKind === 'resolve_conflict'
+      && publicationTargetRepository(command).toLowerCase() !== command.repository.toLowerCase()
+    const source = forkWorkflowMerge ? options.forkWorkflowTokens : options.tokens
+    if (source === undefined)
+      return err('Maintainer authentication is required to merge workflow changes into this contributor branch.')
+    const result = await source.getToken(command.repository, access, signal)
     return result._tag === 'Ok' ? ok(result.value.token) : err(result.error.message)
   }
 

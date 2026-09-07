@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { createGitPublicationRemote } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -93,6 +93,74 @@ function fixture(changedPath = 'base.txt'): { bare: string, checkout: string, co
 }
 
 describe('git publication remote', () => {
+  it.each([
+    ['fork workflow merge', 'contributor/example', '.github/workflows/ci.yml', 'maintainer'],
+    ['fork source merge', 'contributor/example', 'base.txt', 'app'],
+    ['owned workflow merge', 'harlan-zw/example', '.github/workflows/ci.yml', 'app'],
+  ])('publishes a %s with the permitted account', async (_scenario, headRepository, changedPath, account) => {
+    const { bare, command, root } = fixture(changedPath)
+    const conflict = { ...command, headRepository }
+    const requested: string[] = []
+    const provider = (name: string) => ({
+      getToken: () => {
+        requested.push(name)
+        return name === account
+          ? Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' }))
+          : Promise.resolve(err({ repository: command.repository, message: 'This account cannot publish the change.' }))
+      },
+      invalidate: () => undefined,
+    })
+    const remote = createGitPublicationRemote({
+      github: {
+        getPullRequest: () => Promise.resolve(ok(pullRequestItem({
+          number: 1,
+          headSha: command.expectedHeadSha,
+          headRepository,
+          headRef: command.headRef,
+          maintainerCanModify: true,
+        }))),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
+        isBranchProtected: () => Promise.resolve(ok(false)),
+      },
+      remoteUrl: () => bare,
+      root,
+      tokens: provider('app'),
+      forkWorkflowTokens: provider('maintainer'),
+    })
+    const signal = new AbortController().signal
+
+    expect(await remote.validateAuthority(conflict, signal)).toEqual(ok(undefined))
+    expect(await remote.push(conflict, signal)).toEqual(ok(undefined))
+    expect(git(bare, 'rev-parse', 'refs/heads/fix/conflict')).toBe(command.commitSha)
+    expect(requested).toEqual([account, account])
+  })
+
+  it('refuses a fork workflow merge after the contributor disables maintainer edits', async () => {
+    const { bare, command, root } = fixture('.github/workflows/ci.yml')
+    const conflict = { ...command, headRepository: 'contributor/example' }
+    const remote = createGitPublicationRemote({
+      github: {
+        getPullRequest: () => Promise.resolve(ok(pullRequestItem({
+          number: 1,
+          headSha: command.expectedHeadSha,
+          headRepository: conflict.headRepository,
+          headRef: command.headRef,
+          maintainerCanModify: false,
+        }))),
+        hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
+        isBranchProtected: () => Promise.resolve(ok(false)),
+      },
+      remoteUrl: () => bare,
+      root,
+      tokens: { getToken: () => Promise.reject(new Error('No write credential is permitted.')), invalidate: () => undefined },
+      forkWorkflowTokens: { getToken: () => Promise.reject(new Error('No maintainer credential is permitted.')), invalidate: () => undefined },
+    })
+
+    expect(await remote.validateAuthority(conflict, new AbortController().signal))
+      .toEqual(err('The pull request no longer authorizes publication.'))
+    expect(git(bare, 'rev-parse', 'refs/heads/fix/conflict')).toBe(command.expectedHeadSha)
+  })
+
   it.each([
     ['a source patch', 'base.txt', 'contents_write'],
     ['a workflow patch', '.github/workflows/ci.yml', 'workflows_write'],
