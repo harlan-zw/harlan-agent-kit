@@ -20,7 +20,7 @@ export interface AgentAppOptions {
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
   dashboardPassword: string
-  /** HTTPS origins allowed to frame the dashboard, such as a talk deck. Empty denies framing. */
+  /** Origins allowed to frame the dashboard, such as a talk deck. Empty denies framing. */
   frameAncestors?: readonly string[]
   dashboardRoot?: string
   now: () => Date

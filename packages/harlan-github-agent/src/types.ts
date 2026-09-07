@@ -101,7 +101,7 @@ export interface AgentConfig {
     host: string
     port: number
     allowedOrigin: string
-    /** HTTPS origins allowed to frame the dashboard. Empty keeps framing denied. */
+    /** HTTPS or loopback HTTP origins allowed to frame the dashboard. Empty keeps framing denied. */
     frameAncestors: readonly string[]
   }
   /** Which triggers this machine answers. Defaults to every trigger. */

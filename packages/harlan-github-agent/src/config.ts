@@ -228,8 +228,16 @@ function providerName(value: unknown): AgentProviderName | undefined {
 }
 
 /** Keeps the control UI on the local proxy or one private Tailscale HTTPS name. */
-function isHttpsOrigin(value: string): boolean {
-  return URL.canParse(value) && new URL(value).protocol === 'https:' && new URL(value).origin === value
+/** A frame ancestor is an HTTPS origin, or a loopback HTTP origin for a deck served from this machine. */
+function isFrameAncestorOrigin(value: string): boolean {
+  if (!URL.canParse(value))
+    return false
+  const origin = new URL(value)
+  if (origin.origin !== value)
+    return false
+  if (origin.protocol === 'https:')
+    return true
+  return origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)
 }
 
 function isDashboardOrigin(value: string): boolean {
@@ -597,8 +605,8 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     issues.push({ path: '$.server.host', message: 'Expected a loopback address.' })
   if (allowedOrigin !== undefined && !isDashboardOrigin(allowedOrigin))
     issues.push({ path: '$.server.allowed_origin', message: 'Expected the local dashboard or an HTTPS Tailscale origin.' })
-  if (frameAncestors?.some(origin => !isHttpsOrigin(origin)))
-    issues.push({ path: '$.server.frame_ancestors', message: 'Expected HTTPS origins without a path.' })
+  if (frameAncestors?.some(origin => !isFrameAncestorOrigin(origin)))
+    issues.push({ path: '$.server.frame_ancestors', message: 'Expected HTTPS or loopback HTTP origins without a path.' })
   if (storagePath !== undefined && storagePath !== ':memory:' && !isAbsolute(storagePath))
     issues.push({ path: '$.storage.path', message: 'Expected an absolute path or :memory:.' })
   if (mutationsEnabled === true && storagePath === ':memory:')
