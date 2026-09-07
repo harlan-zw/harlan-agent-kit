@@ -525,6 +525,24 @@ describe('dashboard HTTP app', () => {
     expect(response.headers.get('content-security-policy')).toContain(`script-src 'self' 'nonce-${nonce}'`)
   })
 
+  it('denies framing unless frame ancestors are configured', async () => {
+    const denied = await createApp().request(`http://${allowedHost}/`, { headers: { authorization, host: allowedHost } })
+    expect(denied.headers.get('content-security-policy')).toContain('frame-ancestors \'none\'')
+    expect(denied.headers.get('x-frame-options')).toBe('DENY')
+
+    const framed = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      frameAncestors: ['https://deck.example.com'],
+      now,
+      store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => dashboardSnapshot(), listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    })
+    const allowed = await framed.request(`http://${allowedHost}/`, { headers: { authorization, host: allowedHost } })
+    expect(allowed.headers.get('content-security-policy')).toContain('frame-ancestors \'self\' https://deck.example.com')
+    expect(allowed.headers.get('x-frame-options')).toBeNull()
+  })
+
   it('serves the workflow map directly', async () => {
     const response = await createApp().request(`http://${allowedHost}/flow`, { headers: { authorization, host: allowedHost } })
 

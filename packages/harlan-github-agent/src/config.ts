@@ -228,6 +228,18 @@ function providerName(value: unknown): AgentProviderName | undefined {
 }
 
 /** Keeps the control UI on the local proxy or one private Tailscale HTTPS name. */
+/** A frame ancestor is an HTTPS origin, or a loopback HTTP origin for a deck served from this machine. */
+function isFrameAncestorOrigin(value: string): boolean {
+  if (!URL.canParse(value))
+    return false
+  const origin = new URL(value)
+  if (origin.origin !== value)
+    return false
+  if (origin.protocol === 'https:')
+    return true
+  return origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)
+}
+
 function isDashboardOrigin(value: string): boolean {
   if (!URL.canParse(value))
     return false
@@ -535,6 +547,9 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   if (port === undefined)
     issues.push({ path: '$.server.port', message: 'Expected an integer from 1 to 65535.' })
   const allowedOrigin = server === undefined ? undefined : requiredString(server, 'allowed_origin', '$.server', issues)
+  const frameAncestors = server === undefined
+    ? undefined
+    : server.frame_ancestors === undefined ? [] : stringArray(server, 'frame_ancestors', '$.server', issues)
   const storagePath = storage === undefined ? undefined : requiredString(storage, 'path', '$.storage', issues)
 
   const pollValue = document.value.poll_interval_seconds
@@ -590,6 +605,8 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     issues.push({ path: '$.server.host', message: 'Expected a loopback address.' })
   if (allowedOrigin !== undefined && !isDashboardOrigin(allowedOrigin))
     issues.push({ path: '$.server.allowed_origin', message: 'Expected the local dashboard or an HTTPS Tailscale origin.' })
+  if (frameAncestors?.some(origin => !isFrameAncestorOrigin(origin)))
+    issues.push({ path: '$.server.frame_ancestors', message: 'Expected HTTPS or loopback HTTP origins without a path.' })
   if (storagePath !== undefined && storagePath !== ':memory:' && !isAbsolute(storagePath))
     issues.push({ path: '$.storage.path', message: 'Expected an absolute path or :memory:.' })
   if (mutationsEnabled === true && storagePath === ':memory:')
@@ -609,6 +626,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || allowedOwners === undefined
     || port === undefined
     || allowedOrigin === undefined
+    || frameAncestors === undefined
     || storagePath === undefined
     || pollIntervalSeconds === undefined
     || mutationsEnabled === undefined
@@ -625,7 +643,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   return ok({
     agent,
     github: { appId, privateKeyPath, allowedOwners },
-    server: { host, port, allowedOrigin },
+    server: { host, port, allowedOrigin, frameAncestors },
     webhook,
     triggers,
     storage: { path: storagePath },

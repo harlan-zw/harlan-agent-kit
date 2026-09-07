@@ -171,6 +171,26 @@ agent:
     })
   })
 
+  it('accepts HTTPS and loopback HTTP origins as frame ancestors', () => {
+    const framed = parseConfigText(configText.replace(
+      'allowed_origin: https://harlan-github-agent.localhost',
+      'allowed_origin: https://harlan-github-agent.localhost\n  frame_ancestors: [https://deck.example.com, http://localhost:3000]',
+    ))
+    const unencrypted = parseConfigText(configText.replace(
+      'allowed_origin: https://harlan-github-agent.localhost',
+      'allowed_origin: https://harlan-github-agent.localhost\n  frame_ancestors: [http://deck.example.com]',
+    ))
+
+    const unframed = parseConfigText(configText)
+
+    expect(framed._tag === 'Ok' && framed.value.server.frameAncestors).toEqual(['https://deck.example.com', 'http://localhost:3000'])
+    expect(unframed._tag === 'Ok' && unframed.value.server.frameAncestors).toEqual([])
+    expect(unencrypted._tag === 'Err' && unencrypted.error).toContainEqual({
+      path: '$.server.frame_ancestors',
+      message: 'Expected HTTPS or loopback HTTP origins without a path.',
+    })
+  })
+
   it('parses a precise repository policy', () => {
     const result = parseConfigText(configText)
 
