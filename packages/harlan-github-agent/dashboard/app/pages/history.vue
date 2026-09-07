@@ -104,7 +104,10 @@ useHead({
 
 <template>
   <div class="flex flex-col gap-4">
-    <UiSectionHeader title="History" :badge="rows.length" class="mb-0">
+    <UiSectionHeader title="History" class="mb-0">
+      <template #after-title>
+        <span class="font-mono text-sm font-normal text-muted">{{ rows.length }}</span>
+      </template>
       <template #actions>
         <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by outcome">
           <UButton
@@ -148,7 +151,7 @@ useHead({
         />
         <div class="pointer-events-none relative flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 px-2 py-2 [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
           <!-- Fixed slots above sm, so the identity column starts on one line down the page. -->
-          <span class="flex shrink-0 sm:w-34">
+          <span class="flex shrink-0 sm:w-30">
             <StateBadge
               :tone="historyRowBadge(row).tone"
               :label="historyRowBadge(row).label"
@@ -156,7 +159,7 @@ useHead({
               :uppercase="historyRowBadge(row).uppercase"
             />
           </span>
-          <span class="flex shrink-0 sm:w-40">
+          <span class="flex shrink-0 sm:w-34">
             <WorkChip :work="historyRowWork(row)" />
           </span>
 

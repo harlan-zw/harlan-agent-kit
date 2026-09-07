@@ -59,7 +59,7 @@ const {
 
 const face = ref<HTMLButtonElement | null>(null)
 const slideoverOpen = ref(false)
-const confirming = ref<'cancel' | 'dismiss' | undefined>()
+const confirming = ref<'cancel' | 'dismiss' | 'eject' | undefined>()
 
 const entry = computed(() => card._tag === 'Running' || card._tag === 'Done' ? undefined : card.entry)
 const agent = computed(() => card._tag === 'Running' ? card.agent : undefined)
@@ -93,12 +93,13 @@ const busy = computed(() => approvalPending.value !== undefined
 
 const cancelError = computed(() => taskId.value === undefined ? undefined : cancelErrors.value[taskId.value])
 const dismissError = computed(() => dismissErrors.value[itemDismissKey.value])
+const ejectError = computed(() => agent.value === undefined ? undefined : ejectErrors.value[agent.value.id])
 
 /** Errors that belong under the face. Cancel and Dismiss errors show in their modal instead. */
 const faceErrors = computed(() => [
   entry.value === undefined ? undefined : approvalErrorFor(entry.value),
   rerunErrors.value[rerunKey.value],
-  agent.value === undefined ? undefined : ejectErrors.value[agent.value.id],
+  confirming.value === 'eject' ? undefined : ejectError.value,
   confirming.value === 'cancel' ? undefined : cancelError.value,
   confirming.value === 'dismiss' ? undefined : dismissError.value,
 ].filter((error): error is string => error !== undefined))
@@ -125,12 +126,22 @@ const menuItems = computed<DropdownMenuItem[][]>(() => {
   const item = (action: CardAction): DropdownMenuItem => action === 'open'
     ? { label: actionLabels.open, icon: actionIcons.open, to: identity.value?.url, target: '_blank', rel: 'noreferrer' }
     : { label: actionLabels[action], icon: actionIcons[action], color: action === 'rerun' ? undefined : 'error', disabled: busy.value, onSelect: () => act(action) }
-  return [quiet.map(item), destructive.map(item)].filter(group => group.length > 0)
+  /* Eject ends the automated turn, so it sits with the other consequential actions and confirms. */
+  const eject: DropdownMenuItem[] = canEject.value
+    ? [{ label: 'Eject to terminal', icon: 'i-octicon-terminal-16', disabled: busy.value, onSelect: () => { confirming.value = 'eject' } }]
+    : []
+  return [quiet.map(item), [...eject, ...destructive.map(item)]].filter(group => group.length > 0)
 })
 
-const consequence = computed(() => confirming.value === 'cancel'
-  ? cancelConsequence(work.value)
-  : dismissConsequence(identity.value?.kind ?? 'pull_request'))
+const canEject = computed(() => agent.value !== undefined && agent.value.session._tag === 'Connected')
+
+const consequence = computed(() => {
+  if (confirming.value === 'cancel')
+    return cancelConsequence(work.value)
+  if (confirming.value === 'eject')
+    return 'The automated turn stops and the saved session opens in Ghostty.'
+  return dismissConsequence(identity.value?.kind ?? 'pull_request')
+})
 
 function pressPrimary(): void {
   if (entry.value === undefined || primaryLabel.value === undefined || busy.value)
@@ -150,6 +161,13 @@ function act(action: CardAction): void {
 }
 
 async function confirm(): Promise<void> {
+  if (confirming.value === 'eject' && agent.value !== undefined) {
+    const id = agent.value.id
+    await ejectAgent(id)
+    if (ejectErrors.value[id] === undefined)
+      confirming.value = undefined
+    return
+  }
   if (confirming.value === 'cancel' && taskId.value !== undefined) {
     const id = taskId.value
     await cancelAgentTask(id)
@@ -265,9 +283,8 @@ defineExpose({
       </div>
 
       <!-- One decision, inline. Everything else is in the menu. -->
-      <div v-if="primaryLabel || (agent && agent.session._tag === 'Connected')" class="mt-1 flex flex-wrap items-center gap-1">
+      <div v-if="primaryLabel" class="mt-1 flex flex-wrap items-center gap-1">
         <UButton
-          v-if="primaryLabel"
           size="sm"
           :loading="primaryPending"
           :disabled="busy"
@@ -275,19 +292,6 @@ defineExpose({
         >
           {{ primaryLabel }}
         </UButton>
-        <ConfirmButton
-          v-else-if="agent && agent.session._tag === 'Connected'"
-          label="Eject"
-          confirm-label="Confirm eject"
-          aria-label="Eject this agent into your terminal"
-          confirm-aria-label="Confirm ejecting this agent into your terminal"
-          color="primary"
-          size="xs"
-          icon="i-octicon-terminal-16"
-          :loading="ejecting"
-          :disabled="busy"
-          @confirm="eject"
-        />
       </div>
 
       <p v-for="error in faceErrors" :key="error" role="alert" class="status-error text-sm">
@@ -312,11 +316,12 @@ defineExpose({
 
     <ConfirmModal
       v-model:open="confirmOpen"
-      :title="confirming === 'cancel' ? 'Cancel this task?' : `Dismiss this ${identity?.kind === 'issue' ? 'issue' : 'pull request'}?`"
+      :title="confirming === 'cancel' ? 'Cancel this task?' : confirming === 'eject' ? 'Eject this agent?' : `Dismiss this ${identity?.kind === 'issue' ? 'issue' : 'pull request'}?`"
       :consequence="consequence"
-      :confirm-label="confirming === 'cancel' ? 'Cancel task' : 'Dismiss'"
-      :pending="confirming === 'cancel' ? cancelling : dismissing"
-      :error="confirming === 'cancel' ? cancelError : dismissError"
+      :confirm-label="confirming === 'cancel' ? 'Cancel task' : confirming === 'eject' ? 'Eject' : 'Dismiss'"
+      :pending="confirming === 'cancel' ? cancelling : confirming === 'eject' ? ejecting : dismissing"
+      :tone="confirming === 'eject' ? 'primary' : 'error'"
+      :error="confirming === 'cancel' ? cancelError : confirming === 'eject' ? ejectError : dismissError"
       @confirm="confirm"
     />
   </article>

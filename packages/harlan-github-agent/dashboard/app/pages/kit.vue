@@ -357,7 +357,11 @@ const ejected = ref(0)
         <UiStats :data="kitStats" variant="card" />
         <div class="grid gap-8 md:grid-cols-2">
           <div>
-            <UiSectionHeader title="Ranked bars" :badge="kitBars.length" />
+            <UiSectionHeader title="Ranked bars">
+              <template #after-title>
+                <span class="font-mono text-sm font-normal text-muted">{{ kitBars.length }}</span>
+              </template>
+            </UiSectionHeader>
             <UiBarChart :data="kitBars" label-key="label" value-key="value" />
           </div>
           <div>

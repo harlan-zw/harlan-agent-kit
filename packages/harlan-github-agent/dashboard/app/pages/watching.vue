@@ -115,7 +115,10 @@ useHead({
       Watching
     </h1>
     <section class="min-w-0" aria-label="Repositories">
-      <UiSectionHeader title="Repositories" :badge="repositories.length">
+      <UiSectionHeader title="Repositories">
+        <template #after-title>
+          <span class="font-mono text-sm font-normal text-muted">{{ repositories.length }}</span>
+        </template>
         <template #actions>
           <UInput
             ref="filterInput"
@@ -191,7 +194,10 @@ useHead({
 
     <div class="flex min-w-0 flex-col gap-10">
       <section class="min-w-0" aria-label="Open">
-        <UiSectionHeader title="Open" :badge="openItems.length">
+        <UiSectionHeader title="Open">
+          <template #after-title>
+            <span class="font-mono text-sm font-normal text-muted">{{ openItems.length }}</span>
+          </template>
           <template #actions>
             <div class="flex items-center gap-1" role="group" aria-label="Filter by kind">
               <UButton
@@ -236,7 +242,11 @@ useHead({
 
       <!-- The only place a Dismissal can be undone. Absent until one exists. -->
       <section v-if="dismissed.length > 0" class="min-w-0" aria-label="Dismissed">
-        <UiSectionHeader title="Dismissed" :badge="dismissed.length" />
+        <UiSectionHeader title="Dismissed">
+          <template #after-title>
+            <span class="font-mono text-sm font-normal text-muted">{{ dismissed.length }}</span>
+          </template>
+        </UiSectionHeader>
         <ul class="divide-y divide-default border-y border-default" role="list">
           <li
             v-for="item in dismissed"
