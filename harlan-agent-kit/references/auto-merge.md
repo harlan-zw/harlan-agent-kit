@@ -11,17 +11,18 @@ The label never changes whether a pull request is reviewed. Automated review run
 Add it for a change with no judgement in it:
 
 - comments or wording inside non-Markdown files, with no behaviour change
+- Markdown that nothing executes: a README, docs, or a blog post
 - dependency bump or lockfile refresh
 - formatting, lint autofix, or generated file refresh
 - changelog or version bump
 
 Never add it for a change a reviewer must judge: source behaviour, public API, configuration, CI workflow, authentication, authorization, payments, data migrations, deletes, or user-visible copy.
 
+Markdown an agent reads as instructions is source behaviour. That covers Skills, `agent-context/`, `CLAUDE.md`, `AGENTS.md`, `GLOSSARY.md`, and `.github` issue or pull request templates. A change there alters what every agent does in every repository, so Harlan merges it.
+
 When unsure, leave it off. A missing label costs one human merge. A wrong label ships an unreviewed change.
 
 Remove the label when a pull request grows past the change it was added for.
-
-Markdown-only work never reaches this policy. The `pr` skill pushes it directly to `origin/main`.
 
 ## Repository scope
 

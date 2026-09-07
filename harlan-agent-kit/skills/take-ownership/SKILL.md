@@ -34,8 +34,8 @@ Inspect local Git state and remote state. Select one exact target:
 
 Determine the intended result and applicable CI, merge, deployment, release, and smoke stages.
 
-For a Markdown-only direct push, verify the exact commit on `origin/main`.
-Expect no CI or deployment unless a workflow event uses `paths` to include that Markdown.
+A Markdown-only pull request runs no CI unless a workflow event uses `paths` to include that Markdown.
+After its merge, verify the merge commit on `origin/main` instead of a green check.
 
 Ask only when multiple targets remain plausible or the intended result materially changes the work.
 
