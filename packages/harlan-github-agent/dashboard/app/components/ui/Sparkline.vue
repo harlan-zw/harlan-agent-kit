@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import type { BarRect, SparklineFrame } from '../../utils/sparkline.ts'
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { computed, useId } from 'vue'
 import { semanticColors } from '../../utils/semantic-colors.ts'
+import { buildBars, minMax, projectPoints } from '../../utils/sparkline.ts'
 
 // Ported from the nuxtseo design-system UiSparkline. The motion-v tracer dot
 // is dropped: the CSS tracer line still sweeps on hover, and a looping dot was
@@ -276,76 +278,17 @@ const gradientStops = computed(() => {
 })
 
 // Single-pass min/max — avoids `Math.min(...arr)` spread (which allocates an
-// args array and risks a call-stack overflow on large series).
-function minMax(arr: number[]): { min: number, max: number } {
-  let min = Infinity
-  let max = -Infinity
-  for (const v of arr) {
-    if (v < min)
-      min = v
-    if (v > max)
-      max = v
-  }
-  return { min, max }
-}
+// args array and risks a call-stack overflow on large series). Lives in
+// utils/sparkline.ts with the rest of the drawing geometry.
 
-/**
- * Smallest peak-to-trough spread, as a fraction of the series' own magnitude,
- * that is allowed to fill the chart height.
- *
- * The y-scale auto-fits, so without a floor ANY spread is stretched to the full
- * height: a metric sitting at 100 that jitters by 0.05 draws the same violent
- * zigzag as one that halved. 8% sits between `trend`'s 2% flat cut and the
- * smallest move a reader would call real. A floor rather than a flat-series
- * short-circuit, deliberately: a threshold that swaps the curve for a straight
- * line flips between refreshes; a floored range degrades continuously.
- */
-const FLAT_RANGE_FLOOR = 0.08
-
-/**
- * Widen `bounds` to the floor when the series is flatter than FLAT_RANGE_FLOOR,
- * keeping the data centred in the widened band so a truly constant series draws
- * through the middle rather than pinned to the chart's bottom edge.
- */
-function floorRange(bounds: { min: number, max: number }): { min: number, max: number } {
-  const spread = bounds.max - bounds.min
-  // Magnitude, not spread, sets the floor: "flat" is relative to how big the
-  // numbers are. A 0.05 wobble is noise at 100 and a doubling at 0.05.
-  const magnitude = Math.max(Math.abs(bounds.max), Math.abs(bounds.min))
-  const minRange = magnitude * FLAT_RANGE_FLOOR
-  if (!(spread < minRange))
-    return bounds
-  const mid = (bounds.max + bounds.min) / 2
-  return { min: mid - minRange / 2, max: mid + minRange / 2 }
-}
-
-function projectPoints(vals: number[], yScale?: { min: number, max: number }) {
-  const padX = strokeWidth
-  const padY = strokeWidth
-  const chartW = vbW.value - padX * 2
-  const chartH = vbH.value - padY * 2
-
-  const bounds = floorRange(yScale ?? minMax(vals))
-  const min = bounds.min
-  const max = bounds.max
-  const range = max - min || 1
-
-  return {
-    padX,
-    padY,
-    chartW,
-    chartH,
-    // The ONE place the y-axis direction is decided, so nothing downstream
-    // (line, step, bars, area close, tracer) can disagree about which way is up.
-    points: vals.map((v, i) => {
-      const t = (v - min) / range
-      return {
-        x: padX + (i / (vals.length - 1)) * chartW,
-        y: inverted ? padY + t * chartH : padY + chartH - t * chartH,
-      }
-    }),
-  }
-}
+// The drawing frame the pure geometry reads, so the projection stays a
+// function of its inputs.
+const frame = computed<SparklineFrame>(() => ({
+  width: vbW.value,
+  height: vbH.value,
+  strokeWidth,
+  inverted,
+}))
 
 // Shared y-scale when rendering current + previous as overlay (ghost mode).
 const sharedYScale = computed<{ min: number, max: number } | undefined>(() => {
@@ -361,7 +304,7 @@ function buildPath(vals: number[]): string {
   if (vals.length < 2)
     return ''
 
-  const { padY, chartH, points } = projectPoints(vals, sharedYScale.value)
+  const { padY, chartH, points } = projectPoints(vals, frame.value, sharedYScale.value)
   // Catmull-Rom control points overshoot local extremes: at an asymmetric peak
   // the control point lands above the chart top and the SVG viewport clips the
   // curve flat. Clamping control-point Y to the chart area keeps the whole
@@ -390,7 +333,7 @@ function buildPath(vals: number[]): string {
 function buildStepPath(vals: number[]): string {
   if (vals.length < 2)
     return ''
-  const { points } = projectPoints(vals, sharedYScale.value)
+  const { points } = projectPoints(vals, frame.value, sharedYScale.value)
   const segments: string[] = [`M ${points[0]!.x} ${points[0]!.y}`]
   for (let i = 1; i < points.length; i++) {
     const p = points[i]!
@@ -398,23 +341,6 @@ function buildStepPath(vals: number[]): string {
     segments.push(`L ${p.x} ${prev.y}`, `L ${p.x} ${p.y}`)
   }
   return segments.join(' ')
-}
-
-interface BarRect { x: number, y: number, w: number, h: number }
-function buildBars(vals: number[]): BarRect[] {
-  if (!vals.length)
-    return []
-  const { padY, chartW, chartH, points } = projectPoints(vals)
-  const gapRatio = 0.3
-  const slotW = chartW / vals.length
-  const barW = Math.max(1, slotW * (1 - gapRatio))
-  const baselineY = padY + chartH
-  return points.map(p => ({
-    x: p.x - barW / 2,
-    y: p.y,
-    w: barW,
-    h: Math.max(1, baselineY - p.y),
-  }))
 }
 
 const strokeGradientId = useId()
@@ -426,7 +352,7 @@ const pathD = computed(() => {
   return variant === 'step' ? buildStepPath(values.value) : buildPath(values.value)
 })
 
-const bars = computed<BarRect[]>(() => variant === 'bars' ? buildBars(values.value) : [])
+const bars = computed<BarRect[]>(() => variant === 'bars' ? buildBars(values.value, frame.value) : [])
 
 const areaPathD = computed(() => {
   // With `projectPoints` flipping the axis, an inverted line sits above the
