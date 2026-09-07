@@ -2459,6 +2459,25 @@ function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+/**
+ * The repository policy a stored Review verdict depends on.
+ *
+ * A change here starts a fresh Review of every open pull request, so this
+ * names only the fields the Review gates and Repair authority read. Digesting
+ * the whole mapping sent the fleet back through Review whenever a field was
+ * added for something else, as Auto merge scope did.
+ */
+export function reviewPolicyDigest(mapping: RepositoryMapping): string {
+  return digest(JSON.stringify({
+    github: mapping.github,
+    authentication: mapping.authentication,
+    ownership: mapping.ownership,
+    defaultBranch: mapping.defaultBranch,
+    writablePullRequestAuthors: mapping.writablePullRequestAuthors,
+    writablePullRequestHeadPrefixes: mapping.writablePullRequestHeadPrefixes,
+  }))
+}
+
 function inferredClosureObservationId(subject: Pick<GitHubItem, 'repository' | 'kind' | 'number'>, observedAt: string): string {
   return digest(`poll-closure:${subject.repository}:${subject.kind}:${subject.number}:${observedAt}`)
 }
@@ -4200,7 +4219,7 @@ function planAdversarialReview(
     revisionId,
     subjectId,
     subject.kind === 'pull_request' ? subject.headSha : '',
-    digest(JSON.stringify(mapping)),
+    reviewPolicyDigest(mapping),
   ) as {
     any_attempt: number
     revision_attempt: number
@@ -6304,8 +6323,7 @@ export function openJournalStore(
     try {
       database.prepare('UPDATE repositories SET enabled = 0').run()
       repositories.forEach((mapping) => {
-        const policy = JSON.stringify(mapping)
-        statement.run(mapping.github, policy, digest(policy), mapping.enabled ? 1 : 0, mapping.ownership)
+        statement.run(mapping.github, JSON.stringify(mapping), reviewPolicyDigest(mapping), mapping.enabled ? 1 : 0, mapping.ownership)
       })
       const unauthorized = database.prepare(`
         SELECT tasks.id, tasks.kind, tasks.state_tag, tasks.fence, tasks.subject_id
@@ -7306,7 +7324,7 @@ export function openJournalStore(
       return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
 
     const runUsage: AgentTokenUsage = input.usage ?? { _tag: 'Unavailable' }
-    const policyDigest = input.policyDigest ?? digest(revision.policy_json)
+    const policyDigest = input.policyDigest ?? reviewPolicyDigest(JSON.parse(revision.policy_json) as RepositoryMapping)
     const gates = JSON.stringify(input.gates)
     const findings = JSON.stringify(input.findings)
     const usage = JSON.stringify(runUsage)
@@ -7440,7 +7458,7 @@ export function openJournalStore(
       return { _tag: 'Rejected', reason: { _tag: 'ReviewApprovalRequired' } }
 
     const runUsage: AgentTokenUsage = input.usage ?? { _tag: 'Unavailable' }
-    const policyDigest = input.policyDigest ?? digest(revision.policy_json)
+    const policyDigest = input.policyDigest ?? reviewPolicyDigest(JSON.parse(revision.policy_json) as RepositoryMapping)
     const gates = JSON.stringify(input.gates)
     const findings = JSON.stringify(input.findings)
     const usage = JSON.stringify(runUsage)
