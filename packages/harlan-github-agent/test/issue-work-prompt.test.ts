@@ -1,5 +1,6 @@
 import type { ClaimedIssueWorkTask } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
+import { PULL_REQUEST_BODY_LINES } from '../src/agent-context.ts'
 import { parseStoredIssueTriage } from '../src/issue-triage.ts'
 import { issueWorkPrompt } from '../src/issue-work-worker.ts'
 import { issueItem, repositoryMapping } from './fixtures.ts'
@@ -124,5 +125,37 @@ describe('issueWorkPrompt memory', () => {
     })
 
     expect(prompt).not.toContain('project memory index')
+  })
+})
+
+describe('issueWorkPrompt pull request description', () => {
+  it('inlines the pr skill body rules and asks for a diagram only when the reference exists', () => {
+    const without = issueWorkPrompt({
+      task: task(),
+      body: 'Body',
+      comments: [],
+      template: '### Description',
+      routineSource: null,
+      triage: null,
+      instructionFiles: [],
+      diagramReference: null,
+    })
+    const withReference = issueWorkPrompt({
+      task: task(),
+      body: 'Body',
+      comments: [],
+      template: '### Description',
+      routineSource: null,
+      triage: null,
+      instructionFiles: [],
+      diagramReference: { guide: '/kit/skills/pr-lens/references/graph-document.md', example: '/kit/skills/pr-lens/references/example.graph.json' },
+    })
+
+    expect(without).toContain(PULL_REQUEST_BODY_LINES)
+    expect(without).toContain('Paste the evidence instead of describing it')
+    expect(without).not.toContain('.pr-lens/graph.json')
+    expect(withReference).toContain('write a PR Lens graph document to .pr-lens/graph.json')
+    expect(withReference).toContain('Read /kit/skills/pr-lens/references/graph-document.md before you write it.')
+    expect(withReference).toContain('Do not run the pr-lens CLI.')
   })
 })

@@ -180,6 +180,7 @@ describe('batches in the journal', () => {
           issueNumber: 101,
           pullRequestTitle: 'fix: shared helper',
           pullRequestBody: 'Closes #101.\nCloses #102.',
+          diagram: null,
           commitSha: 'commit-1',
           baseSha: 'base-1',
           baseRef: 'main',

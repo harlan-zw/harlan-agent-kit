@@ -68,6 +68,7 @@ function stagedIssueStore() {
       issueNumber: 12,
       pullRequestTitle: 'Fix #12',
       pullRequestBody: 'Closes #12.',
+      diagram: null,
       commitSha: 'issue-commit',
       baseSha: 'base-sha',
       baseRef: 'main',

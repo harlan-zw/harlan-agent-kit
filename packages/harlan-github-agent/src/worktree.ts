@@ -1090,7 +1090,9 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       const diffCheck = await runGit(worktree.path, ['diff', '--check'], signal)
       if (diffCheck.exitCode !== 0)
         return err(`The change failed git diff check: ${diffCheck.stdout || diffCheck.stderr}`)
-      const add = await runGit(worktree.path, ['add', '--all'], signal)
+      // The graph document the Agent may leave for the description is the
+      // controller's input, never part of the change.
+      const add = await runGit(worktree.path, ['add', '--all', '--', '.', ':(exclude).pr-lens'], signal)
       if (add.exitCode !== 0)
         return err(`Could not stage the verified change: ${add.stderr}`)
       const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
@@ -1407,10 +1409,14 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         title: command.pullRequestTitle,
         body: command.pullRequestBody,
         ...(command.taskKind === 'baseline_repair' ? { labels: [BASELINE_REPAIR_LABEL_SPEC] } : {}),
+        ...(command.taskKind === 'issue_work' && command.diagram !== null ? { diagram: command.diagram } : {}),
       }, signal)
-      return pullRequest._tag === 'Err'
-        ? err(pullRequest.error.message)
-        : ok({ evidence: `Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}`, pullRequestNumber: pullRequest.value.number })
+      if (pullRequest._tag === 'Err')
+        return err(pullRequest.error.message)
+      const diagram = pullRequest.value.diagram._tag === 'Skipped'
+        ? ` The diagram was not attached: ${pullRequest.value.diagram.reason}`
+        : ''
+      return ok({ evidence: `Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}.${diagram}`, pullRequestNumber: pullRequest.value.number })
     },
   }
 }

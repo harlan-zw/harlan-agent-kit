@@ -54,6 +54,7 @@ import type {
   PullRequestApprovalKind,
   PullRequestApprovalResult,
   PullRequestApprovalState,
+  PullRequestDiagram,
   QueueEntry,
   QueueState,
   RecordAgentFeedbackResult,
@@ -1145,6 +1146,7 @@ interface PublicationRow {
   outcome_unknown: number
   pull_request_title: string | null
   pull_request_body: string | null
+  diagram_json: string | null
   head_repository: string
   worker_id: string | null
   fence: number
@@ -5497,6 +5499,13 @@ const candidateTitleMigration = `
   PRAGMA user_version = 63;
 `
 
+/** The drawn pull request diagram an Issue work Publication carries, as JSON. */
+const publicationDiagramMigration = `
+  ALTER TABLE publication_commands ADD COLUMN diagram_json TEXT;
+
+  PRAGMA user_version = 64;
+`
+
 const batchMigration = `
   CREATE TABLE IF NOT EXISTS batches (
     id TEXT PRIMARY KEY,
@@ -5842,9 +5851,17 @@ function installSchema(database: DatabaseSync): void {
     const columns = (database.prepare('PRAGMA table_info(candidates)').all() as unknown as Array<{ name: string }>)
       .map(column => column.name)
     applyMigration(database, columns.includes('title') ? 'PRAGMA user_version = 63;' : candidateTitleMigration)
+    version = 63
+  }
+  if (version === 63) {
+    // A journal rewound for replay already carries the column, and SQLite has
+    // no ADD COLUMN IF NOT EXISTS.
+    const columns = (database.prepare('PRAGMA table_info(publication_commands)').all() as unknown as Array<{ name: string }>)
+      .map(column => column.name)
+    applyMigration(database, columns.includes('diagram_json') ? 'PRAGMA user_version = 64;' : publicationDiagramMigration)
     return
   }
-  if (version === 63)
+  if (version === 64)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9975,8 +9992,8 @@ export function openJournalStore(
       database.prepare(`
         INSERT INTO publication_commands (
           id, task_id, state_tag, commit_sha, base_sha, base_ref, expected_head_sha, head_ref,
-          artifact_ref, patch_digest, changed_files, pull_request_title, pull_request_body, updated_at
-        ) VALUES (?, ?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          artifact_ref, patch_digest, changed_files, pull_request_title, pull_request_body, diagram_json, updated_at
+        ) VALUES (?, ?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         commandId,
         input.taskId,
@@ -9990,6 +10007,7 @@ export function openJournalStore(
         publication.changedFiles,
         publication._tag === 'OpenPullRequest' ? publication.pullRequestTitle : null,
         publication._tag === 'OpenPullRequest' ? publication.pullRequestBody : null,
+        publication._tag === 'OpenPullRequest' && publication.taskKind === 'issue_work' && publication.diagram !== null ? JSON.stringify(publication.diagram) : null,
         input.at,
       )
       recordPublicationEvent(database, {
@@ -10074,6 +10092,7 @@ export function openJournalStore(
           publication_commands.outcome_unknown,
           publication_commands.pull_request_title,
           publication_commands.pull_request_body,
+          publication_commands.diagram_json,
           json_extract(revisions.payload, '$.headRepository') AS head_repository,
           publication_commands.worker_id,
           publication_commands.fence,
@@ -10147,6 +10166,7 @@ export function openJournalStore(
               issueNumber: row.github_number,
               pullRequestTitle: row.pull_request_title,
               pullRequestBody: row.pull_request_body,
+              diagram: row.diagram_json === null ? null : JSON.parse(row.diagram_json) as PullRequestDiagram,
             }
           : {
               ...common,

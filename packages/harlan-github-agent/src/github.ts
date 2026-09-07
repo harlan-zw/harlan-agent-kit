@@ -1,8 +1,9 @@
 import type { Octokit } from 'octokit'
 import type { AutoMergeMethod } from './auto-merge.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
+import type { UploadUserAsset } from './github-user-assets.ts'
 import type { Result } from './result.ts'
-import type { GitHubIssueItem, GitHubItem, GitHubPullRequestItem, RepositoryMapping, RoutineName } from './types.ts'
+import type { GitHubIssueItem, GitHubItem, GitHubPullRequestItem, PullRequestDiagram, RepositoryMapping, RoutineName } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { approvalLabels } from './approval-labels.ts'
@@ -64,7 +65,14 @@ export interface GitHubSourceOptions {
 export interface PublishedPullRequest {
   number: number
   url: string
+  diagram: PullRequestDiagramOutcome
 }
+
+/** What became of the diagram a publication carried. */
+export type PullRequestDiagramOutcome
+  = | { _tag: 'None' }
+    | { _tag: 'Attached', url: string }
+    | { _tag: 'Skipped', reason: string }
 
 export interface GitHubPullRequestPublisher {
   ensurePullRequest: (input: {
@@ -76,11 +84,33 @@ export interface GitHubPullRequestPublisher {
     title: string
     body: string
     labels?: Array<{ name: string, color: string, description: string }>
+    /** A drawn picture to upload and place in the body before the AI disclosure. */
+    diagram?: PullRequestDiagram
   }, signal?: AbortSignal) => Promise<Result<PublishedPullRequest, GitHubReadError>>
 }
 
 export interface GitHubPullRequestPublisherOptions extends Pick<GitHubSourceOptions, 'tokens' | 'userAgent'> {
   createClient?: (token: string) => Octokit
+  /** Uploads one image for a description. Absent means every diagram is skipped with a reason. */
+  uploadAsset?: UploadUserAsset
+}
+
+const disclosureLine = /^>\s*🤖 AI disclosure:/
+
+/**
+ * The body with its picture where a reviewer looks first.
+ *
+ * The pr skill puts a diagram after the why and before the AI disclosure, and
+ * every controller body ends with that disclosure, so the image goes right
+ * above it. A body without the line gets the image at the end.
+ */
+export function withPullRequestDiagram(body: string, diagram: { alt: string, url: string }): string {
+  const image = `![${diagram.alt.replaceAll(/[\r\n]+/g, ' ').replaceAll(']', ')')}](${diagram.url})`
+  const lines = body.trimEnd().split(/\r?\n/)
+  const disclosure = lines.findIndex(line => disclosureLine.test(line))
+  if (disclosure === -1)
+    return `${lines.join('\n')}\n\n${image}`
+  return [...lines.slice(0, disclosure), image, '', ...lines.slice(disclosure)].join('\n').replaceAll(/\n{3,}/g, '\n\n')
 }
 
 function repositoryParts(repository: string): { owner: string, repo: string } {
@@ -745,6 +775,24 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           ...request,
         })
       }
+      // The picture is worth an upload, never a refusal: a description without
+      // it still says why the change exists, and the evidence names the reason.
+      const attachDiagram = async (): Promise<{ body: string, diagram: PullRequestDiagramOutcome }> => {
+        if (input.diagram === undefined)
+          return { body: input.body, diagram: { _tag: 'None' } }
+        if (options.uploadAsset === undefined)
+          return { body: input.body, diagram: { _tag: 'Skipped', reason: 'No asset uploader is configured.' } }
+        const repository = await octokit.rest.repos.get({ owner, repo, ...request })
+        const uploaded = await options.uploadAsset({
+          repositoryId: repository.data.id,
+          name: `pr-lens-${input.headRef.replaceAll(/[^\w.-]+/g, '-')}.svg`,
+          contentType: 'image/svg+xml',
+          body: input.diagram.svg,
+        }, signal)
+        return uploaded._tag === 'Err'
+          ? { body: input.body, diagram: { _tag: 'Skipped', reason: uploaded.error } }
+          : { body: withPullRequestDiagram(input.body, { alt: input.diagram.alt, url: uploaded.value }), diagram: { _tag: 'Attached', url: uploaded.value } }
+      }
       return octokit.rest.pulls.list({
         owner,
         repo,
@@ -763,20 +811,21 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
         }
         if (existing !== undefined) {
           await applyLabels(existing.number)
-          return ok({ number: existing.number, url: existing.html_url })
+          return ok({ number: existing.number, url: existing.html_url, diagram: { _tag: 'None' } })
         }
+        const attached = await attachDiagram()
         return octokit.rest.pulls.create({
           owner,
           repo,
           head: input.headRef,
           base: input.baseRef,
           title: input.title,
-          body: input.body,
+          body: attached.body,
           draft: false,
           ...request,
         }).then(async (created) => {
           await applyLabels(created.data.number)
-          return ok({ number: created.data.number, url: created.data.html_url })
+          return ok({ number: created.data.number, url: created.data.html_url, diagram: attached.diagram })
         })
       }).catch((error: unknown): Result<PublishedPullRequest, GitHubReadError> => {
         const status = errorStatus(error)
