@@ -1027,6 +1027,12 @@ export interface OpenAgentPullRequest {
   taskKind: 'baseline_repair' | 'issue_work'
 }
 
+/** One rendered PR Lens view and the caption a reader without images gets. */
+export interface PullRequestDiagram {
+  svg: string
+  alt: string
+}
+
 interface PublicationCommandBase {
   id: string
   taskId: string
@@ -1056,6 +1062,8 @@ export type PublicationCommand
     issueNumber: number
     pullRequestTitle: string
     pullRequestBody: string
+    /** The drawn PR Lens picture the description opens with, or null when the change earned none. */
+    diagram: PullRequestDiagram | null
   }
   | PublicationCommandBase & {
     _tag: 'OpenPullRequest'

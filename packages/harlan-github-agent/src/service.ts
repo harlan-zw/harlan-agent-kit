@@ -33,6 +33,7 @@ import { classifyFailure } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
+import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
@@ -44,6 +45,7 @@ import { createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createCircuitProtectedProvider } from './provider-circuit.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
+import { findPullRequestDiagramReference } from './pull-request-diagram.ts'
 import { createPullRequestStatusController } from './pull-request-status-controller.ts'
 import { createPullRequestTriageAgent } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
@@ -216,6 +218,7 @@ export async function resolveUserLogin(
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
   const now = options.now ?? (() => new Date())
   const agentContext = await loadAgentContext(defaultAgentContextPaths())
+  const diagramReference = await findPullRequestDiagramReference()
   if (agentContext._tag === 'Err')
     throw new Error(agentContext.error)
   const opencodeEnvironment = opencodeAgentEnvironment({ context: agentContext.value, environment: process.env })
@@ -488,6 +491,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         github: workerGithub,
         activityLog,
         claudeHome: agentContext.value.claudeHome,
+        ...(diagramReference === null ? {} : { diagramReference }),
         now,
         runtime,
         store,
@@ -667,7 +671,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         store,
         publisher: createGitPublicationRemote({
           github,
-          pullRequests: createGitHubPullRequestPublisher({ tokens }),
+          pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
           root: controllerRoot,
           tokens,
         }),

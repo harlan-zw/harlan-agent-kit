@@ -9,6 +9,12 @@ catalogs:
     '@antfu/eslint-config':
       specifier: ^9.3.0
       version: 9.3.0
+    '@coldtea/pr-lens-renderer':
+      specifier: ^0.2.2
+      version: 0.2.2
+    '@coldtea/pr-lens-schema':
+      specifier: ^0.2.1
+      version: 0.2.1
     '@iconify-json/octicon':
       specifier: ^1.2.20
       version: 1.2.32
@@ -102,6 +108,12 @@ importers:
 
   packages/harlan-github-agent:
     dependencies:
+      '@coldtea/pr-lens-renderer':
+        specifier: 'catalog:'
+        version: 0.2.2
+      '@coldtea/pr-lens-schema':
+        specifier: 'catalog:'
+        version: 0.2.1
       '@openai/codex-sdk':
         specifier: 'catalog:'
         version: 0.147.0
@@ -425,6 +437,14 @@ packages:
   '@cloudflare/kv-asset-handler@0.4.2':
     resolution: {integrity: sha512-SIOD2DxrRRwQ+jgzlXCqoEFiKOFqaPjhnNTGKXSRLvp1HiOvapLaFG2kEr9dYQTYe8rKrd9uvDUzmAITeNyaHQ==}
     engines: {node: '>=18.0.0'}
+
+  '@coldtea/pr-lens-renderer@0.2.2':
+    resolution: {integrity: sha512-O9Ij0p+qgaJrVz+M2GSeph3U9DE8Xh1L1Y7xZIPCZCsQcqrOoY0Ugxw+0jAixTlIgOlcPbiGxMFliWb0pWzDLg==}
+    engines: {node: '>=20.11'}
+
+  '@coldtea/pr-lens-schema@0.2.1':
+    resolution: {integrity: sha512-cngzb5lMkR6rg46uuthjHuZCDXIYSPYo0Y+dDNhhWAynu1auttu2tN6iZVTXMUAfzyBgZ2mCqYaVDe2i9hC+bw==}
+    engines: {node: '>=20.11'}
 
   '@colordx/core@5.5.0':
     resolution: {integrity: sha512-3PxTH8itZzltK0U9jTwVVnjLXvnDYuq3m+QXsHkENxWiPRh4WaoLcs1SQjqgZ55kS+QyirpH5BVwzP2gMVG6EQ==}
@@ -6266,6 +6286,14 @@ snapshots:
       sisteransi: 1.0.5
 
   '@cloudflare/kv-asset-handler@0.4.2': {}
+
+  '@coldtea/pr-lens-renderer@0.2.2':
+    dependencies:
+      '@coldtea/pr-lens-schema': 0.2.1
+
+  '@coldtea/pr-lens-schema@0.2.1':
+    dependencies:
+      zod: 4.5.4
 
   '@colordx/core@5.5.0': {}
 

@@ -1506,6 +1506,7 @@ describe('journal store', () => {
         issueNumber: 12,
         pullRequestTitle: 'Fix #12: Broken thing',
         pullRequestBody: 'Closes #12.',
+        diagram: { svg: '<svg/>', alt: 'The handler reads through the cache' },
         commitSha: 'issue-commit',
         baseSha: 'base-sha',
         baseRef: 'main',
@@ -1521,6 +1522,7 @@ describe('journal store', () => {
       taskKind: 'issue_work',
       issueNumber: 12,
       pullRequestTitle: 'Fix #12: Broken thing',
+      diagram: { svg: '<svg/>', alt: 'The handler reads through the cache' },
     }))
   })
 

@@ -513,6 +513,14 @@ Use `Fixed` after repair. Use `Open` with the next action while unresolved.
 
 GitHub's `annotation` is anchored to a file and line on a check run. A Review finding is prose, so it is not an annotation. Never use annotation for it.
 
+### Pull request diagram
+
+One PR Lens picture of an Issue work change, drawn from a graph document the Agent authors.
+
+The Agent writes `.pr-lens/graph.json` in its worktree when the change touches three or more modules, crosses a boundary, or has a sequence a reviewer must follow. The controller validates and draws the top view, uploads it as a GitHub user attachment with Harlan's CLI login, and places it in the description above the AI disclosure. A document that does not validate is logged and the pull request opens without a picture.
+
+Use Pull request diagram. Do not use lens, graph, picture, image, or architecture diagram for the published result. The Agent's input is the graph document.
+
 ### Publication
 
 One immutable record of a GitHub write: an automated review comment or a pushed commit.

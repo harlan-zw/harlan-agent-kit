@@ -133,6 +133,7 @@ describe('git publication remote', () => {
       baseSha: expectedHeadSha,
       pullRequestTitle: 'fix: broken thing',
       pullRequestBody: 'Closes #30.',
+      diagram: null,
     }
     const remote = createGitPublicationRemote({
       github: {

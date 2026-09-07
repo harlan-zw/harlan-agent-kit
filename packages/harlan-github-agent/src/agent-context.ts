@@ -28,7 +28,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function isMissingPath(error: unknown): boolean {
+export function isMissingPath(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }
 
@@ -347,6 +347,24 @@ export const UNIT_TEST_LINES = `Unit test rules:
 - Delete a test that can fail while the code is correct. Delete a test that can pass while the code is broken.
 - When behaviour changes on purpose, delete the old test and write the new one.
 - Prefer a real fixture over a mock.`
+
+/**
+ * The core of the pr skill's body rules and voice, inlined so no Agent reads
+ * the file each session. A description that breaks these reads as generated
+ * and costs a reviewer's trust before the diff is open.
+ */
+export const PULL_REQUEST_BODY_LINES = `Pull request description rules:
+- Say why the change is needed. The fix itself gets one or two sentences. Never walk through the implementation or name the functions you touched. The diff shows how.
+- Write as the person who hit the problem. When the work started from an issue, say so. Never invent an experience you did not have.
+- Paste the evidence instead of describing it: the real error line, the output before and after, the config a user writes.
+- Say what you are unsure about: the dead end you abandoned, the follow-up you did not take, the question a reviewer should answer.
+- No verification, testing, or QA section, and no passing mention of what you ran. CI reports that.
+- Include a number only when it changes what a reviewer does, and only when you measured it.
+- Tick a checkbox only when it is true, and only the template's own. Never add a checklist of your own.
+- Delete an empty section. Never write "None" or "N/A" under a heading.
+- Length follows risk: one to three sentences for a fix, more only for a behaviour change, a migration, or a non-obvious tradeoff.
+- Vary the shape. Do not open every paragraph with "This". Bullets and fragments are fine.
+- No em dashes. Plain words. No "this means that" takeaway.`
 
 /** Toolchain rules for every Agent turn that may run a command. */
 export const TOOLCHAIN_LINES = `Use pnpm for every package command. Never use npx.

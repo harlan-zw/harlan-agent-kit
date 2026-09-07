@@ -1,6 +1,6 @@
 import type { ClaimedIssueWorkTask, PullRequestBase } from '../src/types.ts'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -177,5 +177,22 @@ describe('issue worktree', () => {
     // A leftover cherry-pick would hand the commit the wrong subject.
     expect(git(prepared.value.path, 'show', '--no-patch', '--format=%s')).toBe('fix(parser): handle empty input')
     expect(readFileSync(join(prepared.value.path, 'file.ts'), 'utf8')).toBe('export const value = 2\n')
+  })
+})
+
+describe('issue worktree diagram input', () => {
+  it('keeps the graph document out of the verified change', async () => {
+    const { manager, task } = fixture()
+    const prepared = await manager.prepare(task, defaultBranch, new AbortController().signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    writeFileSync(join(prepared.value.path, 'file.ts'), 'export const value = 2\n')
+    mkdirSync(join(prepared.value.path, '.pr-lens'))
+    writeFileSync(join(prepared.value.path, '.pr-lens', 'graph.json'), '{}')
+
+    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+
+    expect(verified).toEqual({ _tag: 'Ok', value: expect.objectContaining({ changedPaths: ['file.ts'] }) })
+    expect(readFileSync(join(prepared.value.path, '.pr-lens', 'graph.json'), 'utf8')).toBe('{}')
   })
 })

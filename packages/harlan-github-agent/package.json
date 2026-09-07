@@ -35,6 +35,8 @@
     "typecheck": "tsc --noEmit && nuxt typecheck dashboard"
   },
   "dependencies": {
+    "@coldtea/pr-lens-renderer": "catalog:",
+    "@coldtea/pr-lens-schema": "catalog:",
     "@openai/codex-sdk": "catalog:",
     "citty": "catalog:",
     "consola": "catalog:",
