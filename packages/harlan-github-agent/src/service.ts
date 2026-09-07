@@ -1159,6 +1159,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       restoreItem: store.restoreItem,
     },
     allowedOrigin: config.server.allowedOrigin,
+    frameAncestors: config.server.frameAncestors,
     dashboardPassword: options.dashboardPassword,
     now,
     settleTask: settleAgentTask,

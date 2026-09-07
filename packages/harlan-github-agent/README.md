@@ -62,6 +62,8 @@ Environment files move one way from the desktop checkouts.
 Git stores only their paths.
 The sync rejects missing files, unsafe symlinks, untrusted paths, and files that Git does not ignore.
 
+The dashboard denies framing. If another HTTPS page must frame it, list that origin in `server.frame_ancestors`.
+
 Save the dashboard password in `dashboard-password` beside the config file. Use at least 32 bytes and restrict the file to mode `600`.
 
 Configure your normal global Git profile before starting. The controller uses its identity and commit-signing settings for every commit it creates.
