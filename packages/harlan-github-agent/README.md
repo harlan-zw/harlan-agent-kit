@@ -72,7 +72,7 @@ Install the configured GitHub App only on selected repositories. `github.allowed
 
 Every tracked pull request authored by `harlan-zw` enters review without approval. An outside contributor receives one automated instruction comment. Adding `harlan-agent-review` approves only the named head commit. The service removes the label after saving the approval.
 
-Every tracked pull request is reviewed. The `harlan-agent-auto-merge` label decides who merges the result. With the label, the service merges the pull request itself after a `READY` review at or above `auto_merge.minimum_confidence`. Without it, the pull request waits for Harlan. The agent that opens a pull request adds the label only when the change carries no judgement, for example a dependency bump. Auto merge stays off until `auto_merge.enabled` is true, and it covers owned repositories and trusted authors only.
+Every tracked pull request is reviewed. The `harlan-agent-auto-merge` label decides who merges the result. With the label, the service merges the pull request itself after a `READY` review at or above `auto_merge.minimum_confidence`. Without it, the pull request waits for Harlan. The agent that opens a pull request adds the label only when the change carries no judgement, for example a dependency bump. Auto merge stays off until `auto_merge.enabled` is true, and it covers owned repositories and trusted authors only. A repository block can set `auto_merge.pull_requests: every` with its own `minimum_confidence` to merge every trusted pull request without the label, for a demo site where a wrong merge costs little.
 
 No new issue work starts above `max_open_pull_requests` open pull requests. Review, repair, and conflict fixes continue, because they shorten that queue.
 

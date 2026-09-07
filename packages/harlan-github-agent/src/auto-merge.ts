@@ -13,6 +13,16 @@ export function hasAutoMergeLabel(labels: string[]): boolean {
   return labels.some(label => label.toLowerCase() === AUTO_MERGE_LABEL)
 }
 
+/**
+ * Whether Auto merge should look at this pull request at all.
+ *
+ * A repository scoped to every pull request needs no label. Everywhere else
+ * the label is the instruction.
+ */
+export function autoMergeCandidate(repository: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
+  return pullRequest.autoMerge || repository.autoMerge._tag === 'Every'
+}
+
 export type AutoMergeMethod = 'merge' | 'rebase' | 'squash'
 
 export type AutoMergePolicy
@@ -41,7 +51,7 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   const { attempts, policy, pullRequest, repository } = input
   if (policy._tag === 'Disabled')
     return { _tag: 'Hold', reason: 'Auto merge is disabled.' }
-  if (!pullRequest.autoMerge)
+  if (!autoMergeCandidate(repository, pullRequest))
     return { _tag: 'Hold', reason: `The pull request has no ${AUTO_MERGE_LABEL} label.` }
   if (!repository.enabled)
     return { _tag: 'Hold', reason: 'The repository is disabled.' }
@@ -63,9 +73,10 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
     return { _tag: 'Hold', reason: 'The current head commit has no published READY review.' }
   if (attempt.findings.some(finding => finding._tag === 'Open'))
     return { _tag: 'Hold', reason: 'The review left an open finding.' }
+  const minimumConfidence = repository.autoMerge._tag === 'Every' ? repository.autoMerge.minimumConfidence : policy.minimumConfidence
   const confidence = attempt.outcome.confidence
-  if (confidence === undefined || confidence < policy.minimumConfidence)
-    return { _tag: 'Hold', reason: `Review confidence is below ${policy.minimumConfidence}.` }
+  if (confidence === undefined || confidence < minimumConfidence)
+    return { _tag: 'Hold', reason: `Review confidence is below ${minimumConfidence}.` }
 
   return { _tag: 'Merge', headSha: pullRequest.headSha, method: policy.method, reviewRunId: attempt.id }
 }

@@ -2,7 +2,7 @@ import type { AutoMergePolicy } from './auto-merge.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubItem, RepositoryMapping } from './types.ts'
-import { autoMergeDecision } from './auto-merge.ts'
+import { autoMergeCandidate, autoMergeDecision } from './auto-merge.ts'
 
 export type AutoMergeEvent
   /** GitHub owns the merge from here and performs it when its checks pass. */
@@ -26,7 +26,7 @@ export interface AutoMergeControllerOptions {
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
   return {
     async reconcile(repository, subject, signal) {
-      if (options.policy._tag === 'Disabled' || subject.kind !== 'pull_request' || !subject.autoMerge)
+      if (options.policy._tag === 'Disabled' || subject.kind !== 'pull_request' || !autoMergeCandidate(repository, subject))
         return
       const decision = autoMergeDecision({
         attempts: options.store.listReviewRuns(repository.github, subject.number),

@@ -31,7 +31,7 @@ Replace that route label with exactly one Review outcome label when Review finis
 
 Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Bind Approval to the exact head commit; never let the label approve a head commit twice.
 
-Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
+Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. A repository block with `auto_merge.pull_requests: every` drops the label condition and uses its own `minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
 
 Start no new issue work above `max_open_pull_requests` open pull requests. Keep review, repair, and conflict fixes running.
 

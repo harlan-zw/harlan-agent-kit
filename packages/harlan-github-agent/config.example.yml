@@ -77,3 +77,8 @@ repositories: []
 # Maintained repositories need an explicit policy. Without an installation,
 # the controller uses the authenticated GitHub account.
 # Set repositories[].max_open_pull_requests to hold new Issue work for one busy repository.
+# Set repositories[].auto_merge to widen Auto merge past the label for one owned
+# repository where a wrong merge costs little, such as a demo site:
+#   auto_merge:
+#     pull_requests: every      # labelled (default) or every
+#     minimum_confidence: 80    # replaces $.auto_merge.minimum_confidence here

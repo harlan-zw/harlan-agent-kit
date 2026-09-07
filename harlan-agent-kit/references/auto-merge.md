@@ -23,6 +23,21 @@ Remove the label when a pull request grows past the change it was added for.
 
 Markdown-only work never reaches this policy. The `pr` skill pushes it directly to `origin/main`.
 
+## Repository scope
+
+A repository can widen Auto merge from labelled pull requests to every pull request:
+
+```yaml
+- github: harlan-zw/melbjs-clone
+  auto_merge:
+    pull_requests: every
+    minimum_confidence: 80
+```
+
+With `pull_requests: every`, no label is needed and the repository's own `minimum_confidence` replaces the service-wide one. Every other condition below still holds: owned repository, trusted author, published `READY` review for the exact head commit, no open finding. The block requires an owned repository with `pr_review: true`.
+
+Use it only where a wrong merge costs little, such as a demo site. Leave it off every repository Harlan would want to read first. Without the block, or with `pull_requests: labelled`, the label decides.
+
 ## When the service hands over
 
 The service enables GitHub auto-merge on a labelled pull request only when every
@@ -32,7 +47,7 @@ condition holds:
 2. The repository owner matches the authenticated GitHub login.
 3. The pull request author is a trusted author for that repository.
 4. Automated review returned `READY` for the exact current head commit.
-5. Review confidence meets the configured minimum.
+5. Review confidence meets the configured minimum: the repository's own with `pull_requests: every`, else `auto_merge.minimum_confidence`.
 6. The pull request is open, is not a draft, and GitHub reports it mergeable.
 
 The handover pins the reviewed head commit as `expectedHeadOid`, so GitHub
