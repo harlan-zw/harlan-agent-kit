@@ -120,7 +120,10 @@ function harness(input: {
         return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
       }),
       getRepairedHeadFindings: () => [],
-      findCurrentPolicyReviewRun: (_repository, _pullRequestNumber, headSha) => (input.reviewRuns ?? []).find(run => run.headSha === headSha) ?? null,
+      storedReviewForHead: (_repository, _pullRequestNumber, headSha) => {
+        const run = (input.reviewRuns ?? []).find(candidate => candidate.headSha === headSha)
+        return run === undefined ? { _tag: 'None' } : { _tag: 'Current', run }
+      },
       getWorkerSession: () => null,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },

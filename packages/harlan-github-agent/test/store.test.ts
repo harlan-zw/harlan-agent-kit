@@ -4058,15 +4058,16 @@ describe('journal store', () => {
       at: '2026-08-13T01:02:00.000Z',
       evidence: 'policy-scope-review',
     })
-    expect(store.findCurrentPolicyReviewRun(first.repository, first.pullRequestNumber, first.pullRequest.headSha))
-      .toEqual(expect.objectContaining({ id: 'policy-scope-review' }))
+    expect(store.storedReviewForHead(first.repository, first.pullRequestNumber, first.pullRequest.headSha))
+      .toEqual({ _tag: 'Current', run: expect.objectContaining({ id: 'policy-scope-review' }) })
 
     store.syncRepositories([{ ...initialPolicy, autoMerge: { _tag: 'Every', minimumConfidence: 90 } }], '2026-08-13T02:00:00.000Z')
 
     // The planner requeues this head for a fresh Review. A worker that still
     // resumed the stored run would complete without new evidence, and the
     // planner would requeue it on every poll.
-    expect(store.findCurrentPolicyReviewRun(first.repository, first.pullRequestNumber, first.pullRequest.headSha)).toBeNull()
+    expect(store.storedReviewForHead(first.repository, first.pullRequestNumber, first.pullRequest.headSha)).toEqual({ _tag: 'Stale' })
+    expect(store.storedReviewForHead(first.repository, first.pullRequestNumber, 'unreviewed-head')).toEqual({ _tag: 'None' })
   })
 
   it('releases a review after its completed Baseline repair becomes stale', () => {

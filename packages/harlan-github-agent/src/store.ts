@@ -93,6 +93,7 @@ import type {
   SelectionMode,
   ServiceUpdateStatus,
   StoredAgentControl,
+  StoredReviewForHead,
   SupersedeReviewRunInput,
   SupersedeReviewRunResult,
   TaskState,
@@ -1003,11 +1004,8 @@ export interface JournalStore extends BatchStore {
     at: string
   }) => boolean
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
-  /**
-   * The newest Review run for one head commit whose evidence was recorded
-   * under the repository's current policy, or null when policy moved since.
-   */
-  findCurrentPolicyReviewRun: (repository: string, pullRequestNumber: number, headSha: string) => ReviewRun | null
+  /** What this service already holds for one head commit. */
+  storedReviewForHead: (repository: string, pullRequestNumber: number, headSha: string) => StoredReviewForHead
   /** Replaces one person's explicit judgment about one Review run. */
   recordAgentFeedback: (input: { reviewRunId: string, feedback: AgentFeedbackInput, at: string }) => RecordAgentFeedbackResult
   /** Newest explicit judgments with the Review evidence needed by the feedback Routine. */
@@ -7717,26 +7715,33 @@ export function openJournalStore(
   }
 
   // The planner requeues a reviewed head when no evidence scope carries the
-  // repository's current policy digest. A worker that then resumed the old run
-  // completed with no new scope, and the planner requeued it on every poll.
-  // Only a run recorded under the current policy is worth resuming.
-  const findCurrentPolicyReviewRun: JournalStore['findCurrentPolicyReviewRun'] = (repository, pullRequestNumber, headSha) => {
+  // repository's current policy digest. A worker that then resumed the old
+  // run, or accepted its comment on GitHub as an existing review, completed
+  // with no new scope, and the planner requeued it on every poll. Only a run
+  // recorded under the current policy is worth resuming, and only a head this
+  // service never reviewed may lean on another actor's comment.
+  const storedReviewForHead: JournalStore['storedReviewForHead'] = (repository, pullRequestNumber, headSha) => {
     const row = database.prepare(`
-      SELECT review_runs.id
+      SELECT
+        review_runs.id,
+        EXISTS (
+          SELECT 1 FROM review_evidence_scopes
+          WHERE review_evidence_scopes.review_run_id = review_runs.id
+            AND review_evidence_scopes.policy_digest = repositories.policy_digest
+        ) AS current
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
-      JOIN review_evidence_scopes ON review_evidence_scopes.review_run_id = review_runs.id
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
         AND review_runs.head_sha = ?
-        AND review_evidence_scopes.policy_digest = repositories.policy_digest
-      ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+      ORDER BY current DESC, review_runs.completed_at DESC, review_runs.id DESC
       LIMIT 1
-    `).get(repository, pullRequestNumber, headSha) as { id: string } | undefined
+    `).get(repository, pullRequestNumber, headSha) as { id: string, current: number } | undefined
     if (row === undefined)
-      return null
-    return listReviewRuns(repository, pullRequestNumber).find(run => run.id === row.id) ?? null
+      return { _tag: 'None' }
+    const run = row.current === 1 ? listReviewRuns(repository, pullRequestNumber).find(candidate => candidate.id === row.id) : undefined
+    return run === undefined ? { _tag: 'Stale' } : { _tag: 'Current', run }
   }
 
   const listReviewRuns: JournalStore['listReviewRuns'] = (repository, pullRequestNumber) => {
@@ -13622,7 +13627,7 @@ export function openJournalStore(
     getRepairedHeadFindings,
     listAgentFeedback,
     listReviewRuns,
-    findCurrentPolicyReviewRun,
+    storedReviewForHead,
     recordAgentFeedback,
     needsAttentionTask,
     requestRestart,

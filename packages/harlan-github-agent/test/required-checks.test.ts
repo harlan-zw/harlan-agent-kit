@@ -79,7 +79,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
-      findCurrentPolicyReviewRun: () => null,
+      storedReviewForHead: () => ({ _tag: 'None' }),
       supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },

@@ -89,7 +89,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -249,7 +249,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A clean Review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: (run) => {
@@ -461,7 +461,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -508,6 +508,95 @@ describe('subject Workers', () => {
     })
     expect(capture.requests).toEqual([])
     expect(workspaceCreated).toBe(false)
+  })
+
+  it('reviews afresh when its own comment predates the current policy', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    let workspaceCreated = false
+    const capture: ProviderCapture = { requests: [] }
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
+        clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
+        listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
+          body: 'Fixes the bug.',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: {
+            _tag: 'Found',
+            authorLogin: 'harlan-zw',
+            state: 'complete',
+            url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+          },
+          pullRequest,
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
+        upsertReviewStatus: () => Promise.reject(new Error('A second comment must not be posted.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      store: {
+        queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
+        getRepairedHeadFindings: () => [],
+        getWorkerSession: () => null,
+        storedReviewForHead: () => ({ _tag: 'Stale' }),
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
+        queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+        recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
+        recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
+      },
+      status: {
+        publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => {
+          workspaceCreated = true
+          return Promise.resolve(err('Stopped at the worktree on purpose.'))
+        },
+        verifyReview: () => Promise.reject(new Error('A second Review must not verify a worktree.')),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repositoryMapping(),
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    // The complete comment on GitHub is this service's own, written under an
+    // older policy. The planner queued a fresh Review to replace it, so the
+    // worker must head for a worktree instead of resolving ExistingReview.
+    expect(result).toEqual(err('Stopped at the worktree on purpose.'))
+    expect(capture.requests).toEqual([])
+    expect(workspaceCreated).toBe(true)
   })
 
   it('queues every structured finding without changing the Review worktree', async () => {
@@ -566,7 +655,7 @@ describe('subject Workers', () => {
         },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -684,7 +773,7 @@ describe('subject Workers', () => {
         },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -789,7 +878,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('A wrong premise must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -907,7 +996,7 @@ describe('subject Workers', () => {
           }]
         },
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -990,7 +1079,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -1084,7 +1173,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -1175,7 +1264,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
@@ -1262,7 +1351,7 @@ describe('subject Workers', () => {
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
-        findCurrentPolicyReviewRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
         recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
