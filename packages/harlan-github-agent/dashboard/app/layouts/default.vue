@@ -19,6 +19,7 @@ const tabs = [
   { label: 'Board', to: '/' },
   { label: 'History', to: '/history' },
   { label: 'Watching', to: '/watching' },
+  { label: 'Routines', to: '/routines' },
   { label: 'Stats', to: '/stats' },
 ]
 

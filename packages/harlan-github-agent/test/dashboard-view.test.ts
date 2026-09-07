@@ -29,6 +29,7 @@ import {
 
   queuedEntries,
   queueWork,
+  repositoryName,
   repositoryWritesControl,
   reviewOutcomeDetail,
   reviewOutcomeLabel,
@@ -38,6 +39,7 @@ import {
   routineTrackingUrl,
   runningPhaseLine,
   scheduledRoutineRecords,
+  shortAge,
   stalledLabel,
   systemState,
   taskHistoryCategory,
@@ -283,6 +285,23 @@ describe('history outcome visibility', () => {
     }
 
     expect(taskProgressDetail(failed)).toBe('Last phase: Running tests and checks')
+  })
+})
+
+describe('repositoryName', () => {
+  it('drops the owner and keeps a name that has no owner', () => {
+    expect(repositoryName('harlan-zw/nuxt-seo')).toBe('nuxt-seo')
+    expect(repositoryName('nuxt-seo')).toBe('nuxt-seo')
+  })
+})
+
+describe('shortAge', () => {
+  it('picks the largest whole unit a dense row can afford', () => {
+    const now = new Date('2026-08-28T12:00:00.000Z')
+    expect(shortAge('2026-08-28T11:59:30.000Z', now)).toBe('now')
+    expect(shortAge('2026-08-28T11:54:00.000Z', now)).toBe('6m')
+    expect(shortAge('2026-08-28T09:10:00.000Z', now)).toBe('2h')
+    expect(shortAge('2026-08-25T12:00:00.000Z', now)).toBe('3d')
   })
 })
 

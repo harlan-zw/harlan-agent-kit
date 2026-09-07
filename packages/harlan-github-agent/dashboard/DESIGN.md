@@ -100,9 +100,10 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 
 | Route | Answers | Shape |
 | --- | --- | --- |
-| `/` Board | Questions 1 to 3, and the last eight of 4 | Four fixed columns: **Needs you**, **Up next** (with a **Waiting** group), **Running**, **Done** |
+| `/` Board | Questions 1 to 3, and the last eight of 4 | A full-width **Needs you** list, then three fixed columns: **Up next** (with a **Waiting** disclosure), **Running**, **Done** |
 | `/history` | What happened, on what evidence | GitHub style list rows. Evidence opens in a slideover |
 | `/watching` | What is being polled | Repository table that flags exceptions only, open items, Dismissed group |
+| `/routines` | What is coming on the clock | Schedule table, soonest first, then the last runs |
 | `/stats` | What the work produced over a range | A stats strip, one bar chart, one table. No score, no money |
 | `/flow` | How work moves through the service | Static explainer. Reached from the overflow menu, never a tab |
 | `/kit` | The design system, rendered | Dev only |
@@ -111,7 +112,7 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 
 One header, one row, 48px, on every page.
 
-- Left: wordmark, then tabs `Board`, `History`, `Watching`, `Stats`.
+- Left: wordmark, then tabs `Board`, `History`, `Watching`, `Routines`, `Stats`.
 - Right: **System** chip, Agent selection button, Pause or Resume, overflow menu.
 - The System chip reads `n/3` agents with a state dot. Grey is normal. Amber means work cannot start (Paused, Manual, writes off, Reserve reached, capacity unavailable, restart requested) and the chip names the reason. Red means an unresolved Incident and the chip carries the count. Red outranks amber. Before the first snapshot the chip shows a grey placeholder and no reason. Clicking it opens the System slideover.
 - The overflow menu holds `Selection mode`, `Restart after current work`, `Notifications`, `Theme`, `How it works`.
@@ -131,26 +132,29 @@ An unresolved Incident also renders as one compact error row above the board col
 
 ### Cards
 
-Trello cards. A card face carries identity and one decision. Everything else opens.
+Three shapes for three questions. A Needs you entry is a one-line row, because a decision is read as a line and twenty of them must fit half a screen. Queued and Running entries are three-line cards. A Done entry is a one-line row, because an outcome is read, not decided. Every shape opens the same slideover.
 
-- Face, top to bottom, the way a GitHub Projects card reads: `owner/repo #number` in muted text, the title in one weight of ink, one state line, then a footer with the work chip on the left and the author avatar on the right. The state line is the reason it needs you, the blocking reason, or the phase with its elapsed time. It clamps at three lines and stays ink; colour belongs to the badge. The terminal, including the last command, opens with the card.
+- Needs you row, left to right: state dot (red for Action required, amber for Approval required), avatar, kind icon and title, `owner/repo #number`, the reason on one truncated line, then a fixed action slot holding the one primary button and the menu. The full reason opens with the row.
+- Card, top to bottom: kind icon and `owner/repo #number` with the queue position and the avatar at the right; the title clamped to two lines; one state line with a dot, the reason or phase truncated to one line, and mono elapsed time for a running agent. Nothing else. The terminal, including the last command, opens with the card.
+- Done row: the outcome as a dot and a word with mono confidence in a fixed slot, then `repo #number title` truncated, then mono age.
 - The overflow menu appears on hover, focus, or a coarse pointer. Forty always-visible kebabs were forty invitations to nothing.
-- One primary action on Needs you cards: `Review and repair` or `Approve`. Keyboard `a` presses it.
-- Running cards carry `Eject` inline; it arms then confirms.
+- One primary action on Needs you rows: `Review and repair` or `Approve`, in the action slot. Keyboard `a` presses it.
+- No card or row carries a second button. `Eject` sits in the Running card's menu and confirms in a modal.
 - Every other action sits in the card's overflow menu: `Open on GitHub`, `Rerun review`, `Cancel`, `Dismiss`. Cancel and Dismiss confirm in a modal that states the consequence in one sentence.
 - Clicking the face opens the card slideover: full reason text, session and commit identifiers, terminal, timeline, and the same actions.
-- Done cards are recessive and show the outcome badge and identity only. Evidence lives on History.
+- Done rows are recessive and show the outcome and identity only. Evidence lives on History.
 
 ### Board rules
 
-- Column order is fixed. Needs you keeps its slot when empty so the board never reflows.
+- The order is fixed: the Needs you list, then Up next, Running, Done. Needs you keeps its slot when empty so the board never reflows.
+- On desktop the board fills the viewport and never scrolls as a page. Needs you takes at most half of it; the three columns share the rest. Each region scrolls on its own.
 - An entry lives in exactly one column, decided by state.
 - Column headings are the name in sentence case, then the count in mono. A dot in front carries state: amber on Needs you while it holds cards, green and pulsing on Running while agents run. No hairline, no uppercase, no title.
 - Columns are a muted surface; cards are elevated white on it. Column surfaces are the only recessed area in the app.
-- Queued work carries a position. Pending work sits under Waiting, looks like every other card, and never gets a position. Its state line says why it waits; a dashed border on thirty cards said nothing.
+- Queued work carries a position. Pending work folds into a `Waiting` disclosure at the foot of Up next and never gets a position. Its state line says why it waits.
 - An empty column names its cause in one line. If the cause has a control, the control is there.
 - One work kind filter, all four columns, hidden until two kinds are present.
-- Done holds eight. The ninth is a link to History.
+- Done holds eight rows in one bordered list. The ninth is a link to History.
 
 ## Every Element Earns Its Place
 
@@ -315,6 +319,7 @@ The `Ui*` components under `app/components/ui/` are ports of the nuxtseo.com des
 - Mona Sans replaces Geist. The dashboard is a GitHub tool and borrows GitHub's face; Geist read as Vercel.
 - Octicons replace Lucide. One set, and it is the set GitHub already taught the reader.
 - Body is 14px. This is a dense tool watched from a distance on a large screen, and 14px is the documented floor.
+- Needs you is a list, not a column. Sixteen three-line cards pushed the sixteenth decision off the screen and each reason wrapped into a paragraph; a 32px row shows twenty decisions in half the viewport with the reason on one readable line. The other three questions still read as a board.
 - Column order is fixed and Needs you keeps its slot when empty. A board that reflows on state is unwatchable.
 - An entry lives in one column, decided by state. Active work with no session yet still lands in Running, so a task cannot vanish between starting and reporting.
 - Queue position is always visible on Up next. Pending work never gets a position, because it does not start on its own.

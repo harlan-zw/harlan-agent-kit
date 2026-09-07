@@ -943,6 +943,24 @@ export function boardCardIdentity(card: BoardCard, snapshot: DashboardSnapshot):
   return { author: item.author, title: item.title, url: item.url, repository: task.repository, kind: item.kind, number }
 }
 
+/** `6m`, `3h`, `2d`: the age a dense row can afford. Under a minute reads as `now`. */
+export function shortAge(iso: string, now: Date): string {
+  const seconds = Math.max(0, secondsSince(iso, now))
+  if (seconds < 60)
+    return 'now'
+  if (seconds < 3_600)
+    return `${Math.floor(seconds / 60)}m`
+  if (seconds < 86_400)
+    return `${Math.floor(seconds / 3_600)}h`
+  return `${Math.floor(seconds / 86_400)}d`
+}
+
+/** `owner/repo` reads as `repo` where the owner is noise, such as a Done row. */
+export function repositoryName(repository: string): string {
+  const slash = repository.lastIndexOf('/')
+  return slash === -1 ? repository : repository.slice(slash + 1)
+}
+
 export interface CardBadge {
   label: string
   tone: 'success' | 'warning' | 'error' | 'neutral'
