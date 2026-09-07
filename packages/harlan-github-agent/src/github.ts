@@ -782,16 +782,29 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           return { body: input.body, diagram: { _tag: 'None' } }
         if (options.uploadAsset === undefined)
           return { body: input.body, diagram: { _tag: 'Skipped', reason: 'No asset uploader is configured.' } }
-        const repository = await octokit.rest.repos.get({ owner, repo, ...request })
-        const uploaded = await options.uploadAsset({
-          repositoryId: repository.data.id,
-          name: `pr-lens-${input.headRef.replaceAll(/[^\w.-]+/g, '-')}.svg`,
-          contentType: 'image/svg+xml',
-          body: input.diagram.svg,
-        }, signal)
-        return uploaded._tag === 'Err'
-          ? { body: input.body, diagram: { _tag: 'Skipped', reason: uploaded.error } }
-          : { body: withPullRequestDiagram(input.body, { alt: input.diagram.alt, url: uploaded.value }), diagram: { _tag: 'Attached', url: uploaded.value } }
+        const picture = input.diagram
+        const uploadAsset = options.uploadAsset
+        // The repository read is part of the picture too, so a transient
+        // failure there skips the picture exactly like a failed upload does.
+        return octokit.rest.repos.get({ owner, repo, ...request })
+          .then(repository => uploadAsset({
+            repositoryId: repository.data.id,
+            name: `pr-lens-${input.headRef.replaceAll(/[^\w.-]+/g, '-')}.svg`,
+            contentType: 'image/svg+xml',
+            body: picture.svg,
+          }, signal))
+          .then((uploaded): { body: string, diagram: PullRequestDiagramOutcome } => {
+            return uploaded._tag === 'Err'
+              ? { body: input.body, diagram: { _tag: 'Skipped', reason: uploaded.error } }
+              : { body: withPullRequestDiagram(input.body, { alt: picture.alt, url: uploaded.value }), diagram: { _tag: 'Attached', url: uploaded.value } }
+          })
+          .catch((error: unknown): { body: string, diagram: PullRequestDiagramOutcome } => ({
+            body: input.body,
+            diagram: {
+              _tag: 'Skipped',
+              reason: `could not read the repository for the diagram upload: ${error instanceof Error ? error.message : 'GitHub request failed.'}`,
+            },
+          }))
       }
       return octokit.rest.pulls.list({
         owner,

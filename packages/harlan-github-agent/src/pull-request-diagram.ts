@@ -106,7 +106,15 @@ export function drawPullRequestDiagram(document: string, provenance: PullRequest
   const lens = view?.lens ?? (parsed.value.lenses.includes('architecture') ? 'architecture' : parsed.value.lenses[0])
   if (lens === undefined)
     return err('the document declares no lens')
-  const drawn = render(parsed.value, { lens, theme: 'dark', ...(view === undefined ? {} : { view: view.id }) })
+  // A document that validates but leaves the chosen lens nothing to draw is
+  // the Agent's mistake to read about, never a thrown failure.
+  let drawn: { svg: string }
+  try {
+    drawn = render(parsed.value, { lens, theme: 'dark', ...(view === undefined ? {} : { view: view.id }) })
+  }
+  catch (error: unknown) {
+    return err(`the document could not be drawn: ${error instanceof Error ? error.message : String(error)}`)
+  }
   return ok({ svg: drawn.svg, alt: view?.summary ?? parsed.value.summary ?? parsed.value.title })
 }
 
@@ -117,14 +125,17 @@ export type ReadPullRequestDiagram
 
 /** Reads and draws the graph document the Agent left in the worktree, if any. */
 export async function readPullRequestDiagram(worktreePath: string, provenance: PullRequestDiagramProvenance): Promise<ReadPullRequestDiagram> {
-  const document = await readFile(join(worktreePath, PULL_REQUEST_DIAGRAM_PATH), 'utf8')
-    .catch((error: unknown) => {
+  const read = await readFile(join(worktreePath, PULL_REQUEST_DIAGRAM_PATH), 'utf8')
+    .then(value => ok<string | null>(value))
+    .catch((error: unknown): Result<string | null, string> => {
       if (isMissingPath(error))
-        return null
-      throw error
+        return ok(null)
+      return err(error instanceof Error ? error.message : String(error))
     })
-  if (document === null)
+  if (read._tag === 'Err')
+    return { _tag: 'Invalid', reason: `the document could not be read: ${read.error}` }
+  if (read.value === null)
     return { _tag: 'Absent' }
-  const drawn = drawPullRequestDiagram(document, provenance)
+  const drawn = drawPullRequestDiagram(read.value, provenance)
   return drawn._tag === 'Ok' ? { _tag: 'Drawn', diagram: drawn.value } : { _tag: 'Invalid', reason: drawn.error }
 }
