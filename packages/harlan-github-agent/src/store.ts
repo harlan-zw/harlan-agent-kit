@@ -9414,11 +9414,18 @@ export function openJournalStore(
           LEFT JOIN review_resolutions AS resolution
             ON resolution.task_id = candidate.id AND resolution.review_run_id = review_runs.id
           WHERE candidate.subject_id = review_runs.subject_id
-            AND candidate.revision_id = review_runs.revision_id
             AND candidate.kind = 'adversarial_review'
+            -- A run follows the head across Revisions; a superseded task stays
+            -- on the Revision that superseded it. Both answer the same head.
+            AND candidate.revision_id IN (
+              SELECT id FROM revisions
+              WHERE subject_id = review_runs.subject_id
+                AND json_extract(payload, '$.headSha') = review_runs.head_sha
+            )
           ORDER BY
             (resolution.review_run_id IS NOT NULL) DESC,
             (candidate.evidence = review_runs.id) DESC,
+            (candidate.revision_id = review_runs.revision_id) DESC,
             candidate.updated_at DESC,
             candidate.id DESC
           LIMIT 1

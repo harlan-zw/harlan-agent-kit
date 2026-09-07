@@ -4175,6 +4175,95 @@ describe('journal store', () => {
     })).toBe(true)
   })
 
+  it('refreshes the gates of a Review whose task was superseded on the same head', () => {
+    const store = createStore()
+    const initialPolicy = repositoryMapping()
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.syncRepositories([initialPolicy], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'superseded-gate-first',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const first = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 3_600_000)
+    if (first === null)
+      throw new Error('Expected the first Review.')
+    store.recordReviewRun({
+      id: 'old-policy-run',
+      repository: first.repository,
+      pullRequestNumber: first.pullRequestNumber,
+      revisionId: first.revisionId,
+      headSha: first.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'old-policy-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 95,
+      findings: [],
+    })
+    store.completeWorkerTask({
+      taskId: first.id,
+      workerId: first.state.workerId,
+      fence: first.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      evidence: 'old-policy-run',
+    })
+
+    // Policy moves, so the planner queues a fresh Review of the same head.
+    store.syncRepositories([{
+      ...initialPolicy,
+      writablePullRequestHeadPrefixes: [...initialPolicy.writablePullRequestHeadPrefixes, 'refactor/'],
+    }], '2026-08-13T02:00:00.000Z')
+    store.recordObservation({
+      externalId: 'superseded-gate-policy',
+      observedAt: '2026-08-13T02:00:01.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const fresh = store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 3_600_000)
+    if (fresh === null)
+      throw new Error('Expected the fresh Review.')
+
+    // The base branch moves under it and the head now conflicts. The fresh
+    // Review is superseded, and the old run follows the head to the new
+    // Revision. Its gate refresh must still find the task that owns it, or
+    // the sweep raises an Incident every pass while the conflict stands.
+    store.recordObservation({
+      externalId: 'superseded-gate-conflict',
+      observedAt: '2026-08-13T03:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'conflicting', baseSha: 'moved-base' }),
+    })
+    // A second merge lands on the base. The run follows the head again; the
+    // superseded task, by design, does not.
+    const conflicting = store.recordObservation({
+      externalId: 'superseded-gate-conflict-again',
+      observedAt: '2026-08-13T03:10:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'conflicting', baseSha: 'moved-base-again' }),
+    })
+    if (conflicting._tag !== 'Inserted')
+      throw new Error('Expected the second conflicting revision.')
+    const gates = { ...passedReviewGates(), merge: { _tag: 'Failed' as const, reason: 'The pull request conflicts with its base.', evidence: [] } }
+
+    expect(store.stageReviewGateStatus({
+      reviewRunId: 'old-policy-run',
+      repository: first.repository,
+      pullRequestNumber: first.pullRequestNumber,
+      revisionId: conflicting.revisionId,
+      expectedHeadSha: first.pullRequest.headSha,
+      gates,
+      body: '### 🤖 BLOCKED',
+      desiredOutcome: 'BLOCKED',
+      at: '2026-08-13T03:01:00.000Z',
+    })).toEqual(expect.objectContaining({ _tag: 'Staged' }))
+  })
+
   it('releases a review after its completed Baseline repair becomes stale', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
