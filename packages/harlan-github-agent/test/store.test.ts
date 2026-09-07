@@ -4069,6 +4069,55 @@ describe('journal store', () => {
     expect(store.findCurrentPolicyReviewRun(first.repository, first.pullRequestNumber, first.pullRequest.headSha)).toBeNull()
   })
 
+  it('keeps a Running Review whose own run just landed through the next poll', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.recordObservation({
+      externalId: 'running-review-first',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 3_600_000)
+    if (task === null)
+      throw new Error('Expected the Review Task.')
+    store.recordReviewRun({
+      id: 'landed-run',
+      repository: task.repository,
+      pullRequestNumber: task.pullRequestNumber,
+      revisionId: task.revisionId,
+      headSha: task.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'landed-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:10:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 95,
+      findings: [],
+    })
+
+    // The worker records its run, then publishes. A poll between the two
+    // reads the head as reviewed and must not take the Task from that worker.
+    store.recordObservation({
+      externalId: 'running-review-poll',
+      observedAt: '2026-08-13T01:10:01.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+
+    expect(store.completeWorkerTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:10:02.000Z',
+      evidence: 'landed-run',
+    })).toBe(true)
+  })
+
   it('releases a review after its completed Baseline repair becomes stale', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

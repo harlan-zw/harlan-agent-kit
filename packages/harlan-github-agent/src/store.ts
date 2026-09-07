@@ -4053,13 +4053,15 @@ function supersedeWorkerTasks(
   at: string,
   reason: string,
   exceptRevisionId?: string,
+  keepRunningRevisionId?: string,
 ): void {
   const rows = database.prepare(`
     SELECT id, state_tag, fence FROM worker_tasks
     WHERE subject_id = ? AND kind = ?
       AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Failed')
       AND (? IS NULL OR revision_id != ?)
-  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null) as unknown as Array<{
+      AND NOT (? IS NOT NULL AND state_tag = 'Running' AND revision_id = ? AND lease_expires_at > ?)
+  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null, keepRunningRevisionId ?? null, keepRunningRevisionId ?? null, at) as unknown as Array<{
     id: string
     state_tag: 'Queued' | 'ActionRequired' | 'Running' | 'Failed'
     fence: number
@@ -4289,6 +4291,11 @@ function planAdversarialReview(
   }
 
   if (!eligible) {
+    // A worker records its run, then publishes the comment. A poll between
+    // the two reads the head as reviewed because of that very run, so the
+    // Running Task on this revision keeps its worker and completes itself,
+    // while its lease is live. Anything else waiting on the head is done for.
+    const ownRunLanded = alreadyReviewed && localAttempt.head_review_run_id !== null
     supersedeWorkerTasks(
       database,
       subjectId,
@@ -4297,6 +4304,8 @@ function planAdversarialReview(
       alreadyReviewed
         ? 'The current head commit already has an automated review.'
         : 'The pull request is not ready for review.',
+      undefined,
+      ownRunLanded ? revisionId : undefined,
     )
     return
   }
