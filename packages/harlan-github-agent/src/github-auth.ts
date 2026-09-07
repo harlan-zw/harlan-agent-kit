@@ -64,12 +64,16 @@ function repositoryName(repository: string): string {
  * and label call goes through GitHub's Issues API, whatever the Item is. GitHub
  * states the same requirement in its `X-Accepted-GitHub-Permissions` header for
  * those routes.
+ *
+ * `checks_read` carries `actions` because the base gate lists workflow runs
+ * to drop the suites a `workflow_run` event attached to the default branch
+ * tip. Without it GitHub answers 403 and every CI gate reads PENDING.
  */
 function permissions(access: GitHubRepositoryAccess): Record<string, PermissionLevel> {
   if (access === 'read')
     return { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }
   if (access === 'checks_read')
-    return { checks: 'read', metadata: 'read', statuses: 'read' }
+    return { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }
   if (access === 'item_write')
     return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
   if (access === 'workflows_write')
