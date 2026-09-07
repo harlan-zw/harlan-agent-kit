@@ -10,7 +10,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
-import { runAgentTurn } from './agent-turn.ts'
+import { runRepairedAgentTurn } from './agent-turn.ts'
 import { withBaselineRepairMarker } from './baseline-repair-state.ts'
 import { classifyCheckFailure } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
@@ -358,7 +358,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       const memory = options.claudeHome === undefined
         ? null
         : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
-      const turn = await runAgentTurn(options, {
+      const turn = await runRepairedAgentTurn({ ...options, parse: parseResponse }, {
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
@@ -379,29 +379,28 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       }, signal)
       if (turn._tag === 'Err')
         return turn
-      const parsed = await parseResponse(turn.value.response)
       // A bad metadata envelope must not discard a finished patch. Review and
       // Repair own code quality after publication, so the controller supplies
       // safe PR metadata and keeps the Agent's work moving.
       let response: RepairedResponse
-      if (parsed._tag === 'Err') {
+      if (turn.value._tag === 'Unparsed') {
         options.activityLog?.record(task.id, {
           _tag: 'Reasoning',
           at: options.now().toISOString(),
-          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
+          text: `The agent response could not be parsed (${turn.value.reason}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
         })
         response = controllerBaselineMetadata()
       }
       else {
-        if (parsed.value.outcome === 'blocked') {
+        if (turn.value.value.outcome === 'blocked') {
           return ok({
             _tag: 'ActionRequired',
-            reason: cleanLine(parsed.value.summary),
-            evidence: JSON.stringify(parsed.value),
+            reason: cleanLine(turn.value.value.summary),
+            evidence: JSON.stringify(turn.value.value),
             usage: turn.value.usage,
           })
         }
-        response = parsed.value
+        response = turn.value.value
       }
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')

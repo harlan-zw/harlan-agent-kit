@@ -1,3 +1,5 @@
+import type { AgentEvent, AgentProvider } from '../src/agent-provider.ts'
+import type { PullRequestTemplate } from '../src/github-agent-source.ts'
 import type { OpenAgentPullRequest, PullRequestBase } from '../src/types.ts'
 import type { IssueWorktreeManager } from '../src/worktree.ts'
 import type { ProviderCapture } from './fixtures.ts'
@@ -672,5 +674,128 @@ Closes #12.`,
     expect(new Set(asked)).toEqual(new Set([triageDigest]))
     if (result._tag !== 'Ok' || result.value._tag !== 'Publish' || result.value.publication._tag !== 'OpenPullRequest')
       throw new Error('Expected a pull request publication.')
+  })
+})
+
+describe('issue work pull request metadata', () => {
+  function runIssueWork(input: { texts: string[], template: PullRequestTemplate }) {
+    const repository = repositoryMapping()
+    const issue = issueItem()
+    const capture: ProviderCapture = { requests: [] }
+    const recorded: unknown[] = []
+    const provider: AgentProvider = {
+      name: 'codex',
+      runTurn: (request) => {
+        capture.requests.push(request)
+        const text = input.texts[capture.requests.length - 1] ?? input.texts[input.texts.length - 1] ?? ''
+        return (async function* () {
+          yield { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent
+          yield { _tag: 'Message', text } as AgentEvent
+          yield { _tag: 'TurnCompleted' } as AgentEvent
+        })()
+      },
+    }
+    const worker = createIssueWorkWorker({
+      activityLog: { record: (_taskId, item) => recorded.push(item) },
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, provider),
+      github: {
+        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
+        getPullRequestTemplate: () => Promise.resolve(ok(input.template)),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getIssueTriageEvidence: () => null,
+        getWorkerSession: (_repository, _number, _role, scopeDigest) => scopeDigest === undefined ? null : 'triage-session',
+        listOpenAgentPullRequests: () => [],
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(repository)),
+      worktrees: {
+        prepare: () => Promise.resolve(ok({ path: '/tmp/issue-work', headSha: 'base-sha', baseSha: 'base-sha', defaultBranchSha: 'base-sha' })),
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 1, changedPaths: ['src/parser.ts'] })),
+        restack: () => Promise.reject(new Error('Issue work must not restack without a stack base.')),
+        commit: () => Promise.resolve(ok({ commitSha: 'commit-sha', baseSha: 'base-sha', artifactRef: 'artifact-ref', digest: 'patch-digest', changedFiles: 1 })),
+      },
+    })
+    return worker.run({
+      id: 'issue-work-task',
+      kind: 'issue_work',
+      repository: repository.github,
+      issueNumber: issue.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      issue,
+    }, new AbortController().signal).then(result => ({ result, capture, recorded }))
+  }
+
+  const title = 'fix(parser): keep the trailing byte of a chunked body'
+  const answer = (overrides: Record<string, unknown>) => JSON.stringify({
+    outcome: 'implemented',
+    summary: 'Kept the trailing byte.',
+    checks: ['pnpm vitest run test/parser.test.ts'],
+    commitMessage: title,
+    pullRequestTitle: title,
+    pullRequestBody: '### Description\n\nThe parser dropped the last byte.\n\n### Linked Issues\n\nCloses #12.',
+    ...overrides,
+  })
+  const template = { _tag: 'Found' as const, body: '### Description\n\n### Linked Issues' }
+
+  it('publishes the Agent title when prose precedes its JSON', async () => {
+    const { result, capture } = await runIssueWork({ texts: [`All green. Final result:\n\n${answer({})}`], template })
+
+    expect(capture.requests).toHaveLength(1)
+    expect(result).toEqual(ok(expect.objectContaining({
+      publication: expect.objectContaining({ pullRequestTitle: title }),
+    })))
+  })
+
+  it('shows a repository without a template the default one and accepts a body that follows it', async () => {
+    const body = [
+      '### 🔗 Linked issue',
+      '',
+      'Closes #12.',
+      '',
+      '### ❓ Type of change',
+      '',
+      '- [ ] 📖 Documentation',
+      '- [x] 🐞 Bug fix',
+      '- [ ] 👌 Enhancement',
+      '- [ ] ✨ New feature',
+      '- [ ] 🧹 Chore',
+      '- [ ] ⚠️ Breaking change',
+      '',
+      '### 📚 Description',
+      '',
+      'The parser dropped the last byte.',
+    ].join('\n')
+    const { result, capture } = await runIssueWork({ texts: [answer({ pullRequestBody: body })], template: { _tag: 'Missing' } })
+
+    expect(capture.requests).toHaveLength(1)
+    expect(capture.requests[0]?.prompt).toContain('### 🔗 Linked issue')
+    expect(capture.requests[0]?.prompt).not.toContain('"_tag":"Missing"')
+    expect(result).toEqual(ok(expect.objectContaining({
+      publication: expect.objectContaining({
+        pullRequestTitle: title,
+        pullRequestBody: expect.stringContaining('- [x] 🐞 Bug fix'),
+      }),
+    })))
+  })
+
+  it('keeps the Agent title when only its body still breaks a rule after the repair turn', async () => {
+    const { result, capture, recorded } = await runIssueWork({ texts: [answer({ pullRequestBody: '## Description\n\nCloses #12.' })], template })
+
+    expect(capture.requests).toHaveLength(2)
+    expect(capture.requests[1]?.prompt).toContain('the body drops part of the repository pull request template')
+    expect(JSON.stringify(recorded)).toContain('the body drops part of the repository pull request template')
+    expect(result).toEqual(ok(expect.objectContaining({
+      publication: expect.objectContaining({
+        pullRequestTitle: title,
+        pullRequestBody: expect.stringMatching(/### Description[\s\S]*### Linked Issues[\s\S]*Closes #12\./),
+      }),
+    })))
   })
 })

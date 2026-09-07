@@ -9,7 +9,7 @@ import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAg
 import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
-import { runAgentTurn } from './agent-turn.ts'
+import { runRepairedAgentTurn, unwrapJsonResponse } from './agent-turn.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
 import { canWorkIssues } from './repository-policy.ts'
@@ -109,22 +109,58 @@ function withAiDisclosure(body: string): string {
   return `${content}\n\n${aiDisclosure}`
 }
 
+const CONVENTIONAL_SUBJECT = /^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/
+
+/** A Conventional Commit subject short enough for GitHub to show whole. */
+function isPullRequestSubject(title: string): boolean {
+  return CONVENTIONAL_SUBJECT.test(title) && title.length < 70
+}
+
+/**
+ * The template a repository without one gets.
+ *
+ * The Agent copies the template it is shown and the controller checks the body
+ * against the same text, so a repository with no template must still show one.
+ * Before this, such a repository showed the Agent nothing and then demanded
+ * three headings it had never seen, so every Issue work pull request there
+ * shipped under the controller's generic title.
+ */
+export const DEFAULT_PULL_REQUEST_TEMPLATE = `### 🔗 Linked issue
+
+### ❓ Type of change
+
+- [ ] 📖 Documentation
+- [ ] 🐞 Bug fix
+- [ ] 👌 Enhancement
+- [ ] ✨ New feature
+- [ ] 🧹 Chore
+- [ ] ⚠️ Breaking change
+
+### 📚 Description
+`
+
+export function pullRequestTemplateBody(template: PullRequestTemplate): string {
+  return template._tag === 'Found' ? template.body : DEFAULT_PULL_REQUEST_TEMPLATE
+}
+
+/** A checklist line with its box cleared, so a ticked box still matches the template. */
+function untick(text: string): string {
+  return text.replaceAll(/^([ \t]*[-*] )\[x\]/gim, '$1[ ]')
+}
+
 function templateStructure(body: string): string[] {
   return [
     ...body.matchAll(/<!--.*?-->/gs),
     ...body.matchAll(/^#{1,6} [^\r\n]+$/gm),
     ...body.matchAll(/^[ \t]*[-*] \[[ x]\] [^\r\n]+$/gim),
-  ].map(match => ({ index: match.index, value: match[0] })).sort((left, right) => left.index - right.index).map(match => match.value)
+  ].map(match => ({ index: match.index, value: untick(match[0]) })).sort((left, right) => left.index - right.index).map(match => match.value)
 }
 
-function preservesTemplate(body: string, template: PullRequestTemplate): boolean {
-  if (template._tag === 'Missing') {
-    return ['### 🔗 Linked issue', '### ❓ Type of change', '### 📚 Description']
-      .every(section => body.includes(section))
-  }
+function preservesTemplate(body: string, template: string): boolean {
+  const unticked = untick(body)
   let position = 0
-  return templateStructure(template.body).every((part) => {
-    const next = body.indexOf(part, position)
+  return templateStructure(template).every((part) => {
+    const next = unticked.indexOf(part, position)
     if (next === -1)
       return false
     position = next + part.length
@@ -136,30 +172,26 @@ function closesLines(issueNumbers: readonly number[]): string {
   return issueNumbers.map(number => `Closes #${number}.`).join('\n')
 }
 
-function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: PullRequestTemplate, issueNumbers: readonly number[]): ImplementedAgentResponse {
+/**
+ * The title the Agent chose, when its answer named one that fits.
+ *
+ * A body that breaks a template rule says nothing about the title beside it,
+ * so the title survives the substitution. The generic controller title is for
+ * an answer that named no usable title at all.
+ */
+function salvagedTitle(response: string): Promise<string | undefined> {
+  return Promise.resolve(unwrapJsonResponse(response))
+    .then(value => JSON.parse(value) as AgentResponsePayload)
+    .then(value => typeof value.pullRequestTitle === 'string' && isPullRequestSubject(value.pullRequestTitle) ? value.pullRequestTitle : undefined)
+    // Unparseable JSON names no title; the caller already logged the answer.
+    .catch(() => undefined)
+}
+
+function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: string, issueNumbers: readonly number[], salvaged: string | undefined): ImplementedAgentResponse {
   const issueTitle = cleanLine(task.issue.title)
-  const title = /^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/.test(issueTitle)
-    && issueTitle.length < 70
-    ? issueTitle
-    : `fix: resolve issue #${task.issueNumber}`
-  const body = template._tag === 'Found'
-    ? `${template.body.trimEnd()}\n\n${closesLines(issueNumbers)}`
-    : `### 🔗 Linked issue
-
-${closesLines(issueNumbers)}
-
-### ❓ Type of change
-
-- [ ] 📖 Documentation
-- [x] 🐞 Bug fix
-- [ ] 👌 Enhancement
-- [ ] ✨ New feature
-- [ ] 🧹 Chore
-- [ ] ⚠️ Breaking change
-
-### 📚 Description
-
-Implements ${issueNumbers.map(number => `${task.repository}#${number}`).join(', ')}.`
+  const title = salvaged
+    ?? (isPullRequestSubject(issueTitle) ? issueTitle : `fix: resolve issue #${task.issueNumber}`)
+  const body = `${template.trimEnd()}\n\n${closesLines(issueNumbers)}`
   return {
     outcome: 'implemented',
     summary: `Implemented ${issueNumbers.map(number => `${task.repository}#${number}`).join(', ')}.`,
@@ -170,7 +202,7 @@ Implements ${issueNumbers.map(number => `${task.repository}#${number}`).join(', 
   }
 }
 
-function parseAgentResponse(text: string, issueNumbers: readonly number[], template: PullRequestTemplate): Promise<Result<AgentResponse, string>> {
+function parseAgentResponse(text: string, issueNumbers: readonly number[], template: string): Promise<Result<AgentResponse, string>> {
   return Promise.resolve(text)
     .then(value => JSON.parse(value) as AgentResponsePayload)
     .then((value): Result<AgentResponse, string> => {
@@ -191,7 +223,7 @@ function parseAgentResponse(text: string, issueNumbers: readonly number[], templ
       // Each rule names itself. One shared refusal told nobody which of five
       // rules the metadata broke, so the Incident a person read said only that
       // something was wrong, and a retry had nothing to correct.
-      const brokenRule = !/^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/.test(value.pullRequestTitle)
+      const brokenRule = !CONVENTIONAL_SUBJECT.test(value.pullRequestTitle)
         ? 'the title is not a Conventional Commit subject'
         : value.pullRequestTitle.length >= 70
           ? 'the title is 70 characters or longer'
@@ -238,7 +270,8 @@ export interface IssueWorkPromptInput {
   task: ClaimedIssueWorkTask
   body: string
   comments: readonly string[]
-  template: PullRequestTemplate
+  /** The pull request template body the Agent copies, real or default. */
+  template: string
   routineSource: RoutineIssueSource | null
   triage: IssueTriageResult | null
   /** Instruction file names that exist in the prepared worktree. */
@@ -394,7 +427,8 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const sessionId = options.store.getWorkerSession(task.repository, task.issueNumber, 'issue_triage', scopeDigest)
       if (sessionId === null)
         return err('The issue changed before work started.')
-      const turn = await runAgentTurn(options, {
+      const templateBody = pullRequestTemplateBody(template.value)
+      const turn = await runRepairedAgentTurn({ ...options, parse: response => parseAgentResponse(response, issueNumbers, templateBody) }, {
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.issueNumber,
@@ -403,7 +437,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           task,
           body: snapshot.value.body,
           comments: snapshot.value.comments,
-          template: template.value,
+          template: templateBody,
           routineSource,
           triage,
           instructionFiles,
@@ -421,29 +455,28 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       }, signal)
       if (turn._tag === 'Err')
         return turn
-      const parsed = await parseAgentResponse(turn.value.response, issueNumbers, template.value)
       // A bad metadata envelope must not discard a finished patch. Review and
       // Repair own code quality after publication, so the controller supplies
       // safe PR metadata and keeps the Agent's work moving.
       let response: ImplementedAgentResponse
-      if (parsed._tag === 'Err') {
+      if (turn.value._tag === 'Unparsed') {
         options.activityLog?.record(task.id, {
           _tag: 'Reasoning',
           at: options.now().toISOString(),
-          text: `The agent response could not be parsed (${parsed.error}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
+          text: `The agent response could not be parsed (${turn.value.reason}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
         })
-        response = controllerIssueMetadata(task, template.value, issueNumbers)
+        response = controllerIssueMetadata(task, templateBody, issueNumbers, await salvagedTitle(turn.value.response))
       }
       else {
-        if (parsed.value.outcome === 'blocked') {
+        if (turn.value.value.outcome === 'blocked') {
           return ok({
             _tag: 'ActionRequired',
-            reason: cleanLine(parsed.value.summary),
-            evidence: JSON.stringify(parsed.value),
+            reason: cleanLine(turn.value.value.summary),
+            evidence: JSON.stringify(turn.value.value),
             usage: turn.value.usage,
           })
         }
-        response = parsed.value
+        response = turn.value.value
       }
 
       const verified = await options.worktrees.verify(task, prepared.value, signal)
