@@ -28,10 +28,10 @@ Markdown-only work never reaches this policy. The `pr` skill pushes it directly 
 A repository can widen Auto merge from labelled pull requests to every pull request:
 
 ```yaml
-  - github: harlan-zw/melbjs-clone
-    auto_merge:
-      pull_requests: every
-      minimum_confidence: 80
+- github: harlan-zw/melbjs-clone
+  auto_merge:
+    pull_requests: every
+    minimum_confidence: 80
 ```
 
 With `pull_requests: every`, no label is needed and the repository's own `minimum_confidence` replaces the service-wide one. Every other condition below still holds: owned repository, trusted author, published `READY` review for the exact head commit, no open finding. The block requires an owned repository with `pr_review: true`.
