@@ -30,7 +30,7 @@ export interface AgentAppOptions {
 }
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
-const DASHBOARD_PAGES = ['history', 'watching', 'flow', 'stats'] as const
+const DASHBOARD_PAGES = ['history', 'watching', 'routines', 'flow', 'stats'] as const
 const EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS = 12_000
 
 const securityHeaders = {
