@@ -4070,8 +4070,8 @@ describe('journal store', () => {
     })
 
     expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-13T02:01:00.000Z', 10_000)).toBeNull()
-    expect(store.findCurrentPolicyReviewRun(first.repository, first.pullRequestNumber, first.pullRequest.headSha))
-      .toEqual(expect.objectContaining({ id: 'auto-merge-scope-review' }))
+    expect(store.storedReviewForHead(first.repository, first.pullRequestNumber, first.pullRequest.headSha))
+      .toEqual({ _tag: 'Current', run: expect.objectContaining({ id: 'auto-merge-scope-review' }) })
   })
 
   it('stops counting a stored Review run once trusted repository policy changes', () => {
