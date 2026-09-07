@@ -29,7 +29,6 @@ import {
 
   queuedEntries,
   queueWork,
-  repositoryState,
   repositoryWritesControl,
   reviewOutcomeDetail,
   reviewOutcomeLabel,
@@ -44,6 +43,7 @@ import {
   taskHistoryCategory,
   taskKindLabel,
   taskProgressDetail,
+  taskRowSummary,
   taskStateTone,
   taskSubjectUrl,
   waitingEntries,
@@ -259,6 +259,21 @@ describe('history outcome visibility', () => {
     const superseded = { ...reviewTask, state: { _tag: 'Superseded' as const, reason: 'A newer head commit replaced this review.' } }
 
     expect(taskHistoryCategory(superseded)).toBe('superseded')
+  })
+
+  it('summarises a clean merge as a sentence instead of the stored JSON', () => {
+    const merged = { ...reviewTask, state: { _tag: 'Completed' as const, evidence: '{"_tag":"CleanMerge","headSha":"1f382edd47adec4c948b7e35211eaf7ca9d49946","baseSha":"1c281437935152622615e4f5e1a2b3c4d5e6f708","baseRef":"main"}' } }
+
+    expect(taskRowSummary(merged)).toBe('Merged main cleanly at 1c28143.')
+  })
+
+  it('shortens a published commit to seven characters and hides JSON it cannot read', () => {
+    const published = { ...reviewTask, state: { _tag: 'Completed' as const, evidence: 'Published 6f208efa6d2e70bc8ffe88bb581b9d7ce4625aa5.' } }
+    const findings = { ...reviewTask, state: { _tag: 'Completed' as const, evidence: '{"findings":[],"checks":[]}' } }
+
+    expect(taskRowSummary(published)).toBe('Published 6f208ef.')
+    expect(taskRowSummary(findings)).toBeUndefined()
+    expect(taskRowSummary({ ...reviewTask, state: { _tag: 'Queued' } })).toBeUndefined()
   })
 
   it('shows the last phase without presenting it as completion progress', () => {
@@ -691,14 +706,6 @@ describe('task presentation', () => {
     expect(taskStateTone(reviewTask)).toBe('success')
     expect(taskStateTone(triageTask)).toBe('error')
     expect(taskStateTone({ ...reviewTask, state: { _tag: 'Superseded', reason: 'Head moved.' } })).toBe('neutral')
-  })
-})
-
-describe('repositoryState', () => {
-  it('ranks an error above a missing first poll', () => {
-    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: 'boom', subjectCount: 0 }).tone).toBe('error')
-    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null, subjectCount: 0 }).tone).toBe('warning')
-    expect(repositoryState({ github: 'a/b', enabled: true, writesEnabled: true, ownership: 'owned', paused: false, lastAttemptAt: null, lastSuccessAt: '2026-08-14T11:00:00.000Z', lastError: null, subjectCount: 0 }).tone).toBe('success')
   })
 })
 

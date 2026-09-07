@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { HistoryRow, OutcomeFilter } from '../utils/history.ts'
-import { routineRunPresentation, taskNumber, taskStateDetail, taskSubjectUrl } from '../utils/dashboard.ts'
+import { routineRunPresentation, taskNumber, taskRowSummary, taskSubjectUrl } from '../utils/dashboard.ts'
 import {
   canRerunReview,
   historyRangeFromQuery,
@@ -148,13 +148,18 @@ useHead({
           @click="selectedKey = row.key"
         />
         <div class="pointer-events-none relative flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 px-2 py-2 [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
-          <StateBadge
-            :tone="historyRowBadge(row).tone"
-            :label="historyRowBadge(row).label"
-            :confidence="historyRowBadge(row).confidence"
-            :uppercase="historyRowBadge(row).uppercase"
-          />
-          <WorkChip :work="historyRowWork(row)" />
+          <!-- Fixed slots above sm, so the identity column starts on one line down the page. -->
+          <span class="flex shrink-0 sm:w-34">
+            <StateBadge
+              :tone="historyRowBadge(row).tone"
+              :label="historyRowBadge(row).label"
+              :confidence="historyRowBadge(row).confidence"
+              :uppercase="historyRowBadge(row).uppercase"
+            />
+          </span>
+          <span class="flex shrink-0 sm:w-40">
+            <WorkChip :work="historyRowWork(row)" />
+          </span>
 
           <div class="order-last w-full min-w-0 sm:order-none sm:w-auto sm:flex-1">
             <EntityIdentity
@@ -169,7 +174,7 @@ useHead({
             />
             <p v-else-if="row._tag === 'Task'" class="flex min-w-0 flex-wrap items-baseline gap-x-2">
               <a :href="taskSubjectUrl(row.task)" target="_blank" rel="noreferrer" class="entity-link shrink-0 font-mono text-sm">{{ row.task.repository }}#{{ taskNumber(row.task) }}</a>
-              <span v-if="taskStateDetail(row.task)" class="min-w-0 flex-1 truncate text-sm text-muted">{{ taskStateDetail(row.task) }}</span>
+              <span v-if="taskRowSummary(row.task)" class="min-w-0 flex-1 truncate text-sm text-muted">{{ taskRowSummary(row.task) }}</span>
             </p>
             <p v-else class="flex min-w-0 flex-wrap items-baseline gap-x-2">
               <span class="text-sm font-medium text-highlighted">{{ row.run.name }}</span>

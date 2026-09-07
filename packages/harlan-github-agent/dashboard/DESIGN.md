@@ -102,7 +102,7 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 | --- | --- | --- |
 | `/` Board | Questions 1 to 3, and the last eight of 4 | Four fixed columns: **Needs you**, **Up next** (with a **Waiting** group), **Running**, **Done** |
 | `/history` | What happened, on what evidence | GitHub style list rows. Evidence opens in a slideover |
-| `/watching` | What is being polled | Repository table, open items, Dismissed group |
+| `/watching` | What is being polled | Repository table that flags exceptions only, open items, Dismissed group |
 | `/stats` | What the work produced over a range | Two small charts and one table. No score, no money |
 | `/flow` | How work moves through the service | Static explainer. Reached from the overflow menu, never a tab |
 | `/kit` | The design system, rendered | Dev only |
@@ -133,7 +133,7 @@ An unresolved Incident also renders as one compact error row above the board col
 
 Trello cards. A card face carries identity and one decision. Everything else opens.
 
-- Face: author avatar, `repository#number`, title, work chip. Then one state line: the reason it needs you, the queue position or blocking reason, the phase and elapsed time, or the outcome badge.
+- Face: author avatar, `repository#number`, title, work chip. Then one state line: the reason it needs you, the queue position or blocking reason, the phase and elapsed time, or the outcome badge. The state line clamps at three lines and stays ink; colour belongs to the badge. The terminal, including the last command, opens with the card.
 - One primary action on Needs you cards: `Review and repair` or `Approve`. Keyboard `a` presses it.
 - Running cards carry `Eject` inline; it arms then confirms.
 - Every other action sits in the card's overflow menu: `Open on GitHub`, `Rerun review`, `Cancel`, `Dismiss`. Cancel and Dismiss confirm in a modal that states the consequence in one sentence.
@@ -161,7 +161,10 @@ Never show:
 - Summary counter tiles. Counts live in headings.
 - Static configuration on a live surface. Model lists, cron strings, host kernel strings, security notes.
 - The same record in two places. Recently finished is gone; Done is the terminus.
-- Provenance on a card face. Session id, commit SHA, agent id open on demand.
+- Provenance on a card face. Session id, commit SHA, agent id, last command open on demand.
+- A column of identical cells. `Healthy`, `Enabled`, `Running` on every row said nothing; Watching flags `Action required`, `Starting`, `Paused`, `Writes off` and shows nothing for the normal case.
+- A stored record in a row. A forty character SHA reads as seven; JSON evidence becomes a sentence or waits in the Evidence slideover.
+- A page title that repeats the tab. History and Watching headings carry a count; Stats has no heading.
 - Agent percentage progress. Show phase and elapsed.
 - Keyboard hints as page copy. They live in the overflow menu under `Keyboard`.
 - Internal words: Item, Revision, Observation, Publication, lease, fence, journal, snapshot, worker, job, bot.
@@ -226,7 +229,7 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 - **Chips**: work kind chip is icon plus label, neutral outline, 14px.
 - **Inputs**: hairline, `rounded-md`, 32px tall in dense rows, 40px in forms.
 - **Focus**: 2px ink outline, 2px offset, everywhere.
-- **Links to GitHub**: `.entity-link`, quiet underline that darkens on hover. Every repository, pull request, issue, commit, and comment links out.
+- **Links to GitHub**: `.entity-link`, plain until hover or focus, then underlined. A board of forty titles reads as text, not as forty links. Every repository, pull request, issue, commit, and comment links out.
 
 ## Spatial and Motion
 
@@ -258,6 +261,8 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 - Shadows on cards or rows. Overlays only.
 - Gradients, textures, grid backgrounds.
 - Coloured left border stripes.
+- A coloured card border. Needs you cards sit under the column's amber hairline and carry a default border like every other card.
+- Prose in a semantic colour. Reasons and evidence are ink; only badges, dots, and the Incident row carry state colour.
 - More than one solid button in view inside one card or row.
 - Colour to encode work kind, repository, or provider.
 - A tinted background larger than a badge, except the Incident row.
@@ -274,7 +279,7 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 | Class or token | What it does | When to use |
 | --- | --- | --- |
 | `.field-label` | 12px, 500, uppercase, dimmed, 0.06em tracking | Column headings, table headers, detail list terms |
-| `.entity-link` | Quiet underline in `border-accented`, darkens on hover | Any link that resolves to GitHub |
+| `.entity-link` | No underline until hover or focus | Any link that resolves to GitHub |
 | `.status-success` `.status-warning` `.status-error` | Semantic text mixed toward ink or paper for AA on tints | Text inside badges, dots, alert rows |
 | `.live-dot` | 2s opacity pulse, held solid under reduced motion | The Running column and the System chip while agents run |
 | `.stale` | 55 percent opacity | Board content once the snapshot is over 90 seconds old |
@@ -290,6 +295,8 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 - The status bar and footer are removed. Non-default service state moved into the System chip. Model configuration moved into the Agent selection menu. Security copy and keyboard hints were decoration.
 - Flow is reached from the overflow menu. It is documentation, not monitoring, and a tab gave it monitoring weight.
 - Cards open a slideover. Terminals, identifiers, and evidence were disclosures on the card face and made every column ragged. A card is now a fixed shape and detail has one home.
+- The Running face lost its last-command line. "Ran read /home/…" beside a phase and an elapsed time was a second liveness signal; the stalled warning already covers silence, and the terminal is one click away.
+- Needs you reasons are clamped and ink. Sixteen red paragraphs made the column that matters most the loudest and least readable; the column heading and the primary button carry the decision.
 - Secondary card actions live in an overflow menu. Four buttons on a card face made the one that mattered hard to find.
 - Cancel and Dismiss confirm in a modal from the menu. Eject stays inline and arms then confirms, because it is pressed while watching a live agent and a modal would cover the terminal.
 - Primary is ink, not a hue. The only colours on the page are state colours, so a decision or a failure is the most saturated thing in view.

@@ -54,10 +54,10 @@ const kindLabel = { issue: 'Issue', pull_request: 'Pull request' }
         <span class="sr-only">{{ kindLabel[kind] }}</span>
         <a :href="url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ repository }}#{{ number }}</a>
       </p>
-      <a :href="url" target="_blank" rel="noreferrer" class="entity-link mt-0.5 block text-highlighted" :class="titleClass[size]">
-        {{ title }}
-        <span class="sr-only"> on GitHub</span>
-      </a>
+      <!-- The clamp lives on the paragraph. A block anchor would override the clamp's display. -->
+      <p class="mt-0.5 text-highlighted" :class="titleClass[size]">
+        <a :href="url" target="_blank" rel="noreferrer" class="entity-link">{{ title }}<span class="sr-only"> on GitHub</span></a>
+      </p>
     </div>
   </div>
 </template>

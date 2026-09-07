@@ -3,7 +3,6 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { BoardCard, CardAction } from '../utils/dashboard.ts'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import {
-  activeAgentActivity,
   approvalActionLabel,
   boardCardBadge,
   boardCardIdentity,
@@ -34,7 +33,6 @@ const { card, tabindex = 0 } = defineProps<{
 const {
   snapshot,
   now,
-  relativeTime,
   duration,
   approvalPending,
   approvalKeyFor,
@@ -73,7 +71,6 @@ const task = computed(() => entry.value === undefined ? undefined : taskFor(entr
 const taskId = computed(() => agent.value?.id ?? task.value?.id)
 const reviewAllowed = computed(() => entry.value !== undefined && canRunReview(entry.value))
 const actions = computed(() => cardActions(card, { canRunReview: reviewAllowed.value, hasTask: taskId.value !== undefined }))
-const activity = computed(() => agent.value === undefined ? undefined : activeAgentActivity(agent.value))
 const phase = computed(() => agent.value === undefined ? undefined : runningPhaseLine(agent.value))
 const stalled = computed(() => agent.value !== undefined && isProgressStalled(agent.value, now.value))
 
@@ -180,7 +177,7 @@ const confirmOpen = computed({
 
 const surfaceClass = computed(() => {
   switch (card._tag) {
-    case 'NeedsYou': return 'bg-elevated border-warning'
+    case 'NeedsYou': return 'bg-elevated border-default hover:border-accented'
     case 'Waiting': return 'bg-elevated border-dashed border-accented hover:border-inverted/40'
     case 'Done': return 'bg-elevated/60 border-default hover:border-accented text-muted'
     default: return 'bg-elevated border-default hover:border-accented'
@@ -246,10 +243,6 @@ defineExpose({
           <span v-if="phase" class="min-w-0 flex-1 truncate text-sm text-muted">{{ phase }}</span>
           <span class="ms-auto font-mono text-sm text-dimmed">{{ duration(agent.startedAt) }}</span>
         </div>
-        <p v-if="activity" class="flex min-w-0 items-center justify-between gap-2 font-mono text-sm">
-          <span class="min-w-0 truncate" :class="activity.tone === 'error' ? 'status-error' : 'text-dimmed'">{{ activity.text }}</span>
-          <time class="shrink-0 text-dimmed" :datetime="activity.at">{{ relativeTime(activity.at) }}</time>
-        </p>
         <p v-if="stalled" class="status-warning flex items-center gap-1.5 text-sm">
           <UIcon name="i-octicon-alert-16" class="size-3.5" aria-hidden="true" />
           {{ stalledLabel(agent, now) }}
@@ -260,10 +253,8 @@ defineExpose({
           <WorkChip v-if="work" :work="work" />
           <span v-if="card._tag === 'Queued'" class="font-mono text-sm text-dimmed">{{ String(entry.position).padStart(2, '0') }}</span>
         </div>
-        <p
-          class="text-sm"
-          :class="stateLine.tone === 'muted' ? 'text-muted' : stateLine.tone === 'warning' ? 'status-warning' : 'status-error'"
-        >
+        <!-- Clamped: the face says why in three lines and the slideover holds the rest. Colour stays on the badge, not the prose. -->
+        <p class="line-clamp-3 text-sm" :class="stateLine.tone === 'muted' ? 'text-muted' : 'text-default'">
           {{ stateLine.text }}
         </p>
       </div>

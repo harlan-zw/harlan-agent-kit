@@ -4,7 +4,6 @@ import type { RepositoryStatus } from '../../../src/types.ts'
 import type { OpenItemsFilter, RepositoryAction } from '../utils/watching.ts'
 import { useEventListener } from '@vueuse/core'
 import ConfirmModal from '../components/ConfirmModal.vue'
-import { repositoryState } from '../utils/dashboard.ts'
 import { isTypingTarget, overlayOpen } from '../utils/keyboard.ts'
 import {
   dismissedItems,
@@ -17,8 +16,7 @@ import {
   repositoryActionIcon,
   repositoryActionLabel,
   repositoryActions,
-  repositoryAgentsLabel,
-  repositoryWritesLabel,
+  repositoryFlags,
 } from '../utils/watching.ts'
 
 /**
@@ -145,22 +143,13 @@ useHead({
               <th scope="col" class="field-label py-2 pr-3 pl-2">
                 Repository
               </th>
-              <th scope="col" class="field-label py-2 pr-3">
-                Health
-              </th>
               <th scope="col" class="field-label py-2 pr-3 text-right">
                 Open
               </th>
               <th scope="col" class="field-label py-2 pr-3">
                 Ownership
               </th>
-              <th scope="col" class="field-label py-2 pr-3">
-                Writes
-              </th>
-              <th scope="col" class="field-label py-2 pr-3">
-                Agents
-              </th>
-              <th scope="col" class="field-label py-2 pr-3">
+              <th scope="col" class="field-label py-2 pr-3 text-right">
                 Last success
               </th>
               <th scope="col" class="py-2 pr-2">
@@ -175,25 +164,20 @@ useHead({
             class="border-b border-default transition-colors last:border-b-0 hover:bg-muted"
           >
             <tr class="h-11">
-              <th scope="row" class="whitespace-nowrap py-2 pr-3 pl-2 font-mono text-sm font-normal">
-                <a :href="`https://github.com/${repository.github}`" target="_blank" rel="noreferrer" class="entity-link">{{ repository.github }}</a>
+              <!-- Flags name the exceptions. A healthy row carries none, so the eye lands on the one that does. -->
+              <th scope="row" class="py-2 pr-3 pl-2 font-normal">
+                <span class="flex flex-wrap items-center gap-2">
+                  <a :href="`https://github.com/${repository.github}`" target="_blank" rel="noreferrer" class="entity-link whitespace-nowrap font-mono text-sm">{{ repository.github }}</a>
+                  <StateBadge v-for="flag in repositoryFlags(repository)" :key="flag.label" :tone="flag.tone" :label="flag.label" />
+                </span>
               </th>
-              <td class="py-2 pr-3">
-                <StateBadge :tone="repositoryState(repository).tone" :label="repositoryState(repository).label" />
-              </td>
-              <td class="py-2 pr-3 text-right font-mono text-sm">
+              <td class="py-2 pr-3 text-right font-mono text-sm" :class="repository.subjectCount === 0 ? 'text-dimmed' : undefined">
                 <a :href="`https://github.com/${repository.github}/issues`" target="_blank" rel="noreferrer" class="entity-link">{{ repository.subjectCount }}<span class="sr-only"> open on GitHub</span></a>
               </td>
               <td class="py-2 pr-3 text-sm text-muted">
                 {{ repository.ownership }}
               </td>
-              <td class="py-2 pr-3 text-sm" :class="repositoryWritesLabel(repository) === 'Enabled' ? 'text-default' : 'text-muted'">
-                {{ repositoryWritesLabel(repository) }}
-              </td>
-              <td class="py-2 pr-3 text-sm" :class="repository.paused ? 'text-muted' : 'text-default'">
-                {{ repositoryAgentsLabel(repository) }}
-              </td>
-              <td class="whitespace-nowrap py-2 pr-3 font-mono text-sm text-dimmed">
+              <td class="whitespace-nowrap py-2 pr-3 text-right font-mono text-sm text-dimmed">
                 {{ relativeTime(repository.lastSuccessAt) }}
               </td>
               <td class="py-1 pr-2 text-right">
@@ -211,7 +195,7 @@ useHead({
               </td>
             </tr>
             <tr v-if="repository.lastError !== null">
-              <td colspan="8" class="status-error pb-2.5 pl-2 pr-2 text-sm whitespace-normal">
+              <td colspan="5" class="status-error pb-2.5 pl-2 pr-2 text-sm whitespace-normal">
                 {{ repository.lastError }}
               </td>
             </tr>
@@ -251,7 +235,7 @@ useHead({
           <li
             v-for="item in openItems"
             :key="`${item.repository}#${item.number}`"
-            class="flex min-h-11 items-center justify-between gap-3 px-2 py-2 transition-colors hover:bg-muted"
+            class="flex min-h-11 items-center px-2 py-2 transition-colors hover:bg-muted"
           >
             <EntityIdentity
               :author="item.author"
@@ -262,7 +246,6 @@ useHead({
               :number="item.number"
               size="sm"
             />
-            <time class="shrink-0 font-mono text-sm text-dimmed" :datetime="item.observedAt">{{ relativeTime(item.observedAt) }}</time>
           </li>
         </ul>
 

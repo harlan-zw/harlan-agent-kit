@@ -125,7 +125,9 @@ useHead({
 
 <template>
   <div class="flex flex-col gap-6">
-    <ColumnHeading label="Stats" :level="1" />
+    <h1 class="sr-only">
+      Stats
+    </h1>
 
     <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
       <form class="flex flex-wrap items-center gap-2" aria-label="Date range" @submit.prevent="applyRange">

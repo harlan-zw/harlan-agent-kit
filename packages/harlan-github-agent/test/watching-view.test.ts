@@ -5,7 +5,7 @@ import {
   openItemsFilter,
   repositoriesEmpty,
   repositoryActions,
-  repositoryWritesLabel,
+  repositoryFlags,
 } from '../dashboard/app/utils/watching.ts'
 import { issueItem, pullRequestItem } from './fixtures.ts'
 
@@ -47,6 +47,21 @@ describe('repositoriesEmpty', () => {
   })
 })
 
+describe('repositoryFlags', () => {
+  it('flags nothing on a healthy running repository with writes on', () => {
+    expect(repositoryFlags(repository({ lastSuccessAt: '2026-08-14T11:00:00.000Z' }))).toEqual([])
+  })
+
+  it('ranks an error above a missing first poll and lists paused and writes off after it', () => {
+    expect(repositoryFlags(repository({ lastError: 'boom', paused: true, writesEnabled: false })).map(flag => flag.label)).toEqual(['Action required', 'Paused', 'Writes off'])
+    expect(repositoryFlags(repository()).map(flag => flag.label)).toEqual(['Starting'])
+  })
+
+  it('never flags writes off on an external watch', () => {
+    expect(repositoryFlags(repository({ ownership: 'external', writesEnabled: false, lastSuccessAt: '2026-08-14T11:00:00.000Z' }))).toEqual([])
+  })
+})
+
 describe('repositoryActions', () => {
   it('offers Pause and Disable writes to a running owned repository with writes on', () => {
     expect(repositoryActions(repository()).map(action => action._tag)).toEqual(['Pause', 'DisableWrites'])
@@ -59,7 +74,6 @@ describe('repositoryActions', () => {
   it('never offers a writes change on an external watch', () => {
     const external = repository({ ownership: 'external', writesEnabled: false })
     expect(repositoryActions(external).map(action => action._tag)).toEqual(['Pause'])
-    expect(repositoryWritesLabel(external)).toBe('n/a')
   })
 })
 
