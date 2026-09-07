@@ -117,14 +117,17 @@ export type ReadPullRequestDiagram
 
 /** Reads and draws the graph document the Agent left in the worktree, if any. */
 export async function readPullRequestDiagram(worktreePath: string, provenance: PullRequestDiagramProvenance): Promise<ReadPullRequestDiagram> {
-  const document = await readFile(join(worktreePath, PULL_REQUEST_DIAGRAM_PATH), 'utf8')
-    .catch((error: unknown) => {
+  const read = await readFile(join(worktreePath, PULL_REQUEST_DIAGRAM_PATH), 'utf8')
+    .then(value => ok<string | null>(value))
+    .catch((error: unknown): Result<string | null, string> => {
       if (isMissingPath(error))
-        return null
-      throw error
+        return ok(null)
+      return err(error instanceof Error ? error.message : String(error))
     })
-  if (document === null)
+  if (read._tag === 'Err')
+    return { _tag: 'Invalid', reason: `the document could not be read: ${read.error}` }
+  if (read.value === null)
     return { _tag: 'Absent' }
-  const drawn = drawPullRequestDiagram(document, provenance)
+  const drawn = drawPullRequestDiagram(read.value, provenance)
   return drawn._tag === 'Ok' ? { _tag: 'Drawn', diagram: drawn.value } : { _tag: 'Invalid', reason: drawn.error }
 }
