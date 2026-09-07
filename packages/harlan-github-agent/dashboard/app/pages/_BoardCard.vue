@@ -253,28 +253,30 @@ defineExpose({
       @click="slideoverOpen = true"
     />
 
-    <!-- Needs you: one line, one decision. -->
+    <!--
+      Needs you: one decision. One line from md up; below md the fixed minimums
+      would force the page sideways, so the tracks stack into four short lines.
+    -->
     <div
       v-if="shape === 'row' && identity"
-      class="pointer-events-none relative grid h-8 items-center gap-3 px-2 [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
-      style="grid-template-columns: 8px 20px minmax(12rem, 5fr) minmax(8rem, 3fr) minmax(0, 7fr) 9.5rem"
+      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_auto] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
     >
-      <LiveDot :tone="badge.tone" :label="badge.label" />
-      <a :href="`https://github.com/${identity.author}`" target="_blank" rel="noreferrer" class="flex" :title="`@${identity.author}`">
+      <LiveDot class="[grid-area:dot]" :tone="badge.tone" :label="badge.label" />
+      <a :href="`https://github.com/${identity.author}`" target="_blank" rel="noreferrer" class="flex [grid-area:avatar]" :title="`@${identity.author}`">
         <UAvatar :src="avatarUrl(identity.author)" :alt="`@${identity.author}`" size="2xs" />
       </a>
-      <p class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-highlighted">
+      <p class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-highlighted [grid-area:title]">
         <UIcon :name="kindIcon[identity.kind]" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
         <span class="sr-only">{{ identity.kind === 'issue' ? 'Issue' : 'Pull request' }}</span>
         <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ identity.title }}<span class="sr-only"> on GitHub</span></a>
       </p>
-      <p class="min-w-0 truncate text-sm text-muted">
+      <p class="min-w-0 truncate text-sm text-muted [grid-area:repository]">
         <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
       </p>
-      <p class="min-w-0 truncate text-sm text-muted" :title="meta">
+      <p class="min-w-0 truncate text-sm text-muted [grid-area:meta]" :title="meta">
         {{ meta }}
       </p>
-      <div class="flex items-center justify-end gap-1">
+      <div class="flex items-center justify-end gap-1 [grid-area:actions]">
         <UButton
           v-if="primaryLabel"
           size="xs"

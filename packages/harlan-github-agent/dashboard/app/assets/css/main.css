@@ -119,6 +119,17 @@ body {
   transform: none;
 }
 
+/*
+ * An sr-only span often follows truncated inline text, so its absolute static
+ * position can land past a narrow viewport and widen the page. Pinning the 1px
+ * box to the containing block's start edge makes that overflow impossible.
+ * Nothing renders either way, so reading order and focus are unchanged.
+ */
+.sr-only {
+  inset-block-start: 0;
+  inset-inline-start: 0;
+}
+
 
 /* The only micro label in the system: column headings, table headers, detail list terms. */
 .field-label {
