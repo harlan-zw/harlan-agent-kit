@@ -90,7 +90,7 @@ export interface ItemAgentOptions {
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   pullRequestTriage?: PullRequestTriageAgent
-  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'listReviewRuns' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'findCurrentPolicyReviewRun' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -1152,9 +1152,11 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       if (checksLostRunner(snapshot.value.checks) || checksLostRunner(snapshot.value.baseChecks))
         recordRunnerLostIncident(options, task.repository)
 
+      // A later fence resumes the stored run, unless repository policy moved
+      // since it ran: then the planner asked for a fresh Review, and resuming
+      // would only requeue the same run on every poll.
       const storedRun = task.state.fence > 1 && task.rerun._tag === 'NotRequested' && !manualReview
-        ? options.store.listReviewRuns(task.repository, task.pullRequestNumber)
-            .find(run => run.headSha === task.pullRequest.headSha)
+        ? options.store.findCurrentPolicyReviewRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha) ?? undefined
         : undefined
       if (storedRun !== undefined) {
         const repairAccess = await options.preflightRepair(task.repository, signal)

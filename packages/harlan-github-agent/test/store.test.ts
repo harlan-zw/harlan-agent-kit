@@ -4021,6 +4021,54 @@ describe('journal store', () => {
       .toEqual(expect.objectContaining({ id: first.id }))
   })
 
+  it('stops counting a stored Review run once trusted repository policy changes', () => {
+    const store = createStore()
+    const initialPolicy = repositoryMapping()
+    store.syncRepositories([initialPolicy], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'policy-scope-before',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ mergeState: 'clean' }),
+    })
+    const first = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 10_000)
+    if (first === null)
+      throw new Error('Expected the first Review.')
+    store.recordReviewRun({
+      id: 'policy-scope-review',
+      repository: first.repository,
+      pullRequestNumber: first.pullRequestNumber,
+      revisionId: first.revisionId,
+      headSha: first.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'policy-scope-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 95,
+      findings: [],
+    })
+    store.completeWorkerTask({
+      taskId: first.id,
+      workerId: first.state.workerId,
+      fence: first.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      evidence: 'policy-scope-review',
+    })
+    expect(store.findCurrentPolicyReviewRun(first.repository, first.pullRequestNumber, first.pullRequest.headSha))
+      .toEqual(expect.objectContaining({ id: 'policy-scope-review' }))
+
+    store.syncRepositories([{ ...initialPolicy, autoMerge: { _tag: 'Every', minimumConfidence: 90 } }], '2026-08-13T02:00:00.000Z')
+
+    // The planner requeues this head for a fresh Review. A worker that still
+    // resumed the stored run would complete without new evidence, and the
+    // planner would requeue it on every poll.
+    expect(store.findCurrentPolicyReviewRun(first.repository, first.pullRequestNumber, first.pullRequest.headSha)).toBeNull()
+  })
+
   it('releases a review after its completed Baseline repair becomes stale', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

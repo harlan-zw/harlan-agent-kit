@@ -87,7 +87,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
-      listReviewRuns: () => [],
+      findCurrentPolicyReviewRun: () => null,
       supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: (incident) => {
         incidents.push(incident)
