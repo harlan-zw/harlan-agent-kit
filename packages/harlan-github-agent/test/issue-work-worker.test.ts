@@ -915,4 +915,28 @@ describe('issue work pull request diagram', () => {
     expect(result).toEqual(ok(expect.objectContaining({ publication: expect.objectContaining({ diagram: null }) })))
     expect(JSON.stringify(recorded)).toContain('The pull request diagram was not drawn: the document could not be read:')
   })
+
+  it('logs why an unrenderable document was not drawn and still publishes', async () => {
+    const unrenderable = JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      kind: 'graph',
+      title: 'Trailing byte',
+      summary: 'The parser keeps the last byte of a chunked body.',
+      lenses: ['data-flow'],
+      provenance: { repo: { owner: 'x', name: 'y' }, base: { sha: 'placeholder' }, head: { sha: 'placeholder' } },
+      lanes: [{ id: 'lib', label: 'Library', order: 1 }],
+      nodes: [
+        { id: 'parser', label: 'parser', kind: 'module', delta: 'modified', lane: 'lib' },
+        { id: 'caller', label: 'request reader', kind: 'function', delta: 'unchanged', lane: 'lib' },
+      ],
+      edges: [{ id: 'caller-parser', from: 'caller', to: 'parser', kind: 'call', delta: 'unchanged', emphasis: 'hero' }],
+      flows: [],
+      stats: {},
+      views: [{ id: 'data-flow', title: 'Data flow', lens: 'data-flow', summary: 'How data moves.', defaultOpen: true }],
+    })
+    const { result, recorded } = await runIssueWork({ graph: unrenderable })
+
+    expect(result).toEqual(ok(expect.objectContaining({ publication: expect.objectContaining({ diagram: null }) })))
+    expect(JSON.stringify(recorded)).toContain('The pull request diagram was not drawn: the document could not be drawn:')
+  })
 })

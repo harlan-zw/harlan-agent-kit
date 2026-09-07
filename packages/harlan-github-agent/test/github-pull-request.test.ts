@@ -124,11 +124,15 @@ describe('pull request diagram attachment', () => {
   const body = `### 📚 Description\n\nWhy the change exists.\n\n${disclosure}`
   const diagram = { svg: '<svg/>', alt: 'The handler reads through the cache' }
 
-  function publisher(uploadAsset: ((upload: { name: string, repositoryId: number }) => Promise<ReturnType<typeof ok<string>> | ReturnType<typeof err<string>>>) | undefined, onCreate: (input: { body: string }) => void) {
+  function publisher(
+    uploadAsset: ((upload: { name: string, repositoryId: number }) => Promise<ReturnType<typeof ok<string>> | ReturnType<typeof err<string>>>) | undefined,
+    onCreate: (input: { body: string }) => void,
+    getRepository: () => Promise<unknown> = () => Promise.resolve({ data: { id: 7 } }),
+  ) {
     return createGitHubPullRequestPublisher({
       createClient: () => ({
         rest: {
-          repos: { get: () => Promise.resolve({ data: { id: 7 } }) },
+          repos: { get: getRepository },
           pulls: {
             create: (input: { body: string }) => {
               onCreate(input)
@@ -181,6 +185,26 @@ describe('pull request diagram attachment', () => {
 
     expect(created).toBe(body)
     expect(result).toEqual(ok(expect.objectContaining({ diagram: { _tag: 'Skipped', reason: 'GitHub refused the asset upload: HTTP 404.' } })))
+  })
+
+  it('publishes the body as written when the repository read for the upload fails, and says why', async () => {
+    let created = ''
+    const result = await publisher(
+      () => Promise.resolve(ok('https://github.com/user-attachments/assets/abc')),
+      input => created = input.body,
+      () => Promise.reject(new Error('getaddrinfo EAI_AGAIN api.github.com')),
+    ).ensurePullRequest({
+      repository: repositoryMapping(),
+      baseRef: 'main',
+      headRef: 'fix/issue-30',
+      expectedHeadSha: 'abc123',
+      title: 'fix: broken thing',
+      body,
+      diagram,
+    })
+
+    expect(created).toBe(body)
+    expect(result).toEqual(ok(expect.objectContaining({ diagram: { _tag: 'Skipped', reason: expect.stringContaining('EAI_AGAIN') } })))
   })
 
   it('skips the picture with a reason when no uploader is configured', async () => {

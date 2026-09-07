@@ -106,7 +106,15 @@ export function drawPullRequestDiagram(document: string, provenance: PullRequest
   const lens = view?.lens ?? (parsed.value.lenses.includes('architecture') ? 'architecture' : parsed.value.lenses[0])
   if (lens === undefined)
     return err('the document declares no lens')
-  const drawn = render(parsed.value, { lens, theme: 'dark', ...(view === undefined ? {} : { view: view.id }) })
+  // A document that validates but leaves the chosen lens nothing to draw is
+  // the Agent's mistake to read about, never a thrown failure.
+  let drawn: { svg: string }
+  try {
+    drawn = render(parsed.value, { lens, theme: 'dark', ...(view === undefined ? {} : { view: view.id }) })
+  }
+  catch (error: unknown) {
+    return err(`the document could not be drawn: ${error instanceof Error ? error.message : String(error)}`)
+  }
   return ok({ svg: drawn.svg, alt: view?.summary ?? parsed.value.summary ?? parsed.value.title })
 }
 

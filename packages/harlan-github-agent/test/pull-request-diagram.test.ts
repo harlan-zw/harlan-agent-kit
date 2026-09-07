@@ -56,6 +56,18 @@ describe('drawPullRequestDiagram', () => {
   it('says when the document is not JSON', () => {
     expect(drawPullRequestDiagram('{ not json', provenance)).toEqual({ _tag: 'Err', error: expect.stringContaining('not JSON') })
   })
+
+  it('says when a valid document has nothing the open view can draw', () => {
+    const drawn = drawPullRequestDiagram(document({
+      lenses: ['data-flow'],
+      views: [{ id: 'data-flow', title: 'Data flow', lens: 'data-flow', summary: 'How data moves.', defaultOpen: true }],
+    }), provenance)
+
+    expect(drawn._tag).toBe('Err')
+    if (drawn._tag === 'Ok')
+      throw new Error('Expected a rejection.')
+    expect(drawn.error).toContain('the data-flow lens needs a flow to draw')
+  })
 })
 
 describe('readPullRequestDiagram', () => {
