@@ -1,25 +1,28 @@
 <script setup lang="ts">
-/** A label, a count pill, and a hairline. Never a title. Level 1 only for the one page heading. */
-const { label, count, tone = 'default', level = 2 } = defineProps<{
+/**
+ * A name and a count. A board column adds a state dot; a page section adds a
+ * hairline. Never a title: the tab already named the page.
+ */
+const { label, count, tone = 'default', live = false, rule = false, level = 2 } = defineProps<{
   label: string
   count?: number
-  tone?: 'default' | 'warning' | 'error'
+  /** Colours the dot in front of the name. Default draws no dot. */
+  tone?: 'default' | 'warning' | 'success' | 'error'
+  /** Pulses the dot while agents run. */
+  live?: boolean
+  /** The hairline after the count. Page sections carry it, board columns do not. */
+  rule?: boolean
   level?: 1 | 2
 }>()
-
-const labelClass = { default: '', warning: 'status-warning', error: 'status-error' }
-const ruleClass = { default: 'bg-border', warning: 'bg-warning', error: 'bg-error' }
 </script>
 
 <template>
   <div class="flex min-h-6 items-center gap-2">
-    <component :is="`h${level}`" class="field-label" :class="labelClass[tone]">
+    <LiveDot v-if="tone !== 'default'" :tone="tone" :live="live" />
+    <component :is="`h${level}`" class="text-sm font-medium text-highlighted">
       {{ label }}
     </component>
-
-    <UBadge v-if="count !== undefined" variant="subtle" color="neutral" class="font-mono font-semibold">
-      {{ count }}
-    </UBadge>
-    <span class="h-px flex-1" :class="ruleClass[tone]" aria-hidden="true" />
+    <span v-if="count !== undefined" class="font-mono text-sm text-muted">{{ count }}</span>
+    <span v-if="rule" class="h-px flex-1 bg-border" aria-hidden="true" />
   </div>
 </template>

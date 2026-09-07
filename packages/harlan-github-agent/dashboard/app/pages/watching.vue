@@ -114,121 +114,103 @@ useHead({
     <h1 class="sr-only">
       Watching
     </h1>
-    <section class="flex min-w-0 flex-col gap-3" aria-label="Repositories">
-      <div class="flex items-center gap-3">
-        <ColumnHeading label="Repositories" :count="repositories.length" class="min-w-0 flex-1" />
-        <UInput
-          ref="filterInput"
-          v-model="repositoryQuery"
-          size="sm"
-          icon="i-octicon-search-16"
-          placeholder="Filter repositories"
-          aria-label="Filter repositories"
-          class="w-40 shrink-0 sm:w-56"
-        />
-      </div>
+    <section class="min-w-0" aria-label="Repositories">
+      <UiSectionHeader title="Repositories" :badge="repositories.length">
+        <template #actions>
+          <UInput
+            ref="filterInput"
+            v-model="repositoryQuery"
+            size="sm"
+            icon="i-octicon-search-16"
+            placeholder="Filter repositories"
+            aria-label="Filter repositories"
+            class="w-40 sm:w-56"
+          />
+        </template>
+      </UiSectionHeader>
 
       <div v-if="loading" class="flex flex-col gap-px" aria-busy="true">
-        <USkeleton v-for="row in 3" :key="row" class="h-11 rounded-sm" />
+        <USkeleton v-for="row in 3" :key="row" class="h-10 rounded-sm" />
       </div>
 
-      <!-- Positioned, so the sr-only cells inside cannot push the document wider than the viewport. -->
-      <div v-else-if="repositories.length > 0" class="relative overflow-x-auto border-y border-default">
-        <table class="w-full border-collapse text-left">
-          <caption class="sr-only">
-            Repositories being polled, their health, and their controls
-          </caption>
-          <thead class="border-b border-default">
-            <tr>
-              <th scope="col" class="field-label py-2 pr-3 pl-2">
-                Repository
-              </th>
-              <th scope="col" class="field-label py-2 pr-3 text-right">
-                Open
-              </th>
-              <th scope="col" class="field-label py-2 pr-3">
-                Ownership
-              </th>
-              <th scope="col" class="field-label py-2 pr-3 text-right">
-                Last success
-              </th>
-              <th scope="col" class="py-2 pr-2">
-                <span class="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <!-- One body per repository, so a poll error can sit under its row without breaking the dividers. -->
-          <tbody
-            v-for="repository in repositories"
-            :key="repository.github"
-            class="border-b border-default transition-colors last:border-b-0 hover:bg-muted"
-          >
-            <tr class="h-11">
-              <!-- Flags name the exceptions. A healthy row carries none, so the eye lands on the one that does. -->
-              <th scope="row" class="py-2 pr-3 pl-2 font-normal">
-                <span class="flex flex-wrap items-center gap-2">
-                  <a :href="`https://github.com/${repository.github}`" target="_blank" rel="noreferrer" class="entity-link whitespace-nowrap font-mono text-sm">{{ repository.github }}</a>
-                  <StateBadge v-for="flag in repositoryFlags(repository)" :key="flag.label" :tone="flag.tone" :label="flag.label" />
-                </span>
-              </th>
-              <td class="py-2 pr-3 text-right font-mono text-sm" :class="repository.subjectCount === 0 ? 'text-dimmed' : undefined">
-                <a :href="`https://github.com/${repository.github}/issues`" target="_blank" rel="noreferrer" class="entity-link">{{ repository.subjectCount }}<span class="sr-only"> open on GitHub</span></a>
-              </td>
-              <td class="py-2 pr-3 text-sm text-muted">
-                {{ repository.ownership }}
-              </td>
-              <td class="whitespace-nowrap py-2 pr-3 text-right font-mono text-sm text-dimmed">
-                {{ relativeTime(repository.lastSuccessAt) }}
-              </td>
-              <td class="py-1 pr-2 text-right">
-                <UDropdownMenu :items="menuItems(repository)" :content="{ align: 'end' }">
-                  <UButton
-                    icon="i-octicon-kebab-horizontal-16"
-                    color="neutral"
-                    variant="ghost"
-                    size="xs"
-                    square
-                    :loading="repositoryPending === repository.github"
-                    :aria-label="`Actions for ${repository.github}`"
-                  />
-                </UDropdownMenu>
-              </td>
-            </tr>
-            <tr v-if="repository.lastError !== null">
-              <td colspan="5" class="status-error pb-2.5 pl-2 pr-2 text-sm whitespace-normal">
-                {{ repository.lastError }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <!-- Flags name the exceptions. A healthy row carries none, so the eye lands on the one that does. -->
+      <UiTableShell v-else-if="repositories.length > 0" label="Repositories being polled and their controls" size="sm" row-hover>
+        <template #head>
+          <UiTableTh>Repository</UiTableTh>
+          <UiTableTh numeric>
+            Open
+          </UiTableTh>
+          <UiTableTh visible-from="sm">
+            Ownership
+          </UiTableTh>
+          <UiTableTh align="right">
+            Last success
+          </UiTableTh>
+          <UiTableTh align="right">
+            <span class="sr-only">Actions</span>
+          </UiTableTh>
+        </template>
+        <tr v-for="repository in repositories" :key="repository.github">
+          <UiTableTd row-header size="sm">
+            <span class="flex flex-wrap items-center gap-2">
+              <a :href="`https://github.com/${repository.github}`" target="_blank" rel="noreferrer" class="entity-link whitespace-nowrap font-mono text-sm">{{ repository.github }}</a>
+              <UiStatusBadge v-for="flag in repositoryFlags(repository)" :key="flag.label" :status="flag.tone" :label="flag.label" size="sm" />
+            </span>
+            <p v-if="repository.lastError !== null" class="status-error mt-1 whitespace-normal text-sm">
+              {{ repository.lastError }}
+            </p>
+          </UiTableTd>
+          <UiTableTd numeric size="sm">
+            <a :href="`https://github.com/${repository.github}/issues`" target="_blank" rel="noreferrer" class="entity-link font-mono text-sm" :class="repository.subjectCount === 0 ? 'text-dimmed' : undefined">{{ repository.subjectCount }}<span class="sr-only"> open on GitHub</span></a>
+          </UiTableTd>
+          <UiTableTd size="sm" visible-from="sm">
+            <span class="text-sm text-muted">{{ repository.ownership }}</span>
+          </UiTableTd>
+          <UiTableTd align="right" size="sm">
+            <span class="whitespace-nowrap font-mono text-sm text-dimmed">{{ relativeTime(repository.lastSuccessAt) }}</span>
+          </UiTableTd>
+          <UiTableTd align="right" size="sm" no-padding>
+            <UDropdownMenu :items="menuItems(repository)" :content="{ align: 'end' }">
+              <UButton
+                icon="i-octicon-kebab-horizontal-16"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                square
+                class="me-1"
+                :loading="repositoryPending === repository.github"
+                :aria-label="`Actions for ${repository.github}`"
+              />
+            </UDropdownMenu>
+          </UiTableTd>
+        </tr>
+      </UiTableShell>
 
-      <p v-else-if="repositoriesEmptyReason" class="text-sm text-dimmed">
-        {{ repositoriesEmptyLine(repositoriesEmptyReason) }}
-      </p>
+      <UiEmptyState v-else-if="repositoriesEmptyReason" compact icon="search" title="No repositories" :description="repositoriesEmptyLine(repositoriesEmptyReason)" />
     </section>
 
     <div class="flex min-w-0 flex-col gap-10">
-      <section class="flex min-w-0 flex-col gap-3" aria-label="Open">
-        <div class="flex items-center gap-3">
-          <ColumnHeading label="Open" :count="openItems.length" class="min-w-0 flex-1" />
-          <div class="flex shrink-0 items-center gap-1" role="group" aria-label="Filter by kind">
-            <UButton
-              v-for="filter in itemFilters"
-              :key="filter.value"
-              size="xs"
-              color="neutral"
-              :variant="itemsFilter === filter.value ? 'outline' : 'ghost'"
-              :aria-pressed="itemsFilter === filter.value"
-              @click="itemsFilter = filter.value"
-            >
-              {{ filter.label }}
-            </UButton>
-          </div>
-        </div>
+      <section class="min-w-0" aria-label="Open">
+        <UiSectionHeader title="Open" :badge="openItems.length">
+          <template #actions>
+            <div class="flex items-center gap-1" role="group" aria-label="Filter by kind">
+              <UButton
+                v-for="filter in itemFilters"
+                :key="filter.value"
+                size="xs"
+                color="neutral"
+                :variant="itemsFilter === filter.value ? 'outline' : 'ghost'"
+                :aria-pressed="itemsFilter === filter.value"
+                @click="itemsFilter = filter.value"
+              >
+                {{ filter.label }}
+              </UButton>
+            </div>
+          </template>
+        </UiSectionHeader>
 
         <div v-if="loading" class="flex flex-col gap-px" aria-busy="true">
-          <USkeleton v-for="row in 3" :key="row" class="h-11 rounded-sm" />
+          <USkeleton v-for="row in 3" :key="row" class="h-10 rounded-sm" />
         </div>
 
         <ul v-else-if="openItems.length > 0" class="divide-y divide-default border-y border-default" role="list">
@@ -249,14 +231,12 @@ useHead({
           </li>
         </ul>
 
-        <p v-else class="text-sm text-dimmed">
-          {{ openItemsEmptyLine(itemsFilter) }}
-        </p>
+        <UiEmptyState v-else compact icon="empty" title="Nothing open" :description="openItemsEmptyLine(itemsFilter)" />
       </section>
 
       <!-- The only place a Dismissal can be undone. Absent until one exists. -->
-      <section v-if="dismissed.length > 0" class="flex min-w-0 flex-col gap-3" aria-label="Dismissed">
-        <ColumnHeading label="Dismissed" :count="dismissed.length" />
+      <section v-if="dismissed.length > 0" class="min-w-0" aria-label="Dismissed">
+        <UiSectionHeader title="Dismissed" :badge="dismissed.length" />
         <ul class="divide-y divide-default border-y border-default" role="list">
           <li
             v-for="item in dismissed"

@@ -129,7 +129,7 @@ const stepNumber = (index: number): string => String(index + 1).padStart(2, '0')
     </div>
 
     <section aria-labelledby="flow-intake" class="flex flex-col gap-3">
-      <ColumnHeading id="flow-intake" label="GitHub intake" />
+      <ColumnHeading id="flow-intake" rule label="GitHub intake" />
       <ol class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] md:items-stretch">
         <template v-for="(node, index) in intake" :key="node.title">
           <li v-if="index > 0" class="grid place-items-center text-dimmed" aria-hidden="true">
@@ -148,7 +148,7 @@ const stepNumber = (index: number): string => String(index + 1).padStart(2, '0')
 
     <div class="grid items-start gap-6 md:grid-cols-2">
       <section aria-labelledby="flow-pull-request" class="flex flex-col gap-3">
-        <ColumnHeading id="flow-pull-request" label="Pull request" />
+        <ColumnHeading id="flow-pull-request" rule label="Pull request" />
         <ol class="flex flex-col gap-2 rounded-lg bg-muted p-2">
           <li v-for="(step, index) in pullRequestSteps" :key="step.title" class="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2 rounded-md border border-default bg-elevated p-3">
             <span class="font-mono text-sm text-dimmed">{{ stepNumber(index) }}</span>
@@ -171,7 +171,7 @@ const stepNumber = (index: number): string => String(index + 1).padStart(2, '0')
       </section>
 
       <section aria-labelledby="flow-issue" class="flex flex-col gap-3">
-        <ColumnHeading id="flow-issue" label="Issue" />
+        <ColumnHeading id="flow-issue" rule label="Issue" />
 
         <ol class="flex flex-col gap-2 rounded-lg bg-muted p-2">
           <li v-for="(step, index) in issueSteps" :key="step.title" class="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2 rounded-md border border-default bg-elevated p-3">
@@ -196,7 +196,7 @@ const stepNumber = (index: number): string => String(index + 1).padStart(2, '0')
     </div>
 
     <section aria-labelledby="flow-recovery" class="flex flex-col gap-3">
-      <ColumnHeading id="flow-recovery" label="Automatic recovery" />
+      <ColumnHeading id="flow-recovery" rule label="Automatic recovery" />
       <ul class="divide-y divide-default" role="list">
         <li v-for="row in recovery" :key="row.title" class="grid min-h-11 grid-cols-[1rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[1rem_minmax(0,1fr)_auto]">
           <UIcon :name="row.icon" class="size-4 text-dimmed" aria-hidden="true" />
@@ -212,7 +212,7 @@ const stepNumber = (index: number): string => String(index + 1).padStart(2, '0')
     </section>
 
     <section aria-labelledby="flow-gaps" class="flex flex-col gap-3">
-      <ColumnHeading id="flow-gaps" label="Known gaps" :count="gaps.length" tone="error" />
+      <ColumnHeading id="flow-gaps" rule label="Known gaps" :count="gaps.length" tone="error" />
       <ul class="grid gap-2 md:grid-cols-2" role="list">
         <li v-for="gap in gaps" :key="gap.title" class="rounded-md border p-3" :class="markerClass.gap">
           <span class="font-medium">{{ gap.title }}</span>
@@ -222,7 +222,7 @@ const stepNumber = (index: number): string => String(index + 1).padStart(2, '0')
     </section>
 
     <section aria-labelledby="flow-roles" class="flex flex-col gap-3">
-      <ColumnHeading id="flow-roles" label="Who can do what" />
+      <ColumnHeading id="flow-roles" rule label="Who can do what" />
       <ul class="grid divide-y divide-default rounded-md border border-default bg-elevated md:grid-cols-3 md:divide-x md:divide-y-0" role="list">
         <li v-for="role in roles" :key="role.title" class="p-3">
           <span class="flex items-center gap-2 font-medium">

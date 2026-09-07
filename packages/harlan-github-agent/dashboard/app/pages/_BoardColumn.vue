@@ -3,22 +3,22 @@
  * One column surface: a muted step, a heading with its count, and cards.
  *
  * The region takes its accessible name from the heading wrapper, so the count
- * pill is part of the name a screen reader announces.
+ * is part of the name a screen reader announces.
  */
 const {
   id,
   label,
   count,
   tone = 'default',
-  accent = false,
+  live = false,
   loading = false,
 } = defineProps<{
   id: string
   label: string
   count: number
-  tone?: 'default' | 'warning'
-  /** The amber hairline. Only Needs you earns it, and only while it holds entries. */
-  accent?: boolean
+  /** The dot before the name. Needs you turns amber, Running turns green, only while they hold cards. */
+  tone?: 'default' | 'warning' | 'success'
+  live?: boolean
   loading?: boolean
 }>()
 </script>
@@ -28,11 +28,12 @@ const {
     role="region"
     :aria-labelledby="`${id}-heading`"
     class="flex min-w-0 flex-col gap-2 rounded-lg bg-muted p-2"
-    :class="accent ? 'border-t border-warning' : undefined"
   >
     <!-- The label and count as one string, so no accessible-name algorithm runs them together. -->
     <span :id="`${id}-heading`" class="sr-only">{{ label }}, {{ count }}</span>
-    <ColumnHeading :label="label" :count="count" :tone="tone" />
+    <div class="px-1">
+      <ColumnHeading :label="label" :count="count" :tone="tone" :live="live" />
+    </div>
     <template v-if="loading">
       <USkeleton class="h-24 rounded-md" />
       <USkeleton class="h-24 rounded-md" />

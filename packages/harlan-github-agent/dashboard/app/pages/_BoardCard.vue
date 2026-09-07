@@ -4,6 +4,7 @@ import type { BoardCard, CardAction } from '../utils/dashboard.ts'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import {
   approvalActionLabel,
+  avatarUrl,
   boardCardBadge,
   boardCardIdentity,
   boardCardWork,
@@ -102,6 +103,8 @@ const faceErrors = computed(() => [
   confirming.value === 'dismiss' ? undefined : dismissError.value,
 ].filter((error): error is string => error !== undefined))
 
+const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-git-pull-request-16' }
+
 const actionLabels: Record<CardAction, string> = {
   open: 'Open on GitHub',
   rerun: 'Rerun review',
@@ -177,9 +180,7 @@ const confirmOpen = computed({
 
 const surfaceClass = computed(() => {
   switch (card._tag) {
-    case 'NeedsYou': return 'bg-elevated border-default hover:border-accented'
-    case 'Waiting': return 'bg-elevated border-dashed border-accented hover:border-inverted/40'
-    case 'Done': return 'bg-elevated/60 border-default hover:border-accented text-muted'
+    case 'Done': return 'bg-elevated/60 border-default hover:border-accented'
     default: return 'bg-elevated border-default hover:border-accented'
   }
 })
@@ -191,7 +192,7 @@ defineExpose({
 </script>
 
 <template>
-  <article class="relative rounded-md border p-3 transition-colors" :class="surfaceClass">
+  <article class="group relative rounded-md border p-3 transition-colors" :class="surfaceClass">
     <!-- The face. Stretched under the content so links and buttons stay their own controls. -->
     <button
       ref="face"
@@ -202,26 +203,17 @@ defineExpose({
       @click="slideoverOpen = true"
     />
 
-    <div class="pointer-events-none relative flex flex-col gap-2 [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
-      <div class="flex items-start justify-between gap-2">
-        <div class="flex min-w-0 flex-1 flex-col gap-2">
-          <div v-if="card._tag === 'Done'" class="flex items-center gap-2">
-            <StateBadge :tone="badge.tone" :label="badge.label" :confidence="badge.confidence" :uppercase="badge.uppercase" />
-          </div>
-          <EntityIdentity
-            v-if="identity"
-            :author="identity.author"
-            :title="identity.title"
-            :url="identity.url"
-            :repository="identity.repository"
-            :kind="identity.kind"
-            :number="identity.number"
-            :size="card._tag === 'Done' ? 'sm' : 'md'"
-          />
-          <p v-else-if="card._tag === 'Done' && card.record._tag === 'Task'" class="font-mono text-sm">
-            <a :href="taskSubjectUrl(card.record.task)" target="_blank" rel="noreferrer" class="entity-link">{{ card.record.task.repository }}#{{ taskNumber(card.record.task) }}</a>
-          </p>
-        </div>
+    <div class="pointer-events-none relative flex flex-col gap-1.5 [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
+      <!-- Where it lives, and the menu that appears when the pointer arrives. -->
+      <div class="flex items-center justify-between gap-2">
+        <p v-if="identity" class="flex min-w-0 items-center gap-1 text-sm text-muted">
+          <UIcon :name="kindIcon[identity.kind]" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
+          <span class="sr-only">{{ identity.kind === 'issue' ? 'Issue' : 'Pull request' }}</span>
+          <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
+        </p>
+        <p v-else-if="card._tag === 'Done' && card.record._tag === 'Task'" class="min-w-0 truncate text-sm text-muted">
+          <a :href="taskSubjectUrl(card.record.task)" target="_blank" rel="noreferrer" class="entity-link">{{ card.record.task.repository }}<span class="text-dimmed"> #{{ taskNumber(card.record.task) }}</span></a>
+        </p>
         <UDropdownMenu :items="menuItems" :content="{ align: 'end' }">
           <UButton
             icon="i-octicon-kebab-horizontal-16"
@@ -229,38 +221,51 @@ defineExpose({
             variant="ghost"
             size="xs"
             square
-            class="-mt-1 -mr-1 shrink-0"
+            class="-my-1.5 -me-1.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100"
             :aria-label="identity ? `More actions for ${identity.repository} number ${identity.number}` : 'More actions'"
           />
         </UDropdownMenu>
       </div>
 
-      <!-- The one state line. -->
-      <div v-if="card._tag === 'Running' && agent" class="flex flex-col gap-1.5">
-        <div class="flex flex-wrap items-center gap-2">
-          <WorkChip :work="agent.role" />
+      <p v-if="identity" class="line-clamp-2 text-sm font-medium text-highlighted">
+        <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link">{{ identity.title }}<span class="sr-only"> on GitHub</span></a>
+      </p>
+
+      <!-- The one state line. Clamped and ink: the slideover holds the rest, the badge holds the colour. -->
+      <template v-if="card._tag === 'Running' && agent">
+        <p class="flex items-center gap-2 text-sm">
           <LiveDot tone="success" live label="Agent running" />
-          <span v-if="phase" class="min-w-0 flex-1 truncate text-sm text-muted">{{ phase }}</span>
-          <span class="ms-auto font-mono text-sm text-dimmed">{{ duration(agent.startedAt) }}</span>
-        </div>
+          <span class="min-w-0 flex-1 truncate text-muted">{{ phase ?? 'Working' }}</span>
+          <span class="shrink-0 font-mono text-dimmed">{{ duration(agent.startedAt) }}</span>
+        </p>
         <p v-if="stalled" class="status-warning flex items-center gap-1.5 text-sm">
           <UIcon name="i-octicon-alert-16" class="size-3.5" aria-hidden="true" />
           {{ stalledLabel(agent, now) }}
         </p>
-      </div>
-      <div v-else-if="entry && stateLine" class="flex flex-col gap-1.5">
-        <div class="flex flex-wrap items-center gap-2">
-          <WorkChip v-if="work" :work="work" />
-          <span v-if="card._tag === 'Queued'" class="font-mono text-sm text-dimmed">{{ String(entry.position).padStart(2, '0') }}</span>
-        </div>
-        <!-- Clamped: the face says why in three lines and the slideover holds the rest. Colour stays on the badge, not the prose. -->
-        <p class="line-clamp-3 text-sm" :class="stateLine.tone === 'muted' ? 'text-muted' : 'text-default'">
-          {{ stateLine.text }}
-        </p>
+      </template>
+      <p v-else-if="entry && stateLine" class="line-clamp-3 text-sm" :class="stateLine.tone === 'muted' ? 'text-muted' : 'text-default'">
+        {{ stateLine.text }}
+      </p>
+
+      <!-- Footer: what kind of work, then who. The avatar sits where GitHub puts the assignee. -->
+      <div class="mt-0.5 flex items-center gap-1.5">
+        <StateBadge v-if="card._tag === 'Done'" :tone="badge.tone" :label="badge.label" :confidence="badge.confidence" :uppercase="badge.uppercase" />
+        <WorkChip v-else-if="work" :work="work" />
+        <span v-if="card._tag === 'Queued'" class="font-mono text-sm text-dimmed">{{ String(entry?.position).padStart(2, '0') }}</span>
+        <a
+          v-if="identity"
+          :href="`https://github.com/${identity.author}`"
+          target="_blank"
+          rel="noreferrer"
+          class="ms-auto shrink-0"
+          :title="`@${identity.author}`"
+        >
+          <UAvatar :src="avatarUrl(identity.author)" :alt="`@${identity.author}`" size="2xs" />
+        </a>
       </div>
 
       <!-- One decision, inline. Everything else is in the menu. -->
-      <div v-if="primaryLabel || (agent && agent.session._tag === 'Connected')" class="flex flex-wrap items-center gap-1">
+      <div v-if="primaryLabel || (agent && agent.session._tag === 'Connected')" class="mt-1 flex flex-wrap items-center gap-1">
         <UButton
           v-if="primaryLabel"
           size="sm"

@@ -1,59 +1,48 @@
 <script setup lang="ts">
 import type { StatsDay } from '../../../src/stats.ts'
 import { useElementSize } from '@vueuse/core'
-import { barWidth, dayLabel, dayTitle, dayTotal, labelFits } from '../utils/stats.ts'
+import { useChartTickPlan } from '../composables/useChartTickPlan.ts'
+import { dayLabel, dayTitle, dayTotal } from '../utils/stats.ts'
 
 /**
- * One bar per day, ink on paper. A value sits on its bar when the column is
- * wide enough; otherwise the bar's title carries it. The container scrolls
- * sideways on narrow screens and is focusable, so the keyboard reaches it.
+ * One bar per day on the sparkline primitive, with calendar-aware ticks below.
+ * The visible summary is the tick row; the full per-day breakdown is read out
+ * to assistive technology.
  */
 const { days } = defineProps<{ days: StatsDay[] }>()
 
-const grid = ref<HTMLElement | null>(null)
-const { width } = useElementSize(grid)
-
-const columns = computed(() => Math.max(days.length, 1))
-const totals = computed(() => days.map(day => ({ day, total: dayTotal(day) })))
-const maximum = computed(() => Math.max(...totals.value.map(entry => entry.total), 0))
-/** Column width minus the 2px gap between bars. */
-const columnWidth = computed(() => width.value / columns.value - 2)
-const first = computed(() => days[0])
-const last = computed(() => days.at(-1))
+const frame = ref<HTMLElement | null>(null)
+const { width } = useElementSize(frame)
+const totals = computed(() => days.map(dayTotal))
+const dates = computed(() => days.map(day => day.date))
+const { tickPlan, firstTickYear } = useChartTickPlan({ dates })
+const ticks = computed(() => tickPlan.value.indices.map((index, position) => ({
+  index,
+  left: days.length <= 1 ? 0 : (index / (days.length - 1)) * 100,
+  label: tickPlan.value.format(new Date(`${days[index]?.date}T00:00:00.000Z`), position, firstTickYear.value),
+})))
+const summary = computed(() => days.map(dayTitle).join('. '))
 </script>
 
 <template>
   <section class="min-w-0" aria-labelledby="stats-daily-heading">
-    <ColumnHeading id="stats-daily-heading" label="Outcomes per day" />
-    <div
-      class="mt-3 max-w-full overflow-x-auto pb-1"
-      role="region"
-      tabindex="0"
-      aria-label="Outcomes per day. Scroll sideways to see every day."
-    >
-      <div
-        ref="grid"
-        class="grid h-48 items-end gap-0.5 border-b border-default pt-4"
-        :style="{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, minWidth: `${columns * 0.75}rem` }"
-      >
-        <div
-          v-for="{ day, total } in totals"
-          :key="day.date"
-          class="relative flex h-full min-w-0 items-end"
-          :title="dayTitle(day)"
-        >
-          <div class="w-full bg-inverted" :style="{ height: barWidth(total, maximum) }" />
-          <span
-            v-if="total > 0 && labelFits(total, columnWidth)"
-            class="absolute inset-x-0 text-center font-mono text-sm text-muted"
-            :style="{ bottom: `calc(${barWidth(total, maximum)} + 0.125rem)` }"
-          >{{ total }}</span>
-        </div>
+    <UiSectionHeader id="stats-daily-heading" title="Outcomes per day" :description="days.length > 0 ? `${dayLabel(days[0]!.date)} to ${dayLabel(days.at(-1)!.date)}` : undefined" />
+    <figure class="min-w-0">
+      <!-- Pixel sizes, so the bar corners stay square instead of stretching with a scaled viewBox. -->
+      <div ref="frame" class="h-40 w-full">
+        <UiSparkline v-if="width > 0" :data="totals" variant="bars" size="lg" :width="Math.round(width)" :height="160" :colors="['var(--ui-primary)']" />
       </div>
-      <div class="mt-1.5 flex justify-between font-mono text-sm text-dimmed" :style="{ minWidth: `${columns * 0.75}rem` }">
-        <span>{{ first ? dayLabel(first.date) : '' }}</span>
-        <span>{{ last && last !== first ? dayLabel(last.date) : '' }}</span>
+      <div class="relative mt-1.5 h-5 font-mono text-sm text-dimmed" aria-hidden="true">
+        <span
+          v-for="tick in ticks"
+          :key="tick.index"
+          class="absolute top-0 whitespace-nowrap"
+          :style="{ left: `${tick.left}%`, transform: tick.left === 0 ? 'none' : tick.left >= 99 ? 'translateX(-100%)' : 'translateX(-50%)' }"
+        >{{ tick.label }}</span>
       </div>
-    </div>
+      <figcaption class="sr-only">
+        {{ summary }}
+      </figcaption>
+    </figure>
   </section>
 </template>

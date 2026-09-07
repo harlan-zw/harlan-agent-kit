@@ -104,24 +104,23 @@ useHead({
 
 <template>
   <div class="flex flex-col gap-4">
-    <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
-      <div class="min-w-0 flex-1 basis-48">
-        <ColumnHeading label="History" :count="rows.length" :level="1" />
-      </div>
-      <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by outcome">
-        <UButton
-          v-for="filter in outcomeFilters"
-          :key="filter.value"
-          size="xs"
-          color="neutral"
-          :variant="outcomeFilter === filter.value ? 'outline' : 'ghost'"
-          :aria-pressed="outcomeFilter === filter.value"
-          @click="outcomeFilter = filter.value"
-        >
-          {{ filter.label }}
-        </UButton>
-      </div>
-    </div>
+    <UiSectionHeader title="History" :badge="rows.length" class="mb-0">
+      <template #actions>
+        <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by outcome">
+          <UButton
+            v-for="filter in outcomeFilters"
+            :key="filter.value"
+            size="xs"
+            color="neutral"
+            :variant="outcomeFilter === filter.value ? 'outline' : 'ghost'"
+            :aria-pressed="outcomeFilter === filter.value"
+            @click="outcomeFilter = filter.value"
+          >
+            {{ filter.label }}
+          </UButton>
+        </div>
+      </template>
+    </UiSectionHeader>
 
     <div v-if="range._tag === 'Stats'" class="flex flex-wrap items-center justify-between gap-3 text-sm">
       <span class="text-muted">Showing the Stats range.</span>
@@ -207,9 +206,7 @@ useHead({
       </li>
     </ul>
 
-    <p v-else class="text-sm text-dimmed">
-      {{ emptyLine }}
-    </p>
+    <UiEmptyState v-else compact icon="clock" title="Nothing here" :description="emptyLine" />
 
     <HistoryEvidenceSlideover v-model:open="slideoverOpen" :row="selected" />
   </div>

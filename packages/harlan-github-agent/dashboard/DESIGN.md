@@ -103,7 +103,7 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 | `/` Board | Questions 1 to 3, and the last eight of 4 | Four fixed columns: **Needs you**, **Up next** (with a **Waiting** group), **Running**, **Done** |
 | `/history` | What happened, on what evidence | GitHub style list rows. Evidence opens in a slideover |
 | `/watching` | What is being polled | Repository table that flags exceptions only, open items, Dismissed group |
-| `/stats` | What the work produced over a range | Two small charts and one table. No score, no money |
+| `/stats` | What the work produced over a range | A stats strip, one bar chart, one table. No score, no money |
 | `/flow` | How work moves through the service | Static explainer. Reached from the overflow menu, never a tab |
 | `/kit` | The design system, rendered | Dev only |
 
@@ -133,7 +133,8 @@ An unresolved Incident also renders as one compact error row above the board col
 
 Trello cards. A card face carries identity and one decision. Everything else opens.
 
-- Face: author avatar, `repository#number`, title, work chip. Then one state line: the reason it needs you, the queue position or blocking reason, the phase and elapsed time, or the outcome badge. The state line clamps at three lines and stays ink; colour belongs to the badge. The terminal, including the last command, opens with the card.
+- Face, top to bottom, the way a GitHub Projects card reads: `owner/repo #number` in muted text, the title in one weight of ink, one state line, then a footer with the work chip on the left and the author avatar on the right. The state line is the reason it needs you, the blocking reason, or the phase with its elapsed time. It clamps at three lines and stays ink; colour belongs to the badge. The terminal, including the last command, opens with the card.
+- The overflow menu appears on hover, focus, or a coarse pointer. Forty always-visible kebabs were forty invitations to nothing.
 - One primary action on Needs you cards: `Review and repair` or `Approve`. Keyboard `a` presses it.
 - Running cards carry `Eject` inline; it arms then confirms.
 - Every other action sits in the card's overflow menu: `Open on GitHub`, `Rerun review`, `Cancel`, `Dismiss`. Cancel and Dismiss confirm in a modal that states the consequence in one sentence.
@@ -144,9 +145,9 @@ Trello cards. A card face carries identity and one decision. Everything else ope
 
 - Column order is fixed. Needs you keeps its slot when empty so the board never reflows.
 - An entry lives in exactly one column, decided by state.
-- Column headings are a label, a count pill, and a hairline. Never a title.
+- Column headings are the name in sentence case, then the count in mono. A dot in front carries state: amber on Needs you while it holds cards, green and pulsing on Running while agents run. No hairline, no uppercase, no title.
 - Columns are a muted surface; cards are elevated white on it. Column surfaces are the only recessed area in the app.
-- Queued work carries a position. Pending work sits under Waiting with a dashed border and never gets a position.
+- Queued work carries a position. Pending work sits under Waiting, looks like every other card, and never gets a position. Its state line says why it waits; a dashed border on thirty cards said nothing.
 - An empty column names its cause in one line. If the cause has a control, the control is there.
 - One work kind filter, all four columns, hidden until two kinds are present.
 - Done holds eight. The ninth is a link to History.
@@ -158,7 +159,7 @@ New copy has to answer one question the reader cannot already answer from the sc
 Never show:
 
 - Eyebrow labels, section descriptions, or captions that restate a heading or a chart.
-- Summary counter tiles. Counts live in headings.
+- Summary counter tiles on a live surface. Counts live in headings; the Stats strip is the one place a number is the content.
 - Static configuration on a live surface. Model lists, cron strings, host kernel strings, security notes.
 - The same record in two places. Recently finished is gone; Done is the terminus.
 - Provenance on a card face. Session id, commit SHA, agent id, last command open on demand.
@@ -216,6 +217,16 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 
 - **Colour**: `currentColor` only. Colour arrives from the semantic text class, never from the icon.
 
+## Primitives
+
+The `Ui*` components under `app/components/ui/` are ports of the nuxtseo.com design-system layer (`~/sites/nuxtseo.com/layers/design-system`), kept to the same names, props, and slots so a pattern that works there works here. They sit on Nuxt UI and this file's tokens; they carry no motion library, no chart library, and no table engine.
+
+- **Prefer a `Ui*` primitive over a raw `U*` component** wherever one exists: `UiSectionHeader` over a heading and a flex row, `UiTableShell` with `UiTableTh` and `UiTableTd` over a hand-rolled table, `UiStats` over stat markup, `UiSparkline` and `UiBarChart` over inline SVG, `UiStatusBadge` for a semantic state, `UiEmptyState` for an empty section, `UiTrend` for a delta. Raw Nuxt UI stays for controls the layer has no opinion on: buttons, inputs, menus, slideovers, modals, tooltips.
+- **Data display**: every number that changes is mono. A count in a table goes through `UiTableMetricCell`, a change through `UiTableTrendCell` or `UiTrend`, and colour on a delta is opt in (`colored`) and belongs to the one hero row, never a table.
+- **Ports change tokens, not behaviour.** A port may swap the icon registry for Octicons, raise a 12px label to the 14px floor, and replace a motion transition with 120ms opacity. It may not add a prop, a dependency, or a colour.
+- **Stat numerals** are the one exception to the 1.125rem type ceiling: a `UiStat` value reads from across the room.
+- The `/kit` route renders every port beside the tokens.
+
 ## Component Rules
 
 - **Buttons**: primary is `solid` ink; used once per card and once per modal at most. Secondary is `outline` with a hairline. Tertiary is `ghost` for icon triggers and menu triggers. Never two solid buttons in one row.
@@ -267,18 +278,18 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 - Colour to encode work kind, repository, or provider.
 - A tinted background larger than a badge, except the Incident row.
 - Font sizes above 1.125rem.
-- Uppercase outside `.field-label` and Review outcomes.
+- Uppercase outside `.field-label` and Review outcomes. `.field-label` never heads a section or a column.
 - Section text that explains the section.
 - Tailwind `gray-`, `zinc-`, `slate-`, `stone-` utilities. Only `--ui-*` tokens.
 - Hard-coded hex in components.
 - Emoji.
-- A second heading system. `.field-label` is the only section heading style.
+- A second heading system. `ColumnHeading` is the only section and column heading; page sections add its hairline, columns add its dot.
 
 ## Custom Utilities
 
 | Class or token | What it does | When to use |
 | --- | --- | --- |
-| `.field-label` | 12px, 500, uppercase, dimmed, 0.06em tracking | Column headings, table headers, detail list terms |
+| `.field-label` | 12px, 500, uppercase, dimmed, 0.06em tracking | Table headers and detail list terms only |
 | `.entity-link` | No underline until hover or focus | Any link that resolves to GitHub |
 | `.status-success` `.status-warning` `.status-error` | Semantic text mixed toward ink or paper for AA on tints | Text inside badges, dots, alert rows |
 | `.live-dot` | 2s opacity pulse, held solid under reduced motion | The Running column and the System chip while agents run |
@@ -315,5 +326,5 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 - Keyboard: `j` and `k` move through Needs you, `a` presses its primary action, `/` focuses the Watching filter, `?` opens the keyboard list.
 - One snapshot and one event stream, shared by every page through `useDashboard`. Changing page never costs a reconnect.
 - Presentation logic lives in `app/utils/dashboard.ts`, pure and unit tested. Every write lives in `app/composables/useDashboard.ts`. Pages hold layout and local filters only.
-- Stats stays free of scores, rankings, and money. Bars start at zero, labels sit on the mark, no chart library, no legend.
+- Stats stays free of scores, rankings, and money. Bars start at zero, no chart library, no legend. The strip at the top carries each outcome's change against the previous period; the chart below carries its shape.
 - Shared visual primitives (`Card`, `ColumnHeading`, `StateBadge`, `WorkChip`, `EntityIdentity`, `ConfirmButton`, `DetailList`) live in `app/components/`. Page-local pieces stay `_Name.vue` beside their page.

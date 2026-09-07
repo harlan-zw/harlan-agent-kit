@@ -120,7 +120,6 @@ useHead({
         label="Needs you"
         :count="columns.needsYou.length"
         :tone="columns.needsYou.length > 0 ? 'warning' : 'default'"
-        :accent="columns.needsYou.length > 0"
         :loading="loading"
       >
         <BoardCard
@@ -153,14 +152,14 @@ useHead({
           </UButton>
         </div>
         <template v-if="columns.waiting.length > 0">
-          <div class="mt-2">
+          <div class="mt-2 px-1">
             <ColumnHeading label="Waiting" :count="columns.waiting.length" />
           </div>
           <BoardCard v-for="card in columns.waiting" :key="card.key" :card="card" />
         </template>
       </BoardColumn>
 
-      <BoardColumn id="running" label="Running" :count="columns.running.length" :loading="loading">
+      <BoardColumn id="running" label="Running" :count="columns.running.length" :tone="columns.running.length > 0 ? 'success' : 'default'" :live="columns.running.length > 0" :loading="loading">
         <BoardCard v-for="card in columns.running" :key="card.key" :card="card" />
         <p v-if="columns.running.length === 0" class="px-1 py-1 text-sm text-dimmed">
           {{ emptyReason('running').text }}
