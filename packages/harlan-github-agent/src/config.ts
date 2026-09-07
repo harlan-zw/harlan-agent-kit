@@ -1,7 +1,7 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, AgentRole, CodexReasoningEffort, ExternalRepositoryWatch, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, AgentRole, CodexReasoningEffort, ExternalRepositoryWatch, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -102,6 +102,46 @@ function autoMergePolicy(source: UnknownRecord, issues: ConfigIssue[]): AutoMerg
   if (enabled === undefined || minimumConfidence === undefined || method === undefined)
     return undefined
   return enabled ? { _tag: 'Enabled', minimumConfidence, method } : { _tag: 'Disabled' }
+}
+
+/** Auto merge takes labelled pull requests only, unless the repository widens it to every pull request. */
+function repositoryAutoMergeScope(source: UnknownRecord, path: string, repositoryOwnership: RepositoryOwnership | undefined, pullRequestReview: boolean | undefined, issues: ConfigIssue[]): RepositoryAutoMergeScope | undefined {
+  const value = source.auto_merge
+  if (value === undefined)
+    return { _tag: 'Labelled' }
+  const scopePath = `${path}.auto_merge`
+  if (!isRecord(value)) {
+    issues.push({ path: scopePath, message: 'Expected an object.' })
+    return undefined
+  }
+
+  const pullRequests = requiredString(value, 'pull_requests', scopePath, issues)
+  if (pullRequests === undefined)
+    return undefined
+  if (pullRequests === 'labelled') {
+    if (value.minimum_confidence === undefined)
+      return { _tag: 'Labelled' }
+    issues.push({ path: `${scopePath}.minimum_confidence`, message: 'Labelled pull requests use $.auto_merge.minimum_confidence.' })
+    return undefined
+  }
+  if (pullRequests !== 'every') {
+    issues.push({ path: `${scopePath}.pull_requests`, message: 'Expected labelled or every.' })
+    return undefined
+  }
+
+  const confidenceValue = value.minimum_confidence
+  const minimumConfidence = typeof confidenceValue === 'number' && Number.isInteger(confidenceValue) && confidenceValue >= 0 && confidenceValue <= 100
+    ? confidenceValue
+    : undefined
+  if (minimumConfidence === undefined)
+    issues.push({ path: `${scopePath}.minimum_confidence`, message: 'Expected an integer from 0 to 100.' })
+  if (repositoryOwnership !== 'owned')
+    issues.push({ path: `${scopePath}.pull_requests`, message: 'Auto merge for every pull request requires an owned repository.' })
+  if (pullRequestReview !== true)
+    issues.push({ path: `${scopePath}.pull_requests`, message: 'Auto merge for every pull request requires pull request review.' })
+  if (minimumConfidence === undefined || repositoryOwnership !== 'owned' || pullRequestReview !== true)
+    return undefined
+  return { _tag: 'Every', minimumConfidence }
 }
 
 function ownership(source: UnknownRecord, path: string, issues: ConfigIssue[]): RepositoryOwnership | undefined {
@@ -419,6 +459,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
   const pullRequestReview = requiredBoolean(value, 'pr_review', path, issues)
   const conflictResolution = requiredBoolean(value, 'conflict_resolution', path, issues)
   const ownershipConfig = takeOwnership(value, path, repositoryOwnership, issues)
+  const autoMerge = repositoryAutoMergeScope(value, path, repositoryOwnership, pullRequestReview, issues)
 
   if (github !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(github))
     issues.push({ path: `${path}.github`, message: 'Expected owner/repository.' })
@@ -454,6 +495,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     || pullRequestReview === undefined
     || conflictResolution === undefined
     || ownershipConfig === undefined
+    || autoMerge === undefined
   ) {
     return undefined
   }
@@ -472,6 +514,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     pullRequestReview,
     conflictResolution,
     takeOwnership: ownershipConfig,
+    autoMerge,
   }
 }
 

@@ -240,7 +240,7 @@ Output the PR URL when done. Log to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
 Never add the label to a change a reviewer must judge: source behaviour, public API, configuration, CI workflow, authentication, authorization, payments, data handling, or user-visible copy. When unsure, leave it off. A missing label costs one human merge. A wrong label ships an unreviewed change.
 
-Read [references/auto-merge.md](../../references/auto-merge.md) for the exact conditions.
+Read [references/auto-merge.md](../../references/auto-merge.md) for the exact conditions. A repository whose service block sets `auto_merge.pull_requests: every` needs no label; the service merges every trusted pull request there after a `READY` review at that repository's minimum confidence.
 
 ```bash
 gh label create harlan-agent-auto-merge --color 0e8a16 --description "Lets harlan-github-agent merge this after a READY review" 2>/dev/null || true

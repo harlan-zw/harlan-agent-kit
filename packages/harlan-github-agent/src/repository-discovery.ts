@@ -116,6 +116,7 @@ function defaultMapping(repository: InstalledRepository, checkout: string): Repo
     pullRequestReview: true,
     conflictResolution: ownership === 'owned',
     takeOwnership: { _tag: 'Disabled' },
+    autoMerge: { _tag: 'Labelled' },
   }
 }
 

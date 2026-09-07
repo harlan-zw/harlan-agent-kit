@@ -553,6 +553,8 @@ After a published `READY` Review outcome at or above the configured confidence, 
 
 Auto merge never changes whether a pull request is reviewed. Automated review runs either way.
 
+A repository block may widen the scope with `auto_merge.pull_requests: every` and its own `minimum_confidence`. Then every trusted-author pull request in that repository is a candidate, label or not. The default scope is `labelled`.
+
 Write GitHub's feature as "auto-merge", hyphenated. Do not use self merge, automatic approval, automerge, or merge tier.
 
 ### Legacy issue cutoff

@@ -1,7 +1,7 @@
 import type { AutoMergePolicy } from '../src/auto-merge.ts'
 import type { ReviewFinding, ReviewGates, ReviewGateState, ReviewOutcome, ReviewPublication, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { AUTO_MERGE_LABEL, autoMergeDecision, hasAutoMergeLabel } from '../src/auto-merge.ts'
+import { AUTO_MERGE_LABEL, autoMergeCandidate, autoMergeDecision, hasAutoMergeLabel } from '../src/auto-merge.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const passed: ReviewGateState = { _tag: 'Passed', evidence: [] }
@@ -159,5 +159,42 @@ describe('auto merge decision', () => {
       method: 'merge',
       reviewRunId: 'attempt-1',
     })
+  })
+})
+
+describe('auto merge scoped to every pull request', () => {
+  const every = { autoMerge: { _tag: 'Every', minimumConfidence: 80 } } as const
+
+  it('merges an unlabelled pull request at the repository minimum, below the service minimum', () => {
+    expect(decide({
+      attempts: [attempt({ outcome: { _tag: 'Ready', confidence: 80 } })],
+      pullRequest: { autoMerge: false },
+      repository: every,
+    })).toEqual({ _tag: 'Merge', headSha: 'abc123', method: 'squash', reviewRunId: 'attempt-1' })
+  })
+
+  it('holds below the repository minimum even with the label', () => {
+    expect(decide({
+      attempts: [attempt({ outcome: { _tag: 'Ready', confidence: 79 } })],
+      pullRequest: { autoMerge: true },
+      repository: every,
+    })).toEqual({ _tag: 'Hold', reason: 'Review confidence is below 80.' })
+  })
+
+  it('still needs a trusted author and a READY review', () => {
+    expect(decide({ pullRequest: { autoMerge: false, author: 'stranger' }, repository: every })).toEqual({
+      _tag: 'Hold',
+      reason: 'The pull request author is not a trusted author.',
+    })
+    expect(decide({ attempts: [], pullRequest: { autoMerge: false }, repository: every })).toEqual({
+      _tag: 'Hold',
+      reason: 'The current head commit has no READY review.',
+    })
+  })
+
+  it('names the candidates the controller may spend a merge check on', () => {
+    expect(autoMergeCandidate(repositoryMapping(), pullRequestItem({ autoMerge: false }))).toBe(false)
+    expect(autoMergeCandidate(repositoryMapping(), pullRequestItem({ autoMerge: true }))).toBe(true)
+    expect(autoMergeCandidate(repositoryMapping(every), pullRequestItem({ autoMerge: false }))).toBe(true)
   })
 })

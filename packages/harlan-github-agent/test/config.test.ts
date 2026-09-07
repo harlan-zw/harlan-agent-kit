@@ -238,6 +238,46 @@ agent:
     })
   })
 
+  it('scopes auto merge to labelled pull requests unless a repository widens it', () => {
+    const labelled = parseConfigText(configText)
+    expect(labelled._tag === 'Ok' && labelled.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Labelled' })
+
+    const every = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true\n    auto_merge:\n      pull_requests: every\n      minimum_confidence: 80',
+    ))
+    expect(every._tag === 'Ok' && every.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Every', minimumConfidence: 80 })
+  })
+
+  it('rejects an every pull request scope without its own minimum, on a maintained repository, or without review', () => {
+    const missing = parseConfigText(configText.replace('issue_work: true', 'issue_work: true\n    auto_merge:\n      pull_requests: every'))
+    expect(missing._tag === 'Err' && missing.error).toContainEqual({
+      path: '$.repositories[0].auto_merge.minimum_confidence',
+      message: 'Expected an integer from 0 to 100.',
+    })
+
+    const maintained = parseConfigText(configText
+      .replace('ownership: owned', 'ownership: maintained')
+      .replace('conflict_resolution: true', 'conflict_resolution: false')
+      .replace('issue_work: true', 'issue_work: true\n    auto_merge:\n      pull_requests: every\n      minimum_confidence: 80'))
+    expect(maintained._tag === 'Err' && maintained.error).toContainEqual({
+      path: '$.repositories[0].auto_merge.pull_requests',
+      message: 'Auto merge for every pull request requires an owned repository.',
+    })
+
+    const unreviewed = parseConfigText(configText
+      .replace('pr_review: true', 'pr_review: false')
+      .replace('conflict_resolution: true', 'conflict_resolution: false')
+      .replace('issue_work: true', 'issue_work: true\n    auto_merge:\n      pull_requests: every\n      minimum_confidence: 80'))
+    expect(unreviewed._tag === 'Err' && unreviewed.error).toContainEqual({
+      path: '$.repositories[0].auto_merge.pull_requests',
+      message: 'Auto merge for every pull request requires pull request review.',
+    })
+
+    const labelledWithMinimum = parseConfigText(configText.replace('issue_work: true', 'issue_work: true\n    auto_merge:\n      pull_requests: labelled\n      minimum_confidence: 80'))
+    expect(labelledWithMinimum._tag === 'Err' && labelledWithMinimum.error.map(issue => issue.path)).toContain('$.repositories[0].auto_merge.minimum_confidence')
+  })
+
   it('parses an enabled auto merge policy with its defaults', () => {
     const enabled = parseConfigText(`auto_merge:\n  enabled: true\nmax_open_pull_requests: 3\n${configText}`)
     expect(enabled._tag === 'Ok' && enabled.value.autoMerge).toEqual({

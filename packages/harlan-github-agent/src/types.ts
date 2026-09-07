@@ -16,6 +16,20 @@ export type TakeOwnershipConfig
 
 export type RepositoryAuthentication = 'app' | 'user'
 
+/**
+ * Which pull requests Auto merge may take in one repository.
+ *
+ * `Labelled` is the default: only a pull request carrying the
+ * `harlan-agent-auto-merge` label, at or above the service-wide minimum
+ * confidence. `Every` takes every trusted-author pull request at or above the
+ * repository's own minimum confidence. It suits a repository where a wrong
+ * merge costs little, such as a demo site, and never a repository Harlan would
+ * want to read first.
+ */
+export type RepositoryAutoMergeScope
+  = | { _tag: 'Labelled' }
+    | { _tag: 'Every', minimumConfidence: number }
+
 export interface RepositoryMapping {
   github: string
   checkout: string
@@ -35,6 +49,8 @@ export interface RepositoryMapping {
   pullRequestReview: boolean
   conflictResolution: boolean
   takeOwnership: TakeOwnershipConfig
+  /** Which pull requests Auto merge may take here. Labelled unless the configuration widens it. */
+  autoMerge: RepositoryAutoMergeScope
 }
 
 export interface ExternalRepositoryWatch {

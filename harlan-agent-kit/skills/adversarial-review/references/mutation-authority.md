@@ -61,11 +61,11 @@ Skill selection and generated default prompts never grant merge authority. This 
 Allow it only when every condition holds:
 
 1. The service configuration enables auto merge.
-2. The pull request carries the `harlan-agent-auto-merge` label.
+2. The pull request carries the `harlan-agent-auto-merge` label, or the repository block sets `auto_merge.pull_requests: every`.
 3. The base repository owner exactly matches the authenticated GitHub login.
 4. The pull request author is a trusted author for that repository.
 5. `adversarial-review` returned `READY` for the exact current head commit.
-6. Review confidence meets the configured minimum.
+6. Review confidence meets the configured minimum, the repository's own under `pull_requests: every`.
 7. The pull request is open, is not a draft, and GitHub reports it mergeable.
 
 Recheck the head commit immediately before the merge. Abandon the merge when it moved, then review the new head.
