@@ -438,6 +438,11 @@ describe('cardStateLine', () => {
       .toEqual({ text: 'Blocked on a draft.', tone: 'muted' })
   })
 
+  it('names the wait when a Pending reason arrives empty', () => {
+    expect(cardStateLine(queueEntry({ state: { _tag: 'Pending', reason: '' } }), available, now))
+      .toEqual({ text: 'Waiting on GitHub.', tone: 'muted' })
+  })
+
   it.each([
     [{ _tag: 'Available' } as const, 'Starts when an agent is free.'],
     [{ _tag: 'Paused' } as const, 'Paused. Nothing starts until you select Resume.'],

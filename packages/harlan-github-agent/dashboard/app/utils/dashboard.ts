@@ -378,7 +378,7 @@ export function cardStateLine(entry: QueueEntry, snapshot: DashboardSnapshot, no
     case 'ActionRequired':
       return { text: entry.state.reason, tone: 'error' }
     case 'Pending':
-      return { text: entry.state.reason, tone: 'muted' }
+      return { text: entry.state.reason.length > 0 ? entry.state.reason : 'Waiting on GitHub.', tone: 'muted' }
     case 'Queued': {
       if (isIssueWorkThrottled(entry, queueContextOf(snapshot)))
         return { text: throttledLine(snapshot), tone: 'muted' }

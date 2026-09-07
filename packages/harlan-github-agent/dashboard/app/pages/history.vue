@@ -104,6 +104,9 @@ useHead({
 
 <template>
   <div class="flex flex-col gap-4">
+    <h1 class="sr-only">
+      History
+    </h1>
     <UiSectionHeader title="History" class="mb-0">
       <template #after-title>
         <span class="font-mono text-sm font-normal text-muted">{{ rows.length }}</span>
