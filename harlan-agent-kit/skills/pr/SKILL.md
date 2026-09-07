@@ -45,6 +45,7 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 - **Never sync a clean pull request with its base branch:** A newer base alone needs no pull request commit.
   Merge the base into the head only when GitHub reports merge conflicts.
 - **Never `--no-verify`** -- if hooks fail, fix the underlying issue.
+- **`gh pr merge` refuses a pull request that has a child** -- GitHub asks for the stack merge. Use `gh stack merge`, and expect a child to turn CONFLICTING when its parent squash merges alone. Repair steps in [references/stacked-prs.md](references/stacked-prs.md).
 - **Never move unknown changes** -- primary checkout changes may belong to another task. Copy only changes this task owns.
 - **`gh pr create` fails silently with bad body** -- always use HEREDOC for the body, never inline quotes.
 - **CI flakes vs real failures** -- if the same check fails twice with different errors, it's flaky. If same error, it's real. Don't retry flakes more than once.
@@ -97,6 +98,7 @@ Run IN PARALLEL:
 Bash: git log main..HEAD --oneline
 Bash: git diff main...HEAD --stat
 Bash: gh issue list --state open --limit 20 --json number,title
+Bash: gh pr list --state open --limit 20 --json number,title,headRefName,baseRefName
 Bash: gh pr view --json number,title,body,url 2>&1
 ```
 
@@ -104,6 +106,14 @@ Determine what exists:
 - **No commits ahead of main** and **no uncommitted changes** -> nothing to do, tell user
 - **PR exists** -> we're syncing title/body, skip to Step 4
 - **No PR** -> creating fresh, continue to Step 2
+
+### Stacked work
+
+Read the open pull requests. If this change does not build, pass, or make sense without one of their diffs, it is stacked work: base the branch on that pull request in Step 0 and target it in Step 5.
+
+Related but independent work is not stacked work. It targets `origin/main`, even when it touches the same files or closes a sibling issue. Independent pull requests merge in parallel; a stack merges in order and every child waits for its parent.
+
+[references/stacked-prs.md](references/stacked-prs.md) has the `gh stack` commands, the ones this skill bans, and the merge and repair steps.
 
 ## Step 2: Find Related Issues
 
@@ -224,6 +234,8 @@ BODY
 EOF
 )"
 ```
+
+For stacked work, add `--base PARENT_BRANCH` to `gh pr create`, then link the chain with `gh stack link PARENT_BRANCH BRANCH`. Open the description with `Stacked on #PARENT_PR.` Read [references/stacked-prs.md](references/stacked-prs.md) before either command.
 
 When Step 3 rendered a diagram, add `--attach .pr-lens/<view>-dark-<hash>.svg` for each image the body references. GitHub CLI rewrites the Markdown path to the uploaded asset.
 
