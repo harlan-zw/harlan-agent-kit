@@ -8615,10 +8615,12 @@ export function openJournalStore(
     try {
       const task = database.prepare(`
         SELECT worker_tasks.subject_id, worker_tasks.revision_id,
-          repositories.github AS repository, subjects.github_number
+          repositories.github AS repository, subjects.github_number,
+          json_extract(revisions.payload, '$.baseSha') AS base_sha
         FROM worker_tasks
         JOIN subjects ON subjects.id = worker_tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = worker_tasks.revision_id
         WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
           AND worker_tasks.state_tag = 'Running' AND worker_tasks.worker_id = ?
           AND worker_tasks.fence = ? AND worker_tasks.lease_expires_at > ?
@@ -8628,6 +8630,7 @@ export function openJournalStore(
         revision_id: string
         repository: string
         github_number: number
+        base_sha: string
       } | undefined
       if (task === undefined) {
         database.exec('COMMIT')
@@ -8646,11 +8649,13 @@ export function openJournalStore(
             return { reviewRunId: input.resolution.reviewRunId, baselineTaskId: null, githubUrl: null, reason: null }
           }
           case 'WaitingForBaselineRepair': {
+            // All reviews of this repository's base commit share one repair.
+            const expectedTaskId = digest(`${task.repository}:baseline:${task.base_sha}`)
             const baseline = database.prepare(`
               SELECT 1 FROM tasks
-              WHERE id = ? AND subject_id = ? AND revision_id = ? AND kind = 'baseline_repair'
-            `).get(input.resolution.taskId, task.subject_id, task.revision_id)
-            if (baseline === undefined)
+              WHERE id = ? AND kind = 'baseline_repair'
+            `).get(input.resolution.taskId)
+            if (input.resolution.taskId !== expectedTaskId || baseline === undefined)
               throw new Error('The Review resolution references a different Baseline repair Task.')
             return { reviewRunId: null, baselineTaskId: input.resolution.taskId, githubUrl: null, reason: null }
           }
