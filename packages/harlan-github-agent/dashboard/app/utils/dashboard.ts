@@ -408,7 +408,7 @@ export function runningPhaseLine(agent: ActiveAgent): string | undefined {
   return text
 }
 
-/** The one primary action a Needs you card can carry. Absent when the card only reports. */
+/** The Approval action. Other decisions do not grant permission to start work. */
 export function approvalActionLabel(entry: QueueEntry): 'Review and repair' | 'Approve' | undefined {
   if (entry.state._tag !== 'AwaitingApproval')
     return undefined

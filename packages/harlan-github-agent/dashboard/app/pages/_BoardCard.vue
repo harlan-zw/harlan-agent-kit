@@ -3,7 +3,6 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { BoardCard, CardAction } from '../utils/dashboard.ts'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import {
-  approvalActionLabel,
   avatarUrl,
   boardCardBadge,
   boardCardIdentity,
@@ -19,6 +18,7 @@ import {
   taskNumber,
   taskSubjectUrl,
 } from '../utils/dashboard.ts'
+import { queueRecommendation } from '../utils/recommendation.ts'
 import BoardCardSlideover from './_BoardCardSlideover.vue'
 
 /**
@@ -60,6 +60,7 @@ const {
 } = useDashboard()
 
 const face = ref<HTMLButtonElement | null>(null)
+const primaryControl = ref<{ $el: HTMLElement } | null>(null)
 const slideoverOpen = ref(false)
 const confirming = ref<'cancel' | 'dismiss' | 'eject' | undefined>()
 
@@ -69,7 +70,8 @@ const work = computed(() => boardCardWork(card))
 const identity = computed(() => boardCardIdentity(card, snapshot.value))
 const badge = computed(() => boardCardBadge(card))
 const stateLine = computed(() => entry.value === undefined ? undefined : cardStateLine(entry.value, snapshot.value, now.value))
-const primaryLabel = computed(() => entry.value === undefined ? undefined : approvalActionLabel(entry.value))
+const recommendation = computed(() => entry.value === undefined ? undefined : queueRecommendation(entry.value, snapshot.value))
+const primaryLabel = computed(() => recommendation.value?.label)
 const task = computed(() => entry.value === undefined ? undefined : taskFor(entry.value))
 const taskId = computed(() => agent.value?.id ?? task.value?.id)
 const reviewAllowed = computed(() => entry.value !== undefined && canRunReview(entry.value))
@@ -146,9 +148,29 @@ const consequence = computed(() => {
 })
 
 function pressPrimary(): void {
-  if (entry.value === undefined || primaryLabel.value === undefined || busy.value)
+  if (recommendation.value?._tag === 'OpenGitHub') {
+    primaryControl.value?.$el.click()
     return
-  void approveQueueEntry(entry.value)
+  }
+  runPrimary()
+}
+
+function runPrimary(): void {
+  if (entry.value === undefined || recommendation.value === undefined)
+    return
+  switch (recommendation.value._tag) {
+    case 'OpenGitHub': return // The button is a normal link, including keyboard activation.
+    case 'Inspect':
+      slideoverOpen.value = true
+      return
+    case 'Approve':
+      if (!busy.value)
+        void approveQueueEntry(entry.value)
+      return
+    case 'Dismiss':
+      if (!busy.value)
+        confirming.value = 'dismiss'
+  }
 }
 
 function act(action: CardAction): void {
@@ -259,7 +281,7 @@ defineExpose({
     -->
     <div
       v-if="shape === 'row' && identity"
-      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_auto] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
+      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_12rem] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
     >
       <LiveDot class="[grid-area:dot]" :tone="badge.tone" :label="badge.label" />
       <a :href="`https://github.com/${identity.author}`" target="_blank" rel="noreferrer" class="flex [grid-area:avatar]" :title="`@${identity.author}`">
@@ -279,10 +301,17 @@ defineExpose({
       <div class="flex items-center justify-end gap-1 [grid-area:actions]">
         <UButton
           v-if="primaryLabel"
+          ref="primaryControl"
           size="xs"
+          class="min-h-11 md:min-h-0"
           :loading="primaryPending"
-          :disabled="busy"
-          @click="pressPrimary"
+          :disabled="busy && (recommendation?._tag === 'Approve' || recommendation?._tag === 'Dismiss')"
+          :to="recommendation?._tag === 'OpenGitHub' ? recommendation.url : undefined"
+          :target="recommendation?._tag === 'OpenGitHub' ? '_blank' : undefined"
+          :rel="recommendation?._tag === 'OpenGitHub' ? 'noreferrer' : undefined"
+          :trailing-icon="recommendation?._tag === 'OpenGitHub' ? 'i-octicon-link-external-16' : undefined"
+          :title="recommendation?.description"
+          @click="runPrimary"
         >
           {{ primaryLabel }}
         </UButton>
@@ -383,7 +412,7 @@ defineExpose({
       :card="card"
       :identity="identity"
       :actions="actions"
-      :primary-label="primaryLabel"
+      :recommendation="recommendation"
       :primary-pending="primaryPending"
       :task-id="taskId"
       :busy="busy"

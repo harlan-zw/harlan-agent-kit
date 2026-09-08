@@ -138,7 +138,12 @@ Three shapes for three questions. A Needs you entry is a one-line row, because a
 - Card, top to bottom: kind icon and `owner/repo #number` with the queue position and the avatar at the right; the title clamped to two lines; one state line with a dot, the reason or phase truncated to one line, and mono elapsed time for a running agent. Nothing else. The terminal, including the last command, opens with the card.
 - Done row: the outcome as a dot and a word with mono confidence in a fixed slot, then `repo #number title` truncated, then mono age.
 - The overflow menu appears on hover, focus, or a coarse pointer. Forty always-visible kebabs were forty invitations to nothing.
-- One primary action on Needs you rows: `Review and repair` or `Approve`, in the action slot. Keyboard `a` presses it.
+- Every Needs you row carries one recommended action. Keyboard `a` presses it.
+- `Approve` and `Review and repair` appear only for entries awaiting Approval.
+- `Write spec`, `Provide info`, `Review issues`, and `View failure` open the full task with `Copy task`.
+- `Resolve conflicts` and `View checks` open GitHub. Their external-link icon names that boundary.
+- `Dismiss` is recommended only by the latest review of the current head. It still confirms the consequence.
+- Unknown blockers use `View details`. They never imply Approval or Dismissal.
 - No card or row carries a second button. `Eject` sits in the Running card's menu and confirms in a modal.
 - Every other action sits in the card's overflow menu: `Open on GitHub`, `Rerun review`, `Cancel`, `Dismiss`. Cancel and Dismiss confirm in a modal that states the consequence in one sentence.
 - Clicking the face opens the card slideover: full reason text, session and commit identifiers, terminal, timeline, and the same actions.

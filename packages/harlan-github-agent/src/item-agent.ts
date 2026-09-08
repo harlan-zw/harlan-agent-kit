@@ -392,7 +392,7 @@ function parseIssueTriageResponse(text: string): Promise<Result<IssueTriageResul
         hasReproduction: value.hasReproduction,
         needsCodebaseReview: value.needsCodebaseReview,
         summary: cleanLine(value.summary),
-        nextAction: cleanLine(value.nextAction),
+        nextAction: cleanText(value.nextAction),
         relatedIssues: Array.isArray(value.relatedIssues)
           ? [...new Set(value.relatedIssues.filter((number): number is number => Number.isInteger(number) && number > 0))]
           : [],

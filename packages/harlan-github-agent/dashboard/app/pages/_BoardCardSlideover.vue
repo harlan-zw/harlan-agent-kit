@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DetailItem } from '../components/DetailList.vue'
 import type { BoardCard, CardAction, CardIdentity } from '../utils/dashboard.ts'
+import type { QueueRecommendation } from '../utils/recommendation.ts'
 import { useClipboard } from '@vueuse/core'
 import {
   approvalConsequence,
@@ -12,6 +13,7 @@ import {
   taskProgressDetail,
   taskStateDetail,
 } from '../utils/dashboard.ts'
+import { recommendationTask } from '../utils/recommendation.ts'
 
 /**
  * Everything a card face leaves out: the full reason, identifiers, the
@@ -22,7 +24,7 @@ const {
   card,
   identity,
   actions,
-  primaryLabel,
+  recommendation,
   primaryPending = false,
   taskId,
   busy = false,
@@ -30,7 +32,7 @@ const {
   card: BoardCard
   identity: CardIdentity | undefined
   actions: CardAction[]
-  primaryLabel?: string
+  recommendation?: QueueRecommendation
   primaryPending?: boolean
   /** The live Task behind the card, when one exists. */
   taskId?: string
@@ -42,6 +44,20 @@ const emit = defineEmits<{ act: [action: CardAction], primary: [], eject: [] }>(
 const open = defineModel<boolean>('open', { default: false })
 const { snapshot, now, relativeTime, duration } = useDashboard()
 const { copy, copied } = useClipboard()
+const copyError = ref<string>()
+const copiedTask = computed(() => recommendation?._tag === 'Inspect'
+  && card._tag !== 'Running' && card._tag !== 'Done'
+  ? recommendationTask(card.entry, recommendation)
+  : undefined)
+
+async function copyTask(): Promise<void> {
+  if (copiedTask.value === undefined)
+    return
+  copyError.value = undefined
+  await copy(copiedTask.value).catch(() => {
+    copyError.value = 'Clipboard access failed. Select and copy the task text below.'
+  })
+}
 
 const badge = computed(() => boardCardBadge(card))
 const work = computed(() => boardCardWork(card))
@@ -139,7 +155,20 @@ const canEject = computed(() => card._tag === 'Running' && card.agent.session._t
           </span>
         </div>
 
-        <p v-if="text.length > 0" class="text-sm text-default">
+        <div v-if="recommendation" class="space-y-2">
+          <p class="field-label">
+            Recommended: {{ recommendation.label }}
+          </p>
+          <p class="text-sm text-default">
+            {{ recommendation.description }}
+          </p>
+          <pre v-if="copiedTask" class="whitespace-pre-wrap break-words text-sm font-sans text-default">{{ copiedTask }}</pre>
+          <p v-if="copyError" role="alert" class="text-sm text-error">
+            {{ copyError }}
+          </p>
+        </div>
+
+        <p v-if="text.length > 0 && recommendation?._tag !== 'Inspect'" class="text-sm text-default whitespace-pre-wrap">
           {{ text }}
         </p>
 
@@ -186,8 +215,20 @@ const canEject = computed(() => card._tag === 'Running' && card.agent.session._t
 
     <template #footer>
       <div class="flex flex-wrap items-center gap-2">
-        <UButton v-if="primaryLabel" size="sm" :loading="primaryPending" :disabled="busy" @click="emit('primary')">
-          {{ primaryLabel }}
+        <UButton v-if="copiedTask" size="sm" :icon="copied ? 'i-octicon-check-16' : 'i-octicon-copy-16'" @click="copyTask">
+          {{ copied ? 'Copied' : 'Copy task' }}
+        </UButton>
+        <UButton
+          v-else-if="recommendation"
+          size="sm"
+          :loading="primaryPending"
+          :disabled="busy && recommendation._tag !== 'OpenGitHub'"
+          :to="recommendation._tag === 'OpenGitHub' ? recommendation.url : undefined"
+          :target="recommendation._tag === 'OpenGitHub' ? '_blank' : undefined"
+          :rel="recommendation._tag === 'OpenGitHub' ? 'noreferrer' : undefined"
+          @click="recommendation._tag !== 'OpenGitHub' && emit('primary')"
+        >
+          {{ recommendation.label }}
         </UButton>
         <ConfirmButton
           v-if="canEject"
