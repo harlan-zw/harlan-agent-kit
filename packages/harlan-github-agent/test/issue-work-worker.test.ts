@@ -9,13 +9,14 @@ import { join } from 'node:path'
 import { SCHEMA_VERSION } from '@coldtea/pr-lens-schema'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { withGitHubWritePreflight } from '../src/github-write-gate.ts'
 import { createIssueWorkWorker } from '../src/issue-work-worker.ts'
 import { issueSnapshotDigest } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('issue work worker', () => {
-  it('closes every combined issue and stacks on the base a Batch chose', async () => {
+  it('keeps combined issues and the planned base through the GitHub write preflight', async () => {
     const repository = repositoryMapping()
     const issue = issueItem()
     const bases: PullRequestBase[] = []
@@ -54,7 +55,15 @@ describe('issue work worker', () => {
       },
     })
 
-    const result = await worker.run({
+    const guarded = withGitHubWritePreflight({
+      accesses: ['item_write', 'contents_write'],
+      source: {
+        getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2126-01-01T00:00:00.000Z' })),
+        invalidate: () => undefined,
+      },
+      worker,
+    })
+    const result = await guarded.run({
       id: 'issue-work-task',
       kind: 'issue_work',
       repository: repository.github,
@@ -70,8 +79,9 @@ describe('issue work worker', () => {
     })
 
     expect(bases).toEqual([{ _tag: 'Stacked', ref: 'fix/issue-9', pullRequestNumber: 9, headSha: 'stack-head' }])
-    if (result._tag !== 'Ok' || result.value._tag !== 'Publish' || result.value.publication._tag !== 'OpenPullRequest')
+    if (result._tag !== 'Ok' || result.value._tag !== 'Publish' || result.value.publication._tag !== 'OpenPullRequest' || result.value.publication.taskKind !== 'issue_work')
       throw new Error('Expected a pull request publication.')
+    expect(result.value.publication.combinedIssueNumbers).toEqual([13])
     expect(result.value.publication.baseRef).toBe('fix/issue-9')
     expect(result.value.publication.pullRequestBody).toContain('Closes #12.')
     expect(result.value.publication.pullRequestBody).toContain('Closes #13.')

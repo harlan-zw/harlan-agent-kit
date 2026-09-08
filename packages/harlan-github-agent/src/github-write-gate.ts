@@ -60,20 +60,20 @@ export async function preflightGitHubWriteAccess(
   return ok(undefined)
 }
 
-interface RepositoryWorker<Task extends { repository: string }, Value> {
-  run: (task: Task, signal: AbortSignal) => Promise<Result<Value, string>>
+interface RepositoryWorker<Task extends { repository: string }, Value, Context extends unknown[]> {
+  run: (task: Task, signal: AbortSignal, ...context: Context) => Promise<Result<Value, string>>
 }
 
 /** Refuses work before an Agent turn when its required GitHub access is absent. */
-export function withGitHubWritePreflight<Task extends { repository: string }, Value>(options: {
+export function withGitHubWritePreflight<Task extends { repository: string }, Value, Context extends unknown[]>(options: {
   accesses: readonly GitHubRepositoryAccess[]
   source: GitHubTokenProvider
-  worker: RepositoryWorker<Task, Value>
-}): RepositoryWorker<Task, Value> {
+  worker: RepositoryWorker<Task, Value, Context>
+}): RepositoryWorker<Task, Value, Context> {
   return {
-    async run(task, signal) {
+    async run(task, signal, ...context) {
       const access = await preflightGitHubWriteAccess(options.source, task.repository, options.accesses, signal)
-      return access._tag === 'Err' ? access : options.worker.run(task, signal)
+      return access._tag === 'Err' ? access : options.worker.run(task, signal, ...context)
     },
   }
 }
