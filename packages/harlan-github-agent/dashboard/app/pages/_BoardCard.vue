@@ -281,7 +281,7 @@ defineExpose({
     -->
     <div
       v-if="shape === 'row' && identity"
-      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_12rem] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
+      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_14rem] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
     >
       <LiveDot class="[grid-area:dot]" :tone="badge.tone" :label="badge.label" />
       <a :href="`https://github.com/${identity.author}`" target="_blank" rel="noreferrer" class="flex [grid-area:avatar]" :title="`@${identity.author}`">
@@ -303,7 +303,7 @@ defineExpose({
           v-if="primaryLabel"
           ref="primaryControl"
           size="xs"
-          class="min-h-11 md:min-h-0"
+          class="min-h-11 shrink-0 whitespace-nowrap md:min-h-0"
           :loading="primaryPending"
           :disabled="busy && (recommendation?._tag === 'Approve' || recommendation?._tag === 'Dismiss')"
           :to="recommendation?._tag === 'OpenGitHub' ? recommendation.url : undefined"
