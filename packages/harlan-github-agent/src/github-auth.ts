@@ -65,6 +65,9 @@ function repositoryName(repository: string): string {
  * states the same requirement in its `X-Accepted-GitHub-Permissions` header for
  * those routes.
  *
+ * `pull_request_merge` carries Contents write for the REST merge endpoint and
+ * Pull requests write for GitHub's auto-merge mutation.
+ *
  * `checks_read` carries `actions` because the base gate lists workflow runs
  * to drop the suites a `workflow_run` event attached to the default branch
  * tip. Without it GitHub answers 403 and every CI gate reads PENDING.
@@ -76,6 +79,8 @@ function permissions(access: GitHubRepositoryAccess): Record<string, PermissionL
     return { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }
   if (access === 'item_write')
     return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
+  if (access === 'pull_request_merge')
+    return { contents: 'write', metadata: 'read', pull_requests: 'write' }
   if (access === 'workflows_write')
     return { contents: 'write', metadata: 'read', workflows: 'write' }
   return { contents: 'write', metadata: 'read' }

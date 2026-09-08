@@ -903,12 +903,12 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
   return {
     async merge(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
-      const credential = await options.tokens.getToken(input.repository.github, 'item_write', signal)
+      const credential = await options.tokens.getToken(input.repository.github, 'pull_request_merge', signal)
       if (credential._tag === 'Err')
         return credential
       const octokit = options.createClient?.(credential.value.token)
         ?? createAuthenticatedClient({
-          access: 'item_write',
+          access: 'pull_request_merge',
           repository: input.repository.github,
           signal,
           token: credential.value.token,

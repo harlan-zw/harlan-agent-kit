@@ -1036,7 +1036,7 @@ export interface ClaimedIssueTriageCommentCommand extends IssueTriageCommentComm
  * token that covers one kind and not the other fails half of those calls. One
  * level means no caller can pick the wrong one.
  */
-export type GitHubRepositoryAccess = 'read' | 'checks_read' | 'contents_write' | 'item_write' | 'workflows_write'
+export type GitHubRepositoryAccess = 'read' | 'checks_read' | 'contents_write' | 'item_write' | 'pull_request_merge' | 'workflows_write'
 
 export interface GitHubRepositoryToken {
   token: string

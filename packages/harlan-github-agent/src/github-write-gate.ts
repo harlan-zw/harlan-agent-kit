@@ -23,7 +23,7 @@ export function isRepositoryWriteQuarantineReason(message: string): boolean {
     && message.length > start + prefix.length + suffix.length
 }
 
-const writeAccess = new Set<GitHubRepositoryAccess>(['contents_write', 'item_write', 'workflows_write'])
+const writeAccess = new Set<GitHubRepositoryAccess>(['contents_write', 'item_write', 'pull_request_merge', 'workflows_write'])
 
 /**
  * Refuses every write credential to a repository nobody enabled.
