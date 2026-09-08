@@ -43,6 +43,17 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('reads repository priority and its polling interval', () => {
+    const parsed = parseConfigText(configText.replace('    enabled: true', '    enabled: true\n    priority: 100\n    poll_interval_seconds: 15'))
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.priority).toBe(100)
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.pollIntervalSeconds).toBe(15)
+  })
+
+  it.each(['priority: -1', 'priority: 1.5', 'priority: high', 'poll_interval_seconds: 1'])('refuses invalid repository scheduling: %s', (setting) => {
+    const parsed = parseConfigText(configText.replace('    enabled: true', `    enabled: true\n    ${setting}`))
+    expect(parsed._tag).toBe('Err')
+  })
+
   it('accepts explicit conflict resolution on a maintained repository', () => {
     const parsed = parseConfigText(configText.replace('ownership: owned', 'ownership: maintained'))
 

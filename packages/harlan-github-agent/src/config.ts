@@ -442,6 +442,12 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
   const github = requiredString(value, 'github', path, issues)
   const checkout = requiredString(value, 'checkout', path, issues)
   const enabled = requiredBoolean(value, 'enabled', path, issues)
+  const priority = value.priority ?? 0
+  if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < 0 || priority > 100)
+    issues.push({ path: `${path}.priority`, message: 'Expected an integer from 0 to 100.' })
+  const pollIntervalSeconds = value.poll_interval_seconds
+  if (pollIntervalSeconds !== undefined && (typeof pollIntervalSeconds !== 'number' || !Number.isInteger(pollIntervalSeconds) || pollIntervalSeconds < 10 || pollIntervalSeconds > 3600))
+    issues.push({ path: `${path}.poll_interval_seconds`, message: 'Expected an integer from 10 to 3600.' })
   const repositoryOwnership = ownership(value, path, issues)
   const defaultBranch = requiredString(value, 'default_branch', path, issues)
   const writablePullRequestAuthors = stringArray(value, 'writable_pr_authors', path, issues)
@@ -504,6 +510,8 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     github,
     checkout,
     enabled,
+    ...(typeof priority === 'number' ? { priority } : {}),
+    ...(typeof pollIntervalSeconds === 'number' ? { pollIntervalSeconds } : {}),
     authentication: 'app',
     ownership: repositoryOwnership,
     defaultBranch,

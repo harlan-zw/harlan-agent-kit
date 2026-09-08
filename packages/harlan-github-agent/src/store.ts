@@ -720,6 +720,7 @@ export interface JournalStore extends BatchStore {
   recordPullRequestTriageRun: (input: RecordPullRequestTriageRunInput) => RecordPullRequestTriageRunResult
   /** The newest recorded Pull request triage decision for one exact head commit, or null. */
   getLatestPullRequestTriageRun: (repository: string, pullRequestNumber: number, headSha: string) => LatestPullRequestTriageRun | null
+  hasPriorityAgentTask: () => boolean
   claimNextAdversarialReviewTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedAdversarialReviewTask | null
   claimNextBaselineRepairTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedBaselineRepairTask | null
   claimNextConflictTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedConflictResolutionTask | null
@@ -3068,7 +3069,9 @@ function dashboardQueue(
   })
 
   return entries
-    .sort((left, right) => queuePriority(left) - queuePriority(right) || left.createdAt.localeCompare(right.createdAt))
+    .sort((left, right) => queuePriority(left) - queuePriority(right)
+      || (mappings.get(right.repository)?.priority ?? 0) - (mappings.get(left.repository)?.priority ?? 0)
+      || left.createdAt.localeCompare(right.createdAt))
     .map((entry, index) => ({ ...entry, position: index + 1 }))
 }
 
@@ -8134,17 +8137,7 @@ export function openJournalStore(
     })
   }
 
-  const claimMutationTask = (
-    kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work',
-    workerId: string,
-    now: string,
-    leaseMilliseconds: number,
-    exactTaskId?: string,
-  ): ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueWorkTask | null => {
-    database.exec('BEGIN IMMEDIATE')
-    try {
-      recoverExpiredTasks(now)
-      const row = database.prepare(`
+  const nextMutationTask = (kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' | null, exactTaskId?: string, includeQueuedBatches = false): ClaimRow | undefined => database.prepare(`
         SELECT
           tasks.id,
           tasks.kind,
@@ -8166,11 +8159,23 @@ export function openJournalStore(
         JOIN subjects ON subjects.id = tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
         JOIN revisions ON revisions.id = tasks.revision_id
-        WHERE tasks.kind = ? AND tasks.state_tag = 'Queued'
+        WHERE (? IS NULL OR tasks.kind = ?) AND tasks.state_tag = 'Queued'
           AND (? IS NULL OR tasks.id = ?)
           -- A Task a Batch reserved runs under that Batch's lease. Only the
-          -- exact-Task claim the Batch makes may take it.
-          AND (? IS NOT NULL OR NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id))
+          -- exact-Task claim the Batch makes may take it. Priority checks also
+          -- see eligible Tasks in queued Batches that need a free Agent permit.
+          AND (
+            ? IS NOT NULL
+            OR NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id)
+            OR (? = 1 AND EXISTS (
+              SELECT 1 FROM batch_tasks
+              JOIN batches ON batches.id = batch_tasks.batch_id
+              LEFT JOIN batch_units ON batch_units.id = batch_tasks.unit_id
+              WHERE batch_tasks.task_id = tasks.id AND batches.state_tag = 'Queued'
+                AND batches.attempts < batches.max_attempts
+                AND (batch_units.id IS NULL OR (batch_units.state_tag = 'Waiting' AND batch_units.primary_task_id = tasks.id))
+            ))
+          )
           AND NOT EXISTS (
             SELECT 1 FROM combined_issue_publications AS combined
             JOIN publication_commands AS commands ON commands.id = combined.command_id
@@ -8242,10 +8247,34 @@ export function openJournalStore(
               )
             )
           )
-        ORDER BY tasks.updated_at, tasks.id
+        ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, maxOpenPullRequests) as ClaimRow | undefined
+      `).get(kind, kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests) as ClaimRow | undefined
+
+  const hasHigherPriorityTask = (priority: number): boolean =>
+    [nextMutationTask(null, undefined, true), nextWorkerTask(null)].some(row =>
+      row !== undefined && ((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0) > priority,
+    )
+
+  const claimMutationTask = (
+    kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work',
+    workerId: string,
+    now: string,
+    leaseMilliseconds: number,
+    exactTaskId?: string,
+  ): ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueWorkTask | null => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      recoverExpiredTasks(now)
+      const row = nextMutationTask(kind, exactTaskId)
       if (row === undefined) {
+        database.exec('COMMIT')
+        return null
+      }
+
+      // A Batch already owns an Agent permit when it claims an exact unit Task.
+      // New priority work competes for free permits without interrupting that Batch.
+      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0)) {
         database.exec('COMMIT')
         return null
       }
@@ -8313,6 +8342,9 @@ export function openJournalStore(
   }
 
   const batchStore = createBatchStore(database, {
+    recoverExpiredTasks,
+    canClaimIssueWorkTask: exactTaskId => nextMutationTask('issue_work', exactTaskId) !== undefined,
+    hasHigherPriorityTask,
     claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
       const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)
       if (task === null || task.kind === 'issue_work')
@@ -8639,16 +8671,7 @@ export function openJournalStore(
     })
   }
 
-  const claimWorkerTask = (
-    kind: 'adversarial_review' | 'issue_triage',
-    workerId: string,
-    now: string,
-    leaseMilliseconds: number,
-  ): ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | null => {
-    database.exec('BEGIN IMMEDIATE')
-    try {
-      recoverExpiredWorkerTasks(now)
-      const row = database.prepare(`
+  const nextWorkerTask = (kind: 'adversarial_review' | 'issue_triage' | null): (ClaimRow & { rerun_requested: number }) | undefined => database.prepare(`
         SELECT
           worker_tasks.id,
           worker_tasks.kind,
@@ -8681,7 +8704,7 @@ export function openJournalStore(
         JOIN subjects ON subjects.id = worker_tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
         JOIN revisions ON revisions.id = worker_tasks.revision_id
-        WHERE worker_tasks.kind = ? AND worker_tasks.state_tag = 'Queued'
+        WHERE (? IS NULL OR worker_tasks.kind = ?) AND worker_tasks.state_tag = 'Queued'
           AND worker_tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
@@ -8690,10 +8713,41 @@ export function openJournalStore(
             (worker_tasks.kind = 'adversarial_review' AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1)
             OR (worker_tasks.kind = 'issue_triage' AND json_extract(repositories.policy_json, '$.issueWork') = 1)
           )
-        ORDER BY worker_tasks.updated_at, worker_tasks.id
+          AND (
+            worker_tasks.kind != 'adversarial_review'
+            OR (
+              (SELECT selection_mode FROM agent_control WHERE singleton = 1) = 'auto'
+              AND EXISTS (
+                SELECT 1 FROM json_each(repositories.policy_json, '$.writablePullRequestAuthors') AS author
+                WHERE lower(author.value) = lower(json_extract(revisions.payload, '$.author'))
+              )
+            )
+            OR EXISTS (
+              SELECT 1 FROM pull_request_approvals
+              WHERE pull_request_approvals.revision_id = worker_tasks.revision_id
+                AND pull_request_approvals.kind = 'review'
+            )
+          )
+        ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, worker_tasks.updated_at, worker_tasks.id
         LIMIT 1
-      `).get(kind) as (ClaimRow & { rerun_requested: number }) | undefined
+      `).get(kind, kind) as (ClaimRow & { rerun_requested: number }) | undefined
+
+  const claimWorkerTask = (
+    kind: 'adversarial_review' | 'issue_triage',
+    workerId: string,
+    now: string,
+    leaseMilliseconds: number,
+  ): ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | null => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      recoverExpiredWorkerTasks(now)
+      const row = nextWorkerTask(kind)
       if (row === undefined) {
+        database.exec('COMMIT')
+        return null
+      }
+
+      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0)) {
         database.exec('COMMIT')
         return null
       }
@@ -14043,6 +14097,7 @@ export function openJournalStore(
     cancelTask,
     recordPullRequestTriageRun,
     getLatestPullRequestTriageRun,
+    hasPriorityAgentTask: () => hasHigherPriorityTask(0),
     claimNextAdversarialReviewTask,
     claimNextBaselineRepairTask,
     claimNextConflictTask,

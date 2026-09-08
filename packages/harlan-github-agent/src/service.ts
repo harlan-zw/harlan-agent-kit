@@ -215,6 +215,11 @@ export async function resolveUserLogin(
   return err(lastError)
 }
 
+/** Whether a Routine run may take a free Agent permit. */
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask'>): boolean {
+  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask())
+}
+
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
   const now = options.now ?? (() => new Date())
   const agentContext = await loadAgentContext(defaultAgentContextPaths())
@@ -499,7 +504,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         worktrees: issueWorktrees,
       }),
     })
-    const batchWorkerId = randomUUID()
     const conflictWorker = withGitHubWritePreflight({
       accesses: ['item_write', 'contents_write'],
       source: tokens,
@@ -587,7 +591,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         },
         store,
       }),
-      baselineRepairs: createTaskScheduler({
+      baselineRepairs: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
         canClaim,
         claim: store.claimNextBaselineRepairTask,
         intervalMilliseconds: 5_000,
@@ -614,9 +618,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }),
         }),
         workerId: randomUUID(),
-      }),
+      })),
       routines: createWorkerTaskScheduler({
-        canClaim,
+        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store),
         claim: store.claimNextRoutineRun,
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
@@ -746,7 +750,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
         workerId: randomUUID(),
       })),
-      issueWork: createTaskScheduler({
+      issueWork: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
         // New work waits while the open pull requests already need Harlan.
         // Manual Selection mode makes Harlan the throttle, so the count stops
         // counting: every pull request the agent opens was already selected.
@@ -762,41 +766,44 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         store,
         worker: issueWorkWorker,
         workerId: randomUUID(),
-      }),
+      })),
       // One permit per Batch. Its units run as sub agents under that permit,
       // each with its own Task lease and worktree, and each publishes the
       // moment it finishes.
-      batches: createBatchScheduler({
-        canClaim,
-        intervalMilliseconds: 5_000,
-        leaseMilliseconds: 4 * 60 * 60_000,
-        now,
-        onError: error => options.logger.error(error),
-        permits,
-        store,
-        worker: createBatchWorker({
-          activityLog,
-          canClaimIssueWork,
-          claudeHome: agentContext.value.claudeHome,
-          github: workerGithub,
-          issueWork: issueWorkWorker,
-          leaseMilliseconds: 45 * 60_000,
-          logger: {
-            error: message => options.logger.error(message),
-            info: message => options.logger.info(message),
-          },
+      batches: Array.from({ length: profile.maximumActiveAgents }, () => {
+        const batchWorkerId = randomUUID()
+        return createBatchScheduler({
+          canClaim,
+          intervalMilliseconds: 5_000,
+          leaseMilliseconds: 4 * 60 * 60_000,
           now,
-          onTaskSettled: settleTask,
-          onTaskStarted: stampRunningLabel,
-          runtime,
+          onError: error => options.logger.error(error),
+          permits,
           store,
-          validateMapping,
+          worker: createBatchWorker({
+            activityLog,
+            canClaimIssueWork,
+            claudeHome: agentContext.value.claudeHome,
+            github: workerGithub,
+            issueWork: issueWorkWorker,
+            leaseMilliseconds: 45 * 60_000,
+            logger: {
+              error: message => options.logger.error(message),
+              info: message => options.logger.info(message),
+            },
+            now,
+            onTaskSettled: settleTask,
+            onTaskStarted: stampRunningLabel,
+            runtime,
+            store,
+            validateMapping,
+            workerId: batchWorkerId,
+            workspaces,
+          }),
           workerId: batchWorkerId,
-          workspaces,
-        }),
-        workerId: batchWorkerId,
+        })
       }),
-      tasks: createTaskScheduler({
+      tasks: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
         canClaim,
         intervalMilliseconds: 5_000,
         leaseMilliseconds: 10 * 60_000,
@@ -808,7 +815,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         store,
         worker: conflictWorker,
         workerId: randomUUID(),
-      }),
+      })),
     }
   })().catch((error) => {
     store.close()
@@ -846,7 +853,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         })
       const results = !config.triggers.includes('github')
         ? []
-        : await guarded('Repository reconciliation', () => reconcileAllRepositories(config.repositories, {
+        : await guarded('Repository reconciliation', () => reconcileAllRepositories(config.repositories.filter(repository => repository.pollIntervalSeconds === undefined), {
             ...(mutationSchedulers === undefined
               ? {}
               : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge }),
@@ -1072,6 +1079,29 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     },
     onError: error => options.logger.error(error),
   })
+  const repositoryPollers = config.repositories
+    .filter(repository => repository.enabled && repository.pollIntervalSeconds !== undefined)
+    .map(repository => createPoller({
+      intervalMilliseconds: repository.pollIntervalSeconds! * 1_000,
+      timeoutMilliseconds: 60_000,
+      poll: async (signal) => {
+        const results = await reconcileAllRepositories([repository], {
+          ...(mutationSchedulers === undefined
+            ? {}
+            : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge }),
+          github,
+          store,
+          now,
+          signal,
+        })
+        for (const result of results) {
+          if (result._tag === 'Err')
+            throw new Error(`${result.error.repository}: ${result.error.message}`)
+          options.logger.info(`${result.value.repository}: observed ${result.value.subjects} open pull requests and issues.`)
+        }
+      },
+      onError: error => options.logger.error(error),
+    }))
   const externalPoller = createPoller({
     intervalMilliseconds: 5 * 60_000,
     poll: async (signal) => {
@@ -1123,9 +1153,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     if (mutationSchedulers === undefined)
       return false
     const schedulers = [
-      mutationSchedulers.tasks,
-      mutationSchedulers.baselineRepairs,
-      mutationSchedulers.issueWork,
+      ...mutationSchedulers.tasks,
+      ...mutationSchedulers.baselineRepairs,
+      ...mutationSchedulers.issueWork,
       ...mutationSchedulers.issues,
       ...mutationSchedulers.repairs,
       ...mutationSchedulers.reviews,
@@ -1201,7 +1231,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // worst ask for a pass the poller would have run anyway.
   const reconcileHint = createReconcileHint({
     onError: error => options.logger.error(error),
-    run: () => poller.runNow(),
+    run: async () => {
+      await Promise.all([poller.runNow(), ...repositoryPollers.map(repositoryPoller => repositoryPoller.runNow())])
+    },
   })
   const webhookServer = config.webhook._tag === 'Disabled' || options.webhookSecret === undefined
     ? null
@@ -1246,16 +1278,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const answers = (trigger: 'github' | 'routine'): boolean => config.triggers.includes(trigger)
   if (answers('github') || answers('routine'))
     poller.start()
-  if (answers('github'))
+  if (answers('github')) {
     externalPoller.start()
+    repositoryPollers.forEach(repositoryPoller => repositoryPoller.start())
+  }
   worktreeSweeper.start()
   if (answers('github'))
-    mutationSchedulers?.tasks.start()
+    mutationSchedulers?.tasks.forEach(scheduler => scheduler.start())
   if (answers('github'))
-    mutationSchedulers?.baselineRepairs.start()
+    mutationSchedulers?.baselineRepairs.forEach(scheduler => scheduler.start())
   if (answers('github'))
-    mutationSchedulers?.issueWork.start()
-  mutationSchedulers?.batches.start()
+    mutationSchedulers?.issueWork.forEach(scheduler => scheduler.start())
+  mutationSchedulers?.batches.forEach(scheduler => scheduler.start())
   if (answers('github'))
     mutationSchedulers?.publications.start()
   if (answers('github'))
@@ -1280,11 +1314,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         reconcileHint.stop(),
         poller.stop(),
         externalPoller.stop(),
+        ...repositoryPollers.map(repositoryPoller => repositoryPoller.stop()),
         worktreeSweeper.stop(),
-        mutationSchedulers?.tasks.stop() ?? Promise.resolve(),
-        mutationSchedulers?.baselineRepairs.stop() ?? Promise.resolve(),
-        mutationSchedulers?.issueWork.stop() ?? Promise.resolve(),
-        mutationSchedulers?.batches.stop() ?? Promise.resolve(),
+        ...(mutationSchedulers?.tasks.map(scheduler => scheduler.stop()) ?? []),
+        ...(mutationSchedulers?.baselineRepairs.map(scheduler => scheduler.stop()) ?? []),
+        ...(mutationSchedulers?.issueWork.map(scheduler => scheduler.stop()) ?? []),
+        ...(mutationSchedulers?.batches.map(scheduler => scheduler.stop()) ?? []),
         mutationSchedulers?.publications.stop() ?? Promise.resolve(),
         mutationSchedulers?.reviewStatuses.stop() ?? Promise.resolve(),
         ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),

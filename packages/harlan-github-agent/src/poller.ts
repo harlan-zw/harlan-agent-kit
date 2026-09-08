@@ -88,7 +88,7 @@ export function createPoller(options: PollerOptions): Poller {
       return
     const baseDelay = Math.min(
       options.intervalMilliseconds * 2 ** Math.min(consecutiveFailures, 5),
-      options.maxIntervalMilliseconds ?? 15 * 60_000,
+      Math.max(options.intervalMilliseconds, options.maxIntervalMilliseconds ?? 15 * 60_000),
     )
     const jitter = Math.floor(baseDelay * 0.2 * (options.random ?? Math.random)())
     timer = setTimeout(() => {

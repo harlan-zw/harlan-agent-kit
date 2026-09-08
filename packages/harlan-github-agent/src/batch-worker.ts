@@ -20,7 +20,6 @@ export const DEFAULT_BATCH_UNIT_CONCURRENCY = 3
 /** How long a stacked unit waits for its base pull request to open before it falls back to the default branch. */
 const DEPENDENCY_WAIT_MILLISECONDS = 10 * 60_000
 const DEPENDENCY_POLL_MILLISECONDS = 5_000
-const CLAIM_RETRY_MILLISECONDS = 15_000
 
 export const BATCH_PLAN_SCHEMA = {
   type: 'object',
@@ -146,8 +145,8 @@ export interface BatchWorkerOptions {
 }
 
 export interface BatchWorker {
-  /** Plans the Batch when needed, then runs every unit. Resolves once every unit settled. */
-  run: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<{ units: number }, string>>
+  /** Plans the Batch, then runs units until they settle or Issue work must wait. */
+  run: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<{ _tag: 'Completed', units: number } | { _tag: 'Suspended' }, string>>
 }
 
 const sessionlessStore = {
@@ -243,9 +242,11 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
   }
 
   /** Waits until a dependency's pull request exists, or gives up and returns the reason. */
-  const awaitDependency = async (unitId: string, signal: AbortSignal): Promise<Extract<PullRequestBase, { _tag: 'Stacked' }> | { _tag: 'Unavailable', reason: string }> => {
+  const awaitDependency = async (unitId: string, signal: AbortSignal, canWait = (): boolean => true): Promise<Extract<PullRequestBase, { _tag: 'Stacked' }> | { _tag: 'Unavailable', reason: string }> => {
     const deadline = options.now().getTime() + DEPENDENCY_WAIT_MILLISECONDS
     while (!signal.aborted) {
+      if (!canWait())
+        return { _tag: 'Unavailable', reason: 'Issue work must wait before the next unit starts.' }
       const dependency = options.store.getBatchDependency(unitId)
       if (dependency._tag === 'Published')
         return { _tag: 'Stacked', ref: dependency.headRef, pullRequestNumber: dependency.pullRequestNumber, headSha: dependency.headSha }
@@ -281,10 +282,14 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
     }
   }
 
-  const runUnit = async (batch: ClaimedBatch, mapping: RepositoryMapping, unit: BatchUnit, signal: AbortSignal): Promise<void> => {
+  const runUnit = async (batch: ClaimedBatch, mapping: RepositoryMapping, unit: BatchUnit, signal: AbortSignal): Promise<'Settled' | 'Waiting'> => {
+    if (!options.canClaimIssueWork())
+      return 'Waiting'
     let base: PullRequestBase | null = null
     if (unit.dependsOnUnitId !== null) {
-      const dependency = await awaitDependency(unit.dependsOnUnitId, signal)
+      const dependency = await awaitDependency(unit.dependsOnUnitId, signal, options.canClaimIssueWork)
+      if (!options.canClaimIssueWork())
+        return 'Waiting'
       if (dependency._tag === 'Unavailable') {
         options.logger.info(`${batch.repository}: Batch unit ${unit.position} stands on the default branch instead of its planned base: ${dependency.reason}`)
       }
@@ -292,20 +297,13 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
         base = dependency
       }
     }
-    let task: ClaimedIssueWorkTask | null = null
-    while (task === null && !signal.aborted) {
-      if (!options.canClaimIssueWork()) {
-        await sleep(CLAIM_RETRY_MILLISECONDS, signal)
-        continue
-      }
-      task = options.store.claimBatchUnitTask({ unitId: unit.id, workerId: options.workerId, now: options.now().toISOString(), leaseMilliseconds: options.leaseMilliseconds })
-      if (task === null) {
-        options.store.settleBatchUnit({ unitId: unit.id, at: options.now().toISOString(), state: { _tag: 'Failed', reason: 'The unit Task could not be claimed. The issue changed, closed, or an open pull request limit holds it.' } })
-        return
-      }
+    if (signal.aborted || !options.canClaimIssueWork())
+      return 'Waiting'
+    const task = options.store.claimBatchUnitTask({ unitId: unit.id, workerId: options.workerId, now: options.now().toISOString(), leaseMilliseconds: options.leaseMilliseconds })
+    if (task === null) {
+      options.store.settleBatchUnit({ unitId: unit.id, at: options.now().toISOString(), state: { _tag: 'Failed', reason: 'The unit Task could not be claimed. The issue changed, closed, or an open pull request limit holds it.' } })
+      return 'Settled'
     }
-    if (task === null)
-      return
     const combined: CombinedIssue[] = []
     for (const number of unit.issueNumbers.slice(1)) {
       const snapshot = await options.github.getIssueTriageSnapshot(mapping, number, signal)
@@ -329,6 +327,7 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
     options.onTaskSettled?.(task.id, task)
     const at = options.now().toISOString()
     settleUnitFromTask(unit, result, at)
+    return 'Settled'
   }
 
   /** Records the final state of units that published, once their pull requests exist. */
@@ -360,11 +359,19 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
       // idles on ordering alone. Nothing waits for the whole Batch: each unit
       // stages its publication the moment its Agent finishes.
       const queue = [...waiting]
+      const settled: BatchUnit[] = []
+      let suspended = false
       const running = new Set<Promise<void>>()
       while ((queue.length > 0 || running.size > 0) && !signal.aborted) {
-        while (queue.length > 0 && running.size < concurrency) {
+        while (queue.length > 0 && running.size < concurrency && options.canClaimIssueWork()) {
           const unit = queue.shift()!
           const execution = runUnit(batch, mapping, unit, signal)
+            .then((result) => {
+              if (result === 'Waiting')
+                suspended = true
+              else
+                settled.push(unit)
+            })
             .catch((error: unknown) => {
               options.logger.error(error)
               // The unit failed, and recording that can fail the same way, so
@@ -382,11 +389,17 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
         }
         if (running.size > 0)
           await Promise.race(running)
+        else
+          break
       }
       if (signal.aborted)
         return err('The Batch was stopped before every unit finished.')
-      await settlePublished(waiting.filter(unit => options.store.getBatchDependency(unit.id)._tag !== 'Unavailable'), signal)
-      return ok({ units: units.length })
+      await settlePublished(settled.filter(unit => options.store.getBatchDependency(unit.id)._tag !== 'Unavailable'), signal)
+      // A blocked unit stays Waiting. The scheduler releases the permit and
+      // keeps the plan queued, so reviews can clear the pull request limit.
+      if (queue.length > 0 || suspended)
+        return ok({ _tag: 'Suspended' })
+      return ok({ _tag: 'Completed', units: units.length })
     },
   }
 }

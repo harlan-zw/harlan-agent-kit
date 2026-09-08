@@ -2,6 +2,29 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPoller } from '../src/poller.ts'
 
 describe('poller', () => {
+  it.each([undefined, 900_000])('keeps hourly polling when the maximum is %s', async (maxIntervalMilliseconds) => {
+    vi.useFakeTimers()
+    const poll = vi.fn(async () => {})
+    const poller = createPoller({
+      intervalMilliseconds: 3_600_000,
+      ...(maxIntervalMilliseconds === undefined ? {} : { maxIntervalMilliseconds }),
+      random: () => 0,
+      onError: (error) => { throw error },
+      poll,
+    })
+    try {
+      poller.start()
+      await vi.advanceTimersByTimeAsync(3_599_999)
+      expect(poll).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(poll).toHaveBeenCalledTimes(2)
+    }
+    finally {
+      await poller.stop()
+      vi.useRealTimers()
+    }
+  })
+
   it('abandons a pass that never settles so later passes still run', async () => {
     vi.useFakeTimers()
     try {

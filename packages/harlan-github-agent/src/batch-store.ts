@@ -19,6 +19,8 @@ export interface BatchStore {
    */
   planBatches: (at: string) => Array<{ batchId: string, repository: string, issueNumbers: number[] }>
   claimNextBatch: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedBatch | null
+  /** Keeps a partial plan queued without retaining an Agent permit or consuming a retry. */
+  suspendBatch: (input: { batchId: string, workerId: string, fence: number, at: string }) => boolean
   heartbeatBatch: (input: { batchId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   /** Stores the planning turn's units. Issues the plan left out become single units, so nothing reserved is lost. */
   recordBatchPlan: (input: { batchId: string, workerId: string, fence: number, at: string, units: readonly PlannedBatchUnit[] }) => Result<readonly BatchUnit[], string>
@@ -35,7 +37,10 @@ export interface BatchStore {
 }
 
 export interface BatchStoreDependencies {
+  recoverExpiredTasks: (now: string) => void
+  canClaimIssueWorkTask: (exactTaskId: string) => boolean
   claimIssueWorkTask: (workerId: string, now: string, leaseMilliseconds: number, exactTaskId: string) => ClaimedIssueWorkTask | null
+  hasHigherPriorityTask: (priority: number) => boolean
 }
 
 interface BatchRow {
@@ -280,16 +285,27 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
   })
 
   const claimNextBatch: BatchStore['claimNextBatch'] = (workerId, now, leaseMilliseconds) => transaction(() => {
+    dependencies.recoverExpiredTasks(now)
     recoverExpiredBatches(now)
-    const row = database.prepare(`
+    const candidates = database.prepare(`
       ${selectBatch}
       WHERE batches.state_tag = 'Queued' AND batches.attempts < batches.max_attempts
         AND repositories.enabled = 1 AND repositories.paused = 0
         AND json_extract(repositories.policy_json, '$.issueWork') = 1
-      ORDER BY batches.created_at, batches.id
-      LIMIT 1
-    `).get() as BatchRow | undefined
+      ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, batches.created_at, batches.id
+    `).all() as unknown as BatchRow[]
+    const row = candidates.find((candidate) => {
+      const tasks = database.prepare(`
+        SELECT batch_tasks.task_id FROM batch_tasks
+        LEFT JOIN batch_units ON batch_units.id = batch_tasks.unit_id
+        WHERE batch_tasks.batch_id = ?
+          AND (batch_units.id IS NULL OR (batch_units.state_tag = 'Waiting' AND batch_units.primary_task_id = batch_tasks.task_id))
+      `).all(candidate.id) as Array<{ task_id: string }>
+      return tasks.some(task => dependencies.canClaimIssueWorkTask(task.task_id))
+    })
     if (row === undefined)
+      return null
+    if (dependencies.hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0))
       return null
     const fence = row.fence + 1
     const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()
@@ -309,6 +325,14 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
   })
 
   const ownedBatchSql = 'id = ? AND state_tag = \'Running\' AND worker_id = ? AND fence = ? AND lease_expires_at > ?'
+
+  const suspendBatch: BatchStore['suspendBatch'] = input => database.prepare(`
+    UPDATE batches
+    SET state_tag = 'Queued', worker_id = NULL, lease_expires_at = NULL,
+      attempts = MAX(0, attempts - 1), updated_at = ?
+    WHERE ${ownedBatchSql}
+      AND NOT EXISTS (SELECT 1 FROM batch_units WHERE batch_id = batches.id AND state_tag = 'Running')
+  `).run(input.at, input.batchId, input.workerId, input.fence, input.at).changes === 1
 
   const heartbeatBatch: BatchStore['heartbeatBatch'] = input => database.prepare(`
     UPDATE batches SET lease_expires_at = ?, updated_at = ? WHERE ${ownedBatchSql}
@@ -490,6 +514,7 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
     planBatches,
     claimNextBatch,
     heartbeatBatch,
+    suspendBatch,
     recordBatchPlan,
     claimBatchUnitTask,
     getBatchDependency,
