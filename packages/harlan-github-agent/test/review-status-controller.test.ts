@@ -72,6 +72,7 @@ describe('review status controller', () => {
         completeReviewStatus: () => true,
         recordReviewStatusReceipt: () => true,
         deferReviewStatus: () => { throw new Error('Unexpected defer.') },
+        supersedeReviewStatus: () => { throw new Error('Unexpected supersede.') },
       },
       workerId: 'status-worker',
     })

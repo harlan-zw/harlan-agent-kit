@@ -49,7 +49,10 @@ describe('reading an existing review label', () => {
   it.each(['CONTRIBUTOR', 'NONE'])('rejects a marker from an untrusted %s', async (association) => {
     const test = harness()
     test.comment.author_association = association
-    expect(await test.read()).toEqual({ _tag: 'Err', error: 'The completed review changed before its label was restored.' })
+    expect(await test.read()).toEqual({
+      _tag: 'Err',
+      error: { _tag: 'Permanent', message: 'The completed review changed before its label was restored.' },
+    })
   })
 
   it('rejects an unreviewed head', async () => {
@@ -70,6 +73,9 @@ describe('reading an existing review label', () => {
       test.pull.state = 'closed'
     else
       test.pull.head.sha = 'b'.repeat(40)
-    expect(await test.read()).toEqual({ _tag: 'Err', error: 'The pull request changed before its review label was restored.' })
+    expect(await test.read()).toEqual({
+      _tag: 'Err',
+      error: { _tag: 'Permanent', message: 'The pull request changed before its review label was restored.' },
+    })
   })
 })

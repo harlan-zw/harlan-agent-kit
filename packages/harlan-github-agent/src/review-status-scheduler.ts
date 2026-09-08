@@ -23,7 +23,7 @@ export interface ReviewStatusSchedulerOptions {
    * after the defect behind it was fixed.
    */
   onPublished: (repository: string, pullRequestNumber: number) => void
-  store: Pick<JournalStore, 'claimNextTerminalReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt'>
+  store: Pick<JournalStore, 'claimNextTerminalReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
   workerId: string
 }
 

@@ -33,6 +33,8 @@ function harness() {
   const labels: string[] = []
   const failures: string[] = []
   let failLabel = false
+  let reads = 0
+  let readFailure: string | null = null
   let outcome: ExistingReviewLabel['label'] = 'READY'
   const scheduler = () => createReviewStatusScheduler({
     github: {
@@ -46,7 +48,12 @@ function harness() {
         requiredChecks: { _tag: 'None' },
         reviews: [],
       })),
-      readExistingReviewLabel: (_repository, _number, commentId) => Promise.resolve(ok({ commentId, url: `${pullRequest.url}#issuecomment-${commentId}`, label: outcome })),
+      readExistingReviewLabel: (_repository, _number, commentId) => {
+        reads += 1
+        if (readFailure !== null)
+          return Promise.resolve(err({ _tag: 'Permanent', message: readFailure }))
+        return Promise.resolve(ok({ commentId, url: `${pullRequest.url}#issuecomment-${commentId}`, label: outcome }))
+      },
       upsertReviewStatus: () => { throw new Error('The existing comment must stay unchanged.') },
       stampAgentLabel: (_repository, _number, label) => {
         if (failLabel)
@@ -72,6 +79,8 @@ function harness() {
     scheduler,
     failLabel: (value: boolean) => { failLabel = value },
     outcome: (value: ExistingReviewLabel['label']) => { outcome = value },
+    readFailure: (value: string | null) => { readFailure = value },
+    reads: () => reads,
   }
 }
 
@@ -98,14 +107,27 @@ describe('labels for an existing review', () => {
     expect(test.labels).toEqual(['READY'])
   })
 
-  it('checks the current comment again on later observations', async () => {
+  it('does not republish a published label when the same observation repeats', async () => {
     const test = harness()
     await test.scheduler().runNow()
-    test.outcome('BLOCKED')
     test.observe()
     await test.scheduler().runNow()
 
-    expect(test.labels).toEqual(['READY', 'BLOCKED'])
+    expect(test.labels).toEqual(['READY'])
+    expect(test.reads()).toBe(1)
+  })
+
+  it('stops retrying when the trusted review changed before its label was restored', async () => {
+    const test = harness()
+    test.readFailure('The completed review changed before its label was restored.')
+    await test.scheduler().runNow()
+    await test.scheduler().runNow()
+
+    expect(test.failures).toEqual(['The completed review changed before its label was restored.'])
+    expect(test.reads()).toBe(1)
+    expect(test.store.claimNextTerminalReviewStatus('label-publisher-2', '2026-08-13T01:04:00.000Z', 60_000)).toBeNull()
+    expect(test.store.listWorkflowEvents({ stream: 'review_status', limit: 20 }).map(event => event.event))
+      .toContain('Superseded')
   })
 
   it('follows a replacement trusted comment on the same head', async () => {

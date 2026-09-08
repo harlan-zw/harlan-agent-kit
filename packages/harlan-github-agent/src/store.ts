@@ -862,6 +862,7 @@ export interface JournalStore extends BatchStore {
   failTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   failWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   deferReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
+  supersedeReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   deferIssueTriageComment: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
@@ -4248,8 +4249,13 @@ function stageExistingReviewLabel(database: DatabaseSync, subject: GitHubPullReq
       id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase, body, body_sha256,
       desired_outcome, state_tag, github_comment_id, github_url, created_at, updated_at
     ) VALUES (?, 'existing_review', ?, 0, ?, ?, 'terminal', '', ?, 'EXISTING', 'Pending', ?, ?, ?, ?)
+    -- The id pins one revision to one comment, so an unchanged observation names
+    -- a Published command whose label is already on the pull request. Restaging
+    -- it would republish through GitHub on every poll and never converge. Only a
+    -- Superseded command yields again, so retired work can return when the
+    -- observation that retired it goes away.
     ON CONFLICT(id) DO UPDATE SET state_tag = 'Pending', updated_at = excluded.updated_at
-    WHERE review_status_commands.state_tag IN ('Published', 'Superseded')
+    WHERE review_status_commands.state_tag = 'Superseded'
   `).run(commandId, commandId, revisionId, subject.headSha, digest(''), commentId, prior.url, at, at)
   if (staged.changes === 1)
     recordReviewStatusEvent(database, { commandId, event: 'Staged', from: null, to: 'Pending', at })
@@ -10256,6 +10262,36 @@ export function openJournalStore(
     }
   }
 
+  /** Retires one Running command whose failure no retry can answer. */
+  const supersedeReviewStatus: JournalStore['supersedeReviewStatus'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Superseded', reason = ?, worker_id = NULL,
+          lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordReviewStatusEvent(database, {
+          commandId: input.commandId,
+          event: 'Superseded',
+          from: 'Running',
+          to: 'Superseded',
+          reason: input.reason,
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const heartbeatTask: JournalStore['heartbeatTask'] = (input) => {
     const leaseExpiresAt = new Date(new Date(input.at).getTime() + input.leaseMilliseconds).toISOString()
     return database.prepare(`
@@ -14034,6 +14070,7 @@ export function openJournalStore(
     deferPublication,
     deferIssueTriageComment,
     deferReviewStatus,
+    supersedeReviewStatus,
     failPublication,
     failTask,
     failWorkerTask,

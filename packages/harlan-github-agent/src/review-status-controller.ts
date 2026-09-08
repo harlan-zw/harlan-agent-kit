@@ -1,4 +1,4 @@
-import type { ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
+import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewStatusTaskPhase } from './types.ts'
@@ -18,14 +18,92 @@ export interface ReviewStatusControllerOptions {
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
-  store: Pick<JournalStore, 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus'>
+  store: Pick<JournalStore, 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus' | 'supersedeReviewStatus'>
   workerId: string
 }
 
 export interface ReviewStatusPublicationOptions {
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
   now: () => Date
-  store: Pick<JournalStore, 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt'>
+  store: Pick<JournalStore, 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
+}
+
+/** Files one failure with the store that answers for it: defer or retire. */
+function settleUnpublished(
+  options: ReviewStatusPublicationOptions,
+  command: ClaimedReviewStatusCommand,
+  failure: ExistingReviewLabelFailure,
+): void {
+  const input = {
+    commandId: command.id,
+    workerId: command.workerId,
+    fence: command.fence,
+    at: options.now().toISOString(),
+    reason: failure.message,
+  }
+  if (failure._tag === 'Transient')
+    options.store.deferReviewStatus(input)
+  else
+    options.store.supersedeReviewStatus(input)
+}
+
+/** Restores one outcome label for a trusted review comment this service must not edit. */
+async function publishExistingReviewLabel(
+  options: ReviewStatusPublicationOptions,
+  command: ClaimedReviewStatusCommand,
+  signal: AbortSignal,
+): Promise<Result<PublishedReviewStatus, string>> {
+  // The read re-validates the state and the head itself, so the heavier review
+  // snapshot would spend GitHub calls re-reading the same truth.
+  const existing = command.commentId === null
+    ? err({ _tag: 'Permanent' as const, message: 'The existing review has no comment identifier.' })
+    : await options.github.readExistingReviewLabel(
+        command.repositoryMapping,
+        command.pullRequestNumber,
+        command.commentId,
+        command.expectedHeadSha,
+        signal,
+      )
+  if (existing._tag === 'Err') {
+    settleUnpublished(options, command, existing.error)
+    return err(existing.error.message)
+  }
+  const stamped = await options.github.stampAgentLabel(
+    command.repositoryMapping,
+    command.pullRequestNumber,
+    existing.value.label,
+    signal,
+  )
+  if (stamped._tag === 'Err') {
+    options.store.deferReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: options.now().toISOString(),
+      reason: stamped.error,
+    })
+    return stamped
+  }
+  const labelConfirmed = options.store.recordReviewStatusReceipt({
+    commandId: command.id,
+    workerId: command.workerId,
+    fence: command.fence,
+    at: options.now().toISOString(),
+    sink: 'outcome_label',
+  })
+  if (!labelConfirmed)
+    return err('GitHub accepted the Review label, but its receipt lost the Publication lease.')
+  const completed = options.store.completeReviewStatus({
+    commandId: command.id,
+    workerId: command.workerId,
+    fence: command.fence,
+    at: options.now().toISOString(),
+    commentId: existing.value.commentId,
+    url: existing.value.url,
+  })
+  return completed
+    ? ok(existing.value)
+    : err('GitHub accepted the review comment, but the local review changed. Refresh before retrying.')
 }
 
 /** Publishes one already fenced command. Terminal commands may outlive their Agent Task. */
@@ -35,6 +113,9 @@ export async function publishClaimedReviewStatus(
   replacePriorReview: boolean,
   signal: AbortSignal,
 ): Promise<Result<PublishedReviewStatus, string>> {
+  if (command.taskKind === 'existing_review')
+    return publishExistingReviewLabel(options, command, signal)
+
   const current = await options.github.getPullRequestReviewSnapshot(command.repositoryMapping, command.pullRequestNumber, signal)
   if (current._tag === 'Err') {
     options.store.deferReviewStatus({
@@ -58,18 +139,7 @@ export async function publishClaimedReviewStatus(
     return err(reason)
   }
 
-  const existing = command.taskKind === 'existing_review'
-    ? command.commentId === null
-      ? err('The existing review has no comment identifier.')
-      : await options.github.readExistingReviewLabel(
-          command.repositoryMapping,
-          command.pullRequestNumber,
-          command.commentId,
-          command.expectedHeadSha,
-          signal,
-        )
-    : null
-  const published = existing ?? await options.github.upsertReviewStatus(
+  const published = await options.github.upsertReviewStatus(
     command.repositoryMapping,
     command.pullRequestNumber,
     command.commentId,
@@ -99,15 +169,13 @@ export async function publishClaimedReviewStatus(
   if (!commentConfirmed)
     return err('GitHub accepted the review comment, but its receipt lost the Publication lease.')
 
-  const label = existing?._tag === 'Ok'
-    ? existing.value.label
-    : command.phase !== 'terminal'
-      ? null
-      : command.desiredOutcome === 'READY' || command.desiredOutcome === 'BLOCKED' || command.desiredOutcome === 'PENDING'
-        ? command.desiredOutcome
-        : command.desiredOutcome === 'WAITING'
-          ? 'PENDING'
-          : null
+  const label = command.phase !== 'terminal'
+    ? null
+    : command.desiredOutcome === 'READY' || command.desiredOutcome === 'BLOCKED' || command.desiredOutcome === 'PENDING'
+      ? command.desiredOutcome
+      : command.desiredOutcome === 'WAITING'
+        ? 'PENDING'
+        : null
   if (label !== null) {
     const stamped = await options.github.stampAgentLabel(
       command.repositoryMapping,

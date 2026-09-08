@@ -222,9 +222,22 @@ export interface ExistingReviewLabel extends PublishedReviewStatus {
   label: 'READY' | 'PENDING' | 'BLOCKED' | 'ADVERSARIAL_REVIEW_SKIPPED'
 }
 
+/**
+ * Why the trusted comment stopped yielding its outcome label.
+ *
+ * `Permanent` says the comment no longer carries the review its command is
+ * pinned to: it was deleted or edited past recognition, or the pull request
+ * moved off the pinned head. No retry restores it, so the caller retires the
+ * command instead of asking GitHub the same question every pass. `Transient`
+ * covers transport trouble a retry can outlive.
+ */
+export type ExistingReviewLabelFailure
+  = | { _tag: 'Permanent', message: string }
+    | { _tag: 'Transient', message: string }
+
 export interface ExistingReviewLabelSource {
   /** Reads the latest trusted review for the pinned head without editing its comment. */
-  readExistingReviewLabel: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, headSha: string, signal: AbortSignal) => Promise<Result<ExistingReviewLabel, string>>
+  readExistingReviewLabel: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, headSha: string, signal: AbortSignal) => Promise<Result<ExistingReviewLabel, ExistingReviewLabelFailure>>
 }
 
 export interface GitHubAgentSource {
@@ -558,7 +571,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     async readExistingReviewLabel(repository, pullRequestNumber, commentId, headSha, signal) {
       const octokit = await client(repository.github, 'read', signal)
       if (octokit._tag === 'Err')
-        return octokit
+        return err({ _tag: 'Transient', message: octokit.error })
       const { owner, repo } = repositoryParts(repository.github)
       return octokit.value.paginate(octokit.value.rest.issues.listComments, {
         owner,
@@ -566,7 +579,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         issue_number: pullRequestNumber,
         per_page: 100,
         request: { signal },
-      }).then(async (comments): Promise<Result<ExistingReviewLabel, string>> => {
+      }).then(async (comments): Promise<Result<ExistingReviewLabel, ExistingReviewLabelFailure>> => {
         const prior = priorAutomatedReviewForHead(comments.flatMap(comment =>
           comment.body == null || comment.user?.login === undefined
             ? []
@@ -578,7 +591,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
               }]), headSha, options.actorLogin(repository))
         const comment = comments.find(comment => comment.id === commentId)
         if (prior._tag !== 'Found' || prior.state !== 'complete' || comment?.html_url !== prior.url)
-          return err('The completed review changed before its label was restored.')
+          return err({ _tag: 'Permanent', message: 'The completed review changed before its label was restored.' })
         const body = comment.body ?? ''
         const outcome = body.match(/^### 🤖 (READY|BLOCKED|REVIEW SKIPPED)\b/m)?.[1]
           ?? body.match(/^\*\*(PASS|PENDING|BLOCKED)\b/m)?.[1]
@@ -588,13 +601,13 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             ? 'ADVERSARIAL_REVIEW_SKIPPED'
             : outcome === 'PENDING' || outcome === 'BLOCKED' ? outcome : null
         if (label === null)
-          return err('The completed review has no recognized outcome.')
+          return err({ _tag: 'Permanent', message: 'The completed review has no recognized outcome.' })
         // Read the head after the comments, immediately before the label write.
         const pull = await octokit.value.rest.pulls.get({ owner, repo, pull_number: pullRequestNumber, request: { signal } })
         if (pull.data.state !== 'open' || pull.data.head.sha !== headSha)
-          return err('The pull request changed before its review label was restored.')
+          return err({ _tag: 'Permanent', message: 'The pull request changed before its review label was restored.' })
         return ok({ commentId: comment.id, url: comment.html_url, label })
-      }).catch((error: unknown): Result<ExistingReviewLabel, string> => err(message(error)))
+      }).catch((error: unknown): Result<ExistingReviewLabel, ExistingReviewLabelFailure> => err({ _tag: 'Transient', message: message(error) }))
     },
 
     async stampAgentLabel(repository, itemNumber, state, signal) {
