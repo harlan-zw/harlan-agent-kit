@@ -27,7 +27,7 @@ function harness() {
   const observe = (changes: Partial<GitHubPullRequestItem> = {}) => {
     now = new Date(now.getTime() + 1000)
     pullRequest = { ...pullRequest, ...changes, updatedAt: now.toISOString() }
-    store.recordObservation({ externalId: now.toISOString(), observedAt: now.toISOString(), source: 'poll', subject: pullRequest })
+    return store.recordObservation({ externalId: now.toISOString(), observedAt: now.toISOString(), source: 'poll', subject: pullRequest })
   }
   observe()
   const labels: string[] = []
@@ -131,6 +131,27 @@ describe('labels for an existing review', () => {
     await test.scheduler().runNow()
 
     expect(test.labels).toEqual([])
+  })
+
+  it('retires the label publication when a fresh review is requested', async () => {
+    const test = harness()
+    const subject = test.observe()
+    if (subject._tag !== 'Inserted' && subject._tag !== 'Duplicate')
+      throw new Error('Expected the observed pull request.')
+    test.store.requestReviewRerun({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: subject.revisionId,
+      source: 'dashboard',
+      requestedBy: 'harlan-zw',
+      requestId: 'rerun',
+      at: '2026-08-13T01:00:02.000Z',
+    })
+    await test.scheduler().runNow()
+
+    expect(test.labels).toEqual([])
+    expect(test.store.listWorkflowEvents({ stream: 'review_status', limit: 20 }).map(event => event.event))
+      .toContain('Superseded')
   })
 
   it('honors Manual Selection mode when it changes before publication', async () => {

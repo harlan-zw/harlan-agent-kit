@@ -4249,7 +4249,7 @@ function stageExistingReviewLabel(database: DatabaseSync, subject: GitHubPullReq
       desired_outcome, state_tag, github_comment_id, github_url, created_at, updated_at
     ) VALUES (?, 'existing_review', ?, 0, ?, ?, 'terminal', '', ?, 'EXISTING', 'Pending', ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET state_tag = 'Pending', updated_at = excluded.updated_at
-    WHERE review_status_commands.state_tag = 'Published'
+    WHERE review_status_commands.state_tag IN ('Published', 'Superseded')
   `).run(commandId, commandId, revisionId, subject.headSha, digest(''), commentId, prior.url, at, at)
   if (staged.changes === 1)
     recordReviewStatusEvent(database, { commandId, event: 'Staged', from: null, to: 'Pending', at })
@@ -10010,11 +10010,13 @@ export function openJournalStore(
         JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
         JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
           CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
+        JOIN repositories ON repositories.id = subjects.repository_id
         WHERE review_status_commands.state_tag = 'Pending'
           AND review_status_commands.phase = 'terminal'
           AND (
             review_status_commands.revision_id != subjects.current_revision_id
             OR COALESCE(worker_tasks.revision_id, tasks.revision_id) != subjects.current_revision_id
+            OR (review_status_commands.task_kind = 'existing_review' AND NOT ${existingReviewLabelClaimSql})
           )
       `).all() as unknown as Array<{ id: string, fence: number }>
       const supersede = database.prepare(`
