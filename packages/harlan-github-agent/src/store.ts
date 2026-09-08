@@ -12444,7 +12444,9 @@ export function openJournalStore(
         0 AS source_rank
       FROM review_status_commands AS status
       JOIN revisions AS status_revision ON status_revision.id = status.revision_id
-      WHERE status.state_tag = 'Published'
+      -- An existing_review publication edits nothing: its body is empty and its
+      -- comment belongs to a trusted actor, so a closure must never target it.
+      WHERE status.state_tag = 'Published' AND status.task_kind != 'existing_review'
       UNION ALL
       SELECT
         'review:' || publication.id AS publication_id,

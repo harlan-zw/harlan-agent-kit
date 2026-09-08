@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { agentProfile, CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { MAXIMUM_RECOVERY_ATTEMPTS } from '../src/failure.ts'
 import { repositoryQuarantineReason } from '../src/github-write-gate.ts'
+import { ok } from '../src/result.ts'
+import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
+import { publishStoppedReviews } from '../src/review-stop-sweep.ts'
 import { routineReportCommand } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -2419,6 +2422,166 @@ describe('journal store', () => {
       at: '2026-08-13T01:04:00.000Z',
     })).toBe(true)
     expect(store.listStoppedReviews()).toEqual([])
+  })
+
+  it('banners the agent comment, not a restored label, when GitHub closes the pull request', async () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.recordObservation({
+      externalId: 'closure-with-restored-label',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const agentBody = '### 🤖 PENDING\n\n- **CI gate:** PENDING. Base branch CI is still running.'
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: agentBody,
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: 'Waiting for Baseline repair baseline-task.',
+    })).toBe(true)
+
+    // A trusted actor reviewed the next head, so the service restores that
+    // actor's label on comment 77. That comment is never this service's own.
+    const headB = 'b'.repeat(40)
+    const trustedReview = {
+      _tag: 'Found',
+      authorLogin: 'harlan-zw',
+      state: 'complete',
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-77',
+    } as const
+    const pushed = store.recordObservation({
+      externalId: 'closure-with-restored-label-head-b',
+      observedAt: '2026-08-13T01:05:00.000Z',
+      source: 'poll',
+      subject: {
+        ...pullRequest,
+        headSha: headB,
+        updatedAt: '2026-08-13T01:05:00.000Z',
+        priorAutomatedReview: trustedReview,
+      },
+    })
+    if (pushed._tag !== 'Inserted')
+      throw new Error('Expected the pushed head Revision.')
+    const labelCommand = store.claimNextTerminalReviewStatus('label-publisher', '2026-08-13T01:06:00.000Z', 60_000)
+    if (labelCommand === null)
+      throw new Error('Expected the existing review label command.')
+    const labelPublished = await publishClaimedReviewStatus(
+      {
+        github: {
+          getPullRequestReviewSnapshot: () => { throw new Error('The existing comment needs no snapshot.') },
+          readExistingReviewLabel: (_repository, _number, commentId) => Promise.resolve(ok({
+            commentId,
+            url: `https://github.com/harlan-zw/example/pull/24#issuecomment-${commentId}`,
+            label: 'READY',
+          })),
+          upsertReviewStatus: () => { throw new Error('The existing comment must stay unchanged.') },
+          stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        },
+        now: () => new Date('2026-08-13T01:06:00.000Z'),
+        store,
+      },
+      labelCommand,
+      false,
+      new AbortController().signal,
+    )
+    if (labelPublished._tag === 'Err')
+      throw new Error(labelPublished.error)
+
+    const closed = store.recordObservation({
+      externalId: 'closure-with-restored-label-closed',
+      observedAt: '2026-08-13T01:07:00.000Z',
+      source: 'poll',
+      subject: {
+        ...pullRequest,
+        headSha: headB,
+        state: 'closed',
+        mergedAt: '2026-08-13T01:07:00.000Z',
+        updatedAt: '2026-08-13T01:07:00.000Z',
+        priorAutomatedReview: trustedReview,
+      },
+    })
+    if (closed._tag !== 'Inserted')
+      throw new Error('Expected the closed pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: closed.revisionId,
+      headSha: headB,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:07:00.000Z',
+    })).toBe(true)
+
+    const stopped = store.listStoppedReviews()
+    expect(stopped).toEqual([expect.objectContaining({
+      taskId: review.id,
+      commentId: 42,
+      publishedBody: agentBody,
+    })])
+
+    const edits: Array<{ commentId: number, body: string }> = []
+    let closure: Parameters<ReturnType<typeof openJournalStore>['recordReviewClosure']>[0] | undefined
+    const { results } = await publishStoppedReviews({
+      github: {
+        clearAgentLabels: () => Promise.resolve(ok(undefined)),
+        getPullRequestReviewSnapshot: () => { throw new Error('A merged pull request needs no snapshot.') },
+        editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
+          // Comment 77 belongs to the trusted actor, so GitHub refuses the edit.
+          if (commentId === 77)
+            return Promise.resolve(ok({ _tag: 'Foreign', reason: 'The stored automated review comment belongs to another GitHub actor.' }))
+          edits.push({ commentId, body })
+          return Promise.resolve(ok({ _tag: 'Edited', commentId, url: `https://github.com/harlan-zw/example/pull/24#issuecomment-${commentId}` }))
+        },
+      },
+      now: () => new Date('2026-08-13T01:08:00.000Z'),
+      repositories: [repositoryMapping()],
+      store: {
+        recordReviewClosure: (input) => {
+          closure = input
+          return true
+        },
+        recordDeletedReviewComment: () => true,
+        listStoppedReviews: () => store.listStoppedReviews(),
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+    expect(edits).toEqual([{ commentId: 42, body: expect.stringContaining('### 🤖 MERGED') }])
+    expect(closure).toEqual(expect.objectContaining({
+      disposition: { _tag: 'Merged' },
+      result: expect.objectContaining({ _tag: 'Published', commentId: 42 }),
+    }))
   })
 
   it('closes the READY status that replaced a PENDING Review', () => {
