@@ -6756,6 +6756,17 @@ export function openJournalStore(
           && subject.current_source === 'poll'
         if (!older && !weakerAtSameVersion)
           return false
+        // Older controllers stamped guessed issue closures with their own clock.
+        // A later GitHub poll can correct that guess even when GitHub's timestamp is older.
+        if (input.source === 'poll' && input.subject.kind === 'issue'
+          && current.kind === 'issue' && current.state === 'closed' && subject.current_source === 'poll') {
+          const inferredClosure = database.prepare(`
+            SELECT 1 FROM observations
+            WHERE subject_id = ? AND revision_id = ? AND external_id = ? AND observed_at < ?
+          `).get(subject.id, currentRevisionId, inferredClosureObservationId(current, current.updatedAt), input.observedAt)
+          if (inferredClosure !== undefined)
+            return false
+        }
         if (
           !exactPullRequest
           || input.subject.kind !== 'pull_request'
