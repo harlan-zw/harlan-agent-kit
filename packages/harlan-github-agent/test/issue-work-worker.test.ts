@@ -517,7 +517,7 @@ Closes #12.`,
     }))
   })
 
-  it('stacks on an open pull request that changes the same file', async () => {
+  it('publishes independent work against main when another pull request changes the same file', async () => {
     const overlapping: OpenAgentPullRequest = {
       pullRequestNumber: 55,
       headRef: 'fix/issue-9',
@@ -542,9 +542,9 @@ Closes #12.`,
       _tag: 'Publish',
       usage: { _tag: 'Unavailable' },
       publication: expect.objectContaining({
-        baseRef: 'fix/issue-9',
-        baseSha: 'issue-head',
-        patchDigest: 'restacked-digest',
+        baseRef: 'main',
+        baseSha: 'base-sha',
+        patchDigest: 'patch-digest',
       }),
     }))
   })

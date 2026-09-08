@@ -1,10 +1,11 @@
-import type { ClaimedIssueWorkTask, PullRequestBase } from '../src/types.ts'
+import type { ClaimedIssueWorkTask, ClaimedPublicationCommand, PullRequestBase } from '../src/types.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createIssueWorktreeManager } from '../src/worktree.ts'
+import { ok } from '../src/result.ts'
+import { createGitPublicationRemote, createIssueWorktreeManager } from '../src/worktree.ts'
 import { issueItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
@@ -85,6 +86,76 @@ function pushStackBase(checkout: string, ref: string, contents: string): string 
 const defaultBranch: PullRequestBase = { _tag: 'DefaultBranch', ref: 'main' }
 
 describe('issue worktree', () => {
+  it('publishes ten finished changes as main advances between each publication', async () => {
+    const { checkout, manager, remote, root, task } = fixture()
+    const signal = new AbortController().signal
+    const commands: ClaimedPublicationCommand[] = []
+    const targets: string[] = []
+    const publisher = createGitPublicationRemote({
+      root,
+      remoteUrl: () => remote,
+      tokens: { getToken: async () => ok({ token: 'unused', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+      github: {
+        getPullRequest: async () => { throw new Error('This burst opens new pull requests.') },
+        hasOpenPullRequestForBranch: async () => ok(false),
+        isBranchProtected: async () => ok(false),
+      },
+      pullRequests: { ensurePullRequest: async (input) => {
+        targets.push(input.baseRef)
+        return ok({ number: targets.length, url: `https://github.com/harlan-zw/example/pull/${targets.length}`, diagram: { _tag: 'None' } })
+      } },
+    })
+    for (let index = 0; index < 10; index++) {
+      const issue = { ...task, id: `burst-${index}`, issueNumber: index + 100 }
+      const prepared = await manager.prepare(issue, defaultBranch, signal)
+      if (prepared._tag === 'Err')
+        throw new Error(prepared.error)
+      writeFileSync(join(prepared.value.path, `change-${index}.ts`), `export const value = ${index}\n`)
+      const verified = await manager.verify(issue, prepared.value, signal)
+      if (verified._tag === 'Err')
+        throw new Error(verified.error)
+      const committed = await manager.commit(issue, prepared.value, verified.value, `feat: add change ${index}`, signal)
+      if (committed._tag === 'Err')
+        throw new Error(committed.error)
+      commands.push({
+        _tag: 'OpenPullRequest',
+        taskKind: 'issue_work',
+        id: `publication-${index}`,
+        taskId: issue.id,
+        repository: task.repository,
+        repositoryMapping: task.repositoryMapping,
+        issueNumber: issue.issueNumber,
+        baseRef: 'main',
+        baseSha: committed.value.baseSha,
+        expectedHeadSha: committed.value.baseSha,
+        headRef: `fix/issue-${issue.issueNumber}`,
+        commitSha: committed.value.commitSha,
+        artifactRef: committed.value.artifactRef,
+        patchDigest: committed.value.digest,
+        changedFiles: committed.value.changedFiles,
+        pullRequestTitle: `feat: add change ${index}`,
+        pullRequestBody: `Closes #${issue.issueNumber}.`,
+        diagram: null,
+        outcomeUnknown: false,
+        workerId: 'publisher',
+        fence: 1,
+        leaseExpiresAt: '2126-01-01T00:00:00Z',
+      })
+    }
+    for (const command of commands) {
+      expect(await publisher.validateAuthority(command, signal)).toEqual(ok(undefined))
+      expect(await publisher.push(command, signal)).toEqual(ok(undefined))
+      expect(await publisher.getHeadSha(command, signal)).toEqual(ok(command.commitSha))
+      expect((await publisher.finalize(command, signal))._tag).toBe('Ok')
+      git(checkout, 'fetch', 'origin', command.headRef)
+      git(checkout, 'merge', '--no-ff', `origin/${command.headRef}`, '-m', 'feat: merge a reviewed change')
+      git(checkout, 'push', 'origin', 'main')
+    }
+    expect(targets).toEqual(Array.from({ length: 10 }).fill('main'))
+    for (const command of commands)
+      expect(git(checkout, 'merge-base', '--is-ancestor', command.commitSha, 'main')).toBe('')
+  }, 30_000)
+
   it('pins a controller commit based on the approved default branch', async () => {
     const { baseSha, manager, root, task } = fixture()
     const prepared = await manager.prepare(task, defaultBranch, new AbortController().signal)

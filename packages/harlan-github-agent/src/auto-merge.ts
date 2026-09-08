@@ -63,6 +63,8 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
     return { _tag: 'Hold', reason: 'The pull request is not open.' }
   if (pullRequest.draft)
     return { _tag: 'Hold', reason: 'The pull request is a draft.' }
+  if (pullRequest.baseRef !== repository.defaultBranch)
+    return { _tag: 'Hold', reason: 'The pull request must target the default branch before Auto merge.' }
   if (pullRequest.mergeState !== 'clean')
     return { _tag: 'Hold', reason: 'GitHub does not report the pull request as mergeable.' }
 

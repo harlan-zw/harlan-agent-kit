@@ -9,6 +9,7 @@ export type AutoMergeEvent
   = | { _tag: 'AutoMergeEnabled', repository: string, pullRequestNumber: number }
     /** GitHub had nothing left to wait for, so the merge happened immediately. */
     | { _tag: 'Merged', repository: string, pullRequestNumber: number, sha: string }
+    | { _tag: 'Retargeted', repository: string, pullRequestNumber: number }
     | { _tag: 'Refused', repository: string, pullRequestNumber: number, reason: string }
 
 export interface AutoMergeController {
@@ -28,6 +29,21 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
     async reconcile(repository, subject, signal) {
       if (options.policy._tag === 'Disabled' || subject.kind !== 'pull_request' || !autoMergeCandidate(repository, subject))
         return
+      if (subject.baseRef === undefined)
+        return
+      if (subject.baseRef !== repository.defaultBranch) {
+        const retargeted = await options.merger.retargetMergedParent({
+          repository,
+          number: subject.number,
+          expectedHeadSha: subject.headSha,
+          expectedBaseRef: subject.baseRef,
+        }, signal)
+        if (retargeted._tag === 'Err')
+          options.report({ _tag: 'Refused', repository: repository.github, pullRequestNumber: subject.number, reason: retargeted.error.message })
+        else if (retargeted.value)
+          options.report({ _tag: 'Retargeted', repository: repository.github, pullRequestNumber: subject.number })
+        return
+      }
       const decision = autoMergeDecision({
         attempts: options.store.listReviewRuns(repository.github, subject.number),
         policy: options.policy,

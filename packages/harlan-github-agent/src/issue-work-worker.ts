@@ -6,8 +6,8 @@ import type { IssueTriageResult } from './issue-triage.ts'
 import type { PullRequestDiagramReference } from './pull-request-diagram.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, OpenAgentPullRequest, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
-import type { IssueWorktreeManager, PreparedWorkerWorkspace, VerifiedIssuePatch } from './worktree.ts'
+import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
+import type { IssueWorktreeManager } from './worktree.ts'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, PULL_REQUEST_BODY_LINES, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runRepairedAgentTurn, unwrapJsonResponse } from './agent-turn.ts'
@@ -16,7 +16,7 @@ import { issueSnapshotDigest } from './item-agent.ts'
 import { PULL_REQUEST_DIAGRAM_PATH, readPullRequestDiagram } from './pull-request-diagram.ts'
 import { canWorkIssues } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { chooseOverlappingStackBase, chooseStackBase } from './stack.ts'
+import { chooseStackBase } from './stack.ts'
 import { cleanLine } from './text.ts'
 
 interface ImplementedAgentResponse {
@@ -356,51 +356,6 @@ Untrusted issue data follows as JSON:
 ${JSON.stringify({ title: task.issue.title, body: input.body.slice(0, 12_000), comments: input.comments.slice(0, 30).map(value => value.slice(0, 4_000)) })}`
 }
 
-interface StackedWork {
-  base: PullRequestBase
-  patch: VerifiedIssuePatch
-  workspace: PreparedWorkerWorkspace
-}
-
-/**
- * Moves finished work onto an open pull request that changes the same files.
- *
- * The overlap is only knowable after the agent works, so the worktree starts on
- * the chosen base and moves afterwards. A conflict keeps the prepared base, so
- * the pull request always has somewhere to go.
- *
- * A candidate whose files GitHub will not report has unknown overlap, and
- * unknown overlap never stacks.
- */
-async function stackOnOverlap(
-  options: IssueWorkWorkerOptions,
-  task: ClaimedIssueWorkTask,
-  mapping: RepositoryMapping,
-  current: StackedWork,
-  candidates: readonly OpenAgentPullRequest[],
-  signal: AbortSignal,
-): Promise<Result<StackedWork, string>> {
-  if (current.base._tag === 'Stacked' || candidates.length === 0)
-    return ok(current)
-  const withFiles = await Promise.all(candidates.map(async (candidate) => {
-    const files = await options.github.listPullRequestFiles(mapping, candidate.pullRequestNumber, signal)
-    return files._tag === 'Err' ? [] : [{ ...candidate, changedFiles: files.value }]
-  }))
-  const chosen = chooseOverlappingStackBase({
-    chosen: current.base,
-    changedFiles: current.patch.changedPaths,
-    candidates: withFiles.flat(),
-  })
-  if (chosen._tag !== 'Stacked')
-    return ok(current)
-  const restacked = await options.worktrees.restack(task, current.workspace, { headRef: chosen.ref, headSha: chosen.headSha }, signal)
-  if (restacked._tag === 'Err')
-    return restacked
-  return ok(restacked.value._tag === 'Unstacked'
-    ? current
-    : { base: chosen, patch: restacked.value.patch, workspace: restacked.value.workspace })
-}
-
 export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWorkWorker {
   return {
     async run(task, signal, unit) {
@@ -536,16 +491,6 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         && (verified.value.changedPaths.length !== 1 || verified.value.changedPaths[0] !== routineSource.target)) {
         return err('Agent feedback issue work changed files outside its skill target.')
       }
-      const stacked = await stackOnOverlap(
-        options,
-        task,
-        validated.value,
-        { base: preparedBase, patch: verified.value, workspace: prepared.value },
-        candidates,
-        signal,
-      )
-      if (stacked._tag === 'Err')
-        return stacked
       const checked = reportProgress({ percent: 90, label: 'Issue work checked' })
       if (checked._tag === 'Err')
         return checked
@@ -555,12 +500,12 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (issueSnapshotDigest(frozen.value) !== scopeDigest)
         return err('The issue changed before the controller committed the fix.')
 
-      const committed = await options.worktrees.commit(task, stacked.value.workspace, stacked.value.patch, response.commitMessage, signal)
+      const committed = await options.worktrees.commit(task, prepared.value, verified.value, response.commitMessage, signal)
       if (committed._tag === 'Err')
         return committed
       // The picture is optional. A document that does not validate is the
       // Agent's mistake to read about, never a reason to hold a finished change.
-      const drawn = await readPullRequestDiagram(stacked.value.workspace.path, {
+      const drawn = await readPullRequestDiagram(prepared.value.path, {
         repository: task.repository,
         baseSha: committed.value.baseSha,
         headSha: committed.value.commitSha,
@@ -585,7 +530,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           diagram: drawn._tag === 'Drawn' ? drawn.diagram : null,
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
-          baseRef: stacked.value.base.ref,
+          baseRef: preparedBase.ref,
           expectedHeadSha: committed.value.baseSha,
           headRef: `${prefix}issue-${task.issueNumber}`,
           artifactRef: committed.value.artifactRef,

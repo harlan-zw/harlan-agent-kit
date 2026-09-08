@@ -439,6 +439,8 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
       return { _tag: 'Unavailable', reason: row.publication_reason ?? 'The unit publication failed.' }
     if (row.task_state === 'Failed' || row.task_state === 'ActionRequired' || row.task_state === 'Superseded')
       return { _tag: 'Unavailable', reason: row.task_reason ?? `The unit Task is ${row.task_state}.` }
+    if (row.state_tag === 'Running' && row.task_state === 'Queued')
+      return { _tag: 'Unavailable', reason: 'The unit task was requeued before publication.' }
     return { _tag: 'Pending' }
   }
 

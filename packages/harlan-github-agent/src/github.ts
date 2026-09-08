@@ -864,6 +864,13 @@ export type MergeHandoff
     | { _tag: 'Merged', sha: string }
 
 export interface GitHubPullRequestMerger {
+  /** Moves a stack to the default branch only after its exact parent merged there. */
+  retargetMergedParent: (input: {
+    repository: RepositoryMapping
+    number: number
+    expectedHeadSha: string
+    expectedBaseRef: string
+  }, signal?: AbortSignal) => Promise<Result<boolean, GitHubReadError>>
   merge: (input: {
     repository: RepositoryMapping
     number: number
@@ -901,6 +908,57 @@ const enableAutoMergeMutation = `
 
 export function createGitHubPullRequestMerger(options: GitHubPullRequestPublisherOptions): GitHubPullRequestMerger {
   return {
+    async retargetMergedParent(input, signal) {
+      const mapping = input.repository
+      if (!mapping.enabled || mapping.ownership !== 'owned' || input.expectedBaseRef === mapping.defaultBranch)
+        return ok(false)
+      const credential = await options.tokens.getToken(mapping.github, 'pull_request_merge', signal)
+      if (credential._tag === 'Err')
+        return credential
+      const octokit = options.createClient?.(credential.value.token) ?? createAuthenticatedClient({
+        access: 'pull_request_merge',
+        repository: mapping.github,
+        signal,
+        token: credential.value.token,
+        tokens: options.tokens,
+        userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+      })
+      const { owner, repo } = repositoryParts(mapping.github)
+      const request = signal === undefined ? {} : { request: { signal } }
+      const failure = (error: unknown): Result<never, GitHubReadError> => err({
+        repository: mapping.github,
+        message: error instanceof Error ? error.message : 'GitHub could not retarget the stack.',
+      })
+      const current = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
+        .then(response => ok(response.data))
+        .catch(failure)
+      if (current._tag === 'Err')
+        return current
+      const pullRequest = current.value
+      if (pullRequest.state !== 'open' || pullRequest.draft || pullRequest.merged_at !== null
+        || pullRequest.head.sha !== input.expectedHeadSha || pullRequest.base.ref !== input.expectedBaseRef
+        || pullRequest.head.repo?.full_name.toLowerCase() !== mapping.github.toLowerCase()
+        || pullRequest.base.repo.full_name.toLowerCase() !== mapping.github.toLowerCase()
+        || !mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.user?.login.toLowerCase())) {
+        return ok(false)
+      }
+      const parents = await octokit.rest.pulls.list({ owner, repo, head: `${owner}:${input.expectedBaseRef}`, state: 'all', per_page: 100, ...request })
+        .then(response => ok(response.data))
+        .catch(failure)
+      if (parents._tag === 'Err')
+        return parents
+      const integrated = parents.value.some(parent => parent.merged_at !== null
+        && parent.base.ref === mapping.defaultBranch && parent.head.sha === pullRequest.base.sha
+        && parent.head.repo?.full_name.toLowerCase() === mapping.github.toLowerCase())
+      if (!integrated)
+        return ok(false)
+      // GitHub stores this idempotent change. A restart resumes from the live base ref.
+      return octokit.rest.pulls.update({ owner, repo, pull_number: input.number, base: mapping.defaultBranch, ...request })
+        .then(response => response.data.base.ref === mapping.defaultBranch
+          ? ok(true)
+          : err({ repository: mapping.github, message: 'GitHub did not confirm the new stack base.' }))
+        .catch(failure)
+    },
     async merge(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
       const credential = await options.tokens.getToken(input.repository.github, 'pull_request_merge', signal)
@@ -955,6 +1013,12 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         return err({
           repository: input.repository.github,
           message: 'The head commit moved before the merge was handed to GitHub.',
+        })
+      }
+      if (pullRequest.value.base.ref !== input.repository.defaultBranch) {
+        return err({
+          repository: input.repository.github,
+          message: 'The pull request no longer targets the default branch.',
         })
       }
 
