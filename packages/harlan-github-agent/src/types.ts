@@ -929,6 +929,7 @@ interface ReviewStatusCommandBase {
 export type ReviewStatusTaskPhase
   = | { taskKind: 'adversarial_review', phase: 'snapshot' | 'review' | 'terminal' }
     | { taskKind: 'review_fix', phase: 'repair' | 'terminal' }
+    | { taskKind: 'existing_review', phase: 'terminal' }
 
 export type ReviewStatusCommand = ReviewStatusCommandBase & ReviewStatusTaskPhase
 

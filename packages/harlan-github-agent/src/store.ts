@@ -862,6 +862,7 @@ export interface JournalStore extends BatchStore {
   failTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   failWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   deferReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
+  supersedeReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   deferIssueTriageComment: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
@@ -3280,7 +3281,9 @@ function reviewStatusWorkflowScope(database: DatabaseSync, commandId: string): W
     LEFT JOIN tasks
       ON review_status_commands.task_kind = 'review_fix'
       AND tasks.id = review_status_commands.task_id
-    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+    JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+      CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
     JOIN repositories ON repositories.id = subjects.repository_id
     WHERE review_status_commands.id = ?
   `).get(commandId) as unknown as WorkflowScope
@@ -3324,7 +3327,9 @@ function supersedeUnauthorizedReviewStatuses(database: DatabaseSync, at: string)
     LEFT JOIN tasks
       ON review_status_commands.task_kind = 'review_fix'
       AND tasks.id = review_status_commands.task_id
-    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+    JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+      CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
     JOIN repositories ON repositories.id = subjects.repository_id
     WHERE review_status_commands.state_tag = 'Pending'
       AND (
@@ -4208,6 +4213,54 @@ function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: strin
   taskIds.forEach(task => cancelStoredTask(database, task.id, at, reason))
 }
 
+/** The existing comment yields to current work, Dismissal, and Approval policy. */
+const existingReviewLabelClaimSql = `(review_status_commands.task_kind = 'existing_review'
+      AND EXISTS (SELECT 1 FROM review_resolutions AS resolution
+        WHERE resolution.subject_id = subjects.id AND resolution.revision_id = subjects.current_revision_id
+          AND resolution.resolution_tag = 'ExistingReview' AND resolution.github_url = review_status_commands.github_url)
+      AND NOT EXISTS (SELECT 1 FROM worker_tasks AS active
+        WHERE active.subject_id = subjects.id AND active.state_tag IN ('Queued', 'Running'))
+      AND NOT EXISTS (SELECT 1 FROM tasks AS active
+        WHERE active.subject_id = subjects.id AND active.state_tag IN ('Queued', 'Running', 'Publishing'))
+      AND json_extract(status_revision.payload, '$.state') = 'open'
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+      AND (
+        EXISTS (SELECT 1 FROM pull_request_approvals
+          WHERE subject_id = subjects.id AND revision_id = subjects.current_revision_id AND kind = 'review')
+        OR ((SELECT selection_mode FROM agent_control WHERE singleton = 1) = 'auto'
+          AND EXISTS (SELECT 1 FROM json_each(repositories.policy_json, '$.writablePullRequestAuthors')
+            WHERE lower(value) = lower(json_extract(status_revision.payload, '$.author'))))
+      ))`
+
+/** Restores the label omitted by a completed review from another trusted actor. */
+function stageExistingReviewLabel(database: DatabaseSync, subject: GitHubPullRequestItem, revisionId: string, at: string): void {
+  const prior = subject.priorAutomatedReview
+  if (prior._tag !== 'Found' || prior.state !== 'complete')
+    return
+  const prefix = `${subject.url}#issuecomment-`
+  if (!prior.url.startsWith(prefix))
+    return
+  const commentId = Number(prior.url.slice(prefix.length))
+  if (!Number.isSafeInteger(commentId) || commentId <= 0)
+    return
+  const commandId = digest(`existing-review-label:${revisionId}:${commentId}`)
+  const staged = database.prepare(`
+    INSERT INTO review_status_commands (
+      id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase, body, body_sha256,
+      desired_outcome, state_tag, github_comment_id, github_url, created_at, updated_at
+    ) VALUES (?, 'existing_review', ?, 0, ?, ?, 'terminal', '', ?, 'EXISTING', 'Pending', ?, ?, ?, ?)
+    -- The id pins one revision to one comment, so an unchanged observation names
+    -- a Published command whose label is already on the pull request. Restaging
+    -- it would republish through GitHub on every poll and never converge. Only a
+    -- Superseded command yields again, so retired work can return when the
+    -- observation that retired it goes away.
+    ON CONFLICT(id) DO UPDATE SET state_tag = 'Pending', updated_at = excluded.updated_at
+    WHERE review_status_commands.state_tag = 'Superseded'
+  `).run(commandId, commandId, revisionId, subject.headSha, digest(''), commentId, prior.url, at, at)
+  if (staged.changes === 1)
+    recordReviewStatusEvent(database, { commandId, event: 'Staged', from: null, to: 'Pending', at })
+}
+
 function planAdversarialReview(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4313,7 +4366,7 @@ function planAdversarialReview(
         task_id = NULL, task_fence = 0, resolution_tag = 'ExistingReview',
         review_run_id = NULL, baseline_task_id = NULL, github_url = excluded.github_url,
         reason = NULL, created_at = excluded.created_at
-      WHERE review_resolutions.resolution_tag = 'UnknownNeedsReconciliation'
+      WHERE review_resolutions.resolution_tag IN ('UnknownNeedsReconciliation', 'ExistingReview')
     `).run(subjectId, revisionId, subject.priorAutomatedReview.url, observedAt)
     if (stored.changes === 1) {
       recordWorkflowEvent(database, {
@@ -4347,6 +4400,11 @@ function planAdversarialReview(
       undefined,
       ownRunLanded ? revisionId : undefined,
     )
+    if (alreadyReviewed && localAttempt.head_review_run_id === null && subject.kind === 'pull_request'
+      && subject.state === 'open' && mapping.enabled && mapping.pullRequestReview
+      && (!approvalRequired || reviewApproved) && !manualReviewRequested) {
+      stageExistingReviewLabel(database, subject, revisionId, observedAt)
+    }
     return
   }
 
@@ -5825,6 +5883,53 @@ const combinedIssuePublicationMigration = `
   PRAGMA user_version = 67;
 `
 
+/** Publishes labels for trusted reviews without creating an Agent Task. */
+const existingReviewLabelMigration = `
+  DROP INDEX review_status_commands_state;
+  CREATE TABLE review_status_commands_v68 (
+    id TEXT PRIMARY KEY,
+    task_kind TEXT NOT NULL CHECK (task_kind IN ('adversarial_review', 'review_fix', 'existing_review')),
+    task_id TEXT NOT NULL,
+    task_fence INTEGER NOT NULL,
+    revision_id TEXT NOT NULL REFERENCES revisions(id),
+    expected_head_sha TEXT NOT NULL,
+    phase TEXT NOT NULL CHECK (phase IN ('snapshot', 'review', 'repair', 'terminal', 'queued')),
+    body TEXT NOT NULL,
+    body_sha256 TEXT NOT NULL CHECK (length(body_sha256) = 64),
+    state_tag TEXT NOT NULL CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Superseded')),
+    outcome_unknown INTEGER NOT NULL DEFAULT 0 CHECK (outcome_unknown IN (0, 1)),
+    reason TEXT,
+    github_comment_id INTEGER,
+    github_url TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    review_run_id TEXT REFERENCES review_runs(id),
+    desired_outcome TEXT CHECK (desired_outcome IN ('READY', 'PENDING', 'BLOCKED', 'WAITING', 'EXISTING', 'SKIPPED')),
+    UNIQUE (task_kind, task_id, task_fence, phase, body_sha256),
+    CHECK (
+      (task_kind = 'adversarial_review' AND phase IN ('snapshot', 'review', 'terminal', 'queued'))
+      OR (task_kind = 'review_fix' AND phase IN ('repair', 'terminal', 'queued'))
+      OR (task_kind = 'existing_review' AND phase = 'terminal')
+    ),
+    CHECK (
+      (state_tag = 'Running' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+      OR (state_tag != 'Running' AND worker_id IS NULL AND lease_expires_at IS NULL)
+    ),
+    CHECK (
+      (state_tag = 'Published' AND github_comment_id IS NOT NULL AND github_url IS NOT NULL)
+      OR state_tag != 'Published'
+    )
+  );
+  INSERT INTO review_status_commands_v68 SELECT * FROM review_status_commands;
+  DROP TABLE review_status_commands;
+  ALTER TABLE review_status_commands_v68 RENAME TO review_status_commands;
+  CREATE INDEX review_status_commands_state ON review_status_commands(state_tag, updated_at);
+  PRAGMA user_version = 68;
+`
+
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
@@ -6115,7 +6220,11 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, combinedIssuePublicationMigration)
     version = 67
   }
-  if (version === 67)
+  if (version === 67) {
+    applyMigration(database, existingReviewLabelMigration)
+    version = 68
+  }
+  if (version === 68)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9786,14 +9895,17 @@ export function openJournalStore(
         LEFT JOIN tasks
           ON review_status_commands.task_kind = 'review_fix'
           AND tasks.id = review_status_commands.task_id
-        JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+        JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+        JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Pending'
           AND (
             (
               review_status_commands.phase = 'terminal'
               AND (
-                (review_status_commands.task_kind = 'adversarial_review' AND worker_tasks.kind = 'adversarial_review')
+                ${existingReviewLabelClaimSql}
+                OR (review_status_commands.task_kind = 'adversarial_review' AND worker_tasks.kind = 'adversarial_review')
                 OR (review_status_commands.task_kind = 'review_fix' AND tasks.kind = 'review_fix')
               )
             )
@@ -9813,14 +9925,15 @@ export function openJournalStore(
               AND tasks.lease_expires_at > ?
             )
           )
-          AND COALESCE(worker_tasks.revision_id, tasks.revision_id) = subjects.current_revision_id
+          AND COALESCE(worker_tasks.revision_id, tasks.revision_id,
+          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.id END) = subjects.current_revision_id
           AND review_status_commands.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
           AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       `).get(commandId, now, now) as {
             id: string
-            task_kind: 'adversarial_review' | 'review_fix'
+            task_kind: 'adversarial_review' | 'review_fix' | 'existing_review'
             task_id: string
             repository: string
             github_number: number
@@ -9857,9 +9970,11 @@ export function openJournalStore(
         at: now,
       })
       database.exec('COMMIT')
-      const taskPhase: ReviewStatusTaskPhase = row.task_kind === 'review_fix'
-        ? { taskKind: 'review_fix', phase: row.phase as 'repair' | 'terminal' }
-        : { taskKind: 'adversarial_review', phase: row.phase as 'snapshot' | 'review' | 'terminal' }
+      const taskPhase: ReviewStatusTaskPhase = row.task_kind === 'existing_review'
+        ? { taskKind: 'existing_review', phase: 'terminal' }
+        : row.task_kind === 'review_fix'
+          ? { taskKind: 'review_fix', phase: row.phase as 'repair' | 'terminal' }
+          : { taskKind: 'adversarial_review', phase: row.phase as 'snapshot' | 'review' | 'terminal' }
       return {
         id: row.id,
         taskId: row.task_id,
@@ -9898,12 +10013,16 @@ export function openJournalStore(
         LEFT JOIN tasks
           ON review_status_commands.task_kind = 'review_fix'
           AND tasks.id = review_status_commands.task_id
-        JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+        JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+        JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
+        JOIN repositories ON repositories.id = subjects.repository_id
         WHERE review_status_commands.state_tag = 'Pending'
           AND review_status_commands.phase = 'terminal'
           AND (
             review_status_commands.revision_id != subjects.current_revision_id
             OR COALESCE(worker_tasks.revision_id, tasks.revision_id) != subjects.current_revision_id
+            OR (review_status_commands.task_kind = 'existing_review' AND NOT ${existingReviewLabelClaimSql})
           )
       `).all() as unknown as Array<{ id: string, fence: number }>
       const supersede = database.prepare(`
@@ -9940,13 +10059,17 @@ export function openJournalStore(
       LEFT JOIN tasks
         ON review_status_commands.task_kind = 'review_fix'
         AND tasks.id = review_status_commands.task_id
-      JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id)
+      JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+      JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+        CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE review_status_commands.state_tag = 'Pending'
         AND review_status_commands.phase = 'terminal'
         AND review_status_commands.revision_id = subjects.current_revision_id
-        AND COALESCE(worker_tasks.revision_id, tasks.revision_id) = subjects.current_revision_id
-        AND COALESCE(worker_tasks.state_tag, tasks.state_tag) != 'Running'
+        AND COALESCE(worker_tasks.revision_id, tasks.revision_id,
+          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.id END) = subjects.current_revision_id
+        AND COALESCE(worker_tasks.state_tag, tasks.state_tag, 'Completed') != 'Running'
+        AND (review_status_commands.task_kind != 'existing_review' OR ${existingReviewLabelClaimSql})
         AND repositories.enabled = 1
         ${repositoryWriteAuthoritySql}
         AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
@@ -9970,7 +10093,10 @@ export function openJournalStore(
         -- and fence prove this is the authorized attempt.
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND (
-            (
+            (review_status_commands.task_kind = 'existing_review' AND EXISTS (
+              SELECT 1 FROM subjects WHERE subjects.current_revision_id = review_status_commands.revision_id
+            ))
+            OR (
               review_status_commands.phase = 'terminal'
               AND (
                 EXISTS (
@@ -10122,6 +10248,36 @@ export function openJournalStore(
           event: 'Deferred',
           from: 'Running',
           to: 'Pending',
+          reason: input.reason,
+          fence: input.fence,
+          at: input.at,
+        })
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** Retires one Running command whose failure no retry can answer. */
+  const supersedeReviewStatus: JournalStore['supersedeReviewStatus'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Superseded', reason = ?, worker_id = NULL,
+          lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        recordReviewStatusEvent(database, {
+          commandId: input.commandId,
+          event: 'Superseded',
+          from: 'Running',
+          to: 'Superseded',
           reason: input.reason,
           fence: input.fence,
           at: input.at,
@@ -12288,7 +12444,9 @@ export function openJournalStore(
         0 AS source_rank
       FROM review_status_commands AS status
       JOIN revisions AS status_revision ON status_revision.id = status.revision_id
-      WHERE status.state_tag = 'Published'
+      -- An existing_review publication edits nothing: its body is empty and its
+      -- comment belongs to a trusted actor, so a closure must never target it.
+      WHERE status.state_tag = 'Published' AND status.task_kind != 'existing_review'
       UNION ALL
       SELECT
         'review:' || publication.id AS publication_id,
@@ -13914,6 +14072,7 @@ export function openJournalStore(
     deferPublication,
     deferIssueTriageComment,
     deferReviewStatus,
+    supersedeReviewStatus,
     failPublication,
     failTask,
     failWorkerTask,

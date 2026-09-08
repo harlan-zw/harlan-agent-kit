@@ -25,6 +25,7 @@ describe('review status controller', () => {
     let stagedBody = ''
     const controller = createReviewStatusController({
       github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
@@ -71,6 +72,7 @@ describe('review status controller', () => {
         completeReviewStatus: () => true,
         recordReviewStatusReceipt: () => true,
         deferReviewStatus: () => { throw new Error('Unexpected defer.') },
+        supersedeReviewStatus: () => { throw new Error('Unexpected supersede.') },
       },
       workerId: 'status-worker',
     })
