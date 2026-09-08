@@ -12178,13 +12178,18 @@ export function openJournalStore(
             WHERE review_evidence_scopes.review_run_id = ranked.id
               AND review_evidence_scopes.policy_digest = repositories.policy_digest
           )
-          -- A finished or cancelled Repair needs an explicit new Review.
-          -- Base movement must not restore its retry budget.
+          -- A stopped Repair needs a newer Review before another round.
+          -- Base movement alone must not restore its retry budget.
           AND NOT EXISTS (
             SELECT 1 FROM tasks AS repair
             JOIN revisions AS repaired ON repaired.id = repair.revision_id
             WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
               AND json_extract(repaired.payload, '$.headSha') = ranked.head_sha
+              AND (
+                repair.updated_at >= ranked.started_at
+                OR repair.state_tag IN ('Queued', 'Running', 'Publishing', 'Completed')
+                OR EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = repair.id)
+              )
           )
         )
       )
@@ -12203,6 +12208,7 @@ export function openJournalStore(
         JOIN revisions AS cancelled_revision ON cancelled_revision.id = cancelled.revision_id
         WHERE cancelled.subject_id = ranked.subject_id AND cancelled.kind = 'adversarial_review'
           AND json_extract(cancelled_revision.payload, '$.headSha') = ranked.head_sha
+          AND task_cancellations.cancelled_at >= ranked.started_at
       )
       AND NOT EXISTS (
         SELECT 1 FROM worker_tasks AS live
@@ -12213,6 +12219,7 @@ export function openJournalStore(
         SELECT 1 FROM tasks AS repair
         WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
           AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+          AND (repair.state_tag != 'ActionRequired' OR repair.updated_at >= ranked.started_at)
       )
     ORDER BY repositories.github, subjects.github_number
   `).all() as unknown as ReviewGateRefreshRow[]).map(row => ({

@@ -242,4 +242,74 @@ describe('repair after base CI', () => {
       baseSha: 'new-base',
     })
   })
+
+  it.each(['cancelled-review', 'stopped-repair'] as const)('resumes a fresh explicit Review after a %s', async (prior) => {
+    const { store, sweep, live, mapping, task } = setup()
+    const requestRerun = (revisionId: string, at: string) => store.requestReviewRerun({
+      repository: mapping.github,
+      pullRequestNumber: 24,
+      revisionId,
+      requestId: at,
+      requestedBy: 'harlan-zw',
+      source: 'dashboard',
+      at,
+    })
+    if (prior === 'cancelled-review') {
+      expect(requestRerun(task.revisionId, '2026-09-08T04:09:00.000Z')._tag).toBe('Queued')
+      const review = store.claimNextAdversarialReviewTask('reviewer', '2026-09-08T04:09:01.000Z', 60_000)
+      expect(store.cancelTask({ taskId: review!.id, at: '2026-09-08T04:09:02.000Z' })._tag).toBe('Cancelled')
+    }
+    else {
+      await sweep()
+      publishStatus(store)
+      const repair = store.claimNextReviewFixTask('repair', '2026-09-08T04:10:03.000Z', 60_000)!
+      expect(store.needsAttentionTask({
+        taskId: repair.id,
+        workerId: repair.state.workerId,
+        fence: repair.state.fence,
+        at: '2026-09-08T04:10:04.000Z',
+        reason: 'The Repair needs a decision.',
+        evidence: 'blocked',
+      })).toBe(true)
+    }
+    live.pullRequest = { ...live.pullRequest, baseSha: 'new-base' }
+    const observed = store.recordObservation({
+      externalId: 'base-before-explicit-review',
+      observedAt: '2026-09-08T04:11:00.000Z',
+      source: 'poll',
+      subject: live.pullRequest,
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the new base.')
+    expect(requestRerun(observed.revisionId, '2026-09-08T04:12:00.000Z')._tag).toBe('Queued')
+    const review = store.claimNextAdversarialReviewTask('new-reviewer', '2026-09-08T04:12:01.000Z', 60_000)!
+    const earlier = store.listReviewRuns(mapping.github, 24)[0]!
+    expect(store.recordReviewRun({
+      ...earlier,
+      id: 'explicit-review',
+      revisionId: review.revisionId,
+      startedAt: '2026-09-08T04:12:01.000Z',
+      completedAt: '2026-09-08T04:12:02.000Z',
+    })._tag).toBe('Inserted')
+    expect(store.completeReviewTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-09-08T04:12:03.000Z',
+      evidence: 'explicit-review',
+      resolution: { _tag: 'Reviewed', reviewRunId: 'explicit-review' },
+    })).toBe(true)
+    expect(store.recordReviewPublication({
+      id: 'explicit-publication',
+      reviewRunId: 'explicit-review',
+      body: terminalComment(live.pullRequest.headSha, live.pullRequest.baseSha, earlier.gates, [finding], undefined, []),
+      at: '2026-09-08T04:12:04.000Z',
+      result: { _tag: 'Published', githubCommentId: 42, url: live.pullRequest.url },
+    })._tag).toBe('Inserted')
+
+    await sweep('2026-09-08T04:13:00.000Z')
+    publishStatus(store, '13')
+
+    expect(store.claimNextReviewFixTask('new-repair', '2026-09-08T04:13:03.000Z', 60_000)?.kind).toBe('review_fix')
+  })
 })
