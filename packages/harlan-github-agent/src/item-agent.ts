@@ -1368,6 +1368,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           : { _tag: 'Blocked' as const, confidence: response.confidence }
       return projectReviewRun(options, task, frozen.value, {
         id: reviewRunId,
+        baseRef: task.pullRequest.baseRef ?? null,
         repository: task.repository,
         pullRequestNumber: task.pullRequestNumber,
         revisionId: task.revisionId,

@@ -424,7 +424,7 @@ export type ReviewResolution
 
 export type ReviewDesiredOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'WAITING' | 'EXISTING' | 'SKIPPED'
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'feedback' | 'outcome' | 'publications' | 'usage'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'outcome' | 'publications' | 'usage'> {
   confidence?: number
   /** Trusted repository policy used by this Review. */
   policyDigest?: string

@@ -16,6 +16,7 @@ describe('pull request status controller', () => {
     })
     const review = {
       _tag: 'ReviewAgent' as const,
+      baseRef: 'main',
       role: 'adversarial_review' as const,
       id: 'attempt-1',
       repository: 'harlan-zw/example',
