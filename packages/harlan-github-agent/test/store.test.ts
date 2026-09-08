@@ -135,10 +135,10 @@ describe('journal store', () => {
     expect(store.listIncidents()).toEqual([])
   })
 
-  it('defers a running Publication without an Incident when repository writes are disabled', () => {
+  it.each(['owned', 'maintained'] as const)('defers an %s Publication when repository writes are disabled', (ownership) => {
     const store = openJournalStore(':memory:', true)
     stores.push(store)
-    const repository = repositoryMapping()
+    const repository = repositoryMapping({ ownership })
     store.syncRepositories([repository], '2026-09-02T00:00:00.000Z')
     store.setRepositoryWritesEnabled(repository.github, true)
     store.recordObservation({
@@ -754,9 +754,9 @@ describe('journal store', () => {
     expect(result._tag).toBe('Conflict')
   })
 
-  it('queues conflict resolution for a writable pull request branch', () => {
+  it.each(['owned', 'maintained'] as const)('queues conflict resolution for a writable branch when ownership is %s', (ownership) => {
     const store = createStore()
-    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.syncRepositories([repositoryMapping({ ownership })], '2026-08-13T00:00:00.000Z')
 
     store.recordObservation({
       externalId: 'poll-pr-24',
@@ -839,7 +839,7 @@ describe('journal store', () => {
 
     expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').queue[0]?.state).toEqual({
       _tag: 'ActionRequired',
-      reason: 'Conflict resolution is off for maintained repositories. Resolve the merge conflicts on GitHub.',
+      reason: 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.',
     })
   })
 

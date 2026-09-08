@@ -165,6 +165,7 @@ harlan-github-agent control status --config "$agent_config" | jq '.state.restart
 ```
 
 `conflict_resolution: true` permits a repository to queue conflict work. `mutations_enabled: true` lets the controller run and publish it.
+Maintained repositories may enable conflict resolution explicitly. Keep author, branch, and Approval checks in place.
 
 Prefer a GitHub App installation for selected repositories. If a maintained repository has no installation, require an explicit Repository mapping before Issue work. Use Harlan's authenticated GitHub account for that repository. Workers may use the authenticated `gh` client for research.
 

@@ -298,7 +298,7 @@ Closes #12.`,
     expect(committed).toBe(false)
   })
 
-  it('publishes the patch with safe metadata when Agent output is malformed', async () => {
+  it('requires a descriptive title before committing malformed Agent output', async () => {
     const repository = repositoryMapping()
     const issue = issueItem()
     let commitMessage = ''
@@ -349,7 +349,7 @@ Closes #12.`,
       issue,
     }, new AbortController().signal)
 
-    expect(commitMessage).toBe('fix: resolve issue #12')
+    expect(commitMessage).toBe('')
     expect(recorded).toEqual([{
       taskId: 'issue-work-task',
       item: expect.objectContaining({
@@ -359,12 +359,10 @@ Closes #12.`,
     }])
     expect(JSON.stringify(recorded)).not.toContain('ghp_Abcdefghijklmnopqrstuvwx')
     expect(result).toEqual(ok({
-      _tag: 'Publish',
+      _tag: 'ActionRequired',
       usage: { _tag: 'Unavailable' },
-      publication: expect.objectContaining({
-        pullRequestTitle: 'fix: resolve issue #12',
-        pullRequestBody: expect.stringMatching(/### Description[\s\S]*### Linked Issues[\s\S]*Closes #12\./),
-      }),
+      reason: 'The Agent did not return a descriptive pull request title.',
+      evidence: 'The agent returned malformed issue work JSON.',
     }))
   })
 
@@ -812,6 +810,30 @@ describe('issue work pull request metadata', () => {
       }),
     })))
   })
+
+  it('keeps the original title when the repair answer loses it', async () => {
+    const { result } = await runIssueWork({
+      texts: [answer({ pullRequestBody: 'Closes #12.' }), 'The work is done.'],
+      template,
+    })
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'Publish',
+      publication: expect.objectContaining({ pullRequestTitle: title }),
+    })))
+  })
+
+  it.each(['fix: resolve issue #12', 'fix(parser): fix issue #12', 'fix: close #12'])(
+    'requires a descriptive title when the Agent returns %s',
+    async (pullRequestTitle) => {
+      const { result } = await runIssueWork({ texts: [answer({ pullRequestTitle })], template })
+
+      expect(result).toEqual(ok(expect.objectContaining({
+        _tag: 'ActionRequired',
+        reason: 'The Agent did not return a descriptive pull request title.',
+      })))
+    },
+  )
 })
 
 describe('issue work pull request diagram', () => {
