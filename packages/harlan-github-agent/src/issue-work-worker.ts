@@ -187,7 +187,10 @@ function closesLines(issueNumbers: readonly number[]): string {
 function salvagedTitle(response: string): Promise<string | undefined> {
   return Promise.resolve(unwrapJsonResponse(response))
     .then(value => JSON.parse(value) as AgentResponsePayload)
-    .then(value => typeof value.pullRequestTitle === 'string' && isPullRequestSubject(value.pullRequestTitle) ? value.pullRequestTitle : undefined)
+    .then((value) => {
+      const title = typeof value.pullRequestTitle === 'string' ? value.pullRequestTitle.trim() : undefined
+      return title !== undefined && isPullRequestSubject(title) ? title : undefined
+    })
     // Unparseable JSON names no title; the caller already logged the answer.
     .catch(() => undefined)
 }
@@ -225,11 +228,14 @@ function parseAgentResponse(text: string, issueNumbers: readonly number[], templ
       // Each rule names itself. One shared refusal told nobody which of five
       // rules the metadata broke, so the Incident a person read said only that
       // something was wrong, and a retry had nothing to correct.
-      const brokenRule = !CONVENTIONAL_SUBJECT.test(value.pullRequestTitle)
+      // Whitespace survives JSON round trips, and GENERIC_ISSUE_SUBJECT is
+      // anchored at the end, so an untrimmed placeholder escapes the check.
+      const pullRequestTitle = value.pullRequestTitle.trim()
+      const brokenRule = !CONVENTIONAL_SUBJECT.test(pullRequestTitle)
         ? 'the title is not a Conventional Commit subject'
-        : value.pullRequestTitle.length >= 70
+        : pullRequestTitle.length >= 70
           ? 'the title is 70 characters or longer'
-          : !isPullRequestSubject(value.pullRequestTitle)
+          : !isPullRequestSubject(pullRequestTitle)
               ? 'the title does not describe the change'
               : issueNumbers.some(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody))
                 ? `the body does not close ${issueNumbers.filter(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody)).map(number => `#${number}`).join(', ')}`
@@ -245,7 +251,7 @@ function parseAgentResponse(text: string, issueNumbers: readonly number[], templ
         summary: value.summary,
         checks: value.checks as string[],
         commitMessage: value.commitMessage.replaceAll(/[\r\n]/g, ' ').replaceAll(/\s+/g, ' ').trim().slice(0, 240),
-        pullRequestTitle: value.pullRequestTitle,
+        pullRequestTitle,
         pullRequestBody,
       })
     })

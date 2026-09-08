@@ -823,7 +823,7 @@ describe('issue work pull request metadata', () => {
     })))
   })
 
-  it.each(['fix: resolve issue #12', 'fix(parser): fix issue #12', 'fix: close #12'])(
+  it.each(['fix: resolve issue #12', 'fix(parser): fix issue #12', 'fix: close #12', 'fix: resolve issue #12 '])(
     'requires a descriptive title when the Agent returns %s',
     async (pullRequestTitle) => {
       const { result } = await runIssueWork({ texts: [answer({ pullRequestTitle })], template })
