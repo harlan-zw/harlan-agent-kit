@@ -524,6 +524,29 @@ describe('review resilience', () => {
       .toBe(movedFinding?._tag === 'Open' ? movedFinding.details?.fingerprint : undefined)
   })
 
+  it.each([
+    { initial: 'in_progress', final: 'completed', repairs: 1 },
+    { initial: 'completed', final: 'in_progress', repairs: 0 },
+  ])('uses final base CI for Repair when it changes from $initial to $final', async ({ initial, final, repairs }) => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const snapshots = [initial, final].map((status) => {
+      const snapshot = reviewSnapshot(pullRequest)
+      if (snapshot.baseChecks._tag === 'Available')
+        snapshot.baseChecks.checks = snapshot.baseChecks.checks.map(check => ({ ...check, status, conclusion: status === 'completed' ? 'success' : null }))
+      return snapshot
+    })
+    const test = harness({
+      pullRequest,
+      snapshots,
+      response: { findings: [materialFinding()], confidence: 90 },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.queued).toBe(repairs)
+    expect(test.comments.at(-1)).toContain(repairs === 1 ? 'Repair round 1 of 3 starts.' : 'The base branch must pass CI before Repair starts.')
+  })
+
   it('queues Repair when the base branch has no CI', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const snapshot = reviewSnapshot(pullRequest)
