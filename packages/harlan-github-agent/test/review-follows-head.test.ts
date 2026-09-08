@@ -51,7 +51,126 @@ function baseMoved(store: ReturnType<typeof openJournalStore>, at: string, overr
   return observed.revisionId
 }
 
+function recordRetryingReview(store: ReturnType<typeof openJournalStore>) {
+  const repository = repositoryMapping()
+  store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+  store.setRepositoryWritesEnabled(repository.github, true)
+  store.recordObservation({ externalId: 'original', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+  const task = store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:00:30.000Z', 60 * 60_000)!
+  expect(store.recordReviewRun({ ...reviewRun, id: 'retained-review', revisionId: task.revisionId, gates: passedReviewGates(), confidence: 96, findings: [] })._tag).toBe('Inserted')
+  store.recordReviewPublication({ id: 'legacy-publication', reviewRunId: 'retained-review', body: '### READY', at: '2026-08-13T01:03:00.000Z', result: { _tag: 'Published', githubCommentId: 42, url: 'url' } })
+  expect(store.failWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: '2026-08-13T01:04:00.000Z', reason: 'GitHub request timed out.' })).toBe('Retrying')
+  return task
+}
+
+function retainedGateInput(store: ReturnType<typeof openJournalStore>) {
+  baseMoved(store, '2026-08-13T02:00:00.000Z', { mergeState: 'conflicting' })
+  const revisionId = baseMoved(store, '2026-08-13T02:01:00.000Z', { baseSha: 'base789' })
+  return { reviewRunId: 'retained-review', repository: 'harlan-zw/example', pullRequestNumber: 24, revisionId, expectedHeadSha: 'abc123', gates: passedReviewGates(), body: '### READY', desiredOutcome: 'READY' as const, at: '2026-08-13T02:02:00.000Z' }
+}
+
 describe('review work follows the head commit', () => {
+  it('publishes retained Review gates after a retrying worker is superseded by base changes', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'retained-review-publication-'))
+    const path = join(directory, 'journal.sqlite')
+    const store = openJournalStore(path, true)
+    const repository = repositoryMapping()
+    try {
+      const task = recordRetryingReview(store)
+
+      const input = retainedGateInput(store)
+      expect(store.getDashboardSnapshot('2026-08-13T02:01:01.000Z').tasks.find(candidate => candidate.id === task.id)?.state._tag).toBe('Superseded')
+      expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({ reviewRunId: 'retained-review', revisionId: input.revisionId, gatePublication: { _tag: 'Unpublished' } })])
+      const staged = store.stageReviewGateStatus(input)
+      expect(staged._tag).toBe('Staged')
+      const publication = store.claimNextTerminalReviewStatus('publisher', '2026-08-13T02:02:00.000Z', 60_000)!
+      expect(publication).not.toBeNull()
+      expect(store.claimReviewStatus(publication.id, 'another-publisher', '2026-08-13T02:02:30.000Z', 60_000)).toBeNull()
+      const recovered = store.claimReviewStatus(publication.id, 'another-publisher', '2026-08-13T02:03:00.000Z', 60_000)!
+      expect(recovered).not.toBeNull()
+      expect(store.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: '2026-08-13T02:03:01.000Z', commentId: 42, url: 'url' })).toBe(false)
+      expect(store.completeReviewStatus({ commandId: recovered.id, workerId: recovered.workerId, fence: recovered.fence, at: '2026-08-13T02:03:02.000Z', commentId: 42, url: 'url' })).toBe(true)
+
+      const reopened = openJournalStore(path, true)
+      try {
+        expect(reopened.storedReviewForHead(repository.github, 24, 'abc123')).toMatchObject({ _tag: 'Current', run: { id: 'retained-review', gatePublication: { _tag: 'Published', publicationId: publication.id } } })
+        expect(reopened.listReviewRuns(repository.github, 24)).toEqual([expect.objectContaining({ id: 'retained-review', startedAt: reviewRun.startedAt, completedAt: reviewRun.completedAt })])
+        expect(reopened.claimNextAdversarialReviewTask('another-reviewer', '2026-08-13T02:03:00.000Z', 60_000)).toBeNull()
+      }
+      finally {
+        reopened.close()
+      }
+    }
+    finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects retained gate staging after explicit Cancel', () => {
+    const store = createStore()
+    const task = recordRetryingReview(store)
+    expect(store.cancelTask({ taskId: task.id, at: '2026-08-13T01:05:00.000Z' })._tag).toBe('Cancelled')
+    const input = retainedGateInput(store)
+    expect(store.listReviewGateRefreshes()).toEqual([])
+    expect(store.stageReviewGateStatus(input)._tag).toBe('Rejected')
+    expect(store.claimNextTerminalReviewStatus('publisher', input.at, 60_000)).toBeNull()
+  })
+
+  describe.each(['Pending', 'Running'] as const)('retained gate Publication while %s', (state) => {
+    it.each(['head', 'target', 'policy', 'Dismissal', 'writes', 'Pause', 'closed', 'active Review', 'newer Review'] as const)('rejects authority lost through %s', (change) => {
+      const store = openJournalStore(':memory:', true)
+      stores.push(store)
+      recordRetryingReview(store)
+      const input = retainedGateInput(store)
+      const staged = store.stageReviewGateStatus(input)
+      if (staged._tag !== 'Staged')
+        throw new Error('Expected staged retained gates.')
+      const publication = state === 'Running' ? store.claimNextTerminalReviewStatus('publisher', input.at, 60_000)! : null
+      if (state === 'Running')
+        expect(publication).not.toBeNull()
+      const at = '2026-08-13T02:02:01.000Z'
+      switch (change) {
+        case 'head':
+          baseMoved(store, at, { headSha: 'new-head', baseSha: 'base789' })
+          break
+        case 'target':
+          baseMoved(store, at, { baseRef: 'another-target', baseSha: 'base789' })
+          break
+        case 'closed':
+          baseMoved(store, at, { state: 'closed', baseSha: 'base789' })
+          break
+        case 'policy':
+          store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })], at)
+          break
+        case 'Dismissal':
+          store.dismissItem({ repository: input.repository, itemNumber: 24, at })
+          break
+        case 'writes':
+          store.setRepositoryWritesEnabled(input.repository, false)
+          break
+        case 'Pause':
+          store.setRepositoryPaused(input.repository, true)
+          break
+        case 'active Review':
+          store.requestReviewRerun({ repository: input.repository, pullRequestNumber: 24, revisionId: input.revisionId, requestId: 'rerun', source: 'dashboard', requestedBy: 'harlan-zw', at })
+          expect(store.claimNextAdversarialReviewTask('new-reviewer', at, 60_000)).not.toBeNull()
+          break
+        case 'newer Review':
+          expect(store.recordReviewRun({ ...reviewRun, id: 'newer-review', revisionId: input.revisionId, completedAt: at, gates: passedReviewGates(), confidence: 97, findings: [] })._tag).toBe('Inserted')
+          break
+      }
+      if (publication === null) {
+        expect(store.claimReviewStatus(staged.commandId, 'publisher', at, 60_000)).toBeNull()
+        expect(store.claimNextTerminalReviewStatus('publisher', at, 60_000)).toBeNull()
+      }
+      else {
+        expect(store.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at, commentId: 42, url: 'url' })).toBe(false)
+      }
+      expect(store.listReviewRuns(input.repository, 24).find(run => run.id === input.reviewRunId)?.gatePublication).toEqual({ _tag: 'Unpublished' })
+    })
+  })
+
   it('refreshes retained Review evidence on the current base without changing its provenance', () => {
     const directory = mkdtempSync(join(tmpdir(), 'review-gate-delivery-'))
     const path = join(directory, 'journal.sqlite')

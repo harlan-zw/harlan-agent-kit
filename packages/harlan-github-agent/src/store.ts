@@ -6483,6 +6483,67 @@ export function openJournalStore(
   const database = openDatabase(path)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
+  // Retained gates answer the current head, target, and policy through stored Review evidence.
+  const reviewGateAuthoritySql = `
+    subjects.kind = 'pull_request'
+    AND json_extract(revisions.payload, '$.state') = 'open'
+    AND json_extract(revisions.payload, '$.headSha') = review_runs.head_sha
+    AND json_extract(revisions.payload, '$.baseRef') = review_runs.base_ref
+    AND review_runs.id = (
+      SELECT candidate.id FROM review_runs AS candidate
+      WHERE candidate.subject_id = subjects.id
+        AND candidate.head_sha = review_runs.head_sha AND candidate.base_ref = review_runs.base_ref
+        AND NOT EXISTS (SELECT 1 FROM review_runs AS settled WHERE settled.supersedes_review_run_id = candidate.id)
+      ORDER BY candidate.completed_at DESC, candidate.id DESC LIMIT 1
+    )
+    AND EXISTS (
+      SELECT 1 FROM review_evidence_scopes
+      WHERE review_run_id = review_runs.id AND policy_digest = repositories.policy_digest
+    )
+    AND repositories.enabled = 1
+    ${repositoryWriteAuthoritySql}
+    AND repositories.paused = 0
+    AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+    AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+    AND NOT EXISTS (
+      SELECT 1 FROM task_cancellations
+      JOIN worker_tasks AS cancelled ON cancelled.id = task_cancellations.task_id
+      JOIN revisions AS cancelled_revision ON cancelled_revision.id = cancelled.revision_id
+      WHERE cancelled.subject_id = subjects.id AND cancelled.kind = 'adversarial_review'
+        AND json_extract(cancelled_revision.payload, '$.headSha') = review_runs.head_sha
+        AND task_cancellations.cancelled_at >= review_runs.started_at
+    )`
+  // The worker supplies lineage only. The current projection authorizes detached Publication.
+  const retainedReviewGateClaimSql = `(review_status_commands.task_kind = 'adversarial_review'
+    AND review_status_commands.phase = 'terminal'
+    AND EXISTS (
+      SELECT 1 FROM review_runs
+      JOIN review_gate_projections AS projection ON projection.review_run_id = review_runs.id
+      JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      JOIN worker_tasks AS lineage ON lineage.id = review_status_commands.task_id
+        AND lineage.subject_id = subjects.id AND lineage.kind = 'adversarial_review'
+        AND lineage.fence = review_status_commands.task_fence
+        AND lineage.state_tag NOT IN ('Queued', 'ActionRequired', 'Running')
+      WHERE review_runs.id = review_status_commands.review_run_id
+        AND projection.command_id = review_status_commands.id
+        AND UPPER(projection.outcome_tag) = review_status_commands.desired_outcome
+        AND review_status_commands.revision_id = subjects.current_revision_id
+        AND review_status_commands.expected_head_sha = review_runs.head_sha
+        AND ${reviewGateAuthoritySql}
+        AND NOT EXISTS (
+          SELECT 1 FROM worker_tasks AS live
+          WHERE live.subject_id = subjects.id AND live.kind = 'adversarial_review'
+            AND live.state_tag IN ('Queued', 'ActionRequired', 'Running')
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM tasks AS repair
+          WHERE repair.subject_id = subjects.id AND repair.kind = 'review_fix'
+            AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+            AND (repair.state_tag != 'ActionRequired' OR repair.updated_at >= review_runs.started_at)
+        )
+    ))`
 
   const getAgentSelection = (): AgentSelection => {
     const row = database.prepare('SELECT tag, provider, model, reasoning_effort, provider_order FROM agent_selection WHERE singleton = 1').get() as {
@@ -9805,20 +9866,10 @@ export function openJournalStore(
         )
         WHERE review_runs.id = ?
           AND repositories.github = ? AND subjects.github_number = ?
-          AND subjects.kind = 'pull_request'
           AND subjects.current_revision_id = ?
           AND review_runs.head_sha = ?
-          AND review_runs.base_ref = json_extract(revisions.payload, '$.baseRef')
-          AND json_extract(revisions.payload, '$.state') = 'open'
           AND json_extract(revisions.payload, '$.headSha') = ?
-          AND EXISTS (
-            SELECT 1 FROM review_evidence_scopes
-            WHERE review_run_id = review_runs.id AND policy_digest = repositories.policy_digest
-          )
-          AND repositories.enabled = 1
-          ${repositoryWriteAuthoritySql}
-          AND repositories.paused = 0
-          AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+          AND ${reviewGateAuthoritySql}
       `).get(
         input.reviewRunId,
         input.repository,
@@ -10027,8 +10078,11 @@ export function openJournalStore(
               AND tasks.lease_expires_at > ?
             )
           )
-          AND COALESCE(worker_tasks.revision_id, tasks.revision_id,
-          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.id END) = subjects.current_revision_id
+          AND (
+            COALESCE(worker_tasks.revision_id, tasks.revision_id,
+              CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.id END) = subjects.current_revision_id
+            OR ${retainedReviewGateClaimSql}
+          )
           AND review_status_commands.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
@@ -10123,7 +10177,8 @@ export function openJournalStore(
           AND review_status_commands.phase = 'terminal'
           AND (
             review_status_commands.revision_id != subjects.current_revision_id
-            OR COALESCE(worker_tasks.revision_id, tasks.revision_id) != subjects.current_revision_id
+            OR (COALESCE(worker_tasks.revision_id, tasks.revision_id) != subjects.current_revision_id
+              AND NOT ${retainedReviewGateClaimSql})
             OR (review_status_commands.task_kind = 'existing_review' AND NOT ${existingReviewLabelClaimSql})
           )
       `).all() as unknown as Array<{ id: string, fence: number }>
@@ -10168,8 +10223,11 @@ export function openJournalStore(
       WHERE review_status_commands.state_tag = 'Pending'
         AND review_status_commands.phase = 'terminal'
         AND review_status_commands.revision_id = subjects.current_revision_id
-        AND COALESCE(worker_tasks.revision_id, tasks.revision_id,
-          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.id END) = subjects.current_revision_id
+        AND (
+          COALESCE(worker_tasks.revision_id, tasks.revision_id,
+            CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.id END) = subjects.current_revision_id
+          OR ${retainedReviewGateClaimSql}
+        )
         AND COALESCE(worker_tasks.state_tag, tasks.state_tag, 'Completed') != 'Running'
         AND (review_status_commands.task_kind != 'existing_review' OR ${existingReviewLabelClaimSql})
         AND repositories.enabled = 1
@@ -10195,6 +10253,8 @@ export function openJournalStore(
         -- and fence prove this is the authorized attempt.
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND (
+            ${retainedReviewGateClaimSql}
+            OR
             (review_status_commands.task_kind = 'existing_review' AND EXISTS (
               SELECT 1 FROM subjects WHERE subjects.current_revision_id = review_status_commands.revision_id
             ))
