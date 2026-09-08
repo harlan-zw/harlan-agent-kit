@@ -349,12 +349,12 @@ it('suspends idle batches at the pull request limit and resumes their remaining 
 })
 
 it.each([
-  { triggers: ['routine'] as const, expected: ['scan'] },
+  { triggers: ['routine'] as const, expected: ['sentry-checkin'] },
   { triggers: ['github', 'routine'] as const, expected: [] },
 ])('runs due routines with queued priority work only when GitHub is disabled: $triggers', async ({ triggers, expected }) => {
   const store = setup(true)
   store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
-  const [routine] = store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'spec', entries: [{ name: 'scan', crons: ['0 0 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }], at: earlier })
+  const [routine] = store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'spec', entries: [{ name: 'sentry-checkin', crons: ['0 0 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }], at: earlier })
   if (routine === undefined)
     throw new Error('Expected a Routine.')
   store.openRoutineRun({ routineId: routine.id, scheduledFor: earlier, specSha: 'spec', at: earlier })
