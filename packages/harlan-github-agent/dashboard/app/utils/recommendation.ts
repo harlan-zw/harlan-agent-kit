@@ -62,6 +62,14 @@ export function queueRecommendation(entry: QueueEntry, snapshot: DashboardSnapsh
   const item = snapshot.items.find(item => item.kind === 'pull_request'
     && item.repository === entry.repository && item.number === entry.number && item.revisionId === entry.revisionId)
   if (item?.kind === 'pull_request' && item.mergeState === 'conflicting') {
+    if (item.approval._tag === 'ReviewRequired') {
+      return {
+        _tag: 'OpenGitHub',
+        label: 'Approve on GitHub',
+        description: 'Add harlan-agent-review on GitHub to authorize review and repair for this head.',
+        url: entry.subjectUrl,
+      }
+    }
     return {
       _tag: 'OpenGitHub',
       label: 'Resolve conflicts',

@@ -142,6 +142,7 @@ Three shapes for three questions. A Needs you entry is a one-line row, because a
 - `Approve` and `Review and repair` appear only for entries awaiting Approval.
 - `Write spec`, `Provide info`, `Review issues`, and `View failure` open the full task with `Copy task`.
 - `Resolve conflicts` and `View checks` open GitHub. Their external-link icon names that boundary.
+- Conflicting contributor pull requests show `Approve on GitHub` when the current head still requires Approval.
 - `Dismiss` is recommended only by the latest review of the current head. It still confirms the consequence.
 - Unknown blockers use `View details`. They never imply Approval or Dismissal.
 - No card or row carries a second button. `Eject` sits in the Running card's menu and confirms in a modal.

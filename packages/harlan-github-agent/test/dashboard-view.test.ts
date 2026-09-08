@@ -429,16 +429,16 @@ describe('queueRecommendation', () => {
       .toMatchObject({ _tag: 'OpenGitHub', label: 'View checks', url: `${blocked.subjectUrl}/checks` })
   })
 
-  it('opens the exact conflicting pull request without granting approval', () => {
+  it.each(['ReviewRequired', 'NotRequired'] as const)('opens a conflicting pull request with %s without granting approval', (approval) => {
     const item = {
       ...pullRequestItem({ repository: blocked.repository, number: blocked.number, mergeState: 'conflicting' }),
       revisionId: blocked.revisionId,
       observedAt: blocked.updatedAt,
       dismissed: false,
-      approval: { _tag: 'ReviewRequired' as const },
+      approval: { _tag: approval },
     }
     expect(queueRecommendation(blocked, dashboardSnapshot({ items: [item] })))
-      .toMatchObject({ _tag: 'OpenGitHub', label: 'Resolve conflicts', url: blocked.subjectUrl })
+      .toMatchObject({ _tag: 'OpenGitHub', label: approval === 'ReviewRequired' ? 'Approve on GitHub' : 'Resolve conflicts', url: blocked.subjectUrl })
     expect(queueRecommendation(blocked, dashboardSnapshot({ items: [{ ...item, revisionId: 'old' }] })))
       .toMatchObject({ _tag: 'Inspect', label: 'View details' })
   })
