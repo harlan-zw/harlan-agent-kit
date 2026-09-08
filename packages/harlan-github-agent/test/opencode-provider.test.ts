@@ -116,6 +116,17 @@ describe('opencodeAgentEvent', () => {
     })).toEqual({ _tag: 'FileChanged', changes: [{ path: 'src/parser.ts', kind: 'update' }] })
   })
 
+  it.each(['', 'All green. Work complete.\n\n'])('keeps code fences inside an implemented result with prefix %j', (prefix) => {
+    const response = JSON.stringify({
+      outcome: 'implemented',
+      summary: 'The regression failed before the fix and passed afterwards.',
+      pullRequestBody: 'Before:\n```\ncurl -w \'%{http_code} %{redirect_url}\'\n```\nAfter:\n```\n301 /docs/intro\n```',
+    })
+
+    expect(opencodeAgentEvent({ type: 'text', part: { text: `${prefix}${response}` } }))
+      .toEqual({ _tag: 'Message', text: response })
+  })
+
   it('strips the code fence from the final message', () => {
     expect(opencodeAgentEvent(textLine)).toEqual({ _tag: 'Message', text: '{"outcome":"resolved"}' })
   })
@@ -287,6 +298,11 @@ describe('extractJsonObject', () => {
 
   it('takes the object out of surrounding prose', () => {
     expect(extractJsonObject('Here is the result: {"a":1} Done.')).toBe('{"a":1}')
+  })
+
+  it('keeps the complete explanation when braces do not contain JSON', () => {
+    const response = 'The command was curl -w \'%{http_code} %{redirect_url}\'. No response arrived.'
+    expect(extractJsonObject(response)).toBe(response)
   })
 
   it('returns the text unchanged when it holds no object', () => {
