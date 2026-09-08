@@ -6193,9 +6193,13 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 69) {
     const columns = (database.prepare('PRAGMA table_info(review_gate_projections)').all() as unknown as Array<{ name: string }>).map(column => column.name)
-    applyMigration(database, columns.includes('command_id')
-      ? 'PRAGMA user_version = 70;'
-      : 'ALTER TABLE review_gate_projections ADD COLUMN command_id TEXT REFERENCES review_status_commands(id); PRAGMA user_version = 70;')
+    // Repository refresh now owns these failures. The retired Service sweep cannot resolve its old Incidents.
+    applyMigration(database, `
+      ${columns.includes('command_id') ? '' : 'ALTER TABLE review_gate_projections ADD COLUMN command_id TEXT REFERENCES review_status_commands(id);'}
+      UPDATE incidents SET resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE resolved_at IS NULL AND scope_tag = 'Service' AND operation = 'review_gate_refresh';
+      PRAGMA user_version = 70;
+    `)
     version = 70
   }
   if (version === 70)
@@ -7304,16 +7308,8 @@ export function openJournalStore(
     database.prepare(`
       UPDATE repositories SET last_attempt_at = ?, last_success_at = ?, last_error = NULL WHERE github = ?
     `).run(at, at, github)
-    // A healthy poll proves GitHub answers for this repository, so it clears
-    // every Incident a failed read raised. It proves nothing about a Review
-    // gate that never moved, and the sweep that raises `ci_gate_pending` closes
-    // it when the gate moves. Clearing it here would hide a real stall for as
-    // long as GitHub kept answering.
-    database.prepare(`
-      UPDATE incidents SET resolved_at = ?
-      WHERE resolved_at IS NULL AND scope_tag = 'Repository' AND repository = ?
-        AND kind != 'ci_gate_pending'
-    `).run(at, github)
+    // A successful poll proves only its own operation recovered. Each controller resolves the Incidents it owns.
+    resolveIncidents({ _tag: 'Repository', repository: github }, at, 'poll')
     // Edge triggered, on the poll that recovers. A long GitHub outage spends the
     // whole recovery budget of every Task it touches, and those Tasks would then
     // stay dead after GitHub came back. Checking `last_error` first keeps this

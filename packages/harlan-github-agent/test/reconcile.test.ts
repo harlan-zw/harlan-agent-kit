@@ -12,6 +12,47 @@ const noFinalRead = {
 }
 
 describe('gitHub reconciliation', () => {
+  it('keeps a failed Review refresh visible until its own operation recovers', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const scope = { _tag: 'Repository' as const, repository: repository.github }
+    const at = '2026-08-13T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordPollFailure(repository.github, at, 'GitHub could not list open items.')
+    store.recordIncident({ scope, kind: 'unknown', severity: 'error', operation: 'review_status_publication', message: 'GitHub could not publish the Review.', recovery: { _tag: 'ActionRequired' }, at })
+    const github = { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([])) }
+    let refreshes = 0
+    try {
+      const failedRefresh = await reconcileRepository(repository, {
+        github,
+        store,
+        now: () => new Date(at),
+        refreshReviewGates: async () => {
+          refreshes++
+          store.recordIncident({ scope, kind: 'unknown', severity: 'error', operation: 'review_gate_refresh', message: 'GitHub could not read the Review gates.', recovery: { _tag: 'ActionRequired' }, at })
+        },
+      })
+      expect(failedRefresh._tag).toBe('Ok')
+      expect(refreshes).toBe(1)
+      expect(store.listIncidents().map(incident => incident.operation).sort()).toEqual(['review_gate_refresh', 'review_status_publication'])
+
+      const recovered = await reconcileRepository(repository, {
+        github,
+        store,
+        now: () => new Date('2026-08-13T01:01:00.000Z'),
+        refreshReviewGates: async () => {
+          store.resolveIncidents(scope, '2026-08-13T01:01:00.000Z', 'review_gate_refresh')
+        },
+      })
+      expect(recovered._tag).toBe('Ok')
+      expect(store.listIncidents().map(incident => incident.operation)).toEqual(['review_status_publication'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('refreshes settled Review gates after observations and before Auto merge', async () => {
     const store = openJournalStore(':memory:', true)
     const repository = repositoryMapping()
