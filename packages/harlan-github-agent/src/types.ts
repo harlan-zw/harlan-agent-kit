@@ -34,6 +34,10 @@ export interface RepositoryMapping {
   github: string
   checkout: string
   enabled: boolean
+  /** Higher values claim available agent capacity first. Defaults to zero. */
+  priority?: number
+  /** A dedicated repository poll interval. Omit to use the service interval. */
+  pollIntervalSeconds?: number
   /**
    * `app` uses the GitHub App installation. `user` uses Harlan's own token, for
    * a repository he maintains in an organization that cannot install the App.
