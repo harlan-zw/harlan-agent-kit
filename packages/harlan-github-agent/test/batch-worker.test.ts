@@ -74,7 +74,6 @@ describe('batch worker unit failures', () => {
       runtime: {} as never,
       store: {
         claimBatchUnitTask: () => null,
-        completeCombinedIssueWork: () => undefined,
         getBatchDependency: () => ({ _tag: 'Unavailable', reason: 'The unit failed.' }),
         recordBatchPlan: () => [],
         settleBatchUnit: () => {

@@ -178,6 +178,7 @@ describe('batches in the journal', () => {
           _tag: 'OpenPullRequest',
           taskKind: 'issue_work',
           issueNumber: 101,
+          combinedIssueNumbers: [102],
           pullRequestTitle: 'fix: shared helper',
           pullRequestBody: 'Closes #101.\nCloses #102.',
           diagram: null,
@@ -195,12 +196,14 @@ describe('batches in the journal', () => {
       const combinedTaskId = batch.issues.find(issue => issue.issueNumber === 102)?.taskId
       if (combinedTaskId === undefined)
         throw new Error('Expected the combined Task.')
-      expect(store.completeCombinedIssueWork({ taskId: combinedTaskId, at: at(11), evidence: 'Closed by #101.' })).toBe(true)
+      expect(store.getDashboardSnapshot(at(11)).tasks.find(task => task.id === combinedTaskId)?.state).toEqual({ _tag: 'Queued' })
 
       const command = store.claimNextPublication('publisher', at(12), 600_000)
       if (command === null)
         throw new Error('Expected a publication command.')
       expect(store.completePublication({ commandId: command.id, workerId: 'publisher', fence: command.fence, at: at(13), evidence: 'Opened pull request #7.', pullRequestNumber: 7 })).toBe(true)
+      expect(store.getDashboardSnapshot(at(13)).tasks.find(task => task.id === combinedTaskId)?.state)
+        .toEqual({ _tag: 'Completed', evidence: 'Opened pull request #7.' })
       expect(store.getBatchDependency(first.id)).toEqual({ _tag: 'Published', pullRequestNumber: 7, headRef: 'fix/issue-101', headSha: 'commit-1' })
       expect(store.settleBatchUnit({ unitId: first.id, at: at(13), state: { _tag: 'Published', pullRequestNumber: 7, headRef: 'fix/issue-101', headSha: 'commit-1' } })).toBe(true)
 

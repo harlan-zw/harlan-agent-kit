@@ -2909,8 +2909,15 @@ function dashboardQueue(
             return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason } }]
           }
           case 'Failed': return [{ ...base, kind: 'issue', state: failedQueueState(work.state.reason, work.recoveryAttempts) }]
-          case 'Completed': return [{ ...base, kind: 'issue', state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the pull request.' } }]
-          case 'Superseded': break
+          case 'Completed': return [{ ...base, kind: 'issue', state: { _tag: 'Pending', reason: work.state.evidence } }]
+          case 'Superseded':
+            if (work.state.reason !== freshIssueTriageReason) {
+              return [{ ...base, kind: 'issue', state: {
+                _tag: work.state.reason === 'Cancelled from the dashboard.' ? 'Pending' : 'ActionRequired',
+                reason: work.state.reason,
+              } }]
+            }
+            break
         }
       }
       const task = currentTasks.get(`${subject.repository}:${subject.number}:${subject.revisionId}:issue_triage`)
@@ -2927,6 +2934,8 @@ function dashboardQueue(
             return [{ ...base, kind: 'issue', state: { _tag: 'AwaitingApproval', kind: 'issue_work' } }]
           if (triage._tag === 'NEEDS_INFO')
             return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: typeof triage.nextAction === 'string' ? triage.nextAction : 'The issue needs more information.' } }]
+          if (triage._tag === 'READY_TO_SPEC')
+            return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: `Ready to spec. ${typeof triage.nextAction === 'string' ? triage.nextAction : 'Write the specification before implementation.'}` } }]
           return []
         }
         case 'Superseded': return []
@@ -3519,6 +3528,16 @@ function recordPublicationEvent(database: DatabaseSync, input: {
     at: input.at,
   })
 }
+
+/** A combined publication requires every linked issue's current authority. */
+const COMBINED_ISSUE_AUTHORITY_SQL = `NOT EXISTS (
+  SELECT 1 FROM combined_issue_publications AS combined
+  JOIN tasks AS companion ON companion.id = combined.task_id
+  JOIN subjects AS issue ON issue.id = companion.subject_id
+  WHERE combined.command_id = publication_commands.id
+    AND (companion.state_tag != 'Queued' OR companion.revision_id != issue.current_revision_id
+      OR EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = issue.id))
+)`
 
 /**
  * Which Tasks a repository still lets the controller publish.
@@ -4481,7 +4500,7 @@ function planIssueTriage(
       && issueTriageState(existing.evidence) === 'READY_TO_IMPLEMENT'
       && subject.kind === 'issue'
       && canWorkIssues(mapping)
-      && !requiresIssueApproval(mapping, subject.author)
+      && (!requiresIssueApproval(mapping, subject.author) || issuePublicationLostBase(database, subjectId, revisionId))
     ) {
       queueIssueWork(database, subjectId, revisionId, subject, mapping, observedAt)
     }
@@ -4494,6 +4513,18 @@ function planIssueTriage(
     VALUES (?, ?, ?, 'issue_triage', 'Queued', ?)
   `).run(taskId, subjectId, revisionId, observedAt)
   recordWorkerTransition(database, { taskId, from: null, to: 'Queued', reason: null, fence: 0, at: observedAt })
+}
+
+/** A staged change proves approval for this exact issue. A base update does not revoke it. */
+function issuePublicationLostBase(database: DatabaseSync, subjectId: number, revisionId: string): boolean {
+  return database.prepare(`
+    SELECT 1 FROM tasks
+    JOIN publication_commands ON publication_commands.task_id = tasks.id
+    WHERE tasks.subject_id = ? AND tasks.revision_id = ? AND tasks.kind = 'issue_work'
+      AND tasks.state_tag = 'Superseded' AND tasks.reason = 'The base branch changed before publication.'
+      AND publication_commands.state_tag = 'Superseded' AND publication_commands.reason = tasks.reason
+      AND publication_commands.outcome_unknown = 0
+  `).get(subjectId, revisionId) !== undefined
 }
 
 function queueIssueWork(
@@ -4511,6 +4542,23 @@ function queueIssueWork(
   `).run(taskId, subjectId, revisionId, at).changes === 1
   let resumed = false
   if (!inserted) {
+    if (issuePublicationLostBase(database, subjectId, revisionId)) {
+      const existing = database.prepare('SELECT fence, recovery_attempts FROM tasks WHERE id = ?')
+        .get(taskId) as { fence: number, recovery_attempts: number }
+      const exhausted = existing.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS
+      const reason = exhausted
+        ? 'The base branch kept changing before publication. Update the issue after checking the unpublished changes.'
+        : 'The base branch changed. Retry Issue work against its current commit.'
+      database.prepare(`
+        UPDATE tasks SET state_tag = ?, reason = ?, evidence = NULL, attempts = 0,
+          recovery_attempts = recovery_attempts + ?, progress_percent = 0, progress_label = 'Starting', updated_at = ?
+        WHERE id = ? AND state_tag = 'Superseded'
+      `).run(exhausted ? 'ActionRequired' : 'Queued', exhausted ? reason : null, exhausted ? 0 : 1, at, taskId)
+      recordTransition(database, { taskId, from: 'Superseded', to: exhausted ? 'ActionRequired' : 'Queued', reason, fence: existing.fence, at })
+      if (exhausted)
+        recordTaskIncident(database, taskId, reason, at)
+      return { inserted: !exhausted, taskId }
+    }
     const existing = database.prepare(`
       SELECT state_tag, reason, fence FROM tasks WHERE id = ? AND kind = 'issue_work'
     `).get(taskId) as { state_tag: TaskRow['state_tag'], reason: string | null, fence: number } | undefined
@@ -5720,6 +5768,50 @@ function applyForeignKeyMigration(database: DatabaseSync, migration: string): vo
   }
 }
 
+const combinedIssuePublicationMigration = `
+  CREATE TABLE IF NOT EXISTS combined_issue_publications (
+    command_id TEXT NOT NULL REFERENCES publication_commands(id),
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    PRIMARY KEY (command_id, task_id)
+  );
+  CREATE INDEX IF NOT EXISTS combined_issue_publications_task ON combined_issue_publications(task_id);
+
+  -- Old Batch Agents declared completion before the primary publication succeeded.
+  -- Match both the recorded Batch and its exact completion sentence before repairing it.
+  INSERT OR IGNORE INTO combined_issue_publications (command_id, task_id)
+    SELECT commands.id, companion.id
+    FROM batch_units AS units
+    JOIN tasks AS primary_task ON primary_task.id = units.primary_task_id
+    JOIN subjects AS primary_issue ON primary_issue.id = primary_task.subject_id
+    JOIN publication_commands AS commands ON commands.task_id = primary_task.id
+    JOIN subjects AS companion_issue ON companion_issue.repository_id = primary_issue.repository_id
+      AND companion_issue.kind = 'issue' AND companion_issue.github_number IN (SELECT value FROM json_each(units.issue_numbers))
+    JOIN tasks AS companion ON companion.subject_id = companion_issue.id AND companion.kind = 'issue_work'
+      AND companion.revision_id = companion_issue.current_revision_id
+    WHERE companion.id != primary_task.id AND companion.state_tag = 'Completed'
+      AND companion.evidence = 'Closed by the pull request for issue #' || primary_issue.github_number || ' in the same Batch.';
+
+  INSERT INTO task_transitions (task_id, from_tag, to_tag, reason, fence, created_at)
+    SELECT tasks.id, 'Completed', 'Queued', 'The combined pull request was not published.', tasks.fence, tasks.updated_at
+    FROM tasks
+    WHERE tasks.state_tag = 'Completed'
+      AND EXISTS (SELECT 1 FROM combined_issue_publications WHERE task_id = tasks.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM combined_issue_publications AS combined
+        JOIN publication_commands AS commands ON commands.id = combined.command_id
+        WHERE combined.task_id = tasks.id AND commands.state_tag = 'Published'
+      );
+  UPDATE tasks SET state_tag = 'Queued', evidence = NULL, progress_percent = 0, progress_label = 'Starting'
+    WHERE state_tag = 'Completed'
+      AND EXISTS (SELECT 1 FROM combined_issue_publications WHERE task_id = tasks.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM combined_issue_publications AS combined
+        JOIN publication_commands AS commands ON commands.id = combined.command_id
+        WHERE combined.task_id = tasks.id AND commands.state_tag = 'Published'
+      );
+  PRAGMA user_version = 67;
+`
+
 function installSchema(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   let version = (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
@@ -6004,9 +6096,13 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 65) {
     applyMigration(database, forkWorkflowPublicationMigration)
-    return
+    version = 66
   }
-  if (version === 66)
+  if (version === 66) {
+    applyMigration(database, combinedIssuePublicationMigration)
+    version = 67
+  }
+  if (version === 67)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7942,6 +8038,11 @@ export function openJournalStore(
           -- A Task a Batch reserved runs under that Batch's lease. Only the
           -- exact-Task claim the Batch makes may take it.
           AND (? IS NOT NULL OR NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id))
+          AND NOT EXISTS (
+            SELECT 1 FROM combined_issue_publications AS combined
+            JOIN publication_commands AS commands ON commands.id = combined.command_id
+            WHERE combined.task_id = tasks.id AND commands.state_tag IN ('Pending', 'Running')
+          )
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
@@ -8085,7 +8186,6 @@ export function openJournalStore(
         return task
       throw new Error(`Batch unit claim returned a ${task.kind} Task.`)
     },
-    recordTransition: input => recordTransition(database, input),
   })
 
   const claimNextConflictTask: JournalStore['claimNextConflictTask'] = (workerId, now, leaseMilliseconds) => {
@@ -10119,6 +10219,9 @@ export function openJournalStore(
   const stagePublication: JournalStore['stagePublication'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
+      const combinedNumbers = input.publication._tag === 'OpenPullRequest' && input.publication.taskKind === 'issue_work'
+        ? input.publication.combinedIssueNumbers ?? []
+        : []
       const existing = database.prepare(`
         SELECT id, commit_sha, base_sha, base_ref, expected_head_sha, head_ref, artifact_ref, patch_digest,
           changed_files, pull_request_title, pull_request_body
@@ -10139,7 +10242,14 @@ export function openJournalStore(
       } | undefined
       if (existing !== undefined) {
         const publication = input.publication
-        const duplicate = existing.commit_sha === publication.commitSha
+        const linkedNumbers = (database.prepare(`
+          SELECT subjects.github_number FROM combined_issue_publications
+          JOIN tasks ON tasks.id = combined_issue_publications.task_id
+          JOIN subjects ON subjects.id = tasks.subject_id
+          WHERE combined_issue_publications.command_id = ? ORDER BY subjects.github_number
+        `).all(existing.id) as Array<{ github_number: number }>).map(row => row.github_number)
+        const duplicate = JSON.stringify(linkedNumbers) === JSON.stringify([...combinedNumbers].sort((a, b) => a - b))
+          && existing.commit_sha === publication.commitSha
           && existing.base_sha === publication.baseSha
           && existing.base_ref === publication.baseRef
           && existing.expected_head_sha === publication.expectedHeadSha
@@ -10193,6 +10303,29 @@ export function openJournalStore(
         return { _tag: 'Rejected', reason: 'The publication does not match the current GitHub state.' }
       }
 
+      const combinedTasks: string[] = []
+      for (const number of combinedNumbers) {
+        const combined = database.prepare(`
+          SELECT tasks.id FROM tasks
+          JOIN subjects ON subjects.id = tasks.subject_id
+          JOIN repositories ON repositories.id = subjects.repository_id
+          WHERE repositories.github = ? AND subjects.kind = 'issue' AND subjects.github_number = ?
+            AND tasks.kind = 'issue_work' AND tasks.state_tag = 'Queued'
+            AND tasks.revision_id = subjects.current_revision_id AND tasks.id != ?
+            AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+            AND NOT EXISTS (
+              SELECT 1 FROM combined_issue_publications AS combined
+              JOIN publication_commands AS commands ON commands.id = combined.command_id
+              WHERE combined.task_id = tasks.id AND commands.state_tag IN ('Pending', 'Running')
+            )
+        `).get(subject.repository, number, input.taskId) as { id: string } | undefined
+        if (combined === undefined || combinedTasks.includes(combined.id)) {
+          database.exec('COMMIT')
+          return { _tag: 'Rejected', reason: 'A combined issue no longer authorizes this change.' }
+        }
+        combinedTasks.push(combined.id)
+      }
+
       const commandId = digest(JSON.stringify({
         taskId: input.taskId,
         publication,
@@ -10218,6 +10351,8 @@ export function openJournalStore(
         publication._tag === 'OpenPullRequest' && publication.taskKind === 'issue_work' && publication.diagram !== null ? JSON.stringify(publication.diagram) : null,
         input.at,
       )
+      for (const taskId of combinedTasks)
+        database.prepare('INSERT INTO combined_issue_publications (command_id, task_id) VALUES (?, ?)').run(commandId, taskId)
       recordPublicationEvent(database, {
         commandId,
         from: null,
@@ -10282,6 +10417,19 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       recoverExpiredPublications(now)
+      const invalid = database.prepare(`
+        SELECT publication_commands.id, publication_commands.fence, tasks.id AS task_id, tasks.fence AS task_fence
+        FROM publication_commands JOIN tasks ON tasks.id = publication_commands.task_id
+        WHERE publication_commands.state_tag = 'Pending' AND tasks.state_tag = 'Publishing'
+          AND NOT (${COMBINED_ISSUE_AUTHORITY_SQL})
+      `).all() as Array<{ id: string, fence: number, task_id: string, task_fence: number }>
+      for (const command of invalid) {
+        const reason = 'A combined issue changed or was cancelled before publication.'
+        database.prepare('UPDATE publication_commands SET state_tag = \'Superseded\', reason = ?, updated_at = ? WHERE id = ?').run(reason, now, command.id)
+        database.prepare('UPDATE tasks SET state_tag = \'Superseded\', reason = ?, command_id = NULL, updated_at = ? WHERE id = ?').run(reason, now, command.task_id)
+        recordPublicationEvent(database, { commandId: command.id, from: 'Pending', to: 'Superseded', reason, fence: command.fence, at: now })
+        recordTransition(database, { taskId: command.task_id, from: 'Publishing', to: 'Superseded', reason, fence: command.task_fence, at: now })
+      }
       const row = database.prepare(`
         SELECT
           publication_commands.id,
@@ -10413,6 +10561,7 @@ export function openJournalStore(
       AND repositories.enabled = 1
       ${repositoryWriteAuthoritySql}
       AND ${PUBLICATION_AUTHORITY_SQL}
+      AND ${COMBINED_ISSUE_AUTHORITY_SQL}
   `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
 
   const heartbeatPublication: JournalStore['heartbeatPublication'] = (input) => {
@@ -10471,6 +10620,20 @@ export function openJournalStore(
         at: input.at,
       })
       resolveTaskIncidents(database, task.task_id, input.at)
+      const combined = database.prepare(`
+        SELECT tasks.id, tasks.fence FROM combined_issue_publications
+        JOIN tasks ON tasks.id = combined_issue_publications.task_id
+        JOIN subjects ON subjects.id = tasks.subject_id
+        WHERE combined_issue_publications.command_id = ? AND tasks.state_tag = 'Queued'
+          AND tasks.revision_id = subjects.current_revision_id
+          AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+      `).all(input.commandId) as Array<{ id: string, fence: number }>
+      for (const companion of combined) {
+        database.prepare(`UPDATE tasks SET state_tag = 'Completed', evidence = ?, updated_at = ? WHERE id = ?`)
+          .run(input.evidence, input.at, companion.id)
+        recordTransition(database, { taskId: companion.id, from: 'Queued', to: 'Completed', reason: 'The combined pull request was published.', fence: companion.fence, at: input.at })
+        resolveTaskIncidents(database, companion.id, input.at)
+      }
       database.exec('COMMIT')
       return true
     }

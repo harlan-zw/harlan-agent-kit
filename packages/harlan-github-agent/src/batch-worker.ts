@@ -138,7 +138,7 @@ export interface BatchWorkerOptions {
   onTaskSettled?: (taskId: string, task: ClaimedIssueWorkTask) => void
   onTaskStarted?: (task: ClaimedIssueWorkTask) => void
   runtime: AgentRuntimeSource
-  store: ClaimedTaskStore & Pick<JournalStore, 'claimBatchUnitTask' | 'completeCombinedIssueWork' | 'getBatchDependency' | 'recordBatchPlan' | 'settleBatchUnit'>
+  store: ClaimedTaskStore & Pick<JournalStore, 'claimBatchUnitTask' | 'getBatchDependency' | 'recordBatchPlan' | 'settleBatchUnit'>
   unitConcurrency?: number
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   workerId: string
@@ -329,15 +329,6 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
     options.onTaskSettled?.(task.id, task)
     const at = options.now().toISOString()
     settleUnitFromTask(unit, result, at)
-    if (result._tag !== 'Publishing')
-      return
-    // The combined issues close with this pull request, so their own Tasks are done.
-    const taskByIssue = new Map(batch.issues.map(issue => [issue.issueNumber, issue.taskId]))
-    combined.forEach((issue) => {
-      const taskId = taskByIssue.get(issue.number)
-      if (taskId !== undefined)
-        options.store.completeCombinedIssueWork({ taskId, at, evidence: `Closed by the pull request for issue #${task!.issueNumber} in the same Batch.` })
-    })
   }
 
   /** Records the final state of units that published, once their pull requests exist. */

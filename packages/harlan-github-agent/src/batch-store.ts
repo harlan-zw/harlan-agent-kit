@@ -27,8 +27,6 @@ export interface BatchStore {
   /** Where one unit's pull request stands, read by a unit that stacks on it. */
   getBatchDependency: (unitId: string) => BatchDependency
   settleBatchUnit: (input: { unitId: string, at: string, state: Exclude<BatchUnitState, { _tag: 'Waiting' | 'Running' }> }) => boolean
-  /** Completes a Queued Issue work Task whose issue another unit's pull request closes. */
-  completeCombinedIssueWork: (input: { taskId: string, at: string, evidence: string }) => boolean
   completeBatch: (input: { batchId: string, workerId: string, fence: number, at: string }) => boolean
   failBatch: (input: { batchId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   /** Why a reserved Issue work Task waits, keyed by Task id, for the dashboard Queue. */
@@ -38,7 +36,6 @@ export interface BatchStore {
 
 export interface BatchStoreDependencies {
   claimIssueWorkTask: (workerId: string, now: string, leaseMilliseconds: number, exactTaskId: string) => ClaimedIssueWorkTask | null
-  recordTransition: (input: { taskId: string, from: 'Queued', to: 'Completed', reason: string | null, fence: number, at: string }) => void
 }
 
 interface BatchRow {
@@ -251,6 +248,11 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
         AND json_extract(repositories.policy_json, '$.issueWork') = 1
         AND NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id)
         AND NOT EXISTS (
+          SELECT 1 FROM combined_issue_publications AS combined
+          JOIN publication_commands AS commands ON commands.id = combined.command_id
+          WHERE combined.task_id = tasks.id AND commands.state_tag IN ('Pending', 'Running')
+        )
+        AND NOT EXISTS (
           SELECT 1 FROM batches WHERE batches.repository_id = repositories.id AND batches.state_tag IN ('Queued', 'Running')
         )
       ORDER BY repositories.github, subjects.github_number
@@ -434,18 +436,6 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
     ).changes === 1
   }
 
-  const completeCombinedIssueWork: BatchStore['completeCombinedIssueWork'] = input => transaction(() => {
-    const row = database.prepare('SELECT fence FROM tasks WHERE id = ? AND state_tag = \'Queued\'').get(input.taskId) as { fence: number } | undefined
-    if (row === undefined)
-      return false
-    const result = database.prepare(`
-      UPDATE tasks SET state_tag = 'Completed', evidence = ?, reason = NULL, updated_at = ? WHERE id = ? AND state_tag = 'Queued'
-    `).run(input.evidence, input.at, input.taskId)
-    if (result.changes === 1)
-      dependencies.recordTransition({ taskId: input.taskId, from: 'Queued', to: 'Completed', reason: 'Another unit of the Batch closes this issue.', fence: row.fence, at: input.at })
-    return result.changes === 1
-  })
-
   const finishBatch = (input: { batchId: string, workerId: string, fence: number, at: string }, state: 'Completed' | 'Failed', reason: string | null): boolean => transaction(() => {
     const result = database.prepare(`
       UPDATE batches SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE ${ownedBatchSql}
@@ -473,10 +463,21 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
       numbers.push(row.github_number)
       issuesByBatch.set(row.batch_id, numbers)
     })
-    return new Map(rows.map((row) => {
+    const reasons = new Map(rows.map((row) => {
       const others = (issuesByBatch.get(row.batch_id) ?? []).filter(number => number !== row.github_number).map(number => `#${number}`)
       return [row.task_id, others.length === 0 ? 'Planned in a Batch.' : `Planned in a Batch with ${others.join(', ')}.`]
     }))
+    const publishing = database.prepare(`
+      SELECT combined.task_id, subjects.github_number
+      FROM combined_issue_publications AS combined
+      JOIN publication_commands AS commands ON commands.id = combined.command_id
+      JOIN tasks ON tasks.id = commands.task_id
+      JOIN subjects ON subjects.id = tasks.subject_id
+      WHERE commands.state_tag IN ('Pending', 'Running')
+    `).all() as Array<{ task_id: string, github_number: number }>
+    for (const row of publishing)
+      reasons.set(row.task_id, `Waiting for the combined pull request for issue #${row.github_number} to publish.`)
+    return reasons
   }
 
   const listBatches: BatchStore['listBatches'] = (limit = 20) => (database.prepare(`
@@ -493,7 +494,6 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
     claimBatchUnitTask,
     getBatchDependency,
     settleBatchUnit,
-    completeCombinedIssueWork,
     completeBatch,
     failBatch,
     batchReservationReasons,
