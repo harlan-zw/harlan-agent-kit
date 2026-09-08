@@ -135,10 +135,10 @@ describe('journal store', () => {
     expect(store.listIncidents()).toEqual([])
   })
 
-  it('defers a running Publication without an Incident when repository writes are disabled', () => {
+  it.each(['owned', 'maintained'] as const)('defers an %s Publication when repository writes are disabled', (ownership) => {
     const store = openJournalStore(':memory:', true)
     stores.push(store)
-    const repository = repositoryMapping()
+    const repository = repositoryMapping({ ownership })
     store.syncRepositories([repository], '2026-09-02T00:00:00.000Z')
     store.setRepositoryWritesEnabled(repository.github, true)
     store.recordObservation({
@@ -754,9 +754,9 @@ describe('journal store', () => {
     expect(result._tag).toBe('Conflict')
   })
 
-  it('queues conflict resolution for a writable pull request branch', () => {
+  it.each(['owned', 'maintained'] as const)('queues conflict resolution for a writable branch when ownership is %s', (ownership) => {
     const store = createStore()
-    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.syncRepositories([repositoryMapping({ ownership })], '2026-08-13T00:00:00.000Z')
 
     store.recordObservation({
       externalId: 'poll-pr-24',
@@ -839,7 +839,7 @@ describe('journal store', () => {
 
     expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').queue[0]?.state).toEqual({
       _tag: 'ActionRequired',
-      reason: 'Conflict resolution is off for maintained repositories. Resolve the merge conflicts on GitHub.',
+      reason: 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.',
     })
   })
 
@@ -4883,9 +4883,14 @@ describe('journal store', () => {
     }))
   })
 
-  it('requires fresh triage before retrying approved issue work against a changed scope', () => {
+  it.each([
+    { ownership: 'owned', route: 'READY_TO_IMPLEMENT' },
+    { ownership: 'maintained', route: 'READY_TO_IMPLEMENT' },
+    { ownership: 'owned', route: 'WAIT_TO_IMPLEMENT' },
+    { ownership: 'maintained', route: 'WAIT_TO_IMPLEMENT' },
+  ] as const)('keeps Approval after fresh triage on $ownership with route $route', ({ ownership, route }) => {
     const store = createStore()
-    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.syncRepositories([repositoryMapping({ ownership })], '2026-08-13T00:00:00.000Z')
     store.recordObservation({
       externalId: 'issue-scope-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
@@ -4934,22 +4939,21 @@ describe('journal store', () => {
       workerId: retriage.state.workerId,
       fence: retriage.state.fence,
       at: '2026-08-13T01:00:09.000Z',
-      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
+      evidence: JSON.stringify({ _tag: route }),
     })
-    expect(store.getDashboardSnapshot('2026-08-13T01:00:10.000Z').queue).toContainEqual(expect.objectContaining({
-      number: 12,
-      state: { _tag: 'AwaitingApproval', kind: 'issue_work' },
-    }))
-    expect(store.approveIssueWork({
-      repository: 'harlan-zw/example',
-      issueNumber: 12,
-      revisionId: retriage.revisionId,
-      at: '2026-08-13T01:00:11.000Z',
-    })).toEqual({ _tag: 'Approved', taskId: expect.any(String) })
-    expect(store.claimNextIssueWorkTask('issue-worker-4', '2026-08-13T01:00:12.000Z', 10_000)).toEqual(expect.objectContaining({
-      kind: 'issue_work',
-      issueNumber: 12,
-    }))
+    const work = store.claimNextIssueWorkTask('issue-worker-4', '2026-08-13T01:00:12.000Z', 10_000)
+    expect(work?.issueNumber ?? null).toBe(route === 'READY_TO_IMPLEMENT' ? 12 : null)
+    if (work !== null) {
+      expect(work.revisionId).toBe(triage.revisionId)
+      store.cancelTask({ taskId: work.id, at: '2026-08-13T01:00:13.000Z' })
+      store.recordObservation({
+        externalId: 'poll-after-cancellation',
+        observedAt: '2026-08-13T01:00:14.000Z',
+        source: 'poll',
+        subject: issueItem(),
+      })
+      expect(store.claimNextIssueWorkTask('issue-worker-5', '2026-08-13T01:00:15.000Z', 10_000)).toBeNull()
+    }
   })
 
   it('retries changed-scope issue work on a maintained repository', () => {
@@ -5036,8 +5040,18 @@ describe('journal store', () => {
       throw new Error('Expected changed Issue content to create a Revision.')
 
     expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:00:05.000Z', 60_000)).toBeNull()
-    expect(store.claimNextIssueTriageTask('triage-2', '2026-08-13T01:00:05.000Z', 60_000))
-      .toMatchObject({ revisionId: changed.revisionId })
+    const fresh = store.claimNextIssueTriageTask('triage-2', '2026-08-13T01:00:05.000Z', 60_000)
+    if (fresh === null)
+      throw new Error('Expected Issue triage for the changed content.')
+    expect(fresh.revisionId).toBe(changed.revisionId)
+    store.completeWorkerTask({
+      taskId: fresh.id,
+      workerId: fresh.state.workerId,
+      fence: fresh.state.fence,
+      at: '2026-08-13T01:00:06.000Z',
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
+    })
+    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:00:07.000Z', 60_000)).toBeNull()
   })
 
   it('shows repeated pull request description failures instead of the Agent fallback', () => {

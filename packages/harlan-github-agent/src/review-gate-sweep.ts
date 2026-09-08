@@ -5,7 +5,8 @@ import type { BaselineRepairQueueResult, JournalStore, ReviewGateRefresh } from 
 import type { RepositoryMapping, ReviewGates, ReviewOutcomeName } from './types.ts'
 import { createHash } from 'node:crypto'
 import { ciGatePendingMessage, readCiGate } from './ci-gate-pending.ts'
-import { refreshControllerGates, reviewOutcome, terminalComment } from './item-agent.ts'
+import { refreshControllerGates, repairPreflight, reviewOutcome, terminalComment } from './item-agent.ts'
+import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 
 /**
@@ -21,10 +22,10 @@ export type ReviewGateRefreshOutcome
 export interface ReviewGateSweepOptions {
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampAgentLabel'>
   now: () => Date
-  /** Proves the controller may push a Baseline repair branch to this repository. */
+  /** Proves the controller may publish Repair commits in this repository. */
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'recordIncident' | 'recordReviewPublication' | 'resolveIncidents' | 'stageReviewGateStatus'>
+  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordIncident' | 'recordReviewPublication' | 'resolveIncidents' | 'stageReviewGateStatus'>
 }
 
 /**
@@ -39,7 +40,8 @@ const CI_GATE_OPERATION = 'ci_gate_pending'
  * Refreshes the moving gates around one completed Agent report.
  *
  * Mergeability and CI can change without a new head commit. This sweep reads
- * both again. It starts no Agent because the report still covers this diff.
+ * both again and queues deferred Repair from the stored findings.
+ * It needs no new Review Agent because the report still covers this diff.
  */
 export async function refreshReviewGates(
   options: ReviewGateSweepOptions,
@@ -69,7 +71,27 @@ export async function refreshReviewGates(
     const { gates, reportedChecks, ciCause } = refreshControllerGates(review.gates, live.value, mapping)
     const outcome = reviewOutcome(gates)
     const confidence = outcome === 'READY' ? review.confidence : undefined
-    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, review.findings, confidence, reportedChecks)
+    let findings = review.findings
+    const repairable = gates.review._tag === 'Failed'
+      && findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
+      && !findings.some(finding => finding._tag === 'Open' && finding.resolution === 'Dismissal')
+    if (repairable) {
+      const preflight = repairPreflight(mapping, live.value, await options.preflightRepair(review.repository, signal))
+      const repair = preflight._tag === 'Authorized'
+        ? options.store.queueReviewFixForGate({
+            reviewRunId: review.reviewRunId,
+            revisionId: review.revisionId,
+            headSha: review.headSha,
+            baseSha: live.value.pullRequest.baseSha,
+            at: options.now().toISOString(),
+          })
+        : preflight
+      const firstOpen = findings.findIndex(finding => finding._tag === 'Open')
+      findings = findings.map((finding, index) => finding._tag === 'Open' && index === firstOpen
+        ? { ...finding, nextAction: repair._tag === 'Queued' ? `Repair ${repairRoundLabel(repair.rounds)} starts. ${finding.nextAction}` : repair.reason }
+        : finding)
+    }
+    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks)
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can
     // queue that repair. The store answers Existing on every later pass.
@@ -77,7 +99,7 @@ export async function refreshReviewGates(
       ? { baselineRepair: await queueBaselineRepair(options, review, live.value.pullRequest.baseSha, signal) }
       : {}
     const gatesChanged = JSON.stringify(gates) !== JSON.stringify(review.gates)
-    if (!gatesChanged) {
+    if (!gatesChanged && !(repairable && body !== review.publishedBody)) {
       // Only a gate that did not move can be overdue. A gate that changed this
       // pass rewrites its own timestamp, so the old one would report a wait
       // that has just ended.

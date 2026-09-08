@@ -43,6 +43,21 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('accepts explicit conflict resolution on a maintained repository', () => {
+    const parsed = parseConfigText(configText.replace('ownership: owned', 'ownership: maintained'))
+
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.conflictResolution).toBe(true)
+  })
+
+  it.each([
+    ['ownership: owned', 'ownership: external'],
+    ['pr_review: true', 'pr_review: false'],
+  ])('refuses conflict resolution after replacing %s with %s', (before, after) => {
+    const parsed = parseConfigText(configText.replace(before, after))
+
+    expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain('$.repositories[0].conflict_resolution')
+  })
+
   it('accepts the Portless dashboard origin', () => {
     const parsed = parseConfigText(configText)
 

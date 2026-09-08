@@ -33,6 +33,7 @@ import { findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './a
 import { formatPhaseDuration } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
+import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
@@ -853,11 +854,19 @@ type RepairPreflight
   = | { _tag: 'Authorized' }
     | { _tag: 'ActionRequired', reason: string }
 
-function repairPreflight(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean, access: Result<void, string>): RepairPreflight {
-  if (!canRepairPullRequestHead(task.repositoryMapping, task.pullRequest))
+export function repairPreflight(mapping: RepositoryMapping, snapshot: PullRequestReviewSnapshot, access: Result<void, string>): RepairPreflight {
+  if (snapshot.pullRequest.state !== 'open')
+    return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.closed }
+  if (snapshot.pullRequest.draft)
+    return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.draft }
+  if (snapshot.pullRequest.mergeState !== 'clean')
+    return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.conflict }
+  if (!canRepairPullRequestHead(mapping, snapshot.pullRequest))
     return { _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.' }
   if (access._tag === 'Err')
     return { _tag: 'ActionRequired', reason: access.error }
+  const repairsBaseline = snapshot.pullRequest.purpose._tag === 'BaselineRepair'
+    || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
   const baseAllowsRepair = snapshot.baseChecks._tag === 'Available'
     && (snapshot.baseChecks.checks.length === 0 || checksGate(snapshot.baseChecks, 'base-ci', 'Pending').state._tag === 'Passed')
   if (!repairsBaseline && !baseAllowsRepair)
@@ -1161,14 +1170,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const storedRun = task.state.fence > 1 && stored._tag === 'Current' ? stored.run : undefined
       if (storedRun !== undefined) {
         const repairAccess = await options.preflightRepair(task.repository, signal)
-        const repairsBaseline = snapshot.value.pullRequest.purpose._tag === 'BaselineRepair'
-          || (basesDefaultBranch(snapshot.value.pullRequest, task.repositoryMapping) && headRepairsFailedBaseChecks(snapshot.value))
         return projectReviewRun(
           options,
           task,
           snapshot.value,
           storedRun,
-          repairPreflight(task, snapshot.value, repairsBaseline, repairAccess),
+          repairPreflight(task.repositoryMapping, snapshot.value, repairAccess),
           signal,
         )
       }
@@ -1271,7 +1278,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // The Review run records which Agent provider and model answered, so the
       // runtime is read once and reused for the whole review.
       const reviewRuntime = options.runtime()
-      const preflight = repairPreflight(task, snapshot.value, repairsBaseline, repairAccess)
+      const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess)
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       // The slug comes from the primary checkout, never from this worktree.
       const memory = options.claudeHome === undefined
@@ -1378,7 +1385,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         findings,
         feedback: null,
         publications: [],
-      }, preflight, signal)
+      }, repairPreflight(task.repositoryMapping, frozen.value, await options.preflightRepair(task.repository, signal)), signal)
     },
   }
 }

@@ -732,6 +732,14 @@ export interface JournalStore extends BatchStore {
     fence: number
     at: string
   }) => ReviewFixQueueResult
+  /** Queues a completed Review's deferred Repair once its current base permits it. */
+  queueReviewFixForGate: (input: {
+    reviewRunId: string
+    revisionId: string
+    headSha: string
+    baseSha: string
+    at: string
+  }) => ReviewFixQueueResult
   /** Stores one Repair Agent's report under its fenced lease, before its commit is staged. */
   recordRepairReport: (input: { taskId: string, workerId: string, fence: number, at: string, summary: string, checks: string[] }) => boolean
   queueBaselineRepairForReview: (input: {
@@ -2707,11 +2715,9 @@ function requiresIssueApproval(mapping: RepositoryMapping, author: string): bool
 }
 
 function canWritePullRequestHead(mapping: RepositoryMapping, subject: GitHubPullRequestItem): boolean {
-  return mapping.ownership === 'owned'
+  return canRepairPullRequestHead(mapping, subject)
     && subject.headRepository.toLowerCase() === mapping.github.toLowerCase()
     && mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
-    && mapping.writablePullRequestHeadPrefixes.some(prefix => subject.headRef.startsWith(prefix))
-    && subject.headRef !== mapping.defaultBranch
 }
 
 function pullRequestApprovalState(database: DatabaseSync, input: {
@@ -2978,9 +2984,7 @@ function dashboardQueue(
     if (subject.draft)
       return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Draft pull request.' } }]
     if (subject.mergeState === 'conflicting') {
-      const reason = mapping.ownership === 'maintained'
-        ? 'Conflict resolution is off for maintained repositories. Resolve the merge conflicts on GitHub.'
-        : 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.'
+      const reason = 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.'
       return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason } }]
     }
     if (subject.mergeState === 'unknown')
@@ -4500,7 +4504,7 @@ function planIssueTriage(
       && issueTriageState(existing.evidence) === 'READY_TO_IMPLEMENT'
       && subject.kind === 'issue'
       && canWorkIssues(mapping)
-      && (!requiresIssueApproval(mapping, subject.author) || issuePublicationLostBase(database, subjectId, revisionId))
+      && (!requiresIssueApproval(mapping, subject.author) || retainsIssueWorkApproval(database, subjectId, revisionId))
     ) {
       queueIssueWork(database, subjectId, revisionId, subject, mapping, observedAt)
     }
@@ -4525,6 +4529,15 @@ function issuePublicationLostBase(database: DatabaseSync, subjectId: number, rev
       AND publication_commands.state_tag = 'Superseded' AND publication_commands.reason = tasks.reason
       AND publication_commands.outcome_unknown = 0
   `).get(subjectId, revisionId) !== undefined
+}
+
+/** Controller recovery preserves Approval for the same Issue Revision. */
+function retainsIssueWorkApproval(database: DatabaseSync, subjectId: number, revisionId: string): boolean {
+  return issuePublicationLostBase(database, subjectId, revisionId) || database.prepare(`
+    SELECT 1 FROM tasks
+    WHERE subject_id = ? AND revision_id = ? AND kind = 'issue_work'
+      AND state_tag = 'Superseded' AND reason = ?
+  `).get(subjectId, revisionId, freshIssueTriageReason) !== undefined
 }
 
 function queueIssueWork(
@@ -4576,7 +4589,7 @@ function queueIssueWork(
           taskId,
           from: 'Superseded',
           to: 'Queued',
-          reason: 'Fresh issue triage was approved.',
+          reason: 'Fresh Issue triage confirmed the approved work.',
           fence: existing.fence,
           at,
         })
@@ -8263,6 +8276,47 @@ export function openJournalStore(
     }
   }
 
+  const queueReviewFixForGate: JournalStore['queueReviewFixForGate'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      // Recheck eligibility after the GitHub read. A concurrent sweep, changed
+      // head, cancellation, or Dismissal must not start another Repair.
+      const review = listReviewGateRefreshes().find(candidate =>
+        candidate.reviewRunId === input.reviewRunId
+        && candidate.revisionId === input.revisionId
+        && candidate.headSha === input.headSha)
+      const row = review === undefined
+        ? undefined
+        : database.prepare(`
+        SELECT subjects.id AS subject_id, revisions.payload, repositories.policy_json
+        FROM subjects
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE revisions.id = ?
+          AND json_extract(revisions.payload, '$.baseSha') = ?
+      `).get(input.revisionId, input.baseSha) as {
+          subject_id: number
+          payload: string
+          policy_json: string
+        } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'ActionRequired', reason: 'The pull request changed before Repair was queued.' }
+      }
+      const subject = JSON.parse(row.payload) as GitHubPullRequestItem
+      const mapping = JSON.parse(row.policy_json) as RepositoryMapping
+      const plan = planReviewFix(database, subject, row.subject_id, input.revisionId, input.at, mapping)
+      database.exec('COMMIT')
+      return plan._tag === 'Planned'
+        ? { _tag: 'Queued', taskId: plan.taskId, rounds: plan.rounds }
+        : { _tag: 'ActionRequired', reason: plan.reason }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recordRepairReport: JournalStore['recordRepairReport'] = (input) => {
     const owned = database.prepare(`
       SELECT 1 FROM tasks
@@ -8780,7 +8834,7 @@ export function openJournalStore(
           if (
             subject.kind === 'issue'
             && canWorkIssues(mapping)
-            && !requiresIssueApproval(mapping, subject.author)
+            && (!requiresIssueApproval(mapping, subject.author) || retainsIssueWorkApproval(database, row.subject_id, row.revision_id))
             && issueTriageState(input.evidence) === 'READY_TO_IMPLEMENT'
           ) {
             queueIssueWork(database, row.subject_id, row.revision_id, subject, mapping, input.at)
@@ -12064,7 +12118,7 @@ export function openJournalStore(
     }
   }
 
-  /** Every published clean Review whose merge or CI gate can still move. */
+  /** Published Reviews with moving gates or a Repair that has not started. */
   const listReviewGateRefreshes: JournalStore['listReviewGateRefreshes'] = () => (database.prepare(`
     WITH ranked AS (
       SELECT review_runs.*,
@@ -12110,7 +12164,40 @@ export function openJournalStore(
       LIMIT 1
     )
     WHERE ranked.run_rank = 1
-      AND json_extract(ranked.gates, '$.review._tag') = 'Passed'
+      AND (
+        json_extract(ranked.gates, '$.review._tag') = 'Passed'
+        OR (
+          json_extract(ranked.gates, '$.review._tag') = 'Failed'
+          AND EXISTS (
+            SELECT 1 FROM json_each(ranked.findings) AS finding
+            WHERE json_extract(finding.value, '$._tag') = 'Open'
+              AND COALESCE(json_extract(finding.value, '$.resolution'), 'Repair') = 'Repair'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(ranked.findings) AS finding
+            WHERE json_extract(finding.value, '$._tag') = 'Open'
+              AND json_extract(finding.value, '$.resolution') = 'Dismissal'
+          )
+          AND EXISTS (
+            SELECT 1 FROM review_evidence_scopes
+            WHERE review_evidence_scopes.review_run_id = ranked.id
+              AND review_evidence_scopes.policy_digest = repositories.policy_digest
+          )
+          -- A stopped Repair needs a newer Review before another round.
+          -- Base movement alone must not restore its retry budget.
+          AND NOT EXISTS (
+            SELECT 1 FROM tasks AS repair
+            JOIN revisions AS repaired ON repaired.id = repair.revision_id
+            WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
+              AND json_extract(repaired.payload, '$.headSha') = ranked.head_sha
+              AND (
+                repair.updated_at >= ranked.started_at
+                OR repair.state_tag IN ('Queued', 'Running', 'Publishing', 'Completed')
+                OR EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = repair.id)
+              )
+          )
+        )
+      )
       AND published.result_tag = 'Published'
       AND repositories.enabled = 1
       ${repositoryWriteAuthoritySql}
@@ -12119,6 +12206,15 @@ export function openJournalStore(
       AND ranked.revision_id = subjects.current_revision_id
       AND json_extract(current_revisions.payload, '$.state') = 'open'
       AND json_extract(current_revisions.payload, '$.headSha') = ranked.head_sha
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = ranked.subject_id)
+      AND NOT EXISTS (
+        SELECT 1 FROM task_cancellations
+        JOIN worker_tasks AS cancelled ON cancelled.id = task_cancellations.task_id
+        JOIN revisions AS cancelled_revision ON cancelled_revision.id = cancelled.revision_id
+        WHERE cancelled.subject_id = ranked.subject_id AND cancelled.kind = 'adversarial_review'
+          AND json_extract(cancelled_revision.payload, '$.headSha') = ranked.head_sha
+          AND task_cancellations.cancelled_at >= ranked.started_at
+      )
       AND NOT EXISTS (
         SELECT 1 FROM worker_tasks AS live
         WHERE live.subject_id = ranked.subject_id AND live.kind = 'adversarial_review'
@@ -12128,6 +12224,7 @@ export function openJournalStore(
         SELECT 1 FROM tasks AS repair
         WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
           AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+          AND (repair.state_tag != 'ActionRequired' OR repair.updated_at >= ranked.started_at)
       )
     ORDER BY repositories.github, subjects.github_number
   `).all() as unknown as ReviewGateRefreshRow[]).map(row => ({
@@ -13795,6 +13892,7 @@ export function openJournalStore(
     claimNextIssueWorkTask,
     claimNextReviewFixTask,
     queueReviewFixTaskForReview,
+    queueReviewFixForGate,
     recordRepairReport,
     queueBaselineRepairForReview,
     queueBaselineRepairForGate,
