@@ -243,7 +243,7 @@ If GitHub closes a pull request, publish `MERGED` or `CLOSED`. Clear every Agent
 
 Before trusting a locally inferred close, read that exact pull request from GitHub. Store comment and label cleanup separately from the Task that last owned the comment. Resume incomplete cleanup after restart.
 
-Before dispatch, detect trusted marked comments for the current head commit. A terminal comment completes the queued review unless Harlan explicitly requests a rerun. An active comment is status only. Use local Task ownership to decide whether an Agent still runs.
+Treat trusted marked comments as status only. Complete queued Review only when stored Review evidence matches the current head commit, target branch, and repository policy. If Harlan requests a rerun, dispatch fresh Review. Use local Task ownership to decide whether an Agent still runs.
 
 Allow Harlan to rerun the current head commit from the dashboard or with the exact pull request comment `/harlan-agent rerun`. GitHub does not autocomplete regular GitHub Apps as native agents. Reject GitHub rerun commands from every other author. Store the command identity before queueing work. Repeated polls must not queue it twice.
 
