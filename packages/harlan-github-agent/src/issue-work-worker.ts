@@ -187,8 +187,10 @@ function salvagedTitle(response: string): Promise<string | undefined> {
   return Promise.resolve(unwrapJsonResponse(response))
     .then(value => JSON.parse(value) as AgentResponsePayload)
     .then(value => typeof value.pullRequestTitle === 'string' && isPullRequestSubject(value.pullRequestTitle) ? value.pullRequestTitle : undefined)
-    // Unparseable JSON names no title; the caller already logged the answer.
-    .catch(() => undefined)
+    .catch(() => {
+      // Unparseable JSON names no title; the caller already logged the answer.
+      return undefined
+    })
 }
 
 function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: string, issueNumbers: readonly number[], salvaged: string | undefined): ImplementedAgentResponse {

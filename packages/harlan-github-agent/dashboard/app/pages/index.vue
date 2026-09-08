@@ -19,6 +19,9 @@ const { snapshot, loading, relativeTime, setAgentControl, controlPending } = use
 const workFilter = ref<AgentRole | 'all'>('all')
 
 const columns = computed(() => boardColumns(snapshot.value, workFilter.value))
+const attentionOwner = ref<'You' | 'Agent'>('You')
+const attentionCards = computed(() => attentionOwner.value === 'You' ? columns.value.needsYou : columns.value.agentTasks)
+const attentionLabel = computed(() => attentionOwner.value === 'You' ? 'Needs you' : 'Agent tasks')
 /** Chips come from the whole board, so choosing one never hides the others. */
 const workKinds = computed(() => presentWorkKinds(boardColumns(snapshot.value)))
 const incidents = computed(() => incidentEntries(snapshot.value.incidents))
@@ -39,7 +42,7 @@ function setNeedsYouCard(index: number, component: unknown): void {
 }
 
 function focusCard(index: number): void {
-  const count = columns.value.needsYou.length
+  const count = attentionCards.value.length
   if (count === 0)
     return
   const next = Math.min(Math.max(index, 0), count - 1)
@@ -66,10 +69,14 @@ useEventListener('keydown', (event: KeyboardEvent) => {
   }
 })
 
-watch(() => columns.value.needsYou.length, (count) => {
+watch(() => attentionCards.value.length, (count) => {
   needsYouCards.value.length = count
   if (focused.value > count - 1)
     focused.value = count - 1
+})
+
+watch(attentionOwner, () => {
+  focused.value = -1
 })
 
 usePageTitle()
@@ -119,18 +126,42 @@ useHead({
     <!-- Question one. A list, capped at half the board, scrolling on its own. -->
     <section
       role="region"
-      aria-labelledby="needs-you-heading"
+      aria-labelledby="attention-heading"
       class="flex min-h-0 shrink-0 flex-col md:max-h-[50%]"
     >
-      <span id="needs-you-heading" class="sr-only">Needs you, {{ columns.needsYou.length }}</span>
-      <div class="px-2 pb-1">
-        <ColumnHeading label="Needs you" :count="columns.needsYou.length" :tone="columns.needsYou.length > 0 ? 'warning' : 'default'" />
+      <span id="attention-heading" class="sr-only">{{ attentionLabel }}, {{ attentionCards.length }}</span>
+      <div class="flex flex-wrap items-center gap-2 px-2 pb-2" role="group" aria-label="Who acts next">
+        <UButton
+          color="neutral"
+          class="min-h-11 md:min-h-0"
+          :variant="attentionOwner === 'You' ? 'outline' : 'ghost'"
+          :aria-pressed="attentionOwner === 'You'"
+          aria-controls="attention-list"
+          @click="attentionOwner = 'You'"
+        >
+          Needs you <span class="font-mono" :class="columns.needsYou.length > 0 ? 'text-warning' : 'text-dimmed'">{{ columns.needsYou.length }}</span>
+        </UButton>
+        <UButton
+          color="neutral"
+          class="min-h-11 md:min-h-0"
+          :variant="attentionOwner === 'Agent' ? 'outline' : 'ghost'"
+          :aria-pressed="attentionOwner === 'Agent'"
+          aria-controls="attention-list"
+          @click="attentionOwner = 'Agent'"
+        >
+          Agent tasks <span class="font-mono text-muted">{{ columns.agentTasks.length }}</span>
+        </UButton>
       </div>
-      <div v-if="loading" class="flex flex-col gap-px border-y border-default" aria-busy="true">
+      <p class="px-2 pb-2 text-sm text-muted">
+        {{ attentionOwner === 'You'
+          ? 'Your decisions, permissions, or account access. Each row explains what is needed.'
+          : 'An agent can handle these next steps. They are not queued. Open a task to copy its instructions.' }}
+      </p>
+      <div v-if="loading" id="attention-list" class="flex flex-col gap-px border-y border-default" aria-busy="true">
         <USkeleton v-for="row in 3" :key="row" class="h-8 rounded-sm" />
       </div>
-      <ul v-else-if="columns.needsYou.length > 0" class="min-h-0 divide-y divide-muted border-y border-default md:overflow-y-auto" role="list">
-        <li v-for="(card, index) in columns.needsYou" :key="card.key">
+      <ul v-else-if="attentionCards.length > 0" id="attention-list" :aria-label="attentionLabel" class="min-h-0 divide-y divide-muted border-y border-default md:overflow-y-auto" role="list">
+        <li v-for="(card, index) in attentionCards" :key="card.key">
           <BoardCard
             :ref="component => setNeedsYouCard(index, component)"
             :card="card"
@@ -138,8 +169,8 @@ useHead({
           />
         </li>
       </ul>
-      <p v-else class="border-y border-default px-2 py-2 text-sm text-dimmed">
-        {{ emptyReason('needsYou').text }}
+      <p v-else id="attention-list" class="border-y border-default px-2 py-2 text-sm text-dimmed">
+        {{ attentionOwner === 'You' ? emptyReason('needsYou').text : 'No agent tasks need follow-up.' }}
       </p>
     </section>
 

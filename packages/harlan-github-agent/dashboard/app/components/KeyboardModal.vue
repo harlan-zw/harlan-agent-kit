@@ -3,7 +3,7 @@
 const open = defineModel<boolean>('open', { default: false })
 
 const shortcuts = [
-  { keys: ['j', 'k'], action: 'Move through Needs you' },
+  { keys: ['j', 'k'], action: 'Move through the selected list' },
   { keys: ['a'], action: 'Press the primary action on the focused card' },
   { keys: ['/'], action: 'Focus the Watching filter' },
   { keys: ['?'], action: 'Open this list' },

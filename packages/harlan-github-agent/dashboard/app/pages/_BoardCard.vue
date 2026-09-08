@@ -226,7 +226,7 @@ const confirmOpen = computed({
  * Done is a one-line row, because an outcome is read, not decided.
  */
 const shape = computed<'row' | 'card' | 'done'>(() => {
-  if (card._tag === 'NeedsYou')
+  if (card._tag === 'NeedsYou' || card._tag === 'AgentTask')
     return 'row'
   return card._tag === 'Done' ? 'done' : 'card'
 })
@@ -246,7 +246,7 @@ const stateDot = computed<{ tone: 'success' | 'warning' | 'error' | 'neutral', l
 const meta = computed(() => {
   if (card._tag === 'Running' && agent.value !== undefined)
     return stalled.value ? stalledLabel(agent.value, now.value) : (phase.value ?? 'Working')
-  return stateLine.value?.text ?? ''
+  return recommendation.value?.summary ?? stateLine.value?.text ?? ''
 })
 
 const doneAge = computed(() => card._tag === 'Done' ? shortAge(card.record.at, now.value) : '')
@@ -281,7 +281,7 @@ defineExpose({
     -->
     <div
       v-if="shape === 'row' && identity"
-      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_14rem] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
+      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:[grid-template-areas:'dot_avatar_title_actions'_'dot_avatar_repository_actions'_'dot_avatar_meta_actions'] md:grid-cols-[8px_20px_minmax(0,1fr)_14rem] lg:min-h-12 lg:gap-y-0 lg:py-1.5 lg:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] lg:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_14rem] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
     >
       <LiveDot class="[grid-area:dot]" :tone="badge.tone" :label="badge.label" />
       <a :href="`https://github.com/${identity.author}`" target="_blank" rel="noreferrer" class="flex [grid-area:avatar]" :title="`@${identity.author}`">
@@ -295,9 +295,14 @@ defineExpose({
       <p class="min-w-0 truncate text-sm text-muted [grid-area:repository]">
         <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
       </p>
-      <p class="min-w-0 truncate text-sm text-muted [grid-area:meta]" :title="meta">
-        {{ meta }}
-      </p>
+      <div class="min-w-0 text-sm [grid-area:meta]">
+        <p v-if="recommendation" class="whitespace-nowrap text-sm font-medium lg:text-xs" :class="recommendation.owner === 'You' ? 'text-warning' : 'text-muted'">
+          {{ recommendation.blocker }}
+        </p>
+        <p class="text-muted lg:truncate" :title="meta">
+          {{ meta }}
+        </p>
+      </div>
       <div class="flex items-center justify-end gap-1 [grid-area:actions]">
         <UButton
           v-if="primaryLabel"
@@ -305,6 +310,8 @@ defineExpose({
           size="xs"
           class="min-h-11 shrink-0 whitespace-nowrap md:min-h-0"
           :loading="primaryPending"
+          :color="recommendation?.owner === 'Agent' ? 'neutral' : 'primary'"
+          :variant="recommendation?.owner === 'Agent' ? 'outline' : 'solid'"
           :disabled="busy && (recommendation?._tag === 'Approve' || recommendation?._tag === 'Dismiss')"
           :to="recommendation?._tag === 'OpenGitHub' ? recommendation.url : undefined"
           :target="recommendation?._tag === 'OpenGitHub' ? '_blank' : undefined"
@@ -322,7 +329,7 @@ defineExpose({
             variant="ghost"
             size="xs"
             square
-            :class="menuButtonClass"
+            :class="[menuButtonClass, shape === 'row' ? 'min-h-11 min-w-11 md:min-h-0 md:min-w-0' : undefined]"
             :aria-label="`More actions for ${identity.repository} number ${identity.number}`"
           />
         </UDropdownMenu>
@@ -352,7 +359,7 @@ defineExpose({
           size="xs"
           square
           class="-me-1.5"
-          :class="menuButtonClass"
+          :class="[menuButtonClass, shape === 'row' ? 'min-h-11 min-w-11 md:min-h-0 md:min-w-0' : undefined]"
           :aria-label="identity ? `More actions for ${identity.repository} number ${identity.number}` : 'More actions'"
         />
       </UDropdownMenu>
@@ -385,7 +392,7 @@ defineExpose({
             size="xs"
             square
             class="-my-1 -me-1"
-            :class="menuButtonClass"
+            :class="[menuButtonClass, shape === 'row' ? 'min-h-11 min-w-11 md:min-h-0 md:min-w-0' : undefined]"
             :aria-label="identity ? `More actions for ${identity.repository} number ${identity.number}` : 'More actions'"
           />
         </UDropdownMenu>

@@ -563,7 +563,13 @@ One fixed date. Ignore issues created before this date. Do not derive it from th
 
 ### Action required
 
-An Item or Task that requires Harlan's decision or action.
+An Item or Task whose next action cannot start through the scheduler.
+
+The Dashboard separates these by who acts next.
+**Needs you** contains human decisions, permissions, information requests, and blockers whose owner is unclear.
+**Agent tasks** contains specs, evidence gathering, repairs, check investigations, and stopped Agent work.
+Agent tasks are not queued or running. Opening their instructions starts no Agent.
+Only Needs you contributes to the document count and browser notifications.
 
 `action_required` is GitHub's own check conclusion for the same situation, so this service reuses it.
 

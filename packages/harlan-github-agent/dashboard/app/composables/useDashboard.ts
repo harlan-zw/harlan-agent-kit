@@ -14,7 +14,7 @@ import { createSharedComposable, formatTimeAgo, useBrowserLocation, useDocumentV
 import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import {
   agentStartState,
-  decisionEntries,
+  humanDecisionEntries,
   incidentEntries,
   isSnapshotStale,
   taskNumber,
@@ -97,7 +97,7 @@ function createDashboard() {
   const activeAgents = computed(() => snapshot.value.agents.filter((agent): agent is ActiveAgent => agent._tag === 'ActiveAgent'))
   const reviewAgents = computed(() => snapshot.value.agents.filter((agent): agent is ReviewAgent => agent._tag === 'ReviewAgent'))
   const agentStart = computed(() => agentStartState(snapshot.value))
-  const decisions = computed(() => decisionEntries(snapshot.value.queue))
+  const decisions = computed(() => humanDecisionEntries(snapshot.value))
   /** Errors first, then newest. The chip, the Incident row, and the pane all read this one order. */
   const incidents = computed(() => incidentEntries(snapshot.value.incidents))
   const unhealthyRepositories = computed(() => snapshot.value.repositories.filter(repository => repository.lastError !== null).length)

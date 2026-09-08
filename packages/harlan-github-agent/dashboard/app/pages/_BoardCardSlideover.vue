@@ -45,7 +45,7 @@ const open = defineModel<boolean>('open', { default: false })
 const { snapshot, now, relativeTime, duration } = useDashboard()
 const { copy, copied } = useClipboard()
 const copyError = ref<string>()
-const copiedTask = computed(() => recommendation?._tag === 'Inspect'
+const copiedTask = computed(() => recommendation?._tag === 'Inspect' && recommendation.owner === 'Agent'
   && card._tag !== 'Running' && card._tag !== 'Done'
   ? recommendationTask(card.entry, recommendation)
   : undefined)
@@ -157,10 +157,16 @@ const canEject = computed(() => card._tag === 'Running' && card.agent.session._t
 
         <div v-if="recommendation" class="space-y-2">
           <p class="field-label">
-            Recommended: {{ recommendation.label }}
+            {{ recommendation.owner === 'You' ? 'You act next' : 'An agent acts next' }} · {{ recommendation.blocker }}
           </p>
-          <p class="text-sm text-default">
+          <p class="text-sm font-medium text-default">
+            {{ recommendation.summary }}
+          </p>
+          <p class="text-sm text-muted">
             {{ recommendation.description }}
+          </p>
+          <p v-if="recommendation._tag === 'Inspect' && recommendation.owner === 'You'" class="whitespace-pre-wrap text-sm text-default">
+            {{ recommendation.instructions }}
           </p>
           <pre v-if="copiedTask" class="whitespace-pre-wrap break-words text-sm font-sans text-default">{{ copiedTask }}</pre>
           <p v-if="copyError" role="alert" class="text-sm text-error">
@@ -214,12 +220,12 @@ const canEject = computed(() => card._tag === 'Running' && card.agent.session._t
     </template>
 
     <template #footer>
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2 [&_button]:min-h-11 [&_a]:min-h-11 md:[&_button]:min-h-0 md:[&_a]:min-h-0">
         <UButton v-if="copiedTask" size="sm" :icon="copied ? 'i-octicon-check-16' : 'i-octicon-copy-16'" @click="copyTask">
           {{ copied ? 'Copied' : 'Copy task' }}
         </UButton>
         <UButton
-          v-else-if="recommendation"
+          v-else-if="recommendation && recommendation._tag !== 'Inspect'"
           size="sm"
           :loading="primaryPending"
           :disabled="busy && recommendation._tag !== 'OpenGitHub'"

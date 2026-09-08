@@ -20,6 +20,7 @@ import type {
   SelectionMode,
 } from '../../../src/types.ts'
 import { hasSpendableCapacity } from '../../../src/capacity.ts'
+import { queueAttention } from './attention.ts'
 
 /** A progress label older than this means the agent may be wedged, not working. */
 export const stalledProgressSeconds = 120
@@ -792,8 +793,14 @@ export function activeEntries(queue: QueueEntry[], activeAgents: ActiveAgent[]):
  * One card on the board. The variant is the column, decided once from state,
  * so an entry can never render in two places or in none.
  */
+/** Only human actions contribute to the board, document, and notification counts. */
+export function humanDecisionEntries(snapshot: DashboardSnapshot): QueueEntry[] {
+  return decisionEntries(snapshot.queue).filter(entry => queueAttention(entry, snapshot)?.owner === 'You')
+}
+
 export type BoardCard
   = | { _tag: 'NeedsYou', key: string, entry: QueueEntry }
+    | { _tag: 'AgentTask', key: string, entry: QueueEntry, work: AgentRole }
     | { _tag: 'Queued', key: string, entry: QueueEntry }
     | { _tag: 'Waiting', key: string, entry: QueueEntry }
     | { _tag: 'Running', key: string, agent: ActiveAgent }
@@ -802,6 +809,7 @@ export type BoardCard
 
 export interface BoardColumns {
   needsYou: BoardCard[]
+  agentTasks: BoardCard[]
   queued: BoardCard[]
   waiting: BoardCard[]
   running: BoardCard[]
@@ -820,6 +828,7 @@ function entryKey(entry: QueueEntry): string {
 /** The work a card is for, or undefined for a condition that names none. */
 export function boardCardWork(card: BoardCard): AgentRole | undefined {
   switch (card._tag) {
+    case 'AgentTask': return card.work
     case 'Running': return card.agent.role
     case 'Done': return card.record._tag === 'Review'
       ? 'adversarial_review'
@@ -845,7 +854,20 @@ export function boardColumns(snapshot: DashboardSnapshot, filter: AgentRole | 'a
   const finished = finishedRecords(snapshot)
   const done = finished.map((record): BoardCard => ({ _tag: 'Done', key: record.key, record })).filter(keep)
   return {
-    needsYou: decisionEntries(snapshot.queue).map((entry): BoardCard => ({ _tag: 'NeedsYou', key: entryKey(entry), entry })).filter(keep),
+    needsYou: humanDecisionEntries(snapshot).map((entry): BoardCard => ({ _tag: 'NeedsYou', key: entryKey(entry), entry })).filter(keep),
+    agentTasks: decisionEntries(snapshot.queue).flatMap((entry): BoardCard[] => {
+      const attention = queueAttention(entry, snapshot)
+      if (attention?.owner !== 'Agent')
+        return []
+      const roles = {
+        Spec: 'issue_triage',
+        Evidence: 'issue_triage',
+        Repair: 'review_fix',
+        Checks: 'adversarial_review',
+        Recovery: 'issue_work',
+      } as const
+      return [{ _tag: 'AgentTask', key: entryKey(entry), entry, work: roles[attention._tag] }]
+    }).filter(keep),
     queued: queued
       .filter(entry => !isIssueWorkThrottled(entry, context))
       .map((entry): BoardCard => ({ _tag: 'Queued', key: entryKey(entry), entry }))
@@ -872,6 +894,7 @@ export function presentWorkKinds(columns: BoardColumns): Array<[AgentRole, WorkC
       present.add(work)
   })
   collect(columns.needsYou)
+  collect(columns.agentTasks)
   collect(columns.queued)
   collect(columns.waiting)
   collect(columns.running)
@@ -974,6 +997,7 @@ export function boardCardBadge(card: BoardCard): CardBadge {
     case 'NeedsYou': return card.entry.state._tag === 'ActionRequired'
       ? { label: 'Action required', tone: 'error', uppercase: false }
       : { label: 'Approval required', tone: 'warning', uppercase: false }
+    case 'AgentTask': return { label: 'Not queued', tone: 'neutral', uppercase: false }
     case 'Queued': return { label: 'Queued', tone: 'neutral', uppercase: false }
     case 'Waiting': return { label: 'Waiting', tone: 'neutral', uppercase: false }
     case 'Running': return { label: 'Running', tone: 'success', uppercase: false }
