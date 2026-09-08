@@ -552,6 +552,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           _tag: 'OpenPullRequest',
           taskKind: 'issue_work',
           issueNumber: task.issueNumber,
+          combinedIssueNumbers: combinedIssues.map(issue => issue.number),
           pullRequestTitle: response.pullRequestTitle,
           pullRequestBody: response.pullRequestBody,
           diagram: drawn._tag === 'Drawn' ? drawn.diagram : null,

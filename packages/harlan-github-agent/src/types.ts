@@ -1090,6 +1090,8 @@ export type PublicationCommand
     _tag: 'OpenPullRequest'
     taskKind: 'issue_work'
     issueNumber: number
+    /** Additional issues covered by this exact publication. Omitted for a single issue. */
+    combinedIssueNumbers?: readonly number[]
     pullRequestTitle: string
     pullRequestBody: string
     /** The drawn PR Lens picture the description opens with, or null when the change earned none. */
