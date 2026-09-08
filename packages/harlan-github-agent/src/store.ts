@@ -1202,6 +1202,7 @@ interface ClaimRow extends TaskRow {
 }
 
 interface ReviewRunRow {
+  base_ref: string | null
   id: string
   repository: string
   github_number: number
@@ -2587,6 +2588,7 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,
     headSha: row.head_sha,
+    baseRef: row.base_ref,
     provider: row.provider,
     sessionId: row.session_id,
     model: row.model,
@@ -3962,7 +3964,8 @@ function planReviewFix(
  * while it works, when the base branch moves or GitHub recomputes mergeability,
  * and the Review rows follow the subject's current Revision. A write that names
  * the claimed Revision lands on the current one while both share the head
- * commit. A different head commit keeps the claimed id, and the caller's own
+ * commit and target branch. A changed target keeps the claimed id, so the write fails.
+ * A different head commit keeps the claimed id, and the caller's own
  * checks refuse it.
  */
 function currentSameHeadRevision(database: DatabaseSync, revisionId: string): string {
@@ -3974,6 +3977,7 @@ function currentSameHeadRevision(database: DatabaseSync, revisionId: string): st
     WHERE claimed.id = ? AND subjects.kind = 'pull_request'
       AND json_extract(current.payload, '$.state') = 'open'
       AND json_extract(current.payload, '$.headSha') = json_extract(claimed.payload, '$.headSha')
+      AND json_extract(current.payload, '$.baseRef') IS json_extract(claimed.payload, '$.baseRef')
   `).get(revisionId) as { current_id: string } | undefined
   return row?.current_id ?? revisionId
 }
@@ -3987,18 +3991,20 @@ function currentSameHeadRevision(database: DatabaseSync, revisionId: string): st
  * superseded, a READY verdict stopped refreshing, and a Repair lost its
  * findings. 208 Reviews died that way in one fortnight. Rows follow the head.
  *
+ * A different target branch changes the reviewed diff. Those rows stay on their original Revision.
  * Conflict resolution and Baseline repair answer a base commit, so they stay.
  */
 function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId: string, headSha: string): void {
   const sameHead = `
     SELECT id FROM revisions
     WHERE subject_id = ? AND id != ? AND json_extract(payload, '$.headSha') = ?
+      AND json_extract(payload, '$.baseRef') IS (SELECT json_extract(payload, '$.baseRef') FROM revisions WHERE id = ?)
   `
-  const sameHeadArgs = [subjectId, revisionId, headSha]
+  const sameHeadArgs = [subjectId, revisionId, headSha, revisionId]
   database.prepare(`
     UPDATE review_runs SET revision_id = ?
-    WHERE subject_id = ? AND head_sha = ? AND revision_id != ?
-  `).run(revisionId, subjectId, headSha, revisionId)
+    WHERE subject_id = ? AND revision_id IN (${sameHead})
+  `).run(revisionId, subjectId, ...sameHeadArgs)
   // A Review that queued a Baseline repair answers that base commit. It stays,
   // and the moved base gets a fresh Review that can read the repaired base.
   const waitsOnBaseline = `
@@ -4071,7 +4077,7 @@ function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId:
     UPDATE approval_prompt_comments SET revision_id = ?
     WHERE subject_id = ? AND revision_id IN (${sameHead})
   `).run(revisionId, subjectId, ...sameHeadArgs)
-  // A person approved this head commit, whatever the base was at the time.
+  // An Approval follows the head only while its target branch stays unchanged.
   database.prepare(`
     INSERT OR IGNORE INTO pull_request_approvals (subject_id, revision_id, kind, approved_at)
     SELECT subject_id, ?, kind, MIN(approved_at)
@@ -4288,9 +4294,11 @@ function planAdversarialReview(
       EXISTS (SELECT 1 FROM review_runs WHERE subject_id = ? AND revision_id = ?) AS revision_attempt,
       (SELECT review_runs.id FROM review_runs
         JOIN review_evidence_scopes ON review_evidence_scopes.review_run_id = review_runs.id
+        JOIN revisions AS reviewed ON reviewed.id = review_runs.revision_id
         WHERE review_runs.subject_id = ? AND review_runs.head_sha = ?
           AND review_runs.kind = 'adversarial_review'
           AND review_evidence_scopes.policy_digest = ?
+          AND json_extract(reviewed.payload, '$.baseRef') IS ?
         ORDER BY review_runs.completed_at DESC, review_runs.id DESC LIMIT 1) AS head_review_run_id
   `).get(
     subjectId,
@@ -4299,6 +4307,7 @@ function planAdversarialReview(
     subjectId,
     subject.kind === 'pull_request' ? subject.headSha : '',
     reviewPolicyDigest(mapping),
+    subject.kind === 'pull_request' ? subject.baseRef ?? null : null,
   ) as {
     any_attempt: number
     revision_attempt: number
@@ -6407,6 +6416,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       subjects.github_number,
       review_runs.revision_id,
       review_runs.head_sha,
+      json_extract(revisions.payload, '$.baseRef') AS base_ref,
       review_runs.provider,
       review_runs.session_id,
       review_runs.model,
@@ -7987,9 +7997,12 @@ export function openJournalStore(
           SELECT 1 FROM review_evidence_scopes
           WHERE review_evidence_scopes.review_run_id = review_runs.id
             AND review_evidence_scopes.policy_digest = repositories.policy_digest
+            AND json_extract(reviewed.payload, '$.baseRef') IS json_extract(current.payload, '$.baseRef')
         ) AS current
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN revisions AS reviewed ON reviewed.id = review_runs.revision_id
+      JOIN revisions AS current ON current.id = subjects.current_revision_id
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
@@ -8011,6 +8024,7 @@ export function openJournalStore(
         subjects.github_number,
         review_runs.revision_id,
         review_runs.head_sha,
+        json_extract(revisions.payload, '$.baseRef') AS base_ref,
         review_runs.provider,
         review_runs.session_id,
         review_runs.model,
@@ -8028,6 +8042,7 @@ export function openJournalStore(
         agent_feedback.updated_at AS feedback_updated_at
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN revisions ON revisions.id = review_runs.revision_id
       JOIN repositories ON repositories.id = subjects.repository_id
       LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
       LEFT JOIN agent_feedback ON agent_feedback.review_run_id = review_runs.id

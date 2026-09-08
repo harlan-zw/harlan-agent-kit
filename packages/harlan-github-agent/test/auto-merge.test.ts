@@ -28,6 +28,7 @@ function attempt(overrides: { headSha?: string, outcome?: ReviewOutcome, finding
     pullRequestNumber: 24,
     revisionId: 'revision-1',
     headSha: overrides.headSha ?? 'abc123',
+    baseRef: 'main',
     provider: 'codex',
     sessionId: 'session-1',
     model: 'gpt-5.6-sol',
@@ -107,6 +108,10 @@ describe('auto merge decision', () => {
     expect(decide({ pullRequest: { mergeState: 'conflicting' } })._tag).toBe('Hold')
     expect(decide({ pullRequest: { mergeState: 'unknown' } })._tag).toBe('Hold')
     expect(decide({ pullRequest: { state: 'closed' } })._tag).toBe('Hold')
+  })
+
+  it('holds when the same head was reviewed against a different target branch', () => {
+    expect(decide({ attempts: [{ ...attempt(), baseRef: 'fix/parent' }] })._tag).toBe('Hold')
   })
 
   it('holds when the READY review covers an older head commit', () => {
