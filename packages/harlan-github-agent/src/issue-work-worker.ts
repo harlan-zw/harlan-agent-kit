@@ -114,10 +114,11 @@ function withAiDisclosure(body: string): string {
 }
 
 const CONVENTIONAL_SUBJECT = /^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([^)]+\))?: \S/
+const GENERIC_ISSUE_SUBJECT = /: (?:resolve|fix|close|implement|address) (?:issues? )?#\d+(?:\s*(?:,|and)\s*#\d+)*[.!]?$/i
 
 /** A Conventional Commit subject short enough for GitHub to show whole. */
 function isPullRequestSubject(title: string): boolean {
-  return CONVENTIONAL_SUBJECT.test(title) && title.length < 70
+  return CONVENTIONAL_SUBJECT.test(title) && title.length < 70 && !GENERIC_ISSUE_SUBJECT.test(title)
 }
 
 /**
@@ -180,21 +181,21 @@ function closesLines(issueNumbers: readonly number[]): string {
  * The title the Agent chose, when its answer named one that fits.
  *
  * A body that breaks a template rule says nothing about the title beside it,
- * so the title survives the substitution. The generic controller title is for
- * an answer that named no usable title at all.
+ * so the title survives the substitution. An answer without a descriptive
+ * title needs correction before the controller can publish it.
  */
 function salvagedTitle(response: string): Promise<string | undefined> {
   return Promise.resolve(unwrapJsonResponse(response))
     .then(value => JSON.parse(value) as AgentResponsePayload)
-    .then(value => typeof value.pullRequestTitle === 'string' && isPullRequestSubject(value.pullRequestTitle) ? value.pullRequestTitle : undefined)
+    .then((value) => {
+      const title = typeof value.pullRequestTitle === 'string' ? value.pullRequestTitle.trim() : undefined
+      return title !== undefined && isPullRequestSubject(title) ? title : undefined
+    })
     // Unparseable JSON names no title; the caller already logged the answer.
     .catch(() => undefined)
 }
 
-function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: string, issueNumbers: readonly number[], salvaged: string | undefined): ImplementedAgentResponse {
-  const issueTitle = cleanLine(task.issue.title)
-  const title = salvaged
-    ?? (isPullRequestSubject(issueTitle) ? issueTitle : `fix: resolve issue #${task.issueNumber}`)
+function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: string, issueNumbers: readonly number[], title: string): ImplementedAgentResponse {
   const body = `${template.trimEnd()}\n\n${closesLines(issueNumbers)}`
   return {
     outcome: 'implemented',
@@ -227,17 +228,22 @@ function parseAgentResponse(text: string, issueNumbers: readonly number[], templ
       // Each rule names itself. One shared refusal told nobody which of five
       // rules the metadata broke, so the Incident a person read said only that
       // something was wrong, and a retry had nothing to correct.
-      const brokenRule = !CONVENTIONAL_SUBJECT.test(value.pullRequestTitle)
+      // Whitespace survives JSON round trips, and GENERIC_ISSUE_SUBJECT is
+      // anchored at the end, so an untrimmed placeholder escapes the check.
+      const pullRequestTitle = value.pullRequestTitle.trim()
+      const brokenRule = !CONVENTIONAL_SUBJECT.test(pullRequestTitle)
         ? 'the title is not a Conventional Commit subject'
-        : value.pullRequestTitle.length >= 70
+        : pullRequestTitle.length >= 70
           ? 'the title is 70 characters or longer'
-          : issueNumbers.some(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody))
-            ? `the body does not close ${issueNumbers.filter(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody)).map(number => `#${number}`).join(', ')}`
-            : /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(pullRequestBody)
-              ? 'the body adds a checks heading'
-              : preservesTemplate(pullRequestBody, template)
-                ? undefined
-                : 'the body drops part of the repository pull request template'
+          : !isPullRequestSubject(pullRequestTitle)
+              ? 'the title does not describe the change'
+              : issueNumbers.some(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody))
+                ? `the body does not close ${issueNumbers.filter(number => !new RegExp(`(?:closes|fixes|resolves)\\s+#${number}\\b`, 'i').test(pullRequestBody)).map(number => `#${number}`).join(', ')}`
+                : /^#{1,6} (?:checks?|testing|verification|qa)\b/im.test(pullRequestBody)
+                  ? 'the body adds a checks heading'
+                  : preservesTemplate(pullRequestBody, template)
+                    ? undefined
+                    : 'the body drops part of the repository pull request template'
       if (brokenRule !== undefined)
         return err(`The Agent returned invalid pull request text: ${brokenRule}.`)
       return ok({
@@ -245,7 +251,7 @@ function parseAgentResponse(text: string, issueNumbers: readonly number[], templ
         summary: value.summary,
         checks: value.checks as string[],
         commitMessage: value.commitMessage.replaceAll(/[\r\n]/g, ' ').replaceAll(/\s+/g, ' ').trim().slice(0, 240),
-        pullRequestTitle: value.pullRequestTitle,
+        pullRequestTitle,
         pullRequestBody,
       })
     })
@@ -262,6 +268,7 @@ Triage next action: ${triage.nextAction}`
 
 const pullRequestMetadataLines = `Pull request metadata contract:
 - pullRequestTitle is a Conventional Commit subject under 70 characters, for example "fix(parser): keep buffered bytes".
+- Describe the change in the title. Never use a placeholder such as "fix: resolve issue #12".
 - pullRequestBody keeps every heading, comment, and checklist of the trusted template below.
 - Tick the one type of change that matches.
 - The body closes every issue this pull request fixes, one "Closes #N" line each.
@@ -450,7 +457,16 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (sessionId === null)
         return err('The issue changed before work started.')
       const templateBody = pullRequestTemplateBody(template.value)
-      const turn = await runRepairedAgentTurn({ ...options, parse: response => parseAgentResponse(response, issueNumbers, templateBody) }, {
+      // A repair can lose a valid title while correcting the body. Keep the
+      // first descriptive title before either response is rejected.
+      let agentTitle: string | undefined
+      const turn = await runRepairedAgentTurn({
+        ...options,
+        parse: async (response) => {
+          agentTitle ??= await salvagedTitle(response)
+          return parseAgentResponse(response, issueNumbers, templateBody)
+        },
+      }, {
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.issueNumber,
@@ -478,17 +494,26 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       }, signal)
       if (turn._tag === 'Err')
         return turn
-      // A bad metadata envelope must not discard a finished patch. Review and
-      // Repair own code quality after publication, so the controller supplies
-      // safe PR metadata and keeps the Agent's work moving.
+      // Recover a usable title from either turn before substituting the body.
+      // If neither turn names the change, publication needs human attention.
       let response: ImplementedAgentResponse
       if (turn.value._tag === 'Unparsed') {
         options.activityLog?.record(task.id, {
           _tag: 'Reasoning',
           at: options.now().toISOString(),
-          text: `The agent response could not be parsed (${turn.value.reason}) and the controller substituted the pull request metadata. Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
+          text: `The Agent response could not be parsed (${turn.value.reason}). Raw response: ${truncateOutput(redactSecrets(turn.value.response))}`,
         })
-        response = controllerIssueMetadata(task, templateBody, issueNumbers, await salvagedTitle(turn.value.response))
+        const issueTitle = cleanLine(task.issue.title)
+        const title = agentTitle ?? (isPullRequestSubject(issueTitle) ? issueTitle : undefined)
+        if (title === undefined) {
+          return ok({
+            _tag: 'ActionRequired',
+            reason: 'The Agent did not return a descriptive pull request title.',
+            evidence: turn.value.reason,
+            usage: turn.value.usage,
+          })
+        }
+        response = controllerIssueMetadata(task, templateBody, issueNumbers, title)
       }
       else {
         if (turn.value.value.outcome === 'blocked') {

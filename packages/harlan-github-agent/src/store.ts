@@ -2715,11 +2715,9 @@ function requiresIssueApproval(mapping: RepositoryMapping, author: string): bool
 }
 
 function canWritePullRequestHead(mapping: RepositoryMapping, subject: GitHubPullRequestItem): boolean {
-  return mapping.ownership === 'owned'
+  return canRepairPullRequestHead(mapping, subject)
     && subject.headRepository.toLowerCase() === mapping.github.toLowerCase()
     && mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
-    && mapping.writablePullRequestHeadPrefixes.some(prefix => subject.headRef.startsWith(prefix))
-    && subject.headRef !== mapping.defaultBranch
 }
 
 function pullRequestApprovalState(database: DatabaseSync, input: {
@@ -2986,9 +2984,7 @@ function dashboardQueue(
     if (subject.draft)
       return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Draft pull request.' } }]
     if (subject.mergeState === 'conflicting') {
-      const reason = mapping.ownership === 'maintained'
-        ? 'Conflict resolution is off for maintained repositories. Resolve the merge conflicts on GitHub.'
-        : 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.'
+      const reason = 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.'
       return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason } }]
     }
     if (subject.mergeState === 'unknown')
