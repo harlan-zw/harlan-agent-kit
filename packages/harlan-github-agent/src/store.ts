@@ -732,6 +732,14 @@ export interface JournalStore extends BatchStore {
     fence: number
     at: string
   }) => ReviewFixQueueResult
+  /** Queues a completed Review's deferred Repair once its current base permits it. */
+  queueReviewFixForGate: (input: {
+    reviewRunId: string
+    revisionId: string
+    headSha: string
+    baseSha: string
+    at: string
+  }) => ReviewFixQueueResult
   /** Stores one Repair Agent's report under its fenced lease, before its commit is staged. */
   recordRepairReport: (input: { taskId: string, workerId: string, fence: number, at: string, summary: string, checks: string[] }) => boolean
   queueBaselineRepairForReview: (input: {
@@ -8263,6 +8271,47 @@ export function openJournalStore(
     }
   }
 
+  const queueReviewFixForGate: JournalStore['queueReviewFixForGate'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      // Recheck eligibility after the GitHub read. A concurrent sweep, changed
+      // head, cancellation, or Dismissal must not start another Repair.
+      const review = listReviewGateRefreshes().find(candidate =>
+        candidate.reviewRunId === input.reviewRunId
+        && candidate.revisionId === input.revisionId
+        && candidate.headSha === input.headSha)
+      const row = review === undefined
+        ? undefined
+        : database.prepare(`
+        SELECT subjects.id AS subject_id, revisions.payload, repositories.policy_json
+        FROM subjects
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE revisions.id = ?
+          AND json_extract(revisions.payload, '$.baseSha') = ?
+      `).get(input.revisionId, input.baseSha) as {
+          subject_id: number
+          payload: string
+          policy_json: string
+        } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'ActionRequired', reason: 'The pull request changed before Repair was queued.' }
+      }
+      const subject = JSON.parse(row.payload) as GitHubPullRequestItem
+      const mapping = JSON.parse(row.policy_json) as RepositoryMapping
+      const plan = planReviewFix(database, subject, row.subject_id, input.revisionId, input.at, mapping)
+      database.exec('COMMIT')
+      return plan._tag === 'Planned'
+        ? { _tag: 'Queued', taskId: plan.taskId, rounds: plan.rounds }
+        : { _tag: 'ActionRequired', reason: plan.reason }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recordRepairReport: JournalStore['recordRepairReport'] = (input) => {
     const owned = database.prepare(`
       SELECT 1 FROM tasks
@@ -12064,7 +12113,7 @@ export function openJournalStore(
     }
   }
 
-  /** Every published clean Review whose merge or CI gate can still move. */
+  /** Published Reviews with moving gates or a Repair that has not started. */
   const listReviewGateRefreshes: JournalStore['listReviewGateRefreshes'] = () => (database.prepare(`
     WITH ranked AS (
       SELECT review_runs.*,
@@ -12110,7 +12159,35 @@ export function openJournalStore(
       LIMIT 1
     )
     WHERE ranked.run_rank = 1
-      AND json_extract(ranked.gates, '$.review._tag') = 'Passed'
+      AND (
+        json_extract(ranked.gates, '$.review._tag') = 'Passed'
+        OR (
+          json_extract(ranked.gates, '$.review._tag') = 'Failed'
+          AND EXISTS (
+            SELECT 1 FROM json_each(ranked.findings) AS finding
+            WHERE json_extract(finding.value, '$._tag') = 'Open'
+              AND COALESCE(json_extract(finding.value, '$.resolution'), 'Repair') = 'Repair'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(ranked.findings) AS finding
+            WHERE json_extract(finding.value, '$._tag') = 'Open'
+              AND json_extract(finding.value, '$.resolution') = 'Dismissal'
+          )
+          AND EXISTS (
+            SELECT 1 FROM review_evidence_scopes
+            WHERE review_evidence_scopes.review_run_id = ranked.id
+              AND review_evidence_scopes.policy_digest = repositories.policy_digest
+          )
+          -- A finished or cancelled Repair needs an explicit new Review.
+          -- Base movement must not restore its retry budget.
+          AND NOT EXISTS (
+            SELECT 1 FROM tasks AS repair
+            JOIN revisions AS repaired ON repaired.id = repair.revision_id
+            WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
+              AND json_extract(repaired.payload, '$.headSha') = ranked.head_sha
+          )
+        )
+      )
       AND published.result_tag = 'Published'
       AND repositories.enabled = 1
       ${repositoryWriteAuthoritySql}
@@ -12119,6 +12196,14 @@ export function openJournalStore(
       AND ranked.revision_id = subjects.current_revision_id
       AND json_extract(current_revisions.payload, '$.state') = 'open'
       AND json_extract(current_revisions.payload, '$.headSha') = ranked.head_sha
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = ranked.subject_id)
+      AND NOT EXISTS (
+        SELECT 1 FROM task_cancellations
+        JOIN worker_tasks AS cancelled ON cancelled.id = task_cancellations.task_id
+        JOIN revisions AS cancelled_revision ON cancelled_revision.id = cancelled.revision_id
+        WHERE cancelled.subject_id = ranked.subject_id AND cancelled.kind = 'adversarial_review'
+          AND json_extract(cancelled_revision.payload, '$.headSha') = ranked.head_sha
+      )
       AND NOT EXISTS (
         SELECT 1 FROM worker_tasks AS live
         WHERE live.subject_id = ranked.subject_id AND live.kind = 'adversarial_review'
@@ -13795,6 +13880,7 @@ export function openJournalStore(
     claimNextIssueWorkTask,
     claimNextReviewFixTask,
     queueReviewFixTaskForReview,
+    queueReviewFixForGate,
     recordRepairReport,
     queueBaselineRepairForReview,
     queueBaselineRepairForGate,

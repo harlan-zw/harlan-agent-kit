@@ -114,6 +114,7 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
+      queueReviewFixForGate: () => { throw new Error('A passing Review needs no Repair.') },
       queueBaselineRepairForGate: ({ at: _at, ...input }) => {
         recorded.baselineQueued.push(input)
         return { _tag: 'Queued', taskId: 'baseline-1' }
