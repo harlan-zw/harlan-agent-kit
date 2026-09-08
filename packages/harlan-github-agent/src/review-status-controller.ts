@@ -1,4 +1,4 @@
-import type { GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
+import type { ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewStatusTaskPhase } from './types.ts'
@@ -15,7 +15,7 @@ export interface ReviewStatusController {
 }
 
 export interface ReviewStatusControllerOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'>
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
   store: Pick<JournalStore, 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus'>
@@ -23,7 +23,7 @@ export interface ReviewStatusControllerOptions {
 }
 
 export interface ReviewStatusPublicationOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'>
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
   now: () => Date
   store: Pick<JournalStore, 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt'>
 }
@@ -58,7 +58,18 @@ export async function publishClaimedReviewStatus(
     return err(reason)
   }
 
-  const published = await options.github.upsertReviewStatus(
+  const existing = command.taskKind === 'existing_review'
+    ? command.commentId === null
+      ? err('The existing review has no comment identifier.')
+      : await options.github.readExistingReviewLabel(
+          command.repositoryMapping,
+          command.pullRequestNumber,
+          command.commentId,
+          command.expectedHeadSha,
+          signal,
+        )
+    : null
+  const published = existing ?? await options.github.upsertReviewStatus(
     command.repositoryMapping,
     command.pullRequestNumber,
     command.commentId,
@@ -88,13 +99,15 @@ export async function publishClaimedReviewStatus(
   if (!commentConfirmed)
     return err('GitHub accepted the review comment, but its receipt lost the Publication lease.')
 
-  const label = command.phase !== 'terminal'
-    ? null
-    : command.desiredOutcome === 'READY' || command.desiredOutcome === 'BLOCKED' || command.desiredOutcome === 'PENDING'
-      ? command.desiredOutcome
-      : command.desiredOutcome === 'WAITING'
-        ? 'PENDING'
-        : null
+  const label = existing?._tag === 'Ok'
+    ? existing.value.label
+    : command.phase !== 'terminal'
+      ? null
+      : command.desiredOutcome === 'READY' || command.desiredOutcome === 'BLOCKED' || command.desiredOutcome === 'PENDING'
+        ? command.desiredOutcome
+        : command.desiredOutcome === 'WAITING'
+          ? 'PENDING'
+          : null
   if (label !== null) {
     const stamped = await options.github.stampAgentLabel(
       command.repositoryMapping,

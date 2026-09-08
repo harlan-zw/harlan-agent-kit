@@ -218,6 +218,15 @@ export interface FailedJobContext {
 
 export const FAILED_JOB_LOG_TAIL_LINES = 80
 
+export interface ExistingReviewLabel extends PublishedReviewStatus {
+  label: 'READY' | 'PENDING' | 'BLOCKED' | 'ADVERSARIAL_REVIEW_SKIPPED'
+}
+
+export interface ExistingReviewLabelSource {
+  /** Reads the latest trusted review for the pinned head without editing its comment. */
+  readExistingReviewLabel: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, headSha: string, signal: AbortSignal) => Promise<Result<ExistingReviewLabel, string>>
+}
+
 export interface GitHubAgentSource {
   /** Finds the open pull request whose head is `headRef`, if one exists. */
   findOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal: AbortSignal) => Promise<Result<OpenPullRequestReference | null, string>>
@@ -398,7 +407,7 @@ function pullRequestItem(
   }
 }
 
-export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource {
+export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & ExistingReviewLabelSource {
   const clientWith = async (tokens: GitHubTokenProvider, repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> => {
     const token = await tokens.getToken(repository, access, signal)
     return token._tag === 'Err'
@@ -544,6 +553,48 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return octokit.value.rest.issues.removeLabel({ ...request, name: AGENT_LABELS.RUNNING.name })
         .then((): Result<void, string> => ok(undefined))
         .catch((error: unknown): Result<void, string> => errorStatus(error) === 404 ? ok(undefined) : err(message(error)))
+    },
+
+    async readExistingReviewLabel(repository, pullRequestNumber, commentId, headSha, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return octokit.value.paginate(octokit.value.rest.issues.listComments, {
+        owner,
+        repo,
+        issue_number: pullRequestNumber,
+        per_page: 100,
+        request: { signal },
+      }).then(async (comments): Promise<Result<ExistingReviewLabel, string>> => {
+        const prior = priorAutomatedReviewForHead(comments.flatMap(comment =>
+          comment.body == null || comment.user?.login === undefined
+            ? []
+            : [{
+                authorAssociation: comment.author_association,
+                authorLogin: comment.user.login,
+                body: comment.body,
+                url: comment.html_url,
+              }]), headSha, options.actorLogin(repository))
+        const comment = comments.find(comment => comment.id === commentId)
+        if (prior._tag !== 'Found' || prior.state !== 'complete' || comment?.html_url !== prior.url)
+          return err('The completed review changed before its label was restored.')
+        const body = comment.body ?? ''
+        const outcome = body.match(/^### 🤖 (READY|BLOCKED|REVIEW SKIPPED)\b/m)?.[1]
+          ?? body.match(/^\*\*(PASS|PENDING|BLOCKED)\b/m)?.[1]
+        const label = outcome === 'PASS' || outcome === 'READY'
+          ? 'READY'
+          : outcome === 'REVIEW SKIPPED'
+            ? 'ADVERSARIAL_REVIEW_SKIPPED'
+            : outcome === 'PENDING' || outcome === 'BLOCKED' ? outcome : null
+        if (label === null)
+          return err('The completed review has no recognized outcome.')
+        // Read the head after the comments, immediately before the label write.
+        const pull = await octokit.value.rest.pulls.get({ owner, repo, pull_number: pullRequestNumber, request: { signal } })
+        if (pull.data.state !== 'open' || pull.data.head.sha !== headSha)
+          return err('The pull request changed before its review label was restored.')
+        return ok({ commentId: comment.id, url: comment.html_url, label })
+      }).catch((error: unknown): Result<ExistingReviewLabel, string> => err(message(error)))
     },
 
     async stampAgentLabel(repository, itemNumber, state, signal) {

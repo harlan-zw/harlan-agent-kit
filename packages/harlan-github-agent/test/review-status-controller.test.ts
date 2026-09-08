@@ -25,6 +25,7 @@ describe('review status controller', () => {
     let stagedBody = ''
     const controller = createReviewStatusController({
       github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',

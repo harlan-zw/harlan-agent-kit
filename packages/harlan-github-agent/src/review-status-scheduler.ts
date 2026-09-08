@@ -1,4 +1,4 @@
-import type { GitHubAgentSource } from './github-agent-source.ts'
+import type { ExistingReviewLabelSource, GitHubAgentSource } from './github-agent-source.ts'
 import type { JournalStore } from './store.ts'
 import { publishClaimedReviewStatus } from './review-status-controller.ts'
 
@@ -9,7 +9,7 @@ export interface ReviewStatusScheduler {
 }
 
 export interface ReviewStatusSchedulerOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'>
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
   intervalMilliseconds: number
   leaseMilliseconds: number
   now: () => Date

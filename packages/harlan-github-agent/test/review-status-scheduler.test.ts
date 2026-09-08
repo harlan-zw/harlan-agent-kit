@@ -69,6 +69,7 @@ describe('review status scheduler', () => {
     const published: string[] = []
     const scheduler = createReviewStatusScheduler({
       github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: (_repository, _number, _commentId, body) => {
           bodies.push(body)
@@ -102,6 +103,7 @@ describe('review status scheduler', () => {
     const published: string[] = []
     const scheduler = createReviewStatusScheduler({
       github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: () => {
           writes += 1
@@ -134,6 +136,7 @@ describe('review status scheduler', () => {
     const commentIds: Array<number | null> = []
     const scheduler = createReviewStatusScheduler({
       github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: (_repository, _number, commentId) => {
           commentIds.push(commentId)
