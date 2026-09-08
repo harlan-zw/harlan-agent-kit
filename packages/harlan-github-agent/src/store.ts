@@ -4508,7 +4508,7 @@ function planIssueTriage(
       && issueTriageState(existing.evidence) === 'READY_TO_IMPLEMENT'
       && subject.kind === 'issue'
       && canWorkIssues(mapping)
-      && (!requiresIssueApproval(mapping, subject.author) || issuePublicationLostBase(database, subjectId, revisionId))
+      && (!requiresIssueApproval(mapping, subject.author) || retainsIssueWorkApproval(database, subjectId, revisionId))
     ) {
       queueIssueWork(database, subjectId, revisionId, subject, mapping, observedAt)
     }
@@ -4533,6 +4533,15 @@ function issuePublicationLostBase(database: DatabaseSync, subjectId: number, rev
       AND publication_commands.state_tag = 'Superseded' AND publication_commands.reason = tasks.reason
       AND publication_commands.outcome_unknown = 0
   `).get(subjectId, revisionId) !== undefined
+}
+
+/** Controller recovery preserves Approval for the same Issue Revision. */
+function retainsIssueWorkApproval(database: DatabaseSync, subjectId: number, revisionId: string): boolean {
+  return issuePublicationLostBase(database, subjectId, revisionId) || database.prepare(`
+    SELECT 1 FROM tasks
+    WHERE subject_id = ? AND revision_id = ? AND kind = 'issue_work'
+      AND state_tag = 'Superseded' AND reason = ?
+  `).get(subjectId, revisionId, freshIssueTriageReason) !== undefined
 }
 
 function queueIssueWork(
@@ -4584,7 +4593,7 @@ function queueIssueWork(
           taskId,
           from: 'Superseded',
           to: 'Queued',
-          reason: 'Fresh issue triage was approved.',
+          reason: 'Fresh Issue triage confirmed the approved work.',
           fence: existing.fence,
           at,
         })
@@ -8829,7 +8838,7 @@ export function openJournalStore(
           if (
             subject.kind === 'issue'
             && canWorkIssues(mapping)
-            && !requiresIssueApproval(mapping, subject.author)
+            && (!requiresIssueApproval(mapping, subject.author) || retainsIssueWorkApproval(database, row.subject_id, row.revision_id))
             && issueTriageState(input.evidence) === 'READY_TO_IMPLEMENT'
           ) {
             queueIssueWork(database, row.subject_id, row.revision_id, subject, mapping, input.at)
