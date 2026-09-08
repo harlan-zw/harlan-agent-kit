@@ -1180,16 +1180,6 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         )
       }
 
-      // A complete comment stands in for a Review only when this service never
-      // reviewed the head. Its own comment under an older policy is what the
-      // planner queued this fresh Review to replace.
-      if (stored._tag === 'None' && snapshot.value.priorAutomatedReview._tag === 'Found' && snapshot.value.priorAutomatedReview.state === 'complete' && task.rerun._tag === 'NotRequested' && !manualReview) {
-        return ok({
-          evidence: `Existing automated review by @${snapshot.value.priorAutomatedReview.authorLogin}: ${snapshot.value.priorAutomatedReview.url}`,
-          resolution: { _tag: 'ExistingReview', url: snapshot.value.priorAutomatedReview.url },
-        })
-      }
-
       let freshReviewSession = false
       if (manualReview) {
         const routed = await options.github.stampAgentLabel(task.repositoryMapping, task.pullRequestNumber, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
@@ -1368,6 +1358,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           : { _tag: 'Blocked' as const, confidence: response.confidence }
       return projectReviewRun(options, task, frozen.value, {
         id: reviewRunId,
+        baseRef: task.pullRequest.baseRef ?? null,
         repository: task.repository,
         pullRequestNumber: task.pullRequestNumber,
         revisionId: task.revisionId,

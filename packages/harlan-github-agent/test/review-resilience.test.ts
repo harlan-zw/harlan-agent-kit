@@ -179,6 +179,7 @@ describe('review resilience', () => {
       response: {},
       reviewRuns: [{
         id: 'stored-review',
+        baseRef: 'main',
         repository: 'harlan-zw/example',
         pullRequestNumber: 24,
         revisionId: 'revision-1',
@@ -242,6 +243,7 @@ describe('review resilience', () => {
     const { confidence, ...stored } = attempt
     reviewRuns.push({
       ...stored,
+      baseRef: pullRequest.baseRef ?? null,
       usage: attempt.usage ?? { _tag: 'Unavailable' },
       outcome: { _tag: 'Ready', confidence },
       feedback: null,

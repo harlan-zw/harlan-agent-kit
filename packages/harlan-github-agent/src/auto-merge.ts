@@ -40,9 +40,9 @@ export interface AutoMergeInput {
   repository: RepositoryMapping
 }
 
-function readyAttemptForHead(attempts: ReviewRun[], headSha: string): ReviewRun | undefined {
+function readyAttemptForHead(attempts: ReviewRun[], headSha: string, baseRef: string): ReviewRun | undefined {
   return attempts
-    .filter(attempt => attempt.headSha === headSha && attempt.outcome._tag === 'Ready')
+    .filter(attempt => attempt.headSha === headSha && attempt.baseRef === baseRef && attempt.outcome._tag === 'Ready')
     .sort((left, right) => right.completedAt.localeCompare(left.completedAt))[0]
 }
 
@@ -68,7 +68,7 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   if (pullRequest.mergeState !== 'clean')
     return { _tag: 'Hold', reason: 'GitHub does not report the pull request as mergeable.' }
 
-  const attempt = readyAttemptForHead(attempts, pullRequest.headSha)
+  const attempt = readyAttemptForHead(attempts, pullRequest.headSha, pullRequest.baseRef)
   if (attempt === undefined || attempt.outcome._tag !== 'Ready')
     return { _tag: 'Hold', reason: 'The current head commit has no READY review.' }
   if (!attempt.publications.some(publication => publication.result._tag === 'Published'))

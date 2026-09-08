@@ -7,7 +7,6 @@ import { agentProfile, CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { MAXIMUM_RECOVERY_ATTEMPTS } from '../src/failure.ts'
 import { repositoryQuarantineReason } from '../src/github-write-gate.ts'
 import { ok } from '../src/result.ts'
-import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { publishStoppedReviews } from '../src/review-stop-sweep.ts'
 import { routineReportCommand } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -2424,7 +2423,7 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
-  it('banners the agent comment, not a restored label, when GitHub closes the pull request', async () => {
+  it('banners its own comment when GitHub closes a pull request with another trusted comment', async () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -2470,8 +2469,7 @@ describe('journal store', () => {
       evidence: 'Waiting for Baseline repair baseline-task.',
     })).toBe(true)
 
-    // A trusted actor reviewed the next head, so the service restores that
-    // actor's label on comment 77. That comment is never this service's own.
+    // An external comment carries no target evidence and remains context only.
     const headB = 'b'.repeat(40)
     const trustedReview = {
       _tag: 'Found',
@@ -2492,30 +2490,7 @@ describe('journal store', () => {
     })
     if (pushed._tag !== 'Inserted')
       throw new Error('Expected the pushed head Revision.')
-    const labelCommand = store.claimNextTerminalReviewStatus('label-publisher', '2026-08-13T01:06:00.000Z', 60_000)
-    if (labelCommand === null)
-      throw new Error('Expected the existing review label command.')
-    const labelPublished = await publishClaimedReviewStatus(
-      {
-        github: {
-          getPullRequestReviewSnapshot: () => { throw new Error('The existing comment needs no snapshot.') },
-          readExistingReviewLabel: (_repository, _number, commentId) => Promise.resolve(ok({
-            commentId,
-            url: `https://github.com/harlan-zw/example/pull/24#issuecomment-${commentId}`,
-            label: 'READY',
-          })),
-          upsertReviewStatus: () => { throw new Error('The existing comment must stay unchanged.') },
-          stampAgentLabel: () => Promise.resolve(ok(undefined)),
-        },
-        now: () => new Date('2026-08-13T01:06:00.000Z'),
-        store,
-      },
-      labelCommand,
-      false,
-      new AbortController().signal,
-    )
-    if (labelPublished._tag === 'Err')
-      throw new Error(labelPublished.error)
+    expect(store.claimNextTerminalReviewStatus('label-publisher', '2026-08-13T01:06:00.000Z', 60_000)).toBeNull()
 
     const closed = store.recordObservation({
       externalId: 'closure-with-restored-label-closed',
@@ -2544,7 +2519,6 @@ describe('journal store', () => {
 
     const stopped = store.listStoppedReviews()
     expect(stopped).toEqual([expect.objectContaining({
-      taskId: review.id,
       commentId: 42,
       publishedBody: agentBody,
     })])
@@ -3915,7 +3889,7 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:02:00.000Z').queue).toEqual([])
   })
 
-  it('revokes a running review when a trusted review covers the current head commit', () => {
+  it('keeps a running Review when a trusted comment has no target evidence', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -3950,11 +3924,8 @@ describe('journal store', () => {
       fence: task.state.fence,
       at: '2026-08-13T01:02:01.000Z',
       leaseMilliseconds: 45 * 60_000,
-    })).toBe(false)
-    expect(store.getDashboardSnapshot('2026-08-13T01:02:01.000Z').tasks.find(item => item.id === task.id)?.state).toEqual({
-      _tag: 'Superseded',
-      reason: 'The current head commit already has an automated review.',
-    })
+    })).toBe(true)
+    expect(store.getDashboardSnapshot('2026-08-13T01:02:01.000Z').tasks.find(item => item.id === task.id)?.state._tag).toBe('Running')
   })
 
   it('keeps Review work when the prior automated comment is still active', () => {

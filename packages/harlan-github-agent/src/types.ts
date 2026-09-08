@@ -378,6 +378,8 @@ export type RecordAgentFeedbackResult
     | { _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }
 
 export interface ReviewRun {
+  /** The target branch whose diff this Review covered. */
+  baseRef: string | null
   id: string
   repository: string
   pullRequestNumber: number
@@ -403,7 +405,7 @@ export interface ReviewRun {
  * What this service already holds for one head commit, from a worker's view.
  *
  * `Current` was recorded under the repository's current policy and may be
- * resumed. `Stale` predates that policy: the planner queued a fresh Review to
+ * resumed. `Stale` covers an old policy or target branch: the planner queued a fresh Review to
  * replace it, so neither it nor its comment on GitHub may stand in. `None`
  * means this service never reviewed the head, so a complete comment from
  * another actor may.
@@ -422,7 +424,7 @@ export type ReviewResolution
 
 export type ReviewDesiredOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'WAITING' | 'EXISTING' | 'SKIPPED'
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'feedback' | 'outcome' | 'publications' | 'usage'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'outcome' | 'publications' | 'usage'> {
   confidence?: number
   /** Trusted repository policy used by this Review. */
   policyDigest?: string

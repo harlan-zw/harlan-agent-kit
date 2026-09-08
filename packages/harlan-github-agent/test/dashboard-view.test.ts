@@ -143,6 +143,7 @@ function queueEntry(overrides: Partial<QueueEntry> = {}): QueueEntry {
 function reviewAgent(overrides: Partial<ReviewAgent> = {}): ReviewAgent {
   return {
     _tag: 'ReviewAgent',
+    baseRef: 'main',
     role: 'adversarial_review',
     id: 'attempt-1',
     repository: 'harlan-zw/nuxt-seo',

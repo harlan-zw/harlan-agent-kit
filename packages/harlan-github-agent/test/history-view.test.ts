@@ -15,6 +15,7 @@ import { dashboardSnapshot, pullRequestItem } from './fixtures.ts'
 function reviewAgent(overrides: Partial<ReviewAgent> = {}): ReviewAgent {
   return {
     _tag: 'ReviewAgent',
+    baseRef: 'main',
     role: 'adversarial_review',
     id: 'review-1',
     repository: 'harlan-zw/nuxt-seo',

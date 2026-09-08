@@ -1202,6 +1202,7 @@ interface ClaimRow extends TaskRow {
 }
 
 interface ReviewRunRow {
+  base_ref: string | null
   id: string
   repository: string
   github_number: number
@@ -2587,6 +2588,7 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,
     headSha: row.head_sha,
+    baseRef: row.base_ref,
     provider: row.provider,
     sessionId: row.session_id,
     model: row.model,
@@ -3962,7 +3964,8 @@ function planReviewFix(
  * while it works, when the base branch moves or GitHub recomputes mergeability,
  * and the Review rows follow the subject's current Revision. A write that names
  * the claimed Revision lands on the current one while both share the head
- * commit. A different head commit keeps the claimed id, and the caller's own
+ * commit and target branch. A changed target keeps the claimed id, so the write fails.
+ * A different head commit keeps the claimed id, and the caller's own
  * checks refuse it.
  */
 function currentSameHeadRevision(database: DatabaseSync, revisionId: string): string {
@@ -3974,6 +3977,7 @@ function currentSameHeadRevision(database: DatabaseSync, revisionId: string): st
     WHERE claimed.id = ? AND subjects.kind = 'pull_request'
       AND json_extract(current.payload, '$.state') = 'open'
       AND json_extract(current.payload, '$.headSha') = json_extract(claimed.payload, '$.headSha')
+      AND json_extract(current.payload, '$.baseRef') IS json_extract(claimed.payload, '$.baseRef')
   `).get(revisionId) as { current_id: string } | undefined
   return row?.current_id ?? revisionId
 }
@@ -3987,18 +3991,20 @@ function currentSameHeadRevision(database: DatabaseSync, revisionId: string): st
  * superseded, a READY verdict stopped refreshing, and a Repair lost its
  * findings. 208 Reviews died that way in one fortnight. Rows follow the head.
  *
+ * A different target branch changes the reviewed diff. Those rows stay on their original Revision.
  * Conflict resolution and Baseline repair answer a base commit, so they stay.
  */
 function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId: string, headSha: string): void {
   const sameHead = `
     SELECT id FROM revisions
     WHERE subject_id = ? AND id != ? AND json_extract(payload, '$.headSha') = ?
+      AND json_extract(payload, '$.baseRef') IS (SELECT json_extract(payload, '$.baseRef') FROM revisions WHERE id = ?)
   `
-  const sameHeadArgs = [subjectId, revisionId, headSha]
+  const sameHeadArgs = [subjectId, revisionId, headSha, revisionId]
   database.prepare(`
     UPDATE review_runs SET revision_id = ?
-    WHERE subject_id = ? AND head_sha = ? AND revision_id != ?
-  `).run(revisionId, subjectId, headSha, revisionId)
+    WHERE subject_id = ? AND revision_id IN (${sameHead})
+  `).run(revisionId, subjectId, ...sameHeadArgs)
   // A Review that queued a Baseline repair answers that base commit. It stays,
   // and the moved base gets a fresh Review that can read the repaired base.
   const waitsOnBaseline = `
@@ -4071,7 +4077,7 @@ function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId:
     UPDATE approval_prompt_comments SET revision_id = ?
     WHERE subject_id = ? AND revision_id IN (${sameHead})
   `).run(revisionId, subjectId, ...sameHeadArgs)
-  // A person approved this head commit, whatever the base was at the time.
+  // An Approval follows the head only while its target branch stays unchanged.
   database.prepare(`
     INSERT OR IGNORE INTO pull_request_approvals (subject_id, revision_id, kind, approved_at)
     SELECT subject_id, ?, kind, MIN(approved_at)
@@ -4235,35 +4241,6 @@ const existingReviewLabelClaimSql = `(review_status_commands.task_kind = 'existi
             WHERE lower(value) = lower(json_extract(status_revision.payload, '$.author'))))
       ))`
 
-/** Restores the label omitted by a completed review from another trusted actor. */
-function stageExistingReviewLabel(database: DatabaseSync, subject: GitHubPullRequestItem, revisionId: string, at: string): void {
-  const prior = subject.priorAutomatedReview
-  if (prior._tag !== 'Found' || prior.state !== 'complete')
-    return
-  const prefix = `${subject.url}#issuecomment-`
-  if (!prior.url.startsWith(prefix))
-    return
-  const commentId = Number(prior.url.slice(prefix.length))
-  if (!Number.isSafeInteger(commentId) || commentId <= 0)
-    return
-  const commandId = digest(`existing-review-label:${revisionId}:${commentId}`)
-  const staged = database.prepare(`
-    INSERT INTO review_status_commands (
-      id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase, body, body_sha256,
-      desired_outcome, state_tag, github_comment_id, github_url, created_at, updated_at
-    ) VALUES (?, 'existing_review', ?, 0, ?, ?, 'terminal', '', ?, 'EXISTING', 'Pending', ?, ?, ?, ?)
-    -- The id pins one revision to one comment, so an unchanged observation names
-    -- a Published command whose label is already on the pull request. Restaging
-    -- it would republish through GitHub on every poll and never converge. Only a
-    -- Superseded command yields again, so retired work can return when the
-    -- observation that retired it goes away.
-    ON CONFLICT(id) DO UPDATE SET state_tag = 'Pending', updated_at = excluded.updated_at
-    WHERE review_status_commands.state_tag = 'Superseded'
-  `).run(commandId, commandId, revisionId, subject.headSha, digest(''), commentId, prior.url, at, at)
-  if (staged.changes === 1)
-    recordReviewStatusEvent(database, { commandId, event: 'Staged', from: null, to: 'Pending', at })
-}
-
 function planAdversarialReview(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4284,31 +4261,31 @@ function planAdversarialReview(
   `).get(subjectId, revisionId) !== undefined
   const localAttempt = database.prepare(`
     SELECT
-      EXISTS (SELECT 1 FROM review_runs WHERE subject_id = ?) AS any_attempt,
       EXISTS (SELECT 1 FROM review_runs WHERE subject_id = ? AND revision_id = ?) AS revision_attempt,
+      EXISTS (SELECT 1 FROM review_resolutions WHERE subject_id = ? AND revision_id = ? AND resolution_tag = 'ExistingReview') AS unscoped_comment,
       (SELECT review_runs.id FROM review_runs
         JOIN review_evidence_scopes ON review_evidence_scopes.review_run_id = review_runs.id
         WHERE review_runs.subject_id = ? AND review_runs.head_sha = ?
           AND review_runs.kind = 'adversarial_review'
           AND review_evidence_scopes.policy_digest = ?
+          AND review_runs.base_ref = ?
         ORDER BY review_runs.completed_at DESC, review_runs.id DESC LIMIT 1) AS head_review_run_id
   `).get(
     subjectId,
+    revisionId,
     subjectId,
     revisionId,
     subjectId,
     subject.kind === 'pull_request' ? subject.headSha : '',
     reviewPolicyDigest(mapping),
+    subject.kind === 'pull_request' ? subject.baseRef ?? null : null,
   ) as {
-    any_attempt: number
     revision_attempt: number
+    unscoped_comment: number
     head_review_run_id: string | null
   }
-  const priorComplete = subject.kind === 'pull_request'
-    && subject.priorAutomatedReview._tag === 'Found'
-    && subject.priorAutomatedReview.state === 'complete'
   const alreadyReviewed = subject.kind === 'pull_request'
-    && (localAttempt.head_review_run_id !== null || (priorComplete && localAttempt.any_attempt === 0))
+    && localAttempt.head_review_run_id !== null
     && !rerunRequested
     && !(manualReviewRequested && localAttempt.revision_attempt === 0)
   const reviewable = subject.kind === 'pull_request'
@@ -4359,32 +4336,6 @@ function planAdversarialReview(
       })
     }
   }
-  else if (alreadyReviewed && subject.kind === 'pull_request' && subject.priorAutomatedReview._tag === 'Found') {
-    const stored = database.prepare(`
-      INSERT INTO review_resolutions (
-        subject_id, revision_id, task_id, task_fence, resolution_tag,
-        review_run_id, baseline_task_id, github_url, reason, created_at
-      ) VALUES (?, ?, NULL, 0, 'ExistingReview', NULL, NULL, ?, NULL, ?)
-      ON CONFLICT(subject_id, revision_id) DO UPDATE SET
-        task_id = NULL, task_fence = 0, resolution_tag = 'ExistingReview',
-        review_run_id = NULL, baseline_task_id = NULL, github_url = excluded.github_url,
-        reason = NULL, created_at = excluded.created_at
-      WHERE review_resolutions.resolution_tag IN ('UnknownNeedsReconciliation', 'ExistingReview')
-    `).run(subjectId, revisionId, subject.priorAutomatedReview.url, observedAt)
-    if (stored.changes === 1) {
-      recordWorkflowEvent(database, {
-        stream: 'review_resolution',
-        event: 'Recorded',
-        entityId: `${subjectId}:${revisionId}`,
-        repository: mapping.github,
-        itemNumber: subject.number,
-        revisionId,
-        from: null,
-        to: 'ExistingReview',
-        at: observedAt,
-      })
-    }
-  }
 
   if (!eligible) {
     // A worker records its run, then publishes the comment. A poll between
@@ -4403,11 +4354,6 @@ function planAdversarialReview(
       undefined,
       ownRunLanded ? revisionId : undefined,
     )
-    if (alreadyReviewed && localAttempt.head_review_run_id === null && subject.kind === 'pull_request'
-      && subject.state === 'open' && mapping.enabled && mapping.pullRequestReview
-      && (!approvalRequired || reviewApproved) && !manualReviewRequested) {
-      stageExistingReviewLabel(database, subject, revisionId, observedAt)
-    }
     return
   }
 
@@ -4460,7 +4406,7 @@ function planAdversarialReview(
     })
     return
   }
-  if (existing?.state_tag === 'Completed' && localAttempt.revision_attempt === 1 && localAttempt.head_review_run_id === null) {
+  if (existing?.state_tag === 'Completed' && (localAttempt.revision_attempt === 1 || localAttempt.unscoped_comment === 1) && localAttempt.head_review_run_id === null) {
     database.prepare(`
       UPDATE worker_tasks
       SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
@@ -4474,7 +4420,7 @@ function planAdversarialReview(
       taskId: existing.id,
       from: 'Completed',
       to: 'Queued',
-      reason: 'Trusted Review policy changed.',
+      reason: 'Current Review evidence is missing.',
       fence: existing.fence,
       at: observedAt,
     })
@@ -6227,7 +6173,17 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, existingReviewLabelMigration)
     version = 68
   }
-  if (version === 68)
+  if (version === 68) {
+    // Old Revisions could move across target branches. They cannot prove a Review target.
+    // Replayed journals may already contain the column. Legacy values stay unknown.
+    const columns = (database.prepare('PRAGMA table_info(review_runs)').all() as unknown as Array<{ name: string }>)
+      .map(column => column.name)
+    applyMigration(database, columns.includes('base_ref')
+      ? 'PRAGMA user_version = 69;'
+      : 'ALTER TABLE review_runs ADD COLUMN base_ref TEXT; PRAGMA user_version = 69;')
+    version = 69
+  }
+  if (version === 69)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -6407,6 +6363,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       subjects.github_number,
       review_runs.revision_id,
       review_runs.head_sha,
+      review_runs.base_ref,
       review_runs.provider,
       review_runs.session_id,
       review_runs.model,
@@ -7601,8 +7558,8 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, base_ref
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -7621,6 +7578,7 @@ export function openJournalStore(
         findings,
         contentDigest,
         usage,
+        pullRequest.baseRef ?? null,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -7737,6 +7695,7 @@ export function openJournalStore(
       const parent = database.prepare(`
         SELECT 1 FROM review_runs
         WHERE id = ? AND subject_id = ? AND revision_id = ? AND head_sha = ?
+          AND base_ref = ?
           AND NOT EXISTS (
             SELECT 1 FROM review_runs AS settled
             WHERE settled.supersedes_review_run_id = review_runs.id
@@ -7746,6 +7705,7 @@ export function openJournalStore(
         revision.subject_id,
         revisionId,
         input.headSha,
+        pullRequest.baseRef ?? null,
       )
       if (parent === undefined) {
         const orphaned = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.supersedesReviewRunId)
@@ -7758,8 +7718,8 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, supersedes_review_run_id
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -7779,6 +7739,7 @@ export function openJournalStore(
         contentDigest,
         usage,
         input.supersedesReviewRunId,
+        pullRequest.baseRef ?? null,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -7977,8 +7938,7 @@ export function openJournalStore(
   // repository's current policy digest. A worker that then resumed the old
   // run, or accepted its comment on GitHub as an existing review, completed
   // with no new scope, and the planner requeued it on every poll. Only a run
-  // recorded under the current policy is worth resuming, and only a head this
-  // service never reviewed may lean on another actor's comment.
+  // recorded under the current policy and target branch is worth resuming.
   const storedReviewForHead: JournalStore['storedReviewForHead'] = (repository, pullRequestNumber, headSha) => {
     const row = database.prepare(`
       SELECT
@@ -7987,9 +7947,11 @@ export function openJournalStore(
           SELECT 1 FROM review_evidence_scopes
           WHERE review_evidence_scopes.review_run_id = review_runs.id
             AND review_evidence_scopes.policy_digest = repositories.policy_digest
+            AND review_runs.base_ref = json_extract(current.payload, '$.baseRef')
         ) AS current
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN revisions AS current ON current.id = subjects.current_revision_id
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE repositories.github = ? AND subjects.github_number = ?
         AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
@@ -8011,6 +7973,7 @@ export function openJournalStore(
         subjects.github_number,
         review_runs.revision_id,
         review_runs.head_sha,
+        review_runs.base_ref,
         review_runs.provider,
         review_runs.session_id,
         review_runs.model,
@@ -8028,6 +7991,7 @@ export function openJournalStore(
         agent_feedback.updated_at AS feedback_updated_at
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN revisions ON revisions.id = review_runs.revision_id
       JOIN repositories ON repositories.id = subjects.repository_id
       LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
       LEFT JOIN agent_feedback ON agent_feedback.review_run_id = review_runs.id
@@ -9768,6 +9732,7 @@ export function openJournalStore(
           AND subjects.kind = 'pull_request'
           AND review_runs.revision_id = ? AND subjects.current_revision_id = ?
           AND review_runs.head_sha = ?
+          AND review_runs.base_ref = json_extract(revisions.payload, '$.baseRef')
           AND json_extract(revisions.payload, '$.state') = 'open'
           AND json_extract(revisions.payload, '$.headSha') = ?
           AND repositories.enabled = 1
@@ -12416,6 +12381,7 @@ export function openJournalStore(
       AND ranked.revision_id = subjects.current_revision_id
       AND json_extract(current_revisions.payload, '$.state') = 'open'
       AND json_extract(current_revisions.payload, '$.headSha') = ranked.head_sha
+      AND ranked.base_ref = json_extract(current_revisions.payload, '$.baseRef')
       AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = ranked.subject_id)
       AND NOT EXISTS (
         SELECT 1 FROM task_cancellations
