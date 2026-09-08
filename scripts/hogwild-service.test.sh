@@ -8,6 +8,9 @@ trap 'rm -rf "$test_root"' EXIT
 
 test_home="$test_root/home"
 rendered_home="$test_root/rendered"
+export HOGWILD_SERVICE_TEST_RENDERED_HOME="$rendered_home"
+export HARLAN_AGENT_CONTEXT_MEMORY_ROOT="$test_home/.claude/projects"
+export HARLAN_AGENT_CONTEXT_CHECKOUT_ROOTS="$test_home/sites"
 export HARLAN_GITHUB_AGENT_PASSWORD_FILE="$test_home/.config/harlan-github-agent/dashboard-password"
 export HOGWILD_SERVICE_TEST_CALLS="$test_root/calls"
 export HOGWILD_SERVICE_TEST_CLAUDE_HASH=''
@@ -56,6 +59,18 @@ printf '%s\n' \
   'if [[ "$*" == *mktemp*-d* ]]; then printf '\''%s\n'\'' "$HOGWILD_SERVICE_TEST_ENV_STAGE"; exit; fi' \
   'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; fi' \
   > "$test_root/bin/ssh"
+cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
+# Context sync also verifies the commit hook and the installed opencode files.
+if [[ "$*" == *sha256sum* && ( "$*" == *commit-msg.next* || "$*" == *harlan-hooks.ts.next* ) ]]; then
+  for token in $*; do
+    if [[ "$token" == *.next* ]]; then
+      remote_path=${token//\'/}
+      local_path="$HOGWILD_SERVICE_TEST_RENDERED_HOME${remote_path#/home/harlan}"
+      /usr/bin/sha256sum "${local_path%.next}"
+    fi
+  done
+fi
+FAKE_SSH
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''scp %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \

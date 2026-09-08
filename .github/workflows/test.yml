@@ -110,16 +110,8 @@ jobs:
       - name: Sentry check in
         run: pnpm test:sentry-checkin
 
-      # `pnpm test:service` chains six scripts. Five of them run here.
-      # `hogwild-service.test.sh` already fails on `main`, before this workflow.
-      # Repair it in its own pull request, then add it back.
       - name: Service scripts
-        run: |
-          bash scripts/service.test.sh
-          bash scripts/repository-env.test.sh
-          bash scripts/worktrunk-config.test.sh
-          bash scripts/worktree-sweep.test.sh
-          bash scripts/worktree-sweep-service.test.sh
+        run: pnpm test:service
 
       - name: Service package
         run: pnpm --filter harlan-github-agent test:run
