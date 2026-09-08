@@ -48,7 +48,7 @@ export async function refreshReviewGates(
   signal: AbortSignal,
 ): Promise<Array<Result<ReviewGateRefreshOutcome, string>>> {
   const mappings = new Map(options.repositories.map(mapping => [mapping.github.toLowerCase(), mapping]))
-  const reviews = options.store.listReviewGateRefreshes()
+  const reviews = options.store.listReviewGateRefreshes().filter(review => mappings.has(review.repository.toLowerCase()))
   /** Every overdue CI Review gate message this pass raised, by repository. */
   const stalled = new Map<string, string[]>()
   /** Repositories whose live state this pass could not read. */
@@ -65,7 +65,7 @@ export async function refreshReviewGates(
     }
     // A moved head commit gets its own Review. Restating this verdict against it
     // would answer for a diff nothing read.
-    if (live.value.pullRequest.state !== 'open' || live.value.pullRequest.headSha !== review.headSha)
+    if (live.value.pullRequest.state !== 'open' || live.value.pullRequest.headSha !== review.headSha || live.value.pullRequest.baseRef !== review.baseRef)
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
     const { gates, reportedChecks, ciCause } = refreshControllerGates(review.gates, live.value, mapping)
@@ -99,11 +99,9 @@ export async function refreshReviewGates(
       ? { baselineRepair: await queueBaselineRepair(options, review, live.value.pullRequest.baseSha, signal) }
       : {}
     const gatesChanged = JSON.stringify(gates) !== JSON.stringify(review.gates)
-    if (!gatesChanged && !(repairable && body !== review.publishedBody)) {
-      // Only a gate that did not move can be overdue. A gate that changed this
-      // pass rewrites its own timestamp, so the old one would report a wait
-      // that has just ended.
+    if (!gatesChanged)
       reportOverdueCiGate(options, review, gates, ciCause, stalled)
+    if (!gatesChanged && review.gatePublication._tag === 'Published' && !(repairable && body !== review.publishedBody)) {
       const confirmed = await options.github.editReviewStatus(
         mapping,
         review.pullRequestNumber,

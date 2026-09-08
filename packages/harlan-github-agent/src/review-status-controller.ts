@@ -1,7 +1,7 @@
 import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewStatusTaskPhase } from './types.ts'
+import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
@@ -10,7 +10,7 @@ import { updatedAtLabel } from './text.ts'
 
 export interface ReviewStatusController {
   publish: (task: ClaimedAdversarialReviewTask, phase: 'snapshot' | 'review' | 'terminal', body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
-  stageTerminal?: (task: ClaimedAdversarialReviewTask, body: string, desiredOutcome: ReviewDesiredOutcome, reviewRunId?: string) => Result<{ commandId: string }, string>
+  stageTerminal?: (task: ClaimedAdversarialReviewTask, body: string, desiredOutcome: ReviewDesiredOutcome, reviewRunId?: string, gates?: ReviewGates) => Result<{ commandId: string }, string>
   publishRepair: (task: ClaimedReviewFixTask, progress: AgentProgress, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
@@ -275,7 +275,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
         signal,
       )
     },
-    stageTerminal(task, body, desiredOutcome, reviewRunId) {
+    stageTerminal(task, body, desiredOutcome, reviewRunId, gates) {
       const staged = options.store.stageReviewStatus({
         taskKind: 'adversarial_review',
         phase: 'terminal',
@@ -288,6 +288,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
         body,
         desiredOutcome,
         ...(reviewRunId === undefined ? {} : { reviewRunId }),
+        ...(gates === undefined ? {} : { gates }),
       })
       return staged._tag === 'Rejected' ? err(staged.reason) : ok({ commandId: staged.commandId })
     },

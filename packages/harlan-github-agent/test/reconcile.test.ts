@@ -12,6 +12,31 @@ const noFinalRead = {
 }
 
 describe('gitHub reconciliation', () => {
+  it('refreshes settled Review gates after observations and before Auto merge', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const order: string[] = []
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    try {
+      const result = await reconcileRepository(repository, {
+        github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([pullRequestItem({ mergeState: 'clean' })])) },
+        store,
+        now: () => new Date('2026-08-13T01:00:00.000Z'),
+        refreshReviewGates: async (mapping) => {
+          expect(store.listOpenPullRequestNumbers(mapping.github)).toEqual([24])
+          order.push('refresh')
+        },
+        autoMerge: { reconcile: async () => { order.push('merge') } },
+      })
+      expect(result._tag).toBe('Ok')
+      expect(order).toEqual(['refresh', 'merge'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('ignores issues authored by automated accounts', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()

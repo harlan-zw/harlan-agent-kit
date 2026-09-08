@@ -24,6 +24,7 @@ const publication: ReviewPublication = {
 function attempt(overrides: { headSha?: string, outcome?: ReviewOutcome, findings?: ReviewFinding[], completedAt?: string, publications?: ReviewPublication[] } = {}): ReviewRun {
   return {
     id: 'attempt-1',
+    gatePublication: { _tag: 'Published', publicationId: 'publication-1' },
     repository: 'harlan-zw/example',
     pullRequestNumber: 24,
     revisionId: 'revision-1',
@@ -70,6 +71,14 @@ describe('auto merge label', () => {
 })
 
 describe('auto merge decision', () => {
+  it('holds when a newer Review is PENDING for the same head', () => {
+    expect(decide({ attempts: [attempt(), attempt({ completedAt: '2026-08-18T01:00:00.000Z', outcome: { _tag: 'Pending', confidence: 100 } })] })._tag).toBe('Hold')
+  })
+
+  it('holds when the latest gates have no confirmed Publication', () => {
+    expect(decide({ attempts: [{ ...attempt(), gatePublication: { _tag: 'Unpublished' } }] })._tag).toBe('Hold')
+  })
+
   it('holds a reviewed stack until it targets the default branch', () => {
     expect(decide({ pullRequest: { baseRef: 'fix/parent' } })).toEqual({
       _tag: 'Hold',

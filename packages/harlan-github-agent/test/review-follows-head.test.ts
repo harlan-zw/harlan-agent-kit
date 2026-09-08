@@ -1,4 +1,8 @@
 import type { ReviewGates } from '../src/types.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -48,6 +52,49 @@ function baseMoved(store: ReturnType<typeof openJournalStore>, at: string, overr
 }
 
 describe('review work follows the head commit', () => {
+  it('refreshes retained Review evidence on the current base without changing its provenance', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'review-gate-delivery-'))
+    const path = join(directory, 'journal.sqlite')
+    const before = openJournalStore(path)
+    const repository = repositoryMapping()
+    before.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    before.recordObservation({ externalId: 'original', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+    const task = before.claimNextAdversarialReviewTask('worker', '2026-08-13T01:00:00.000Z', 60 * 60_000)!
+    before.recordReviewRun({ ...reviewRun, id: 'retained-review', revisionId: task.revisionId, gates: passedReviewGates(), confidence: 96, findings: [] })
+    before.completeReviewTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: '2026-08-13T01:03:00.000Z', evidence: 'retained-review', resolution: { _tag: 'Reviewed', reviewRunId: 'retained-review' } })
+    before.recordReviewPublication({ id: 'original-publication', reviewRunId: 'retained-review', body: '### READY', at: '2026-08-13T01:04:00.000Z', result: { _tag: 'Published', githubCommentId: 42, url: 'url' } })
+    const currentRevision = baseMoved(before, '2026-08-13T02:00:00.000Z')
+    before.close()
+
+    // Historical journals can retain the Review's original Revision after a later base observation.
+    const legacy = new DatabaseSync(path)
+    legacy.prepare('UPDATE review_runs SET revision_id = ? WHERE id = ?').run(task.revisionId, 'retained-review')
+    legacy.exec('ALTER TABLE review_gate_projections DROP COLUMN command_id; PRAGMA user_version = 69;')
+    legacy.close()
+    const store = openJournalStore(path)
+    try {
+      expect(store.listReviewRuns(repository.github, 24)[0]?.gatePublication).toEqual({ _tag: 'Unpublished' })
+      expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({ reviewRunId: 'retained-review', revisionId: currentRevision, baseRef: 'main' })])
+      const staged = store.stageReviewGateStatus({ reviewRunId: 'retained-review', repository: repository.github, pullRequestNumber: 24, revisionId: currentRevision, expectedHeadSha: 'abc123', gates: passedReviewGates(), body: '### READY', desiredOutcome: 'READY', at: '2026-08-13T02:01:00.000Z' })
+      expect(staged._tag).toBe('Staged')
+      const publication = store.claimNextTerminalReviewStatus('publisher', '2026-08-13T02:01:00.000Z', 60_000)!
+      expect(publication).not.toBeNull()
+      expect(store.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: '2026-08-13T02:01:01.000Z', commentId: 42, url: 'url' })).toBe(true)
+      expect(store.listReviewRuns(repository.github, 24)[0]).toMatchObject({ revisionId: task.revisionId, startedAt: reviewRun.startedAt, completedAt: reviewRun.completedAt, gatePublication: { _tag: 'Published', publicationId: publication.id } })
+      const reopened = openJournalStore(path)
+      try {
+        expect(reopened.listReviewRuns(repository.github, 24)[0]?.gatePublication).toEqual({ _tag: 'Published', publicationId: publication.id })
+      }
+      finally {
+        reopened.close()
+      }
+    }
+    finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('keeps a running Review when only the base branch moves', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

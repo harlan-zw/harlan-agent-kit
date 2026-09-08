@@ -377,7 +377,12 @@ export type RecordAgentFeedbackResult
   = | { _tag: 'Recorded', feedback: AgentFeedback }
     | { _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }
 
+export type ReviewGatePublication
+  = | { _tag: 'Unpublished' }
+    | { _tag: 'Published', publicationId: string }
+
 export interface ReviewRun {
+  gatePublication: ReviewGatePublication
   /** The target branch whose diff this Review covered. */
   baseRef: string | null
   id: string
@@ -424,7 +429,7 @@ export type ReviewResolution
 
 export type ReviewDesiredOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'WAITING' | 'EXISTING' | 'SKIPPED'
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'outcome' | 'publications' | 'usage'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'gatePublication' | 'outcome' | 'publications' | 'usage'> {
   confidence?: number
   /** Trusted repository policy used by this Review. */
   policyDigest?: string

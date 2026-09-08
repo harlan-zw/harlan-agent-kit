@@ -4,8 +4,12 @@ import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewR
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { createAutoMergeController } from '../src/auto-merge-controller.ts'
 import { createReviewWorker, REVIEW_CONVERSATION_CHARACTER_BUDGET, reviewConversationContext, reviewFindingFingerprint } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
+import { refreshReviewGates } from '../src/review-gate-sweep.ts'
+import { createReviewStatusController } from '../src/review-status-controller.ts'
+import { openJournalStore } from '../src/store.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const soundPremise = { verdict: 'sound' as const, reason: 'The change can be repaired without replacing its intent.' }
@@ -171,6 +175,98 @@ function harness(input: {
 }
 
 describe('review resilience', () => {
+  it('persists final gates and requires each READY projection to reach GitHub before merging', async () => {
+    const store = openJournalStore(':memory:')
+    const mapping = repositoryMapping()
+    const pullRequest = pullRequestItem({ autoMerge: true, mergeState: 'clean' })
+    const pending = reviewSnapshot(pullRequest)
+    pending.checks = { _tag: 'Available', checks: [{ id: 1, failure: { _tag: 'NotAsked' }, source: { _tag: 'CheckRun', appId: 15368 }, name: 'test', status: 'in_progress', conclusion: null }] }
+    const ready = reviewSnapshot(pullRequest)
+    const test = harness({ pullRequest, response: { findings: [], confidence: 96 }, snapshots: [pending, ready] })
+    let at = '2026-08-13T01:00:00.000Z'
+    const now = () => new Date(at)
+    store.syncRepositories([mapping], at)
+    store.recordObservation({ externalId: 'review', observedAt: at, source: 'poll', subject: pullRequest })
+    const task = store.claimNextAdversarialReviewTask('worker', at, 60_000)!
+    test.options.now = now
+    test.options.store = store
+    const controller = createReviewStatusController({
+      github: { ...test.options.github, readExistingReviewLabel: () => Promise.reject(new Error('Unexpected existing review.')) },
+      store,
+      now,
+      workerId: 'publisher',
+      leaseMilliseconds: 60_000,
+    })
+    test.options.status.stageTerminal = controller.stageTerminal!
+    const signal = new AbortController().signal
+    const merges: string[] = []
+    const autoMerge = createAutoMergeController({
+      policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
+      store,
+      report: () => {},
+      merger: {
+        retargetMergedParent: () => Promise.resolve(ok(false)),
+        merge: (input) => {
+          merges.push(input.expectedHeadSha)
+          return Promise.resolve(ok({ _tag: 'AutoMergeEnabled' }))
+        },
+      },
+    })
+    const publish = () => {
+      const command = store.claimNextTerminalReviewStatus('publisher', at, 60_000)!
+      expect(command).not.toBeNull()
+      expect(store.completeReviewStatus({ commandId: command.id, workerId: command.workerId, fence: command.fence, at, commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })).toBe(true)
+    }
+    try {
+      const result = await createReviewWorker(test.options).run(task, signal)
+      expect(result._tag).toBe('Ok')
+      if (result._tag !== 'Ok')
+        throw new Error(result.error)
+      const run = store.listReviewRuns(mapping.github, pullRequest.number)[0]!
+      expect(run.gates.ci._tag).toBe('Passed')
+      expect(run.outcome).toEqual({ _tag: 'Ready', confidence: 96 })
+      expect(store.completeReviewTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, evidence: result.value.evidence, resolution: result.value.resolution })).toBe(true)
+      await autoMerge.reconcile(mapping, pullRequest, signal)
+      expect(merges).toEqual([])
+      publish()
+      await autoMerge.reconcile(mapping, pullRequest, signal)
+      expect(merges).toEqual(['abc123'])
+
+      const refresh = async (live: typeof ready) => refreshReviewGates({
+        store,
+        now,
+        repositories: [mapping],
+        preflightRepair: () => Promise.resolve(ok(undefined)),
+        github: { ...test.options.github, getPullRequestReviewSnapshot: () => Promise.resolve(ok(live)), editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'url' })) },
+      }, signal)
+      at = '2026-08-13T01:01:00.000Z'
+      await refresh(pending)
+      expect(store.listReviewRuns(mapping.github, pullRequest.number)[0]?.outcome._tag).toBe('Pending')
+      await autoMerge.reconcile(mapping, pullRequest, signal)
+      expect(merges).toEqual(['abc123'])
+      publish()
+      at = '2026-08-13T01:02:00.000Z'
+      await Promise.all([refresh(ready), refresh(ready)])
+      await autoMerge.reconcile(mapping, pullRequest, signal)
+      expect(merges).toEqual(['abc123'])
+      publish()
+      await autoMerge.reconcile(mapping, pullRequest, signal)
+      expect(merges).toEqual(['abc123', 'abc123'])
+      at = '2026-08-13T01:03:00.000Z'
+      store.recordReviewPublication({ id: 'foreign-comment', reviewRunId: run.id, body: '### READY', at, result: { _tag: 'Failed', reason: 'The comment no longer belongs to this Review.' } })
+      await autoMerge.reconcile(mapping, pullRequest, signal)
+      expect(merges).toEqual(['abc123', 'abc123'])
+      store.syncRepositories([repositoryMapping({ writablePullRequestAuthors: ['harlan-zw', 'other-maintainer'] })], at)
+      await autoMerge.reconcile(mapping, pullRequest, signal)
+      expect(merges).toEqual(['abc123', 'abc123'])
+      expect(test.provider.requests).toHaveLength(1)
+      expect(store.listReviewRuns(mapping.github, pullRequest.number)[0]).toMatchObject({ id: run.id, startedAt: run.startedAt, completedAt: run.completedAt, usage: run.usage })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('retries a failed terminal publication without another Agent turn', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const passed = { _tag: 'Passed' as const, evidence: [] }
@@ -179,6 +275,7 @@ describe('review resilience', () => {
       response: {},
       reviewRuns: [{
         id: 'stored-review',
+        gatePublication: { _tag: 'Unpublished' },
         baseRef: 'main',
         repository: 'harlan-zw/example',
         pullRequestNumber: 24,
@@ -243,6 +340,7 @@ describe('review resilience', () => {
     const { confidence, ...stored } = attempt
     reviewRuns.push({
       ...stored,
+      gatePublication: { _tag: 'Unpublished' },
       baseRef: pullRequest.baseRef ?? null,
       usage: attempt.usage ?? { _tag: 'Unavailable' },
       outcome: { _tag: 'Ready', confidence },

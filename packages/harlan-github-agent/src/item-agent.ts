@@ -1131,7 +1131,7 @@ async function projectReviewRun(
       : finding)
   }
 
-  if (!gatesChanged && run.publications.some(publication => publication.result._tag === 'Published')) {
+  if (!gatesChanged && run.gatePublication._tag === 'Published') {
     await stampAgentLabel(options, task, storedOutcomeName(run), signal)
     return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
   }
@@ -1142,7 +1142,7 @@ async function projectReviewRun(
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication
     ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
-    : options.status.stageTerminal?.(task, body, outcome, run.id) ?? err('The terminal Review status could not be staged.')
+    : options.status.stageTerminal?.(task, body, outcome, run.id, gates) ?? err('The terminal Review status could not be staged.')
   if (staged._tag === 'Err')
     return staged
   if (!durablePublication)
@@ -1362,6 +1362,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           : { _tag: 'Blocked' as const, confidence: response.confidence }
       return projectReviewRun(options, task, frozen.value, {
         id: reviewRunId,
+        gatePublication: { _tag: 'Unpublished' },
         baseRef: task.pullRequest.baseRef ?? null,
         repository: task.repository,
         pullRequestNumber: task.pullRequestNumber,

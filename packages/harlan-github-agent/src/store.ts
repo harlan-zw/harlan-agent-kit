@@ -73,6 +73,7 @@ import type {
   ReviewFinding,
   ReviewFixQueueResult,
   ReviewFixTask,
+  ReviewGatePublication,
   ReviewGates,
   ReviewOutcome,
   ReviewPublication,
@@ -517,6 +518,8 @@ interface BaselineRepairSubjectRow {
 }
 
 export interface ReviewGateRefresh {
+  baseRef: string
+  gatePublication: ReviewGatePublication
   reviewRunId: string
   repository: string
   pullRequestNumber: number
@@ -548,6 +551,8 @@ export interface ReviewGateRefresh {
 }
 
 interface ReviewGateRefreshRow {
+  base_ref: string
+  gate_publication_id: string | null
   review_run_id: string
   repository: string
   github_number: number
@@ -673,6 +678,7 @@ type StageReviewStatusInput = {
   expectedHeadSha: string
   body: string
   reviewRunId?: string
+  gates?: ReviewGates
   desiredOutcome?: ReviewDesiredOutcome
 } & ReviewStatusTaskPhase
 
@@ -1202,6 +1208,7 @@ interface ClaimRow extends TaskRow {
 }
 
 interface ReviewRunRow {
+  gate_publication_id: string | null
   base_ref: string | null
   id: string
   repository: string
@@ -2605,6 +2612,7 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
       : row.feedback_tag === 'Useful'
         ? { _tag: 'Useful', reason: row.feedback_reason, updatedAt: row.feedback_updated_at }
         : { _tag: row.feedback_tag, reason: row.feedback_reason ?? '', updatedAt: row.feedback_updated_at },
+    gatePublication: row.gate_publication_id === null ? { _tag: 'Unpublished' } : { _tag: 'Published', publicationId: row.gate_publication_id },
     publications,
   }
 }
@@ -6183,7 +6191,14 @@ function installSchema(database: DatabaseSync): void {
       : 'ALTER TABLE review_runs ADD COLUMN base_ref TEXT; PRAGMA user_version = 69;')
     version = 69
   }
-  if (version === 69)
+  if (version === 69) {
+    const columns = (database.prepare('PRAGMA table_info(review_gate_projections)').all() as unknown as Array<{ name: string }>).map(column => column.name)
+    applyMigration(database, columns.includes('command_id')
+      ? 'PRAGMA user_version = 70;'
+      : 'ALTER TABLE review_gate_projections ADD COLUMN command_id TEXT REFERENCES review_status_commands(id); PRAGMA user_version = 70;')
+    version = 70
+  }
+  if (version === 70)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -6372,6 +6387,23 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       review_runs.started_at,
       review_runs.completed_at,
       review_runs.usage,
+      (
+        SELECT published.id FROM review_publications AS published
+        JOIN review_status_commands AS command ON command.id = published.id
+        JOIN review_evidence_scopes AS scope ON scope.review_run_id = review_runs.id
+        WHERE command.id = review_gate_projections.command_id
+          AND command.review_run_id = review_runs.id
+          AND command.state_tag = 'Published' AND published.result_tag = 'Published'
+          AND published.review_run_id = review_runs.id
+          AND published.id = (
+            SELECT latest.id FROM review_publications AS latest
+            WHERE latest.review_run_id = review_runs.id
+            ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+          )
+          AND published.body_sha256 = command.body_sha256
+          AND command.desired_outcome = UPPER(review_gate_projections.outcome_tag)
+          AND scope.policy_digest = repositories.policy_digest
+      ) AS gate_publication_id,
       COALESCE(review_gate_projections.gates, review_runs.gates) AS gates,
       COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
       COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
@@ -7982,6 +8014,23 @@ export function openJournalStore(
         review_runs.started_at,
         review_runs.completed_at,
         review_runs.usage,
+        (
+          SELECT published.id FROM review_publications AS published
+          JOIN review_status_commands AS command ON command.id = published.id
+          JOIN review_evidence_scopes AS scope ON scope.review_run_id = review_runs.id
+          WHERE command.id = review_gate_projections.command_id
+            AND command.review_run_id = review_runs.id
+            AND command.state_tag = 'Published' AND published.result_tag = 'Published'
+            AND published.review_run_id = review_runs.id
+            AND published.id = (
+              SELECT latest.id FROM review_publications AS latest
+              WHERE latest.review_run_id = review_runs.id
+              ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+            )
+            AND published.body_sha256 = command.body_sha256
+            AND command.desired_outcome = UPPER(review_gate_projections.outcome_tag)
+            AND scope.policy_digest = repositories.policy_digest
+        ) AS gate_publication_id,
         COALESCE(review_gate_projections.gates, review_runs.gates) AS gates,
         COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
         COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
@@ -9653,6 +9702,18 @@ export function openJournalStore(
         }
       }
 
+      const projection = input.reviewRunId === undefined
+        ? undefined
+        : database.prepare(`
+        SELECT gates, outcome_tag FROM review_gate_projections WHERE review_run_id = ?
+      `).get(input.reviewRunId) as { gates: string, outcome_tag: string } | undefined
+      const gates = input.gates === undefined ? projection?.gates : JSON.stringify(input.gates)
+      const outcome = gates === undefined ? undefined : derivedReviewOutcome(JSON.parse(gates) as ReviewGates)
+      if (outcome !== undefined && desiredOutcome !== outcome.toUpperCase()) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'The Review gate projection and desired outcome disagree.' }
+      }
+
       const existing = database.prepare(`
         SELECT id, body FROM review_status_commands WHERE id = ?
       `).get(commandId) as { id: string, body: string } | undefined
@@ -9682,6 +9743,13 @@ export function openJournalStore(
         input.at,
         input.at,
       )
+      if (projection !== undefined && gates !== undefined && outcome !== undefined) {
+        database.prepare(`
+          UPDATE review_gate_projections SET gates = ?, outcome_tag = ?, command_id = ?,
+            updated_at = CASE WHEN gates != ? OR outcome_tag != ? THEN ? ELSE updated_at END
+          WHERE review_run_id = ?
+        `).run(gates, outcome, commandId, gates, outcome, input.at, input.reviewRunId!)
+      }
       recordReviewStatusEvent(database, {
         commandId,
         event: 'Staged',
@@ -9742,19 +9810,23 @@ export function openJournalStore(
         WHERE review_runs.id = ?
           AND repositories.github = ? AND subjects.github_number = ?
           AND subjects.kind = 'pull_request'
-          AND review_runs.revision_id = ? AND subjects.current_revision_id = ?
+          AND subjects.current_revision_id = ?
           AND review_runs.head_sha = ?
           AND review_runs.base_ref = json_extract(revisions.payload, '$.baseRef')
           AND json_extract(revisions.payload, '$.state') = 'open'
           AND json_extract(revisions.payload, '$.headSha') = ?
+          AND EXISTS (
+            SELECT 1 FROM review_evidence_scopes
+            WHERE review_run_id = review_runs.id AND policy_digest = repositories.policy_digest
+          )
           AND repositories.enabled = 1
+          ${repositoryWriteAuthoritySql}
           AND repositories.paused = 0
           AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       `).get(
         input.reviewRunId,
         input.repository,
         input.pullRequestNumber,
-        input.revisionId,
         input.revisionId,
         input.expectedHeadSha,
         input.expectedHeadSha,
@@ -9813,6 +9885,7 @@ export function openJournalStore(
         fence: number
       } | undefined
       if (existing !== undefined && (existing.state_tag === 'Pending' || existing.state_tag === 'Running')) {
+        database.prepare('UPDATE review_gate_projections SET command_id = ? WHERE review_run_id = ?').run(existing.id, input.reviewRunId)
         database.exec('COMMIT')
         return { _tag: 'Duplicate', commandId: existing.id }
       }
@@ -9838,6 +9911,7 @@ export function openJournalStore(
           fence: existing.fence,
           at: input.at,
         })
+        database.prepare('UPDATE review_gate_projections SET command_id = ? WHERE review_run_id = ?').run(existing.id, input.reviewRunId)
         database.exec('COMMIT')
         return { _tag: 'Staged', commandId: existing.id }
       }
@@ -9866,6 +9940,7 @@ export function openJournalStore(
         to: 'Pending',
         at: input.at,
       })
+      database.prepare('UPDATE review_gate_projections SET command_id = ? WHERE review_run_id = ?').run(commandId, input.reviewRunId)
       database.exec('COMMIT')
       return { _tag: 'Staged', commandId }
     }
@@ -12311,8 +12386,12 @@ export function openJournalStore(
       SELECT review_runs.*,
         ROW_NUMBER() OVER (PARTITION BY review_runs.subject_id ORDER BY review_runs.completed_at DESC, review_runs.id DESC) AS run_rank
       FROM review_runs
-      WHERE review_runs.revision_id = (
-          SELECT subjects.current_revision_id FROM subjects WHERE subjects.id = review_runs.subject_id
+      WHERE EXISTS (
+          SELECT 1 FROM subjects
+          JOIN revisions ON revisions.id = subjects.current_revision_id
+          WHERE subjects.id = review_runs.subject_id
+            AND json_extract(revisions.payload, '$.headSha') = review_runs.head_sha
+            AND json_extract(revisions.payload, '$.baseRef') = review_runs.base_ref
         )
         AND NOT EXISTS (
           SELECT 1 FROM review_runs AS settled
@@ -12323,7 +12402,10 @@ export function openJournalStore(
       ranked.id AS review_run_id,
       repositories.github AS repository,
       subjects.github_number,
-      ranked.revision_id,
+      subjects.current_revision_id AS revision_id,
+      ranked.base_ref,
+      CASE WHEN projection.command_id = published.id AND command.state_tag = 'Published'
+        THEN published.id ELSE NULL END AS gate_publication_id,
       ranked.head_sha,
       ranked.provider,
       ranked.session_id,
@@ -12344,6 +12426,7 @@ export function openJournalStore(
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions AS current_revisions ON current_revisions.id = subjects.current_revision_id
     LEFT JOIN review_gate_projections AS projection ON projection.review_run_id = ranked.id
+    LEFT JOIN review_status_commands AS command ON command.id = projection.command_id
     JOIN review_publications AS published ON published.id = (
       SELECT candidate.id FROM review_publications AS candidate
       WHERE candidate.review_run_id = ranked.id
@@ -12390,7 +12473,10 @@ export function openJournalStore(
       ${repositoryWriteAuthoritySql}
       AND repositories.paused = 0
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-      AND ranked.revision_id = subjects.current_revision_id
+      AND EXISTS (
+        SELECT 1 FROM review_evidence_scopes
+        WHERE review_run_id = ranked.id AND policy_digest = repositories.policy_digest
+      )
       AND json_extract(current_revisions.payload, '$.state') = 'open'
       AND json_extract(current_revisions.payload, '$.headSha') = ranked.head_sha
       AND ranked.base_ref = json_extract(current_revisions.payload, '$.baseRef')
@@ -12417,6 +12503,8 @@ export function openJournalStore(
     ORDER BY repositories.github, subjects.github_number
   `).all() as unknown as ReviewGateRefreshRow[]).map(row => ({
     reviewRunId: row.review_run_id,
+    baseRef: row.base_ref,
+    gatePublication: row.gate_publication_id === null ? { _tag: 'Unpublished' } : { _tag: 'Published', publicationId: row.gate_publication_id },
     repository: row.repository,
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,

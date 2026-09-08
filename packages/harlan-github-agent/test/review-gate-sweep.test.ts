@@ -29,6 +29,8 @@ function pendingControllerGates(): ReviewGates {
 function gateRefresh(overrides: Partial<ReviewGateRefresh> = {}): ReviewGateRefresh {
   return {
     reviewRunId: 'run-1',
+    baseRef: 'main',
+    gatePublication: { _tag: 'Published', publicationId: 'published-1' },
     repository: 'harlan-zw/example',
     pullRequestNumber: 24,
     revisionId: 'revision-1',
@@ -149,6 +151,23 @@ function harness(options: {
 }
 
 describe('refreshReviewGates', () => {
+  it('skips Reviews outside the requested Repository mappings', async () => {
+    const { recorded, run } = harness({ review: gateRefresh({ repository: 'harlan-zw/other' }) })
+    expect(await run()).toEqual([])
+    expect(recorded.staged).toEqual([])
+    expect(recorded.resolved.map(resolved => resolved.repository)).toEqual(['harlan-zw/example'])
+  })
+
+  it('leaves a Review alone when GitHub retargets its unchanged head', async () => {
+    const live = snapshot([check()])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    live.value.pullRequest.baseRef = 'fix/parent'
+    const { recorded, run } = harness({ live })
+    expect(await run()).toEqual([ok({ _tag: 'Superseded', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
+    expect(recorded.staged).toEqual([])
+  })
+
   it('queues a Baseline repair once the default branch fails under a settled review', async () => {
     const live = snapshot([check({ name: 'Fuzz fuzz_options', conclusion: 'failure' })])
     const { recorded, run } = harness({ live })

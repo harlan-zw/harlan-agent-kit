@@ -40,6 +40,7 @@ describe('pull request status controller', () => {
       findings: [],
       usage: { _tag: 'Unavailable' as const },
       feedback: null,
+      gatePublication: { _tag: 'Unpublished' as const },
       publications: [],
       title: 'Fix the broken thing',
       author: 'harlan-zw',

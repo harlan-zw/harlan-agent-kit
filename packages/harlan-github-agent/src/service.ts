@@ -837,6 +837,44 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store,
     workerId: randomUUID(),
   })
+  const refreshRepositoryReviewGates = async (repository: RepositoryMapping, signal: AbortSignal): Promise<void> => {
+    const settled = await refreshReviewGates({
+      github: workerGithub,
+      now,
+      preflightRepair: (name, refreshSignal) => preflightGitHubWriteAccess(tokens, name, ['contents_write'], refreshSignal),
+      repositories: [repository],
+      store,
+    }, signal)
+    settled.forEach((result) => {
+      if (result._tag === 'Ok') {
+        if ((result.value._tag === 'PublicationQueued' || result.value._tag === 'Unchanged') && result.value.baselineRepair !== undefined) {
+          const repair = result.value.baselineRepair
+          const detail = 'reason' in repair
+            ? `no Baseline repair for the red default branch: ${repair.reason}`
+            : repair._tag === 'Queued'
+              ? `queued Baseline repair ${repair.taskId} for the red default branch.`
+              : `Baseline repair ${repair.taskId} already covers the red default branch.`
+          options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: ${detail}`)
+        }
+        if (result.value._tag === 'PublicationQueued')
+          options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: queued the ${result.value.outcome} Review status.`)
+        else if (result.value._tag === 'Superseded')
+          options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the head commit moved, so the prior Review was left alone.`)
+        else if (result.value._tag === 'Retired')
+          options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The Review left the refresh list.`)
+      }
+      else {
+        options.logger.error(`Waiting review: ${result.error}`)
+      }
+    })
+    if (signal.aborted)
+      return
+    const messages = settled.flatMap(result => result._tag === 'Err' ? [result.error] : [])
+    const scope = { _tag: 'Repository' as const, repository: repository.github }
+    const at = now().toISOString()
+    messages.forEach(message => recordServiceIncident(store, at, 'review_gate_refresh', message, scope))
+    store.resolveIncidents(scope, at, 'review_gate_refresh', messages)
+  }
   const poller = createPoller({
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
@@ -860,7 +898,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         : await guarded('Repository reconciliation', () => reconcileAllRepositories(config.repositories.filter(repository => repository.pollIntervalSeconds === undefined), {
             ...(mutationSchedulers === undefined
               ? {}
-              : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge }),
+              : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge, refreshReviewGates: refreshRepositoryReviewGates }),
             github,
             store,
             now,
@@ -1018,36 +1056,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-        const settled = await guarded('Review gate refresh', () => refreshReviewGates({
-          github: workerGithub,
-          now,
-          preflightRepair: (repository, refreshSignal) => preflightGitHubWriteAccess(tokens, repository, ['contents_write'], refreshSignal),
-          repositories: config.repositories,
-          store,
-        }, signal), [])
-        settled.forEach((result) => {
-          if (result._tag === 'Ok') {
-            if ((result.value._tag === 'PublicationQueued' || result.value._tag === 'Unchanged') && result.value.baselineRepair !== undefined) {
-              const repair = result.value.baselineRepair
-              const detail = 'reason' in repair
-                ? `no Baseline repair for the red default branch: ${repair.reason}`
-                : repair._tag === 'Queued'
-                  ? `queued Baseline repair ${repair.taskId} for the red default branch.`
-                  : `Baseline repair ${repair.taskId} already covers the red default branch.`
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: ${detail}`)
-            }
-            if (result.value._tag === 'PublicationQueued')
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: queued the ${result.value.outcome} Review status.`)
-            else if (result.value._tag === 'Superseded')
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: the head commit moved, so the prior Review was left alone.`)
-            else if (result.value._tag === 'Retired')
-              options.logger.info(`${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The Review left the refresh list.`)
-          }
-          else {
-            options.logger.error(`Waiting review: ${result.error}`)
-          }
-        })
-        recordPassIncidents('review_gate_refresh', settled.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const positions = await guarded('Queue position comments', () => publishQueuePositions({
           github: workerGithub,
           now,
@@ -1092,7 +1100,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         const results = await reconcileAllRepositories([repository], {
           ...(mutationSchedulers === undefined
             ? {}
-            : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge }),
+            : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge, refreshReviewGates: refreshRepositoryReviewGates }),
           github,
           store,
           now,

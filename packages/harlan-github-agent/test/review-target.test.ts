@@ -93,13 +93,24 @@ describe('review target branch authority', () => {
     if (fresh === null)
       throw new Error('Expected a new Review of the target branch.')
     expect(restarted.recordReviewRun({ ...ready, id: 'main-review', revisionId: fresh.revisionId, completedAt: '2026-08-13T02:02:00.000Z' })._tag).toBe('Inserted')
-    restarted.recordReviewPublication({
-      id: 'main-publication',
+    const staged = restarted.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: fresh.id,
+      workerId: fresh.state.workerId,
+      fence: fresh.state.fence,
+      revisionId: fresh.revisionId,
+      expectedHeadSha: child.headSha,
       reviewRunId: 'main-review',
+      gates,
       body: '### READY',
+      desiredOutcome: 'READY',
       at: '2026-08-13T02:03:00.000Z',
-      result: { _tag: 'Published', githubCommentId: 43, url: `${child.url}#issuecomment-43` },
     })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const publication = restarted.claimReviewStatus(staged.commandId, 'publisher', '2026-08-13T02:03:00.000Z', 60_000)!
+    expect(restarted.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: '2026-08-13T02:03:01.000Z', commentId: 43, url: `${child.url}#issuecomment-43` })).toBe(true)
     await controller.reconcile(repository, retargeted, new AbortController().signal)
     expect(merges).toEqual([child.headSha])
   })
