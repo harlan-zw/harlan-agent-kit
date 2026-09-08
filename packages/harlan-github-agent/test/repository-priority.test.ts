@@ -57,6 +57,56 @@ it('claims newer priority issues before older background issues', () => {
   expect(store.claimNextIssueTriageTask('second', later, 60_000)?.repository).toBe('harlan-zw/example')
 })
 
+it('gives Review the next claim before older Issue work and Issue triage', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier, [101])
+  store.recordObservation({ externalId: 'next-issue', observedAt: earlier, source: 'poll', subject: issueItem({ repository: priority, number: 102 }) })
+  store.recordObservation({ externalId: 'review', observedAt: later, source: 'poll', subject: pullRequestItem({ repository: priority, mergeState: 'clean' }) })
+
+  expect(store.claimNextIssueWorkTask('implementation', later, 60_000)).toBeNull()
+  expect(store.claimNextIssueTriageTask('triage', later, 60_000)).toBeNull()
+  expect(store.claimNextAdversarialReviewTask('review', later, 60_000)?.pullRequestNumber).toBe(24)
+  expect(store.claimNextIssueWorkTask('implementation', later, 60_000)?.issueNumber).toBe(101)
+  expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.issueNumber).toBe(102)
+})
+
+it('gives Conflict resolution the next claim before older Issue work', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier, [101])
+  store.recordObservation({ externalId: 'conflict', observedAt: later, source: 'poll', subject: pullRequestItem({ repository: priority, headRepository: priority }) })
+
+  expect(store.claimNextIssueWorkTask('implementation', later, 60_000)).toBeNull()
+  expect(store.claimNextConflictTask('conflict', later, 60_000)?.pullRequestNumber).toBe(24)
+})
+
+it('keeps a new Batch queued until Review takes its claim', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier)
+  store.planBatches(earlier)
+  store.recordObservation({ externalId: 'review', observedAt: later, source: 'poll', subject: pullRequestItem({ repository: priority, mergeState: 'clean' }) })
+
+  expect(store.claimNextBatch('batch', later, 60_000)).toBeNull()
+  expect(store.claimNextAdversarialReviewTask('review', later, 60_000)?.pullRequestNumber).toBe(24)
+  expect(store.claimNextBatch('batch', later, 60_000)?.repository).toBe(priority)
+})
+
+it('does not hold Issue work behind a Review that lacks Approval', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier, [101])
+  store.recordObservation({ externalId: 'unapproved-review', observedAt: later, source: 'poll', subject: pullRequestItem({ repository: priority, mergeState: 'clean', author: 'outside-contributor' }) })
+
+  expect(store.claimNextAdversarialReviewTask('review', later, 60_000)).toBeNull()
+  expect(store.claimNextIssueWorkTask('implementation', later, 60_000)?.issueNumber).toBe(101)
+})
+
+it('keeps ordinary Review outside the repository priority override for Routines', () => {
+  const store = setup(true)
+  store.recordObservation({ externalId: 'review', observedAt: later, source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+
+  expect(store.hasPriorityAgentTask()).toBe(false)
+  expect(store.claimNextAdversarialReviewTask('review', later, 60_000)?.pullRequestNumber).toBe(24)
+})
+
 it('gives priority issues the next permit before background conflict work', () => {
   const store = setup()
   store.recordObservation({ externalId: 'background', observedAt: earlier, source: 'poll', subject: pullRequestItem() })

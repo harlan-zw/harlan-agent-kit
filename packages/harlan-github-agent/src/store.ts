@@ -8211,14 +8211,24 @@ export function openJournalStore(
               )
             )
           )
-        ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, tasks.updated_at, tasks.id
+        ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC,
+          CASE WHEN tasks.kind = 'issue_work' THEN 0 ELSE 1 END DESC,
+          tasks.updated_at, tasks.id
         LIMIT 1
       `).get(kind, kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests) as ClaimRow | undefined
 
-  const hasHigherPriorityTask = (priority: number): boolean =>
-    [nextMutationTask(null, undefined, true), nextWorkerTask(null)].some(row =>
-      row !== undefined && ((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0) > priority,
-    )
+  const deliveryPriority = (kind: AgentTask['kind']): number => kind === 'issue_work' || kind === 'issue_triage' ? 0 : 1
+
+  // A waiting Review must get a free permit before another issue starts.
+  // Compare only claimable work, so missing Approval never holds the Queue.
+  const hasHigherPriorityTask = (priority: number, kind: AgentTask['kind'] = 'issue_work'): boolean =>
+    [nextMutationTask(null, undefined, true), nextWorkerTask(null)].some((row) => {
+      if (row === undefined)
+        return false
+      const candidatePriority = (JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0
+      return candidatePriority > priority
+        || (candidatePriority === priority && deliveryPriority(row.kind) > deliveryPriority(kind))
+    })
 
   const claimMutationTask = (
     kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work',
@@ -8238,7 +8248,7 @@ export function openJournalStore(
 
       // A Batch already owns an Agent permit when it claims an exact unit Task.
       // New priority work competes for free permits without interrupting that Batch.
-      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0)) {
+      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, kind)) {
         database.exec('COMMIT')
         return null
       }
@@ -8692,7 +8702,9 @@ export function openJournalStore(
                 AND pull_request_approvals.kind = 'review'
             )
           )
-        ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, worker_tasks.updated_at, worker_tasks.id
+        ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC,
+          CASE WHEN worker_tasks.kind = 'adversarial_review' THEN 1 ELSE 0 END DESC,
+          worker_tasks.updated_at, worker_tasks.id
         LIMIT 1
       `).get(kind, kind) as (ClaimRow & { rerun_requested: number }) | undefined
 
@@ -8711,7 +8723,7 @@ export function openJournalStore(
         return null
       }
 
-      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0)) {
+      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, kind)) {
         database.exec('COMMIT')
         return null
       }
@@ -14063,7 +14075,7 @@ export function openJournalStore(
     cancelTask,
     recordPullRequestTriageRun,
     getLatestPullRequestTriageRun,
-    hasPriorityAgentTask: () => hasHigherPriorityTask(0),
+    hasPriorityAgentTask: () => hasHigherPriorityTask(0, 'adversarial_review'),
     claimNextAdversarialReviewTask,
     claimNextBaselineRepairTask,
     claimNextConflictTask,

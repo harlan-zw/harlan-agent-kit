@@ -1787,6 +1787,7 @@ describe('journal store', () => {
       source: 'poll',
       subject: { ...pullRequest, state: 'closed', updatedAt: '2026-08-13T01:02:04.000Z' },
     })
+    expect(store.claimNextAdversarialReviewTask('review', '2026-08-13T01:02:04.500Z', 600_000)?.pullRequestNumber).toBe(99)
     expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:05.000Z', 600_000)).toEqual(
       expect.objectContaining({ kind: 'issue_work', issueNumber: 12 }),
     )

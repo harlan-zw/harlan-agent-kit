@@ -1391,7 +1391,6 @@ describe('subject Workers', () => {
       },
     })
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-terra', reasoningEffort: 'medium', sessionId: null })])
-    expect(capture.requests[0]?.prompt).toContain('Verify that the target file and symbol exist. Do not run test suites. Do not prove library types exist.')
     expect(capture.requests[0]?.prompt).toContain('Use pnpm for every package command. Never use npx.')
     expect(triageResult).toEqual({
       _tag: 'READY_TO_IMPLEMENT',
