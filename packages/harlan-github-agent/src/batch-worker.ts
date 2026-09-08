@@ -100,6 +100,7 @@ Decide units. One unit is one pull request. Rules:
 - Combine issues into one unit only when one change fixes them all, or when fixing them apart would conflict in the same lines.
 - Keep issues apart when a reviewer would want to read them apart. Small pull requests merge sooner.
 - A unit that must build on another unit's change names that unit in dependsOn, as the zero-based index of an earlier unit. Its pull request then stacks on that pull request's head branch. Use null when the unit stands on the default branch.
+- Shared files alone do not create a dependency. Keep independent changes on the default branch, even in the same file.
 - Order units so that shared groundwork comes first.
 - An issue whose triage difficulty is 4 or 5 stays in its own unit and comes after the easier units, unless another issue shares its exact cause. One long fix must never hold the quick ones.
 - Every issue appears in exactly one unit. Do not invent issue numbers.
@@ -394,7 +395,7 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
       }
       if (signal.aborted)
         return err('The Batch was stopped before every unit finished.')
-      await settlePublished(settled.filter(unit => options.store.getBatchDependency(unit.id)._tag !== 'Unavailable'), signal)
+      await settlePublished(settled, signal)
       // A blocked unit stays Waiting. The scheduler releases the permit and
       // keeps the plan queued, so reviews can clear the pull request limit.
       if (queue.length > 0 || suspended)

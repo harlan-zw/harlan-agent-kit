@@ -576,6 +576,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         merger: createGitHubPullRequestMerger({ tokens }),
         policy: config.autoMerge,
         report: (event) => {
+          if (event._tag === 'Retargeted') {
+            options.logger.info(`${event.repository}#${event.pullRequestNumber}: the parent merged. The stack now targets the default branch.`)
+            return
+          }
           if (event._tag === 'AutoMergeEnabled') {
             options.logger.info(`${event.repository}#${event.pullRequestNumber}: GitHub auto-merge is enabled. GitHub merges it when its checks pass.`)
             store.resolveIncidents({ _tag: 'Repository', repository: event.repository }, now().toISOString(), 'auto_merge')

@@ -69,6 +69,13 @@ describe('auto merge label', () => {
 })
 
 describe('auto merge decision', () => {
+  it('holds a reviewed stack until it targets the default branch', () => {
+    expect(decide({ pullRequest: { baseRef: 'fix/parent' } })).toEqual({
+      _tag: 'Hold',
+      reason: 'The pull request must target the default branch before Auto merge.',
+    })
+  })
+
   it('merges a labelled pull request with a READY review at full confidence', () => {
     expect(decide()).toEqual({ _tag: 'Merge', headSha: 'abc123', method: 'squash', reviewRunId: 'attempt-1' })
   })

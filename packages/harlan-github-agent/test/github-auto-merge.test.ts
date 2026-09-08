@@ -8,6 +8,7 @@ import { repositoryMapping } from './fixtures.ts'
 
 interface FakeGitHub {
   headSha?: string
+  baseRef?: string
   /** Thrown by the auto-merge mutation, if anything. */
   autoMergeError?: Error
   mergeResponse?: { merged: boolean, sha?: string, message?: string }
@@ -30,7 +31,7 @@ function merger(github: FakeGitHub, recorded: Recorded) {
       rest: {
         pulls: {
           get: () => Promise.resolve({
-            data: { node_id: 'PR_node_1', head: { sha: github.headSha ?? 'abc123' } },
+            data: { node_id: 'PR_node_1', head: { sha: github.headSha ?? 'abc123' }, base: { ref: github.baseRef ?? 'main' } },
           }),
           merge: (input: Record<string, unknown>) => {
             recorded.merges.push(input)
@@ -56,6 +57,49 @@ const input = {
 
 describe('gitHub auto-merge handoff', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it.each(['merged', 'open', 'other-base', 'changed-parent', 'outside-author'])('retargets only an integrated parent: %s', async (scenario) => {
+    const updates: unknown[] = []
+    const current = {
+      state: 'open',
+      draft: false,
+      merged_at: null,
+      user: { login: scenario === 'outside-author' ? 'outside' : 'harlan-zw' },
+      head: { sha: 'abc123', repo: { full_name: input.repository.github } },
+      base: { ref: 'fix/parent', sha: 'parent-sha', repo: { full_name: input.repository.github } },
+    }
+    const parent = {
+      merged_at: scenario === 'open' ? null : '2026-09-08T01:00:00Z',
+      head: { sha: scenario === 'changed-parent' ? 'old-parent' : 'parent-sha', repo: { full_name: input.repository.github } },
+      base: { ref: scenario === 'other-base' ? 'fix/grandparent' : 'main' },
+    }
+    const service = createGitHubPullRequestMerger({
+      tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+      createClient: () => ({ rest: { pulls: {
+        get: async () => ({ data: current }),
+        list: async () => ({ data: [parent] }),
+        update: async (request: unknown) => {
+          updates.push(request)
+          return { data: { ...current, base: { ...current.base, ref: 'main' } } }
+        },
+      } } }) as unknown as Octokit,
+    })
+
+    expect(await service.retargetMergedParent({ ...input, expectedBaseRef: 'fix/parent' })).toEqual(ok(scenario === 'merged'))
+    expect(updates).toEqual(scenario === 'merged' ? [{ owner: 'harlan-zw', repo: 'example', pull_number: 24, base: 'main' }] : [])
+  })
+
+  it('refuses when the target changed to another branch after the review', async () => {
+    const recorded: Recorded = { graphql: [], merges: [] }
+    const result = await merger({ baseRef: 'fix/merged-parent' }, recorded).merge(input)
+
+    expect(result).toEqual({ _tag: 'Err', error: {
+      repository: input.repository.github,
+      message: 'The pull request no longer targets the default branch.',
+    } })
+    expect(recorded.graphql).toEqual([])
+    expect(recorded.merges).toEqual([])
+  })
 
   it.each([false, true])('mints merge access for a direct merge, authentication retry: %s', async (retry) => {
     const minted: Array<Record<string, string>> = []
@@ -85,7 +129,7 @@ describe('gitHub auto-merge handoff', () => {
         merged.push(JSON.parse(String(init?.body)))
         return json({ merged: true, sha: 'merge-sha' })
       }
-      return json({ node_id: 'PR_node_1', head: { sha: 'abc123' } })
+      return json({ node_id: 'PR_node_1', head: { sha: 'abc123' }, base: { ref: 'main' } })
     })
 
     const result = await createGitHubPullRequestMerger({ tokens }).merge(input)

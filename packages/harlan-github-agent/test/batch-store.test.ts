@@ -120,6 +120,64 @@ describe('normalizeBatchPlan', () => {
 })
 
 describe('batches in the journal', () => {
+  it('releases a requeued publication instead of waiting for a pull request that cannot open', () => {
+    const store = openJournalStore(':memory:', true)
+    try {
+      seedReadyHumanIssues(store, [101, 102])
+      store.planBatches(at(6))
+      const batch = store.claimNextBatch('batch-worker', at(7), 600_000)!
+      const plan = store.recordBatchPlan({
+        batchId: batch.id,
+        workerId: 'batch-worker',
+        fence: batch.state.fence,
+        at: at(8),
+        units: [{ issueNumbers: [101], dependsOn: null, rationale: 'Independent.' }, { issueNumbers: [102], dependsOn: null, rationale: 'Independent.' }],
+      })
+      if (plan._tag === 'Err')
+        throw new Error(plan.error)
+      const unit = plan.value[0]!
+      const task = store.claimBatchUnitTask({ unitId: unit.id, workerId: 'batch-worker', now: at(9), leaseMilliseconds: 600_000 })!
+      store.stagePublication({
+        taskId: task.id,
+        workerId: 'batch-worker',
+        fence: task.state.fence,
+        at: at(10),
+        publication: {
+          _tag: 'OpenPullRequest',
+          taskKind: 'issue_work',
+          issueNumber: 101,
+          pullRequestTitle: 'fix: handle the request',
+          pullRequestBody: 'Closes #101.',
+          diagram: null,
+          commitSha: 'commit-1',
+          baseSha: 'base-1',
+          baseRef: 'main',
+          expectedHeadSha: 'base-1',
+          headRef: 'fix/issue-101',
+          artifactRef: 'refs/artifact-1',
+          patchDigest: 'digest-1',
+          changedFiles: 1,
+        },
+      })
+      const command = store.claimNextPublication('publisher', at(11), 600_000)!
+      store.supersedePublication({ commandId: command.id, workerId: 'publisher', fence: command.fence, at: at(12), reason: 'The base branch changed before publication.' })
+      store.recordObservation({
+        externalId: 'issue-101',
+        observedAt: at(13),
+        source: 'poll',
+        subject: issueItem({ number: 101, author: 'harlan-zw', title: 'Reported bug 101', url: 'https://github.com/harlan-zw/example/issues/101' }),
+      })
+
+      expect(store.getBatchDependency(unit.id)).toEqual({ _tag: 'Unavailable', reason: 'The unit task was requeued before publication.' })
+      store.completeBatch({ batchId: batch.id, workerId: 'batch-worker', fence: batch.state.fence, at: at(14) })
+      const ready = [store.claimNextIssueWorkTask('retry', at(15), 600_000), store.claimNextIssueWorkTask('retry', at(15), 600_000)]
+      expect(ready).toEqual(expect.arrayContaining([expect.objectContaining({ id: task.id, issueNumber: 101 })]))
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('reserves Ready Routine-filed issues, keeps plain Issue work off them, and runs units under one Batch lease', async () => {
     const store = openJournalStore(':memory:', true)
     try {

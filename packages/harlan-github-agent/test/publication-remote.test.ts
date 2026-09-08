@@ -188,7 +188,7 @@ describe('git publication remote', () => {
     expect(requested).toEqual([expectedAccess])
   })
 
-  it('pins the stack base branch, not the default branch', async () => {
+  it('allows issue publication after the default branch advances', async () => {
     const { bare, command, expectedHeadSha, root } = fixture()
     const stacked: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> = {
       ...command,
@@ -215,9 +215,9 @@ describe('git publication remote', () => {
     })
 
     expect(await remote.validateAuthority(stacked, new AbortController().signal)).toEqual(ok(undefined))
-    // The same commit is not the default branch tip, so the default branch cannot stand in for it.
+    // A reviewed sibling may merge while this issue is being implemented.
     expect(await remote.validateAuthority({ ...stacked, baseRef: 'main' }, new AbortController().signal))
-      .toEqual({ _tag: 'Err', error: 'The base branch changed before publication.' })
+      .toEqual(ok(undefined))
   })
 
   it('refuses to rewrite a branch that already has an open pull request', async () => {

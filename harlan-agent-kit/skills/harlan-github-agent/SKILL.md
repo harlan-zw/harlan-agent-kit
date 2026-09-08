@@ -33,6 +33,10 @@ Treat `harlan-agent-review` as a manual override that always requires adversaria
 
 Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. A repository block with `auto_merge.pull_requests: every` drops the label condition and uses its own `minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
 
+Auto merge targets the default branch only. If a stack's exact parent merged there, retarget the child before the next observation.
+Keep independent Issue work on the default branch, even when another pull request changes the same file.
+If the default branch advances normally, publish the existing verified patch. Fresh Review and GitHub checks evaluate the current base.
+
 Start no new issue work above `max_open_pull_requests` open pull requests. Keep review, repair, and conflict fixes running.
 
 Plan Ready Routine-filed issues as one Batch per repository when two or more wait. The Batch reserves their Issue work Tasks, runs one Batch planning turn over every reserved issue, and stores units: the issues one pull request closes, and the unit each one stacks on. Units run as Issue work Agents under the Batch's one permit, three at a time, each in its own worktree. A unit publishes the moment its Agent finishes; a stacked unit waits only for its base pull request to open, then falls back to the default branch after ten minutes. A planning turn that fails or returns an invalid plan runs every issue alone. `issue_batches: false` turns planning off. Issue triage names fix-together partners as `Fix with #N`, and the planning turn reads them as hints.

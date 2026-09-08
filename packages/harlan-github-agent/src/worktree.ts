@@ -1343,6 +1343,17 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       if (base.exitCode !== 0)
         return err(`Could not read the remote base branch: ${base.stderr}`)
       const baseSha = base.stdout.split(/\s+/)[0]
+      // Independent Issue work keeps its verified patch when a sibling merges.
+      // Fresh Review and GitHub checks evaluate it against the current default branch.
+      if (baseSha && command._tag === 'OpenPullRequest' && command.taskKind === 'issue_work'
+        && command.baseRef === command.repositoryMapping.defaultBranch && baseSha !== command.baseSha) {
+        const repository = repositoryGitDirectory(options.root, command.repository)
+        const fetched = await runGit(repository, ['fetch', '--no-tags', remoteUrl(command.repository), baseSha], signal, credential.value, options.remoteUrl !== undefined)
+        if (fetched.exitCode !== 0)
+          return err(`Could not read the current default branch commit: ${fetched.stderr}`)
+        const ancestor = await runGit(repository, ['merge-base', '--is-ancestor', command.baseSha, baseSha], signal)
+        return ancestor.exitCode === 0 ? ok(undefined) : err('The default branch no longer contains the issue work base commit.')
+      }
       return baseSha === command.baseSha
         ? ok(undefined)
         : err('The base branch changed before publication.')
