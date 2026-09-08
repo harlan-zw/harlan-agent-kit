@@ -3,7 +3,6 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { BoardCard, CardAction } from '../utils/dashboard.ts'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import {
-  approvalActionLabel,
   avatarUrl,
   boardCardBadge,
   boardCardIdentity,
@@ -19,6 +18,7 @@ import {
   taskNumber,
   taskSubjectUrl,
 } from '../utils/dashboard.ts'
+import { queueRecommendation } from '../utils/recommendation.ts'
 import BoardCardSlideover from './_BoardCardSlideover.vue'
 
 /**
@@ -60,6 +60,7 @@ const {
 } = useDashboard()
 
 const face = ref<HTMLButtonElement | null>(null)
+const primaryControl = ref<{ $el: HTMLElement } | null>(null)
 const slideoverOpen = ref(false)
 const confirming = ref<'cancel' | 'dismiss' | 'eject' | undefined>()
 
@@ -69,7 +70,8 @@ const work = computed(() => boardCardWork(card))
 const identity = computed(() => boardCardIdentity(card, snapshot.value))
 const badge = computed(() => boardCardBadge(card))
 const stateLine = computed(() => entry.value === undefined ? undefined : cardStateLine(entry.value, snapshot.value, now.value))
-const primaryLabel = computed(() => entry.value === undefined ? undefined : approvalActionLabel(entry.value))
+const recommendation = computed(() => entry.value === undefined ? undefined : queueRecommendation(entry.value, snapshot.value))
+const primaryLabel = computed(() => recommendation.value?.label)
 const task = computed(() => entry.value === undefined ? undefined : taskFor(entry.value))
 const taskId = computed(() => agent.value?.id ?? task.value?.id)
 const reviewAllowed = computed(() => entry.value !== undefined && canRunReview(entry.value))
@@ -146,9 +148,29 @@ const consequence = computed(() => {
 })
 
 function pressPrimary(): void {
-  if (entry.value === undefined || primaryLabel.value === undefined || busy.value)
+  if (recommendation.value?._tag === 'OpenGitHub') {
+    primaryControl.value?.$el.click()
     return
-  void approveQueueEntry(entry.value)
+  }
+  runPrimary()
+}
+
+function runPrimary(): void {
+  if (entry.value === undefined || recommendation.value === undefined)
+    return
+  switch (recommendation.value._tag) {
+    case 'OpenGitHub': return // The button is a normal link, including keyboard activation.
+    case 'Inspect':
+      slideoverOpen.value = true
+      return
+    case 'Approve':
+      if (!busy.value)
+        void approveQueueEntry(entry.value)
+      return
+    case 'Dismiss':
+      if (!busy.value)
+        confirming.value = 'dismiss'
+  }
 }
 
 function act(action: CardAction): void {
@@ -204,7 +226,7 @@ const confirmOpen = computed({
  * Done is a one-line row, because an outcome is read, not decided.
  */
 const shape = computed<'row' | 'card' | 'done'>(() => {
-  if (card._tag === 'NeedsYou')
+  if (card._tag === 'NeedsYou' || card._tag === 'AgentTask')
     return 'row'
   return card._tag === 'Done' ? 'done' : 'card'
 })
@@ -224,7 +246,7 @@ const stateDot = computed<{ tone: 'success' | 'warning' | 'error' | 'neutral', l
 const meta = computed(() => {
   if (card._tag === 'Running' && agent.value !== undefined)
     return stalled.value ? stalledLabel(agent.value, now.value) : (phase.value ?? 'Working')
-  return stateLine.value?.text ?? ''
+  return recommendation.value?.summary ?? stateLine.value?.text ?? ''
 })
 
 const doneAge = computed(() => card._tag === 'Done' ? shortAge(card.record.at, now.value) : '')
@@ -259,7 +281,7 @@ defineExpose({
     -->
     <div
       v-if="shape === 'row' && identity"
-      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:h-8 md:gap-y-0 md:py-0 md:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] md:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_auto] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
+      class="pointer-events-none relative grid items-center gap-x-3 gap-y-0.5 px-2 py-2 [grid-template-areas:'dot_avatar_title'_'dot_avatar_repository'_'dot_avatar_meta'_'dot_avatar_actions'] grid-cols-[8px_20px_minmax(0,1fr)] md:[grid-template-areas:'dot_avatar_title_actions'_'dot_avatar_repository_actions'_'dot_avatar_meta_actions'] md:grid-cols-[8px_20px_minmax(0,1fr)_14rem] lg:min-h-12 lg:gap-y-0 lg:py-1.5 lg:[grid-template-areas:'dot_avatar_title_repository_meta_actions'] lg:grid-cols-[8px_20px_minmax(12rem,5fr)_minmax(8rem,3fr)_minmax(0,7fr)_14rem] [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
     >
       <LiveDot class="[grid-area:dot]" :tone="badge.tone" :label="badge.label" />
       <a :href="`https://github.com/${identity.author}`" target="_blank" rel="noreferrer" class="flex [grid-area:avatar]" :title="`@${identity.author}`">
@@ -273,16 +295,30 @@ defineExpose({
       <p class="min-w-0 truncate text-sm text-muted [grid-area:repository]">
         <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
       </p>
-      <p class="min-w-0 truncate text-sm text-muted [grid-area:meta]" :title="meta">
-        {{ meta }}
-      </p>
+      <div class="min-w-0 text-sm [grid-area:meta]">
+        <p v-if="recommendation" class="whitespace-nowrap text-sm font-medium lg:text-xs" :class="recommendation.owner === 'You' ? 'text-warning' : 'text-muted'">
+          {{ recommendation.blocker }}
+        </p>
+        <p class="text-muted lg:truncate" :title="meta">
+          {{ meta }}
+        </p>
+      </div>
       <div class="flex items-center justify-end gap-1 [grid-area:actions]">
         <UButton
           v-if="primaryLabel"
+          ref="primaryControl"
           size="xs"
+          class="min-h-11 shrink-0 whitespace-nowrap md:min-h-0"
           :loading="primaryPending"
-          :disabled="busy"
-          @click="pressPrimary"
+          :color="recommendation?.owner === 'Agent' ? 'neutral' : 'primary'"
+          :variant="recommendation?.owner === 'Agent' ? 'outline' : 'solid'"
+          :disabled="busy && (recommendation?._tag === 'Approve' || recommendation?._tag === 'Dismiss')"
+          :to="recommendation?._tag === 'OpenGitHub' ? recommendation.url : undefined"
+          :target="recommendation?._tag === 'OpenGitHub' ? '_blank' : undefined"
+          :rel="recommendation?._tag === 'OpenGitHub' ? 'noreferrer' : undefined"
+          :trailing-icon="recommendation?._tag === 'OpenGitHub' ? 'i-octicon-link-external-16' : undefined"
+          :title="recommendation?.description"
+          @click="runPrimary"
         >
           {{ primaryLabel }}
         </UButton>
@@ -293,7 +329,7 @@ defineExpose({
             variant="ghost"
             size="xs"
             square
-            :class="menuButtonClass"
+            :class="[menuButtonClass, shape === 'row' ? 'min-h-11 min-w-11 md:min-h-0 md:min-w-0' : undefined]"
             :aria-label="`More actions for ${identity.repository} number ${identity.number}`"
           />
         </UDropdownMenu>
@@ -323,7 +359,7 @@ defineExpose({
           size="xs"
           square
           class="-me-1.5"
-          :class="menuButtonClass"
+          :class="[menuButtonClass, shape === 'row' ? 'min-h-11 min-w-11 md:min-h-0 md:min-w-0' : undefined]"
           :aria-label="identity ? `More actions for ${identity.repository} number ${identity.number}` : 'More actions'"
         />
       </UDropdownMenu>
@@ -356,7 +392,7 @@ defineExpose({
             size="xs"
             square
             class="-my-1 -me-1"
-            :class="menuButtonClass"
+            :class="[menuButtonClass, shape === 'row' ? 'min-h-11 min-w-11 md:min-h-0 md:min-w-0' : undefined]"
             :aria-label="identity ? `More actions for ${identity.repository} number ${identity.number}` : 'More actions'"
           />
         </UDropdownMenu>
@@ -383,7 +419,7 @@ defineExpose({
       :card="card"
       :identity="identity"
       :actions="actions"
-      :primary-label="primaryLabel"
+      :recommendation="recommendation"
       :primary-pending="primaryPending"
       :task-id="taskId"
       :busy="busy"

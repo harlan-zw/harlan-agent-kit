@@ -191,8 +191,10 @@ function salvagedTitle(response: string): Promise<string | undefined> {
       const title = typeof value.pullRequestTitle === 'string' ? value.pullRequestTitle.trim() : undefined
       return title !== undefined && isPullRequestSubject(title) ? title : undefined
     })
-    // Unparseable JSON names no title; the caller already logged the answer.
-    .catch(() => undefined)
+    .catch(() => {
+      // Unparseable JSON names no title; the caller already logged the answer.
+      return undefined
+    })
 }
 
 function controllerIssueMetadata(task: ClaimedIssueWorkTask, template: string, issueNumbers: readonly number[], title: string): ImplementedAgentResponse {

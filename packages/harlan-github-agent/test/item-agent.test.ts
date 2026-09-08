@@ -1397,6 +1397,12 @@ describe('subject Workers', () => {
 
   it('publishes a valid issue triage result from a fresh retry session', async () => {
     const issue = issueItem()
+    const nextAction = [
+      'Write a regression test and repair the parser.',
+      'Read the Cloudflare logs to identify the failing request before choosing a storage mechanism.',
+      'Document the install command for existing users and explain when the optional dependency is required.',
+      'Verify the deployed route after the change. Keep this final verification step in the stored task.',
+    ].join('\n')
     const capture: ProviderCapture = { requests: [] }
     let triageResult: unknown
     const worker = createIssueTriageWorker({
@@ -1407,7 +1413,7 @@ describe('subject Workers', () => {
         hasReproduction: true,
         needsCodebaseReview: false,
         summary: 'The parser drops valid input.',
-        nextAction: 'Write a regression test and repair the parser.',
+        nextAction,
       }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -1470,7 +1476,7 @@ describe('subject Workers', () => {
           hasReproduction: true,
           needsCodebaseReview: false,
           summary: 'The parser drops valid input.',
-          nextAction: 'Write a regression test and repair the parser.',
+          nextAction,
           relatedIssues: [],
         }),
         usage: { _tag: 'Unavailable' },
@@ -1486,7 +1492,7 @@ describe('subject Workers', () => {
       hasReproduction: true,
       needsCodebaseReview: false,
       summary: 'The parser drops valid input.',
-      nextAction: 'Write a regression test and repair the parser.',
+      nextAction,
       relatedIssues: [],
     })
   })

@@ -50,9 +50,10 @@ import {
   taskSubjectUrl,
   waitingEntries,
 } from '../dashboard/app/utils/dashboard.ts'
+import { queueRecommendation } from '../dashboard/app/utils/recommendation.ts'
 import { batchRow } from '../dashboard/app/utils/system.ts'
 import { OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { dashboardSnapshot } from './fixtures.ts'
+import { dashboardSnapshot, pullRequestItem } from './fixtures.ts'
 
 const now = new Date('2026-08-14T12:00:00.000Z')
 
@@ -375,6 +376,128 @@ describe('queueWork', () => {
 
   it('has no work for a condition that names none', () => {
     expect(queueWork(queueEntry({ state: { _tag: 'Pending', reason: 'Waiting for mergeability.' } }))).toBeUndefined()
+  })
+})
+
+describe('queueRecommendation', () => {
+  const blocked = queueEntry({ state: { _tag: 'ActionRequired', reason: 'Work needs a decision.' } })
+  const triage = (_tag: string): Extract<DashboardTask, { kind: 'issue_triage' }> => ({
+    ...triageTask,
+    repository: blocked.repository,
+    issueNumber: blocked.number,
+    revisionId: blocked.revisionId,
+    state: { _tag: 'Completed', evidence: JSON.stringify({
+      _tag,
+      difficulty: 2,
+      impact: 4,
+      hasReproduction: true,
+      needsCodebaseReview: false,
+      summary: 'Choose the change.',
+      nextAction: 'Read the logs.\nRecord the decision.',
+      relatedIssues: [],
+    }) },
+  })
+
+  it.each([
+    ['READY_TO_SPEC', 'Write a short spec choosing a cache mechanism.', 'Agent'],
+    ['READY_TO_SPEC', 'Harlan picks option 1 versus option 2.', 'You'],
+    ['NEEDS_INFO', 'In Sentry, check each issue release and last-event timestamp.', 'Agent'],
+    ['NEEDS_INFO', 'Ask the operator for the exact 404 URL and an owner connection.', 'You'],
+    ['NEEDS_INFO', 'What URL failed?', 'You'],
+  ])('separates who acts next for %s: %s', (route, nextAction, owner) => {
+    const entry = { ...blocked, kind: 'issue' as const }
+    const task = triage(route)
+    task.state = { _tag: 'Completed', evidence: JSON.stringify({
+      ...JSON.parse(task.state._tag === 'Completed' ? task.state.evidence : '{}'),
+      nextAction,
+    }) }
+    const snapshot = dashboardSnapshot({ queue: [entry], tasks: [task] })
+    expect(queueRecommendation(entry, snapshot)).toMatchObject({ owner })
+    const columns = boardColumns(snapshot)
+    expect(columns.needsYou.map(card => card.key)).toEqual(owner === 'You' ? [expect.any(String)] : [])
+    expect(columns.agentTasks.map(card => card.key)).toEqual(owner === 'Agent' ? [expect.any(String)] : [])
+  })
+
+  it('keeps agent spec tasks reachable when filtering by triage work', () => {
+    const entry = { ...blocked, kind: 'issue' as const }
+    const snapshot = dashboardSnapshot({ queue: [entry], tasks: [triage('READY_TO_SPEC')] })
+    expect(boardColumns(snapshot, 'issue_triage').agentTasks.map(card => card._tag === 'AgentTask' && card.entry.number))
+      .toEqual([entry.number])
+  })
+
+  it('keeps an unknown blocker visible for human review', () => {
+    expect(queueRecommendation(blocked, dashboardSnapshot())).toMatchObject({ owner: 'You', label: 'View blocker' })
+  })
+
+  it('keeps implementation approval exclusive to an awaiting approval entry', () => {
+    expect(queueRecommendation(queueEntry({ state: { _tag: 'AwaitingApproval', kind: 'issue_work' } }), dashboardSnapshot()))
+      .toMatchObject({ _tag: 'Approve', label: 'Approve' })
+    expect(queueRecommendation(blocked, dashboardSnapshot())).toMatchObject({ _tag: 'Inspect', label: 'View blocker' })
+    expect(queueRecommendation(queueEntry(), dashboardSnapshot())).toBeUndefined()
+  })
+
+  it.each([['READY_TO_SPEC', 'Open spec task'], ['NEEDS_INFO', 'Open investigation']])('turns %s into a copyable task', (_tag, label) => {
+    const result = queueRecommendation({ ...blocked, kind: 'issue' }, dashboardSnapshot({ tasks: [triage(_tag)] }))
+    expect(result).toMatchObject({ _tag: 'Inspect', label, instructions: 'Read the logs.\nRecord the decision.' })
+  })
+
+  it('shows the work failure instead of repeating its old triage decision', () => {
+    const result = queueRecommendation({ ...blocked, kind: 'issue' }, dashboardSnapshot({ tasks: [triage('READY_TO_SPEC'), {
+      ...triage('READY_TO_IMPLEMENT'),
+      kind: 'issue_work',
+      state: { _tag: 'ActionRequired', reason: 'Deployment could not be verified.' },
+    }] }))
+    expect(result).toMatchObject({ _tag: 'Inspect', label: 'Open recovery task', instructions: 'Deployment could not be verified.' })
+  })
+
+  it('shows checks when the newest review has repaired the old finding', () => {
+    const older = reviewAgent({
+      completedAt: '2026-08-14T11:00:00.000Z',
+      findings: [{ _tag: 'Open', resolution: 'Dismissal', summary: 'Old premise.', nextAction: 'Dismiss this.' }],
+    })
+    const newer = reviewAgent({ gates: { ...older.gates, ci: { _tag: 'Failed', reason: 'test failed.', evidence: [] } } })
+    expect(queueRecommendation(blocked, dashboardSnapshot({ agents: [older, newer] })))
+      .toMatchObject({ _tag: 'OpenGitHub', label: 'View checks', url: `${blocked.subjectUrl}/checks` })
+  })
+
+  it.each(['ReviewRequired', 'NotRequired'] as const)('opens a conflicting pull request with %s without granting approval', (approval) => {
+    const item = {
+      ...pullRequestItem({ repository: blocked.repository, number: blocked.number, mergeState: 'conflicting' }),
+      revisionId: blocked.revisionId,
+      observedAt: blocked.updatedAt,
+      dismissed: false,
+      approval: { _tag: approval },
+    }
+    expect(queueRecommendation(blocked, dashboardSnapshot({ items: [item] })))
+      .toMatchObject(approval === 'ReviewRequired'
+        ? { _tag: 'OpenGitHub', label: 'Approve on GitHub', url: blocked.subjectUrl }
+        : { _tag: 'Inspect', label: 'View access steps' })
+    expect(queueRecommendation(blocked, dashboardSnapshot({ items: [{ ...item, revisionId: 'old' }] })))
+      .toMatchObject({ _tag: 'Inspect', label: 'View blocker' })
+  })
+
+  it('recommends Dismiss only from a current open Dismissal finding', () => {
+    const review = reviewAgent({ findings: [{ _tag: 'Open', resolution: 'Dismissal', summary: 'Wrong premise.', nextAction: 'Close this approach.' }] })
+    expect(queueRecommendation(blocked, dashboardSnapshot({ agents: [review] }))).toMatchObject({ _tag: 'Dismiss', label: 'Dismiss' })
+    expect(queueRecommendation(blocked, dashboardSnapshot({ agents: [{ ...review, revisionId: 'old' }] })))
+      .toMatchObject({ _tag: 'Inspect', label: 'View blocker' })
+  })
+
+  it('carries every open repair into the task instructions', () => {
+    const result = queueRecommendation(blocked, dashboardSnapshot({ agents: [reviewAgent({ findings: [
+      { _tag: 'Open', resolution: 'Repair', summary: 'Shared state is stale.', nextAction: 'Wrap every consumer.' },
+      { _tag: 'Open', resolution: 'Repair', summary: 'Save reports a false failure.', nextAction: 'Catch the refresh separately.' },
+    ] })] }))
+    expect(result).toMatchObject({ _tag: 'Inspect', label: 'Open repair task', instructions: expect.stringContaining('Wrap every consumer.') })
+    expect(result).toMatchObject({ instructions: expect.stringContaining('Catch the refresh separately.') })
+  })
+
+  it('uses safe details when triage evidence is malformed or belongs to an older issue state', () => {
+    const entry = { ...blocked, kind: 'issue' as const }
+    expect(queueRecommendation(entry, dashboardSnapshot({ tasks: [{ ...triage('READY_TO_SPEC'), revisionId: 'old' }] })))
+      .toMatchObject({ _tag: 'Inspect', label: 'View blocker' })
+    expect(queueRecommendation(entry, dashboardSnapshot({ tasks: [{ ...triage('READY_TO_SPEC'), state: { _tag: 'Completed', evidence: '{' } }] })))
+      .toMatchObject({ _tag: 'Inspect', label: 'View blocker' })
   })
 })
 
