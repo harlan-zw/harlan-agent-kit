@@ -36,6 +36,7 @@ export interface BatchStore {
 
 export interface BatchStoreDependencies {
   claimIssueWorkTask: (workerId: string, now: string, leaseMilliseconds: number, exactTaskId: string) => ClaimedIssueWorkTask | null
+  hasHigherPriorityTask: (priority: number) => boolean
 }
 
 interface BatchRow {
@@ -286,10 +287,12 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
       WHERE batches.state_tag = 'Queued' AND batches.attempts < batches.max_attempts
         AND repositories.enabled = 1 AND repositories.paused = 0
         AND json_extract(repositories.policy_json, '$.issueWork') = 1
-      ORDER BY batches.created_at, batches.id
+      ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, batches.created_at, batches.id
       LIMIT 1
     `).get() as BatchRow | undefined
     if (row === undefined)
+      return null
+    if (dependencies.hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0))
       return null
     const fence = row.fence + 1
     const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()

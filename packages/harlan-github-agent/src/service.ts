@@ -499,7 +499,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         worktrees: issueWorktrees,
       }),
     })
-    const batchWorkerId = randomUUID()
     const conflictWorker = withGitHubWritePreflight({
       accesses: ['item_write', 'contents_write'],
       source: tokens,
@@ -766,35 +765,38 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // One permit per Batch. Its units run as sub agents under that permit,
       // each with its own Task lease and worktree, and each publishes the
       // moment it finishes.
-      batches: createBatchScheduler({
-        canClaim: () => canClaim() && !store.hasPriorityAgentTask(),
-        intervalMilliseconds: 5_000,
-        leaseMilliseconds: 4 * 60 * 60_000,
-        now,
-        onError: error => options.logger.error(error),
-        permits,
-        store,
-        worker: createBatchWorker({
-          activityLog,
-          canClaimIssueWork,
-          claudeHome: agentContext.value.claudeHome,
-          github: workerGithub,
-          issueWork: issueWorkWorker,
-          leaseMilliseconds: 45 * 60_000,
-          logger: {
-            error: message => options.logger.error(message),
-            info: message => options.logger.info(message),
-          },
+      batches: Array.from({ length: profile.maximumActiveAgents }, () => {
+        const batchWorkerId = randomUUID()
+        return createBatchScheduler({
+          canClaim,
+          intervalMilliseconds: 5_000,
+          leaseMilliseconds: 4 * 60 * 60_000,
           now,
-          onTaskSettled: settleTask,
-          onTaskStarted: stampRunningLabel,
-          runtime,
+          onError: error => options.logger.error(error),
+          permits,
           store,
-          validateMapping,
+          worker: createBatchWorker({
+            activityLog,
+            canClaimIssueWork,
+            claudeHome: agentContext.value.claudeHome,
+            github: workerGithub,
+            issueWork: issueWorkWorker,
+            leaseMilliseconds: 45 * 60_000,
+            logger: {
+              error: message => options.logger.error(message),
+              info: message => options.logger.info(message),
+            },
+            now,
+            onTaskSettled: settleTask,
+            onTaskStarted: stampRunningLabel,
+            runtime,
+            store,
+            validateMapping,
+            workerId: batchWorkerId,
+            workspaces,
+          }),
           workerId: batchWorkerId,
-          workspaces,
-        }),
-        workerId: batchWorkerId,
+        })
       }),
       tasks: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
         canClaim,
@@ -1282,7 +1284,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     mutationSchedulers?.baselineRepairs.forEach(scheduler => scheduler.start())
   if (answers('github'))
     mutationSchedulers?.issueWork.forEach(scheduler => scheduler.start())
-  mutationSchedulers?.batches.start()
+  mutationSchedulers?.batches.forEach(scheduler => scheduler.start())
   if (answers('github'))
     mutationSchedulers?.publications.start()
   if (answers('github'))
@@ -1312,7 +1314,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         ...(mutationSchedulers?.tasks.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.baselineRepairs.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.issueWork.map(scheduler => scheduler.stop()) ?? []),
-        mutationSchedulers?.batches.stop() ?? Promise.resolve(),
+        ...(mutationSchedulers?.batches.map(scheduler => scheduler.stop()) ?? []),
         mutationSchedulers?.publications.stop() ?? Promise.resolve(),
         mutationSchedulers?.reviewStatuses.stop() ?? Promise.resolve(),
         ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),

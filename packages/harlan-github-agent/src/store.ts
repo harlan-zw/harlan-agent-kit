@@ -8137,7 +8137,7 @@ export function openJournalStore(
     })
   }
 
-  const nextMutationTask = (kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' | null, exactTaskId?: string): ClaimRow | undefined => database.prepare(`
+  const nextMutationTask = (kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' | null, exactTaskId?: string, includeQueuedBatches = false): ClaimRow | undefined => database.prepare(`
         SELECT
           tasks.id,
           tasks.kind,
@@ -8162,8 +8162,18 @@ export function openJournalStore(
         WHERE (? IS NULL OR tasks.kind = ?) AND tasks.state_tag = 'Queued'
           AND (? IS NULL OR tasks.id = ?)
           -- A Task a Batch reserved runs under that Batch's lease. Only the
-          -- exact-Task claim the Batch makes may take it.
-          AND (? IS NOT NULL OR NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id))
+          -- exact-Task claim the Batch makes may take it. Priority checks also
+          -- see eligible Tasks in queued Batches that need a free Agent permit.
+          AND (
+            ? IS NOT NULL
+            OR NOT EXISTS (SELECT 1 FROM batch_tasks WHERE batch_tasks.task_id = tasks.id)
+            OR (? = 1 AND EXISTS (
+              SELECT 1 FROM batch_tasks
+              JOIN batches ON batches.id = batch_tasks.batch_id
+              WHERE batch_tasks.task_id = tasks.id AND batches.state_tag = 'Queued'
+                AND batches.attempts < batches.max_attempts
+            ))
+          )
           AND NOT EXISTS (
             SELECT 1 FROM combined_issue_publications AS combined
             JOIN publication_commands AS commands ON commands.id = combined.command_id
@@ -8237,10 +8247,10 @@ export function openJournalStore(
           )
         ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, maxOpenPullRequests) as ClaimRow | undefined
+      `).get(kind, kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests) as ClaimRow | undefined
 
   const hasHigherPriorityTask = (priority: number): boolean =>
-    [nextMutationTask(null), nextWorkerTask(null)].some(row =>
+    [nextMutationTask(null, undefined, true), nextWorkerTask(null)].some(row =>
       row !== undefined && ((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0) > priority,
     )
 
@@ -8260,7 +8270,9 @@ export function openJournalStore(
         return null
       }
 
-      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0)) {
+      // A Batch already owns an Agent permit when it claims an exact unit Task.
+      // New priority work competes for free permits without interrupting that Batch.
+      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0)) {
         database.exec('COMMIT')
         return null
       }
@@ -8328,6 +8340,7 @@ export function openJournalStore(
   }
 
   const batchStore = createBatchStore(database, {
+    hasHigherPriorityTask,
     claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
       const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)
       if (task === null || task.kind === 'issue_work')
