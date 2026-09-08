@@ -215,6 +215,11 @@ export async function resolveUserLogin(
   return err(lastError)
 }
 
+/** Whether a Routine run may take a free Agent permit. */
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask'>): boolean {
+  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask())
+}
+
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
   const now = options.now ?? (() => new Date())
   const agentContext = await loadAgentContext(defaultAgentContextPaths())
@@ -615,7 +620,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       })),
       routines: createWorkerTaskScheduler({
-        canClaim: () => canClaim() && !store.hasPriorityAgentTask(),
+        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store),
         claim: store.claimNextRoutineRun,
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,

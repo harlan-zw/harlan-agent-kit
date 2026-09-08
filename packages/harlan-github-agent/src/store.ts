@@ -8170,8 +8170,10 @@ export function openJournalStore(
             OR (? = 1 AND EXISTS (
               SELECT 1 FROM batch_tasks
               JOIN batches ON batches.id = batch_tasks.batch_id
+              LEFT JOIN batch_units ON batch_units.id = batch_tasks.unit_id
               WHERE batch_tasks.task_id = tasks.id AND batches.state_tag = 'Queued'
                 AND batches.attempts < batches.max_attempts
+                AND (batch_units.id IS NULL OR (batch_units.state_tag = 'Waiting' AND batch_units.primary_task_id = tasks.id))
             ))
           )
           AND NOT EXISTS (
@@ -8340,6 +8342,8 @@ export function openJournalStore(
   }
 
   const batchStore = createBatchStore(database, {
+    recoverExpiredTasks,
+    canClaimIssueWorkTask: exactTaskId => nextMutationTask('issue_work', exactTaskId) !== undefined,
     hasHigherPriorityTask,
     claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
       const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)

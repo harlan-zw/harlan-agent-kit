@@ -16,7 +16,7 @@ export interface BatchSchedulerOptions {
   onError: (error: unknown) => void
   /** One permit covers the whole Batch. Its units run as sub agents under that permit. */
   permits: AgentPermitPool
-  store: Pick<JournalStore, 'claimNextBatch' | 'completeBatch' | 'failBatch' | 'heartbeatBatch'>
+  store: Pick<JournalStore, 'claimNextBatch' | 'completeBatch' | 'failBatch' | 'heartbeatBatch' | 'suspendBatch'>
   worker: BatchWorker
   workerId: string
 }
@@ -68,7 +68,9 @@ export function createBatchScheduler(options: BatchSchedulerOptions): BatchSched
       if (executionController.signal.aborted)
         return
       const fenced = { batchId: batch.id, workerId: options.workerId, fence: batch.state.fence, at: options.now().toISOString() }
-      if (result._tag === 'Ok')
+      if (result._tag === 'Ok' && result.value._tag === 'Suspended')
+        options.store.suspendBatch(fenced)
+      else if (result._tag === 'Ok')
         options.store.completeBatch(fenced)
       else
         options.store.failBatch({ ...fenced, reason: result.error })

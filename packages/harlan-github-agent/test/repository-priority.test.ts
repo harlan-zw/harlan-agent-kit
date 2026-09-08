@@ -1,8 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
 import { createBatchScheduler } from '../src/batch-scheduler.ts'
+import { createBatchWorker } from '../src/batch-worker.ts'
 import { ok } from '../src/result.ts'
+import { canClaimRoutineRun } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
+import { createWorkerTaskScheduler } from '../src/worker-task-scheduler.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
@@ -12,8 +15,8 @@ const priority = 'harlan-zw/melbjs-clone'
 
 afterEach(() => stores.splice(0).forEach(store => store.close()))
 
-function setup(mutationsEnabled = false) {
-  const store = openJournalStore(':memory:', mutationsEnabled)
+function setup(mutationsEnabled = false, maximumOpenPullRequests = 8) {
+  const store = openJournalStore(':memory:', mutationsEnabled, undefined, maximumOpenPullRequests)
   stores.push(store)
   store.syncRepositories([
     repositoryMapping(),
@@ -172,7 +175,7 @@ it('uses a free permit for a priority batch while a background batch keeps runni
       async run(batch, signal) {
         running.push({ repository: batch.repository, signal })
         await finished
-        return ok({ units: batch.issues.length })
+        return ok({ _tag: 'Completed', units: batch.issues.length })
       },
     },
   }))
@@ -196,4 +199,227 @@ it('uses a free permit for a priority batch while a background batch keeps runni
     await Promise.all(schedulers.map(scheduler => scheduler.stop()))
   }
   expect(errors).toEqual([])
+})
+
+it('leaves permits for reviews when the global pull request limit already holds every batch', async () => {
+  const store = setup(true, 1)
+  readyIssues(store, 'harlan-zw/example', earlier)
+  readyIssues(store, priority, earlier)
+  store.planBatches(earlier)
+  store.recordObservation({ externalId: 'open-review', observedAt: later, source: 'poll', subject: pullRequestItem({ controllerOwned: true, mergeState: 'clean' }) })
+  const permits = createAgentPermitPool(2)
+  const started: string[] = []
+  const schedulers = ['first', 'second'].map(workerId => createBatchScheduler({
+    canClaim: () => true,
+    intervalMilliseconds: 5_000,
+    leaseMilliseconds: 60_000,
+    now: () => new Date(later),
+    onError: (error) => { throw error },
+    permits,
+    store,
+    workerId,
+    worker: { run: async (batch) => {
+      started.push(batch.repository)
+      return ok({ _tag: 'Completed', units: 0 })
+    } },
+  }))
+  await Promise.all(schedulers.map(scheduler => scheduler.runNow()))
+  expect(started).toEqual([])
+  const permit = permits.tryAcquire()
+  expect(permit).not.toBeNull()
+  expect(store.claimNextAdversarialReviewTask('review', later, 60_000)?.pullRequestNumber).toBe(24)
+  permit?.release()
+  await Promise.all(schedulers.map(scheduler => scheduler.stop()))
+})
+
+it.each(['capped', 'writes disabled'] as const)('skips a %s priority batch to claim an eligible background batch', (blocked) => {
+  const store = setup(true)
+  readyIssues(store, 'harlan-zw/example', earlier)
+  readyIssues(store, priority, earlier)
+  store.planBatches(earlier)
+  if (blocked === 'capped')
+    store.syncRepositories([repositoryMapping(), repositoryMapping({ github: priority, priority: 100, maxOpenPullRequests: 0 })], later)
+  else
+    store.setRepositoryWritesEnabled(priority, false)
+
+  expect(store.claimNextBatch('batch', later, 60_000)?.repository).toBe('harlan-zw/example')
+})
+
+it('suspends idle batches at the pull request limit and resumes their remaining units after review', async () => {
+  const store = setup(true, 1)
+  readyIssues(store, 'harlan-zw/example', earlier)
+  readyIssues(store, priority, earlier)
+  store.planBatches(earlier)
+  const permits = createAgentPermitPool(2)
+  const errors: unknown[] = []
+  const started: string[] = []
+  const signals: AbortSignal[] = []
+  const releases: Array<() => void> = []
+  const schedulers = ['first', 'second'].map((workerId) => {
+    const worker = createBatchWorker({
+      canClaimIssueWork: () => store.countOpenPullRequests() < 1,
+      github: { getIssueTriageSnapshot: () => Promise.reject(new Error('Single units need no combined issue.')) },
+      issueWork: { run: async (task, signal) => {
+        started.push(`${task.repository}#${task.issueNumber}`)
+        signals.push(signal)
+        if (task.issueNumber === 101)
+          await new Promise<void>(resolve => releases.push(resolve))
+        return ok({ _tag: 'ActionRequired', reason: 'The first unit needs input.', evidence: 'The remaining units can continue.' })
+      } },
+      leaseMilliseconds: 60_000,
+      logger: { info: () => undefined, error: error => errors.push(error) },
+      now: () => new Date(later),
+      runtime: {} as never,
+      store,
+      unitConcurrency: 1,
+      validateMapping: async mapping => ok(mapping),
+      workerId,
+      workspaces: { prepareBatch: () => Promise.reject(new Error('The existing plan needs no workspace.')) },
+    })
+    return createBatchScheduler({
+      canClaim: () => true,
+      intervalMilliseconds: 5_000,
+      leaseMilliseconds: 60_000,
+      now: () => new Date(later),
+      onError: error => errors.push(error),
+      permits,
+      store,
+      workerId,
+      worker: { run: async (batch, signal) => {
+        const plan = batch.units === null
+          ? store.recordBatchPlan({
+              batchId: batch.id,
+              workerId,
+              fence: batch.state.fence,
+              at: later,
+              units: batch.issues.map(issue => ({ issueNumbers: [issue.issueNumber], dependsOn: null, rationale: 'Independent fix.' })),
+            })
+          : ok(batch.units)
+        if (plan._tag === 'Err')
+          throw new Error(plan.error)
+        return worker.run({ ...batch, units: plan.value }, signal)
+      } },
+    })
+  })
+  const running = schedulers.map(scheduler => scheduler.runNow())
+  try {
+    await vi.waitFor(() => expect(started).toHaveLength(2))
+    store.recordObservation({ externalId: 'open-review', observedAt: later, source: 'poll', subject: pullRequestItem({ controllerOwned: true, mergeState: 'clean' }) })
+    releases.forEach(release => release())
+    await vi.waitFor(() => expect(store.listBatches().map(batch => batch.state._tag)).toEqual(['Queued', 'Queued']))
+    await Promise.all(running)
+    expect(started).toHaveLength(2)
+    expect(signals.map(signal => signal.aborted)).toEqual([false, false])
+    expect(store.listBatches().map(batch => batch.units?.map(unit => unit.state._tag))).toEqual([
+      ['ActionRequired', 'Waiting'],
+      ['ActionRequired', 'Waiting'],
+    ])
+    const reviewed: number[] = []
+    const review = createWorkerTaskScheduler({
+      claim: store.claimNextAdversarialReviewTask,
+      complete: () => true,
+      fail: () => 'Rejected',
+      heartbeat: store.heartbeatWorkerTask,
+      intervalMilliseconds: 5_000,
+      leaseMilliseconds: 60_000,
+      now: () => new Date(later),
+      onError: error => errors.push(error),
+      permits,
+      worker: { run: async (task) => {
+        reviewed.push(task.pullRequestNumber)
+        return ok({ evidence: 'Reviewed.' })
+      } },
+      workerId: 'review',
+    })
+    await review.runNow()
+    expect(reviewed).toEqual([24])
+    await review.stop()
+    store.recordObservation({ externalId: 'closed-review', observedAt: later, source: 'poll', subject: pullRequestItem({ controllerOwned: true, mergeState: 'clean', state: 'closed' }) })
+    await Promise.all(schedulers.map(scheduler => scheduler.runNow()))
+    expect(started.filter(task => task.endsWith('#101'))).toHaveLength(2)
+    expect(started.filter(task => task.endsWith('#102'))).toHaveLength(2)
+    expect(store.listBatches().map(batch => batch.state._tag)).toEqual(['Completed', 'Completed'])
+    expect(errors).toEqual([])
+  }
+  finally {
+    releases.forEach(release => release())
+    await Promise.all(schedulers.map(scheduler => scheduler.stop()))
+    await Promise.all(running)
+  }
+})
+
+it.each([
+  { triggers: ['routine'] as const, expected: ['scan'] },
+  { triggers: ['github', 'routine'] as const, expected: [] },
+])('runs due routines with queued priority work only when GitHub is disabled: $triggers', async ({ triggers, expected }) => {
+  const store = setup(true)
+  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
+  const [routine] = store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'spec', entries: [{ name: 'scan', crons: ['0 0 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }], at: earlier })
+  if (routine === undefined)
+    throw new Error('Expected a Routine.')
+  store.openRoutineRun({ routineId: routine.id, scheduledFor: earlier, specSha: 'spec', at: earlier })
+  const started: string[] = []
+  const scheduler = createWorkerTaskScheduler({
+    canClaim: () => canClaimRoutineRun(true, triggers, store),
+    claim: store.claimNextRoutineRun,
+    complete: store.completeRoutineRun,
+    fail: store.failRoutineRun,
+    heartbeat: store.heartbeatRoutineRun,
+    intervalMilliseconds: 5_000,
+    leaseMilliseconds: 60_000,
+    now: () => new Date(later),
+    onError: (error) => { throw error },
+    permits: createAgentPermitPool(1),
+    worker: { run: async (task) => {
+      started.push(task.name)
+      return ok({ evidence: 'Scan complete.' })
+    } },
+    workerId: 'routine',
+  })
+  await scheduler.runNow()
+  expect(started).toEqual(expected)
+  await scheduler.stop()
+})
+
+it('recovers expired issue-work leases before deciding whether a batch can resume', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier)
+  store.planBatches(earlier)
+  const batch = store.claimNextBatch('expired', earlier, 30_000)
+  if (batch === null)
+    throw new Error('Expected a Batch.')
+  const plan = store.recordBatchPlan({ batchId: batch.id, workerId: 'expired', fence: batch.state.fence, at: earlier, units: [{ issueNumbers: [101, 102], dependsOn: null, rationale: 'Shared fix.' }] })
+  if (plan._tag === 'Err' || plan.value[0] === undefined)
+    throw new Error('Expected a Batch unit.')
+  store.claimBatchUnitTask({ unitId: plan.value[0].id, workerId: 'expired', now: earlier, leaseMilliseconds: 30_000 })
+
+  const resumed = store.claimNextBatch('resumed', later, 60_000)
+  expect(resumed?.id).toBe(batch.id)
+  expect(store.claimBatchUnitTask({ unitId: plan.value[0].id, workerId: 'resumed', now: later, leaseMilliseconds: 60_000 })?.issueNumber).toBe(101)
+})
+
+it('ignores combined issues from settled units when a suspended batch asks for priority', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier, [101, 102, 103])
+  store.planBatches(earlier)
+  const batch = store.claimNextBatch('batch', earlier, 600_000)
+  if (batch === null)
+    throw new Error('Expected a Batch.')
+  const plan = store.recordBatchPlan({ batchId: batch.id, workerId: 'batch', fence: batch.state.fence, at: earlier, units: [
+    { issueNumbers: [101, 102], dependsOn: null, rationale: 'Shared fix.' },
+    { issueNumbers: [103], dependsOn: null, rationale: 'Independent.' },
+  ] })
+  if (plan._tag === 'Err' || plan.value[0] === undefined)
+    throw new Error('Expected a Batch unit.')
+  const task = store.claimBatchUnitTask({ unitId: plan.value[0].id, workerId: 'batch', now: earlier, leaseMilliseconds: 60_000 })
+  if (task === null)
+    throw new Error('Expected Issue work.')
+  store.needsAttentionTask({ taskId: task.id, workerId: 'batch', fence: task.state.fence, at: earlier, reason: 'Needs input.', evidence: 'The combined fix needs input.' })
+  store.settleBatchUnit({ unitId: plan.value[0].id, at: earlier, state: { _tag: 'ActionRequired', reason: 'Needs input.' } })
+  store.recordObservation({ externalId: 'closed-unit', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, number: 103, author: 'harlan-zw', state: 'closed' }) })
+  store.suspendBatch({ batchId: batch.id, workerId: 'batch', fence: batch.state.fence, at: later })
+  store.recordObservation({ externalId: 'background', observedAt: later, source: 'poll', subject: issueItem() })
+
+  expect(store.hasPriorityAgentTask()).toBe(false)
+  expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe('harlan-zw/example')
 })
