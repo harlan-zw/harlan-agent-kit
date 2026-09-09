@@ -181,7 +181,7 @@ function activityLine(item: AgentActivityItem): string {
         <ul class="mt-1 divide-y divide-default">
           <li v-for="batch in batches" :key="batch.id" class="space-y-1 py-3">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="font-mono text-sm text-highlighted">{{ batch.repository }}</span>
+              <RepositoryIdentity :repository="batch.repository" class="font-mono text-sm text-highlighted" />
               <span class="font-mono text-sm text-muted">{{ batch.issues }}</span>
               <StateBadge :tone="batch.tone" :label="batch.label" class="ms-auto" />
             </div>
@@ -229,8 +229,8 @@ function activityLine(item: AgentActivityItem): string {
                 target="_blank"
                 rel="noreferrer"
                 class="entity-link font-mono text-sm text-muted"
-              >{{ record.routine.repository }}#{{ record.routine.trackingIssueNumber }}</a>
-              <span v-else class="font-mono text-sm text-muted">{{ record.routine.repository }}</span>
+              ><RepositoryIdentity :repository="record.routine.repository"> #{{ record.routine.trackingIssueNumber }}</RepositoryIdentity></a>
+              <RepositoryIdentity v-else :repository="record.routine.repository" class="font-mono text-sm text-muted" />
               <StateBadge :tone="record.tone" :label="record.label" class="ms-auto" />
             </div>
             <p class="text-sm text-muted">

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { HistoryRow } from '../utils/history.ts'
 import { routineRunPresentation } from '../utils/dashboard.ts'
 import { recentRoutineRuns, routineRows, routineRunDetail } from '../utils/routines.ts'
 
@@ -11,6 +12,17 @@ const { snapshot, loading, now, relativeTime } = useDashboard()
 const minute = computed(() => Math.floor(now.value.getTime() / 60_000))
 const rows = computed(() => routineRows(snapshot.value.routines, snapshot.value.routineRuns, new Date(minute.value * 60_000)))
 const runs = computed(() => recentRoutineRuns(snapshot.value.routineRuns))
+const selectedRunId = ref<string>()
+const evidenceOpen = ref(false)
+const selectedRun = computed<HistoryRow | undefined>(() => {
+  const run = snapshot.value.routineRuns.find(run => run.id === selectedRunId.value)
+  return run === undefined ? undefined : { _tag: 'Routine', key: run.id, at: run.updatedAt, run }
+})
+
+function showRun(id: string): void {
+  selectedRunId.value = id
+  evidenceOpen.value = true
+}
 
 const absolute = new Intl.DateTimeFormat('en', { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 function at(iso: string): string {
@@ -56,8 +68,8 @@ useHead({
             <span v-if="!row.routine.enabled" class="ms-2 text-sm text-dimmed">Disabled</span>
           </UiTableTd>
           <UiTableTd size="sm">
-            <a v-if="row.trackingUrl" :href="row.trackingUrl" target="_blank" rel="noreferrer" class="entity-link text-sm text-muted">{{ row.routine.repository }}<span class="text-dimmed"> #{{ row.routine.trackingIssueNumber }}</span></a>
-            <a v-else :href="`https://github.com/${row.routine.repository}`" target="_blank" rel="noreferrer" class="entity-link text-sm text-muted">{{ row.routine.repository }}</a>
+            <a v-if="row.trackingUrl" :href="row.trackingUrl" target="_blank" rel="noreferrer" class="entity-link text-sm text-muted"><RepositoryIdentity :repository="row.routine.repository"><span class="text-dimmed"> #{{ row.routine.trackingIssueNumber }}</span></RepositoryIdentity></a>
+            <a v-else :href="`https://github.com/${row.routine.repository}`" target="_blank" rel="noreferrer" class="entity-link text-sm text-muted"><RepositoryIdentity :repository="row.routine.repository" /></a>
           </UiTableTd>
           <UiTableTd size="sm" visible-from="md">
             <span class="text-sm text-muted">{{ row.schedule }}</span>
@@ -88,16 +100,26 @@ useHead({
         </template>
       </UiSectionHeader>
       <ul class="divide-y divide-default border-y border-default" role="list">
-        <li v-for="run in runs" :key="run.id" class="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 px-2 py-2 transition-colors hover:bg-muted">
-          <span class="w-32 shrink-0">
-            <StateBadge :tone="routineRunPresentation(run).tone === 'primary' ? 'neutral' : routineRunPresentation(run).tone" :label="routineRunPresentation(run).label" />
-          </span>
-          <span class="font-medium text-highlighted">{{ run.name }}</span>
-          <span class="text-sm text-muted">{{ run.repository }}</span>
-          <span v-if="routineRunDetail(run)" class="min-w-0 flex-1 truncate text-sm text-muted">{{ routineRunDetail(run) }}</span>
-          <span class="ms-auto shrink-0 font-mono text-sm text-dimmed"><time :datetime="run.scheduledFor">{{ relativeTime(run.scheduledFor) }}</time></span>
+        <li v-for="run in runs" :key="run.id">
+          <button
+            type="button"
+            class="flex min-h-11 w-full flex-wrap items-center gap-x-3 gap-y-1 px-2 py-2 text-start transition-colors hover:bg-muted"
+            :aria-label="`Open ${run.name} on ${run.repository}, ${at(run.scheduledFor)}`"
+            aria-haspopup="dialog"
+            @click="showRun(run.id)"
+          >
+            <span class="w-32 shrink-0">
+              <StateBadge :tone="routineRunPresentation(run).tone === 'primary' ? 'neutral' : routineRunPresentation(run).tone" :label="routineRunPresentation(run).label" />
+            </span>
+            <span class="font-medium text-highlighted">{{ run.name }}</span>
+            <RepositoryIdentity :repository="run.repository" class="text-sm text-muted" />
+            <span v-if="routineRunDetail(run)" class="min-w-0 flex-1 truncate text-sm text-muted">{{ routineRunDetail(run) }}</span>
+            <span class="ms-auto shrink-0 font-mono text-sm text-dimmed"><time :datetime="run.scheduledFor">{{ relativeTime(run.scheduledFor) }}</time></span>
+            <UIcon name="i-octicon-chevron-right-16" class="size-4 shrink-0 text-dimmed" aria-hidden="true" />
+          </button>
         </li>
       </ul>
     </section>
+    <HistoryEvidenceSlideover v-model:open="evidenceOpen" :row="selectedRun" />
   </div>
 </template>

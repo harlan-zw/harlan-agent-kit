@@ -53,7 +53,7 @@ const kindLabel = { issue: 'Issue', pull_request: 'Pull request' }
       <p class="flex items-center gap-1 text-sm text-muted">
         <UIcon :name="kindIcon[kind]" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
         <span class="sr-only">{{ kindLabel[kind] }}</span>
-        <a :href="url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ repository }}<span class="text-dimmed"> #{{ number }}</span></a>
+        <a :href="url" target="_blank" rel="noreferrer" class="entity-link truncate"><RepositoryIdentity :repository="repository"><span class="text-dimmed"> #{{ number }}</span></RepositoryIdentity></a>
       </p>
       <!-- The clamp lives on the paragraph. A block anchor would override the clamp's display. -->
       <p class="mt-0.5 text-highlighted" :class="titleClass[size]">

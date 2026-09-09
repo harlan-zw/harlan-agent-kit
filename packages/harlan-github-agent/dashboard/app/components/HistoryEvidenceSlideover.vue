@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { AgentFeedbackInput } from '../../../src/types.ts'
-import type { DetailItem } from '../components/DetailList.vue'
+import type { AgentActivityItem, AgentFeedbackInput } from '../../../src/types.ts'
 import type { FeedbackVerdict, HistoryRow } from '../utils/history.ts'
+import type { DetailItem } from './DetailList.vue'
 import { useClipboard } from '@vueuse/core'
 import {
   gateTone,
@@ -146,7 +146,7 @@ const details = computed<DetailItem[]>(() => {
     { term: 'Scheduled', value: relativeTime(run.scheduledFor) },
     { term: 'Mode', value: run.mode },
     { term: 'Report', value: run.reportState ?? 'None' },
-    { term: 'Finished', value: relativeTime(run.updatedAt) },
+    { term: ['Queued', 'Running'].includes(run.state._tag) ? 'Updated' : 'Finished', value: relativeTime(run.updatedAt) },
     { term: 'Took', value: duration(run.createdAt, run.updatedAt), mono: true },
   ]
 })
@@ -165,6 +165,15 @@ function save(verdict: FeedbackVerdict): void {
 function rerun(): void {
   if (review.value !== undefined)
     void rerunReview(review.value.repository, review.value.pullRequestNumber, review.value.revisionId)
+}
+
+function activityLine(item: AgentActivityItem): string {
+  switch (item._tag) {
+    case 'Command': return `$ ${item.command}${item.exitCode !== null && item.exitCode !== 0 ? ` (exit ${item.exitCode})` : ''}${item.output.length > 0 ? `\n${item.output}` : ''}`
+    case 'FileChange': return `edited ${item.changes.map(change => change.path).join(', ')}`
+    case 'Progress': return item.text
+    case 'Reasoning': return item.text
+  }
 }
 
 function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error' | 'neutral' {
@@ -302,10 +311,32 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
               <p class="text-sm">
                 {{ candidate.claim }}
               </p>
+              <p v-if="candidate.result._tag === 'Rejected' || candidate.result._tag === 'Superseded'" class="text-sm text-muted">
+                {{ candidate.result.reason }}
+              </p>
+              <a
+                v-if="(candidate.result._tag === 'Proposed' || candidate.result._tag === 'Merged') && candidate.result.pullRequest !== null"
+                :href="`https://github.com/${row.run.repository}/pull/${candidate.result.pullRequest}`"
+                target="_blank"
+                rel="noreferrer"
+                class="entity-link text-sm"
+              >Pull request #{{ candidate.result.pullRequest }}</a>
             </li>
           </ul>
           <p v-else class="text-sm text-muted">
             No candidates.
+          </p>
+        </section>
+
+        <section v-if="row._tag === 'Routine'">
+          <details v-if="row.run.activity.length > 0" class="text-sm">
+            <summary class="cursor-pointer text-muted">
+              Terminal
+            </summary>
+            <pre class="terminal mt-2">{{ row.run.activity.map(activityLine).join('\n') }}</pre>
+          </details>
+          <p v-else class="text-sm text-muted">
+            No activity recorded.
           </p>
         </section>
 

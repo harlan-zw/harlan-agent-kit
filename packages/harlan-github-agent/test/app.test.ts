@@ -30,6 +30,7 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
     },
     days: [],
     work: [],
+    repositories: [],
   }
 }
 const agentControls = {

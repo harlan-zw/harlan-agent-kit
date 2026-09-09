@@ -39,8 +39,8 @@ export type RecordPullRequestTriageRunResult
 
 export type StatsTaskKind = 'review_fix' | 'conflict_resolution' | 'baseline_repair' | 'issue_triage' | 'issue_work'
 
-export type StatsFact
-  = | {
+export type StatsFact = { repository: string } & (
+  | {
     _tag: 'PullRequestTriage'
     at: string
     startedAt: string
@@ -63,7 +63,6 @@ export type StatsFact
   | {
     _tag: 'Publication'
     at: string
-    repository: string
     itemNumber: number
     work: 'review_fix' | 'conflict_resolution' | 'baseline_repair' | 'issue_work'
     changedFiles: number
@@ -75,6 +74,7 @@ export type StatsFact
     outcome: 'Completed' | 'ActionRequired' | 'Failed' | 'Skipped' | 'Superseded'
     candidates: number
   }
+)
 
 export interface StatsComparison {
   value: number
@@ -137,6 +137,16 @@ export type StatsWork = PullRequestTriageWorkStats | ReviewWorkStats | TaskWorkS
 
 export type StatsCoverage = { _tag: 'Complete' } | { _tag: 'Partial', startedAt: string }
 
+export interface RepositoryStats {
+  repository: string
+  runs: number
+  changedPullRequests: number
+  conflictResolutions: number
+  fixCommits: number
+  openedPullRequests: number
+  reviewFindings: number
+}
+
 export interface StatsSnapshot {
   generatedAt: string
   range: StatsRange
@@ -151,6 +161,7 @@ export interface StatsSnapshot {
   }
   days: StatsDay[]
   work: StatsWork[]
+  repositories: RepositoryStats[]
 }
 
 export function parseStatsRange(input: {
@@ -320,6 +331,13 @@ export function buildStats(input: {
       reviewFindings: comparison(currentSummary.reviewFindings, previousSummary.reviewFindings),
     },
     days: [...daysByDate.values()],
+    repositories: [...Map.groupBy(currentFacts, fact => fact.repository)]
+      .map(([repository, facts]) => ({
+        repository,
+        runs: facts.filter(fact => fact._tag !== 'Publication').length,
+        ...summary(facts),
+      }))
+      .sort((left, right) => right.runs - left.runs || left.repository.localeCompare(right.repository)),
     work: [
       {
         _tag: 'PullRequestTriage',
