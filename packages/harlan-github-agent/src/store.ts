@@ -11625,16 +11625,20 @@ export function openJournalStore(
     const facts: StatsFact[] = []
 
     const triageRows = database.prepare(`
-      SELECT started_at, completed_at, outcome_tag
+      SELECT started_at, completed_at, outcome_tag, repositories.github AS repository
       FROM pull_request_triage_runs
+      JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
       WHERE completed_at >= ? AND completed_at < ?
     `).all(queryFrom, range.to) as unknown as Array<{
+      repository: string
       started_at: string
       completed_at: string
       outcome_tag: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure'
     }>
     facts.push(...triageRows.map(row => ({
       _tag: 'PullRequestTriage' as const,
+      repository: row.repository,
       at: row.completed_at,
       startedAt: row.started_at,
       outcome: row.outcome_tag,
@@ -11643,8 +11647,10 @@ export function openJournalStore(
     const reviewRows = database.prepare(`
       SELECT review_runs.started_at, review_runs.completed_at,
         COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
-        review_runs.findings
+        review_runs.findings, repositories.github AS repository
       FROM review_runs
+      JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
       LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
       WHERE completed_at >= ? AND completed_at < ?
         AND NOT EXISTS (
@@ -11652,6 +11658,7 @@ export function openJournalStore(
           WHERE settlement.supersedes_review_run_id = review_runs.id
         )
     `).all(queryFrom, range.to) as unknown as Array<{
+      repository: string
       started_at: string
       completed_at: string
       outcome_tag: 'Ready' | 'Pending' | 'Blocked'
@@ -11661,6 +11668,7 @@ export function openJournalStore(
       const findings = JSON.parse(row.findings) as ReviewFinding[]
       return {
         _tag: 'Review' as const,
+        repository: row.repository,
         at: row.completed_at,
         startedAt: row.started_at,
         outcome: row.outcome_tag,
@@ -11671,6 +11679,7 @@ export function openJournalStore(
     const taskRows = database.prepare(`
       SELECT
         tasks.kind,
+        repositories.github AS repository,
         terminal.to_tag,
         terminal.created_at,
         (
@@ -11680,11 +11689,14 @@ export function openJournalStore(
         ) AS started_at
       FROM task_transitions AS terminal
       JOIN tasks ON tasks.id = terminal.task_id
+      JOIN subjects ON subjects.id = tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
       WHERE terminal.to_tag IN ('Completed', 'ActionRequired', 'Failed', 'Superseded')
         AND terminal.created_at >= ? AND terminal.created_at < ?
       UNION ALL
       SELECT
         worker_tasks.kind,
+        repositories.github AS repository,
         terminal.to_tag,
         terminal.created_at,
         (
@@ -11694,10 +11706,13 @@ export function openJournalStore(
         ) AS started_at
       FROM worker_task_transitions AS terminal
       JOIN worker_tasks ON worker_tasks.id = terminal.task_id
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
       WHERE worker_tasks.kind = 'issue_triage'
         AND terminal.to_tag IN ('Completed', 'ActionRequired', 'Failed', 'Superseded')
         AND terminal.created_at >= ? AND terminal.created_at < ?
     `).all(queryFrom, range.to, queryFrom, range.to) as unknown as Array<{
+      repository: string
       kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_triage' | 'issue_work'
       to_tag: 'Completed' | 'ActionRequired' | 'Failed' | 'Superseded'
       created_at: string
@@ -11706,6 +11721,7 @@ export function openJournalStore(
     const taskWork = (kind: typeof taskRows[number]['kind']): StatsTaskKind => kind === 'resolve_conflict' ? 'conflict_resolution' : kind
     facts.push(...taskRows.map(row => ({
       _tag: 'Task' as const,
+      repository: row.repository,
       at: row.created_at,
       startedAt: row.started_at,
       work: taskWork(row.kind),
@@ -11743,21 +11759,25 @@ export function openJournalStore(
 
     const routineRows = database.prepare(`
       SELECT
+        routines.repository,
         routine_runs.state_tag,
         routine_runs.updated_at,
         COUNT(candidates.id) AS candidates
       FROM routine_runs
+      JOIN routines ON routines.id = routine_runs.routine_id
       LEFT JOIN candidates ON candidates.run_id = routine_runs.id
       WHERE routine_runs.state_tag IN ('Completed', 'ActionRequired', 'Failed', 'Skipped', 'Superseded')
         AND routine_runs.updated_at >= ? AND routine_runs.updated_at < ?
       GROUP BY routine_runs.id
     `).all(queryFrom, range.to) as unknown as Array<{
+      repository: string
       state_tag: 'Completed' | 'ActionRequired' | 'Failed' | 'Skipped' | 'Superseded'
       updated_at: string
       candidates: number
     }>
     facts.push(...routineRows.map(row => ({
       _tag: 'Routine' as const,
+      repository: row.repository,
       at: row.updated_at,
       startedAt: null,
       outcome: row.state_tag,

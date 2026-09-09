@@ -104,5 +104,19 @@ export default defineEventHandler((event): StatsSnapshot => {
     },
     days,
     work: work(days),
+    repositories: days.some(entry => entry.fixCommits + entry.reviewFindings > 0)
+      ? ['harlan-zw/nuxt-seo', 'nuxt-modules/sitemap', 'nuxt-modules/robots'].map((repository, index) => {
+          const share = (value: number) => Math.floor(value / 3) + (index < value % 3 ? 1 : 0)
+          return {
+            repository,
+            runs: share(work(days).reduce((total, entry) => total + entry.runs, 0)),
+            changedPullRequests: share(changed(days)),
+            fixCommits: share(sum(days, 'fixCommits')),
+            conflictResolutions: share(sum(days, 'conflictResolutions')),
+            openedPullRequests: share(sum(days, 'openedPullRequests')),
+            reviewFindings: share(sum(days, 'reviewFindings')),
+          }
+        })
+      : [],
   }
 })

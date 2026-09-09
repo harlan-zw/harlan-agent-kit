@@ -34,8 +34,9 @@ const summary = computed(() => days.map(dayTitle).join('. '))
       </div>
       <div class="relative mt-1.5 h-5 font-mono text-sm text-dimmed" aria-hidden="true">
         <span
-          v-for="tick in ticks"
+          v-for="(tick, index) in ticks"
           :key="tick.index"
+          :class="index % 2 === 1 ? 'hidden sm:block' : undefined"
           class="absolute top-0 whitespace-nowrap"
           :style="{ left: `${tick.left}%`, transform: tick.left === 0 ? 'none' : tick.left >= 99 ? 'translateX(-100%)' : 'translateX(-50%)' }"
         >{{ tick.label }}</span>

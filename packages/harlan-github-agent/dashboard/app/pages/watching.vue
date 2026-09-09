@@ -156,7 +156,7 @@ useHead({
         <tr v-for="repository in repositories" :key="repository.github">
           <UiTableTd row-header size="sm">
             <span class="flex flex-wrap items-center gap-2">
-              <a :href="`https://github.com/${repository.github}`" target="_blank" rel="noreferrer" class="entity-link whitespace-nowrap font-mono text-sm">{{ repository.github }}</a>
+              <a :href="`https://github.com/${repository.github}`" target="_blank" rel="noreferrer" class="entity-link whitespace-nowrap font-mono text-sm"><RepositoryIdentity :repository="repository.github" /></a>
               <UiStatusBadge v-for="flag in repositoryFlags(repository)" :key="flag.label" :status="flag.tone" :label="flag.label" size="sm" />
             </span>
             <p v-if="repository.lastError !== null" class="status-error mt-1 whitespace-normal text-sm">

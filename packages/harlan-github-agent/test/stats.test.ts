@@ -47,6 +47,34 @@ describe('stats range', () => {
 })
 
 describe('stats aggregation', () => {
+  it('groups current work and delivered outcomes by repository without counting publications as runs', () => {
+    const repository = 'harlan-zw/example'
+    const other = 'skilld-dev/skilld'
+    const at = '2026-08-02T00:00:00.000Z'
+    const stats = buildStats({
+      generatedAt: at,
+      range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-08T00:00:00.000Z', timeZone: 'UTC' },
+      triageCoverageStartedAt: '2026-08-01T00:00:00.000Z',
+      facts: [
+        { _tag: 'Publication', repository, at, itemNumber: 1, work: 'review_fix', changedFiles: 1 },
+        { _tag: 'Publication', repository, at, itemNumber: 1, work: 'review_fix', changedFiles: 2 },
+        { _tag: 'Publication', repository: other, at, itemNumber: 1, work: 'conflict_resolution', changedFiles: 1 },
+        { _tag: 'Review', repository, at, startedAt: at, outcome: 'Ready', findings: 3 },
+        { _tag: 'Task', repository, at, startedAt: at, work: 'review_fix', outcome: 'Completed' },
+        { _tag: 'PullRequestTriage', repository, at, startedAt: at, outcome: 'ReviewRequired' },
+        { _tag: 'Routine', repository: other, at, startedAt: null, outcome: 'Completed', candidates: 2 },
+        { _tag: 'Publication', repository: other, at, itemNumber: 2, work: 'issue_work', changedFiles: 1 },
+        { _tag: 'Review', repository: 'harlan-zw/previous', at: '2026-07-31T00:00:00.000Z', startedAt: at, outcome: 'Ready', findings: 9 },
+        { _tag: 'Review', repository, at: '2026-08-08T00:00:00.000Z', startedAt: at, outcome: 'Ready', findings: 9 },
+      ],
+    })
+
+    expect(stats.repositories).toEqual([
+      { repository, runs: 3, changedPullRequests: 1, fixCommits: 2, conflictResolutions: 0, openedPullRequests: 0, reviewFindings: 3 },
+      { repository: other, runs: 1, changedPullRequests: 1, fixCommits: 0, conflictResolutions: 1, openedPullRequests: 1, reviewFindings: 0 },
+    ])
+  })
+
   it('counts delivered outcomes without treating commits as unique pull requests', () => {
     const range = {
       from: '2026-08-01T00:00:00.000Z',
@@ -63,10 +91,10 @@ describe('stats aggregation', () => {
         { _tag: 'Publication', at: '2026-08-02T15:00:00.000Z', repository: 'harlan-zw/example', itemNumber: 24, work: 'review_fix', changedFiles: 1 },
         { _tag: 'Publication', at: '2026-08-03T15:00:00.000Z', repository: 'harlan-zw/example', itemNumber: 24, work: 'conflict_resolution', changedFiles: 3 },
         { _tag: 'Publication', at: '2026-08-04T15:00:00.000Z', repository: 'harlan-zw/example', itemNumber: 24, work: 'baseline_repair', changedFiles: 1 },
-        { _tag: 'Review', at: '2026-08-02T16:00:00.000Z', startedAt: '2026-08-02T15:50:00.000Z', outcome: 'Blocked', findings: 2 },
-        { _tag: 'Task', at: '2026-08-02T15:10:00.000Z', startedAt: '2026-08-02T15:00:00.000Z', work: 'review_fix', outcome: 'Completed' },
-        { _tag: 'Task', at: '2026-08-03T15:10:00.000Z', startedAt: null, work: 'conflict_resolution', outcome: 'ActionRequired' },
-        { _tag: 'PullRequestTriage', at: '2026-08-02T12:00:00.000Z', startedAt: '2026-08-02T11:59:55.000Z', outcome: 'ReviewSkipped' },
+        { _tag: 'Review', repository: 'harlan-zw/example', at: '2026-08-02T16:00:00.000Z', startedAt: '2026-08-02T15:50:00.000Z', outcome: 'Blocked', findings: 2 },
+        { _tag: 'Task', repository: 'harlan-zw/example', at: '2026-08-02T15:10:00.000Z', startedAt: '2026-08-02T15:00:00.000Z', work: 'review_fix', outcome: 'Completed' },
+        { _tag: 'Task', repository: 'harlan-zw/example', at: '2026-08-03T15:10:00.000Z', startedAt: null, work: 'conflict_resolution', outcome: 'ActionRequired' },
+        { _tag: 'PullRequestTriage', repository: 'harlan-zw/example', at: '2026-08-02T12:00:00.000Z', startedAt: '2026-08-02T11:59:55.000Z', outcome: 'ReviewSkipped' },
       ],
     })
 
@@ -154,6 +182,7 @@ describe('pull request triage Stats', () => {
       timeZone: 'UTC',
     }, '2026-08-08T00:00:00.000Z')
 
+    expect(stats.repositories).toEqual([expect.objectContaining({ repository: task.repository, runs: 1 })])
     expect(stats.work.find(work => work._tag === 'PullRequestTriage')).toEqual(expect.objectContaining({
       runs: 1,
       reviewSkipped: 1,
@@ -162,6 +191,36 @@ describe('pull request triage Stats', () => {
 })
 
 describe('journal Stats evidence', () => {
+  it('keeps skipped Routine runs in their repository and excludes them outside the range', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'pr-triage', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }],
+      at: '2026-08-13T00:00:00.000Z',
+    })
+    store.skipRoutineRun({
+      routineId: 'harlan-zw/example:pr-triage',
+      scheduledFor: '2026-08-13T07:00:00.000Z',
+      specSha: 'abc123',
+      reason: 'Outside the catch-up window.',
+      at: '2026-08-13T08:00:00.000Z',
+    })
+    const range = { from: '2026-08-13T00:00:00.000Z', to: '2026-08-14T00:00:00.000Z', timeZone: 'UTC' }
+
+    expect(store.getStats(range, range.to).repositories).toEqual([{
+      repository: 'harlan-zw/example',
+      runs: 1,
+      changedPullRequests: 0,
+      fixCommits: 0,
+      conflictResolutions: 0,
+      openedPullRequests: 0,
+      reviewFindings: 0,
+    }])
+    expect(store.getStats({ ...range, from: range.to, to: '2026-08-15T00:00:00.000Z' }, range.to).repositories).toEqual([])
+  })
+
   it('counts a Publication only after it publishes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -209,6 +268,7 @@ describe('journal Stats evidence', () => {
       at: '2026-08-13T01:04:00.000Z',
       evidence: 'Updated pull request #24.',
     })).toBe(true)
+    expect(store.getStats(range, range.to).repositories).toEqual([expect.objectContaining({ repository: task.repository, conflictResolutions: 1 })])
     expect(store.getStats(range, range.to).summary).toEqual(expect.objectContaining({
       changedPullRequests: { value: 1, previous: 0 },
       conflictResolutions: { value: 1, previous: 0 },
@@ -267,6 +327,7 @@ describe('journal Stats evidence', () => {
       to: '2026-08-14T00:00:00.000Z',
       timeZone: 'UTC',
     }, '2026-08-14T00:00:00.000Z')
+    expect(stats.repositories).toEqual([expect.objectContaining({ repository: task.repository, runs: 1 })])
     expect(stats.work.find(work => work._tag === 'Review')).toEqual(expect.objectContaining({ runs: 1 }))
   })
 })
