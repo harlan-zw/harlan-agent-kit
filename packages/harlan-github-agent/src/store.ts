@@ -6549,6 +6549,15 @@ export function openJournalStore(
               WHERE repair.subject_id = subjects.id AND repair.kind = 'review_fix'
                 AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
                 AND (repair.state_tag != 'ActionRequired' OR repair.updated_at >= review_runs.started_at)
+                -- This Review's queued Repair waits for its BLOCKED Publication.
+                -- Repair resolves the latest findings through the current Revision.
+                AND NOT (
+                  repair.state_tag = 'Queued'
+                  AND repair.revision_id = subjects.current_revision_id
+                  AND repair.updated_at >= review_runs.completed_at
+                  AND review_status_commands.desired_outcome = 'BLOCKED'
+                  AND json_extract(review_runs.gates, '$.review._tag') = 'Failed'
+                )
             )
           )
         )
@@ -10555,7 +10564,7 @@ export function openJournalStore(
     }
   }
 
-  /** Retires one Running command whose failure no retry can answer. */
+  /** Records a definitive failure for the same claim, even after its clock expires. */
   const supersedeReviewStatus: JournalStore['supersedeReviewStatus'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -10564,8 +10573,7 @@ export function openJournalStore(
         SET state_tag = 'Superseded', reason = ?, worker_id = NULL,
           lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-          AND lease_expires_at > ?
-      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence, input.at).changes === 1
+      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
       if (changed) {
         recordReviewStatusEvent(database, {
           commandId: input.commandId,

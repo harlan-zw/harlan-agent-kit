@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { err, ok } from '../src/result.ts'
+import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { createReviewStatusScheduler } from '../src/review-status-scheduler.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -131,6 +132,36 @@ function terminalStatus(lineage: 'current' | 'retained', outcome: 'READY' | 'PEN
 
 type TerminalStatus = ReturnType<typeof terminalStatus>
 
+async function retainedRepairStatus(path = ':memory:') {
+  const test = terminalStatus('retained', 'BLOCKED', path)
+  const harness = publicationHarness(test, 'none')
+  const snapshot = await harness.options.github.getPullRequestReviewSnapshot()
+  if (snapshot._tag === 'Err')
+    throw new Error('Expected a Review snapshot.')
+  expect(await refreshReviewGates({
+    store: {
+      ...test.store,
+      stageReviewGateStatus: (input) => {
+        const staged = test.store.stageReviewGateStatus(input)
+        if (staged._tag !== 'Rejected')
+          test.commandId = staged.commandId
+        return staged
+      },
+    },
+    repositories: [test.repository],
+    now: () => new Date('2026-08-13T01:02:20.000Z'),
+    preflightRepair: () => Promise.resolve(ok(undefined)),
+    github: {
+      getPullRequestReviewSnapshot: () => Promise.resolve(ok({ ...snapshot.value, pullRequest: test.pullRequest })),
+      editReviewStatus: () => { throw new Error('Expected a changed BLOCKED comment.') },
+      stampAgentLabel: () => { throw new Error('Expected queued Publication.') },
+    },
+  }, new AbortController().signal)).toEqual([
+    ok({ _tag: 'PublicationQueued', repository: test.repository.github, pullRequestNumber: test.pullRequest.number, outcome: 'BLOCKED' }),
+  ])
+  return test
+}
+
 function publicationHarness(test: Pick<TerminalStatus, 'store' | 'pullRequest' | 'commandId'>, boundary: 'snapshot' | 'label' | 'none', change = () => {}) {
   let clock = new Date('2026-08-13T01:03:00.000Z')
   const writes: string[] = []
@@ -195,6 +226,7 @@ function publicationHarness(test: Pick<TerminalStatus, 'store' | 'pullRequest' |
 }
 
 function replaceProjection(test: TerminalStatus) {
+  const outcome = test.gates.review._tag === 'Failed' ? 'BLOCKED' : 'PENDING'
   const staged = test.store.stageReviewGateStatus({
     reviewRunId: test.run.id,
     repository: test.repository.github,
@@ -202,8 +234,8 @@ function replaceProjection(test: TerminalStatus) {
     revisionId: test.store.listReviewRuns(test.repository.github, test.pullRequest.number)[0]!.revisionId,
     expectedHeadSha: test.pullRequest.headSha,
     gates: { ...test.gates, ci: { _tag: 'Pending', reason: 'Required checks restarted.', evidence: [] } },
-    body: '### PENDING',
-    desiredOutcome: 'PENDING',
+    body: `### ${outcome}`,
+    desiredOutcome: outcome,
     at: '2026-08-13T01:03:00.000Z',
   })
   expect(staged._tag).toBe('Staged')
@@ -428,12 +460,116 @@ it.each(['WAITING', 'SKIPPED', 'snapshot', 'review'] as const)('publishes %s wit
   expect(harness.claim()).toBeNull()
 })
 
+describe('retained BLOCKED Review with its queued Repair', () => {
+  it.each([false, true])('publishes before Repair becomes claimable with Pause=%s', async (pause) => {
+    const test = await retainedRepairStatus()
+    const harness = publicationHarness(test, 'none')
+    const claimRepair = () => test.store.claimNextReviewFixTask('repair', harness.options.now().toISOString(), 60_000)
+    expect(claimRepair()).toBeNull()
+    if (pause) {
+      test.store.setRepositoryPaused(test.repository.github, true)
+      for (let index = 0; index < 3; index += 1) {
+        await harness.scheduler.runNow()
+        harness.advance()
+        expect(claimRepair()).toBeNull()
+      }
+      expect(harness.writes).toEqual([])
+      expect(harness.events().some(event => event.event === 'Superseded')).toBe(false)
+      test.store.setRepositoryPaused(test.repository.github, false)
+    }
+    expect(claimRepair()).toBeNull()
+    const writeComment = harness.options.github.upsertReviewStatus
+    harness.options.github.upsertReviewStatus = (...args) => {
+      expect(claimRepair()).toBeNull()
+      return writeComment(...args)
+    }
+    const writeLabel = harness.options.github.stampAgentLabel
+    harness.options.github.stampAgentLabel = (...args) => {
+      expect(claimRepair()).toBeNull()
+      return writeLabel(...args)
+    }
+    await harness.scheduler.runNow()
+    expect(harness.writes).toEqual(['comment', 'BLOCKED'])
+    expect(harness.published).toEqual([test.pullRequest.number])
+    const repair = claimRepair()!
+    expect(repair).toMatchObject({ kind: 'review_fix', pullRequest: { headSha: test.pullRequest.headSha, baseSha: test.pullRequest.baseSha, baseRef: test.pullRequest.baseRef } })
+    expect(test.store.getReviewFixFindings(test.repository.github, test.pullRequest.number, repair.revisionId)).toEqual(test.run.findings)
+    harness.advance()
+    await harness.scheduler.runNow()
+    expect(harness.writes).toEqual(['comment', 'BLOCKED'])
+  })
+
+  it.each(['projection', 'newer Review', 'Review rerun'] as const)('rejects %s replacement despite its queued Repair', async (loss) => {
+    const test = await retainedRepairStatus()
+    const harness = publicationHarness(test, 'snapshot', () => {
+      if (loss === 'projection')
+        replaceProjection(test)
+      else if (loss === 'Review rerun')
+        expect(test.store.requestReviewRerun({ repository: test.repository.github, pullRequestNumber: test.pullRequest.number, revisionId: test.run.revisionId, requestId: 'new-review', source: 'dashboard', requestedBy: 'harlan-zw', at: '2026-08-13T01:03:00.000Z' })._tag).toBe('Queued')
+      else
+        expect(test.store.recordReviewRun({ ...test.run, id: 'review-2', completedAt: '2026-08-13T01:03:00.000Z' })._tag).toBe('Inserted')
+    })
+    await harness.scheduler.runNow()
+    expect(harness.writes).toEqual([])
+    expect(harness.events()).toContainEqual(expect.objectContaining({ event: 'Superseded' }))
+    for (let index = 0; index < 3; index += 1) {
+      harness.advance()
+      expect(harness.claim()).toBeNull()
+    }
+  })
+
+  it.each(['prior Repair', 'other Revision', 'Running Repair', 'Publishing Repair', 'READY'] as const)('does not authorize %s through the queued Repair exception', async (loss) => {
+    const directory = mkdtempSync(join(tmpdir(), 'retained-repair-'))
+    directories.push(directory)
+    const path = join(directory, 'journal.sqlite')
+    const test = await retainedRepairStatus(path)
+    const harness = publicationHarness(test, 'snapshot', () => {
+      // Model persisted competing work or an obsolete READY projection at the write boundary.
+      const database = new DatabaseSync(path)
+      if (loss === 'prior Repair') {
+        database.prepare('UPDATE tasks SET updated_at = ? WHERE kind = \'review_fix\'').run('2026-08-13T01:00:00.000Z')
+      }
+      else if (loss === 'other Revision') {
+        database.prepare('UPDATE tasks SET revision_id = ? WHERE kind = \'review_fix\'').run(test.task.revisionId)
+      }
+      else if (loss === 'READY') {
+        database.prepare('UPDATE review_status_commands SET desired_outcome = \'READY\' WHERE id = ?').run(test.commandId)
+        database.prepare('UPDATE review_gate_projections SET outcome_tag = \'Ready\' WHERE command_id = ?').run(test.commandId)
+      }
+      else if (loss === 'Publishing Repair') {
+        database.prepare('UPDATE tasks SET state_tag = \'Publishing\', command_id = \'other-command\', fence = fence + 1 WHERE kind = \'review_fix\'').run()
+      }
+      else {
+        database.prepare('UPDATE tasks SET state_tag = \'Running\', worker_id = \'other-repair\', fence = fence + 1, lease_expires_at = ? WHERE kind = \'review_fix\'')
+          .run('2026-08-13T02:00:00.000Z')
+      }
+      database.close()
+    })
+    await harness.scheduler.runNow()
+    expect(harness.writes).toEqual([])
+    expect(harness.events()).toContainEqual(expect.objectContaining({ event: 'Superseded' }))
+    for (let index = 0; index < 3; index += 1) {
+      harness.advance()
+      expect(harness.claim()).toBeNull()
+    }
+  })
+})
+
 describe('live terminal Review publication boundaries', () => {
-  it.each(['closed', 'head', 'target'] as const)('retires live %s mismatch while stored observation stays unchanged', async (mismatch) => {
+  it.each([
+    ['closed', false],
+    ['head', false],
+    ['target', false],
+    ['closed', true],
+    ['head', true],
+    ['target', true],
+  ] as const)('retires live %s mismatch after lease expiry=%s while stored observation stays unchanged', async (mismatch, expire) => {
     const test = terminalStatus('current', 'BLOCKED')
     const harness = publicationHarness(test, 'none')
     const snapshot = harness.options.github.getPullRequestReviewSnapshot
     harness.options.github.getPullRequestReviewSnapshot = async () => {
+      if (expire)
+        harness.advance()
       const result = await snapshot()
       if (result._tag === 'Err')
         throw new Error('Expected a Review snapshot.')
@@ -469,15 +605,14 @@ describe('live terminal Review publication boundaries', () => {
     expect(harness.writes).toEqual(['comment', 'READY'])
   })
 
-  it.each(['expired', 'reclaimed'] as const)('cannot retire a live mismatch through an %s publisher lease', async (lease) => {
+  it('cannot retire a live mismatch through a reclaimed publisher lease', async () => {
     const test = terminalStatus('current')
     const harness = publicationHarness(test, 'none')
     const command = harness.claim()!
     const snapshot = harness.options.github.getPullRequestReviewSnapshot
     harness.options.github.getPullRequestReviewSnapshot = async () => {
       harness.advance()
-      if (lease === 'reclaimed')
-        expect(harness.claim()?.fence).toBeGreaterThan(command.fence)
+      expect(harness.claim()?.fence).toBeGreaterThan(command.fence)
       const result = await snapshot()
       if (result._tag === 'Err')
         throw new Error('Expected a Review snapshot.')
