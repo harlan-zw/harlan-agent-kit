@@ -88,16 +88,27 @@ export function currentGitHubChecks(checks: GitHubCheck[]): GitHubCheck[] {
 }
 
 /**
- * The check suites of workflow runs a `workflow_run` event started.
+ * Workflow run events whose check suites say nothing about the commit.
  *
- * GitHub attaches such a run to the default branch tip, not to the commit
- * whose workflow finished. A bundle-size comment job on `main` therefore
- * appears as a running base check every time any pull request's CI ends, and
- * the base gate read that as "the default branch has not passed" while Repair
- * waited. Those suites answer for another commit, so they are dropped.
+ * `workflow_run`: GitHub attaches such a run to the default branch tip, not to
+ * the commit whose workflow finished. A bundle-size comment job on `main`
+ * therefore appears as a running base check every time any pull request's CI
+ * ends, and the base gate read that as "the default branch has not passed"
+ * while Repair waited.
+ *
+ * `schedule`: a cron run also lands on the default branch tip, and it runs
+ * housekeeping on a timer, not the commit's tests. A queued cleanup sweep on
+ * nuxtseo.com `main` held the base gate at PENDING for a day while its runner
+ * fleet was down, and Repair for the reviewed pull request never started.
+ *
+ * `workflow_dispatch` stays. A person starts it on purpose, often to rerun the
+ * real checks, so its result is evidence about the commit.
  */
+const DERIVED_RUN_EVENTS = new Set(['workflow_run', 'schedule'])
+
+/** The check suites of workflow runs that answer for a timer or another commit. */
 export function derivedCheckSuiteIds(runs: ReadonlyArray<{ event: string, check_suite_id?: number | null }>): Set<number> {
-  return new Set(runs.flatMap(run => run.event === 'workflow_run' && typeof run.check_suite_id === 'number' ? [run.check_suite_id] : []))
+  return new Set(runs.flatMap(run => DERIVED_RUN_EVENTS.has(run.event) && typeof run.check_suite_id === 'number' ? [run.check_suite_id] : []))
 }
 
 export function chronologicalPullRequestComments(entries: Array<{ body: string, createdAt: string }>): string[] {

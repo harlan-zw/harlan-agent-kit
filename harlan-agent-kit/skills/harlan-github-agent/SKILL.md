@@ -213,7 +213,7 @@ If Review records `Repair` findings, queue all findings immediately under the ex
 
 Available empty base and head check sets with no declared required checks mean the repository has no CI. This passes the CI Review gate and permits Repair. An unavailable, running, or failed base check set does not permit Repair.
 
-Ignore a base check run that a `workflow_run` event attached to the base commit. It reports on another commit's workflow, not on the base commit.
+Ignore a base check run that a `workflow_run` or `schedule` event attached to the base commit. The first reports on another commit's workflow. The second runs housekeeping on a timer. Neither reports on the base commit.
 
 When the gate refresh of a settled review finds the default branch failed, queue one Baseline repair for that exact base commit. Report Existing on every later pass.
 
