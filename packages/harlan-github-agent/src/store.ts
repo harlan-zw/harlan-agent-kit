@@ -10460,6 +10460,12 @@ export function openJournalStore(
         SELECT 1 FROM task_cancellations
         WHERE task_cancellations.task_id = review_status_commands.task_id
       )
+      AND (
+        review_status_commands.review_run_id IS NULL
+        OR review_status_commands.task_kind != 'adversarial_review'
+        OR review_status_commands.phase != 'terminal'
+        OR ${retainedReviewGateClaimSql}
+      )
   `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
 
   const deferReviewStatus: JournalStore['deferReviewStatus'] = (input) => {

@@ -185,9 +185,43 @@ describe('review work follows the head commit', () => {
     }, publication, false, new AbortController().signal)
     expect(result._tag).toBe('Err')
     expect(writes).toEqual(['comment'])
+    expect(store.listWorkflowEvents({ stream: 'review_status', limit: 10 })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityId: publication.id, event: 'CommentConfirmed' }),
+    ]))
   })
 
-  it.each(['Dismissal', 'Pause', 'review disabled'] as const)('does not Auto merge published READY evidence after %s revokes authority', async (change) => {
+  it.each(['expired lease', 'stale fence'] as const)('stops a claimed Review write with a %s', async (loss) => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    recordRetryingReview(store)
+    const input = retainedGateInput(store)
+    expect(store.stageReviewGateStatus(input)._tag).toBe('Staged')
+    const first = store.claimNextTerminalReviewStatus('publisher', input.at, 1_000)!
+    const at = '2026-08-13T02:02:02.000Z'
+    if (loss === 'stale fence')
+      expect(store.claimNextTerminalReviewStatus('replacement', at, 60_000)).not.toBeNull()
+    const writes: string[] = []
+    const result = await publishClaimedReviewStatus({
+      store,
+      now: () => new Date(at),
+      github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] })),
+        upsertReviewStatus: () => {
+          writes.push('comment')
+          return Promise.resolve(ok({ commentId: 43, url: 'url' }))
+        },
+        stampAgentLabel: () => {
+          writes.push('label')
+          return Promise.resolve(ok(undefined))
+        },
+      },
+    }, first, false, new AbortController().signal)
+    expect(result._tag).toBe('Err')
+    expect(writes).toEqual([])
+  })
+
+  it.each(['Dismissal', 'Pause', 'review disabled', 'policy'] as const)('does not Auto merge published READY evidence after %s revokes authority', async (change) => {
     const store = openJournalStore(':memory:', true)
     stores.push(store)
     recordRetryingReview(store)
@@ -203,6 +237,8 @@ describe('review work follows the head commit', () => {
       store.setRepositoryPaused(input.repository, true)
     if (change === 'review disabled')
       store.syncRepositories([repositoryMapping({ pullRequestReview: false })], '2026-08-13T02:02:02.000Z')
+    if (change === 'policy')
+      store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })], '2026-08-13T02:02:02.000Z')
     const merges: string[] = []
     const controller = createAutoMergeController({
       policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
