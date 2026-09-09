@@ -34,6 +34,18 @@ function stagedTerminalStatus(path = ':memory:') {
   const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 60_000)
   if (task === null)
     throw new Error('Expected a Review Task.')
+  const gates = {
+    merge: { _tag: 'Passed' as const, evidence: [] },
+    review: { _tag: 'Passed' as const, evidence: [] },
+    ci: { _tag: 'Passed' as const, evidence: [] },
+  }
+  expect(store.recordReviewRun({
+    id: 'review-1', repository: repository.github, pullRequestNumber: pullRequest.number,
+    revisionId: task.revisionId, headSha: pullRequest.headSha, provider: 'codex', sessionId: 'session',
+    model: 'gpt-5.6', agentVersion: '1.2.3', skillDigest: 'a'.repeat(64),
+    startedAt: '2026-08-13T01:01:00.000Z', completedAt: '2026-08-13T01:01:05.000Z',
+    gates, confidence: 96, findings: [],
+  })._tag).toBe('Inserted')
   const staged = store.stageReviewStatus({
     taskKind: 'adversarial_review',
     phase: 'terminal',
@@ -44,6 +56,9 @@ function stagedTerminalStatus(path = ':memory:') {
     revisionId: observed.revisionId,
     expectedHeadSha: pullRequest.headSha,
     body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY · 96/100',
+    reviewRunId: 'review-1',
+    gates,
+    desiredOutcome: 'READY',
   })
   if (staged._tag === 'Rejected')
     throw new Error(staged.reason)
@@ -110,6 +125,7 @@ describe('review status scheduler', () => {
   it('publishes terminal status after the Agent Task completed', async () => {
     const test = stagedTerminalStatus()
     const bodies: string[] = []
+    const labels: string[] = []
     const failures: string[] = []
     const published: string[] = []
     const scheduler = createReviewStatusScheduler({
@@ -120,7 +136,10 @@ describe('review status scheduler', () => {
           bodies.push(body)
           return Promise.resolve(ok({ commentId: 42, url: `${test.pullRequest.url}#issuecomment-42` }))
         },
-        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        stampAgentLabel: (_repository, _number, label) => {
+          labels.push(label)
+          return Promise.resolve(ok(undefined))
+        },
       },
       intervalMilliseconds: 5_000,
       leaseMilliseconds: 60_000,
@@ -135,10 +154,12 @@ describe('review status scheduler', () => {
     await scheduler.runNow()
 
     expect(bodies).toEqual(['<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY · 96/100'])
+    expect(labels).toEqual(['READY'])
     expect(failures).toEqual([])
     // The success signal an Incident raised here needs to be resolved by.
     expect(published).toEqual([`harlan-zw/example#${test.pullRequest.number}`])
     expect(test.store.claimNextTerminalReviewStatus('status-publisher-2', '2026-08-13T01:02:00.000Z', 60_000)).toBeNull()
+    expect(test.store.listWorkflowEvents({ stream: 'review_status', limit: 20 }).map(event => event.event)).toContain('Published')
   })
 
   it('retries a terminal status failure without another Agent Task', async () => {
