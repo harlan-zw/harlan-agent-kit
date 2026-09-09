@@ -10159,6 +10159,24 @@ export function openJournalStore(
   const claimNextTerminalReviewStatus: JournalStore['claimNextTerminalReviewStatus'] = (workerId, now, leaseMilliseconds) => {
     database.exec('BEGIN IMMEDIATE')
     try {
+      const recovered = database.prepare(`
+        UPDATE review_status_commands
+        SET state_tag = 'Pending', outcome_unknown = 1, reason = 'Publication lease expired.',
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE state_tag = 'Running' AND phase = 'terminal' AND lease_expires_at <= ?
+        RETURNING id, fence
+      `).all(now, now) as unknown as Array<{ id: string, fence: number }>
+      recovered.forEach((command) => {
+        recordReviewStatusEvent(database, {
+          commandId: command.id,
+          event: 'LeaseRecovered',
+          from: 'Running',
+          to: 'Pending',
+          reason: 'Publication lease expired.',
+          fence: command.fence,
+          at: now,
+        })
+      })
       supersedeUnauthorizedReviewStatuses(database, now)
       const stale = database.prepare(`
         SELECT review_status_commands.id, review_status_commands.fence

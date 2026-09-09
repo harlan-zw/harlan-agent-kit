@@ -85,9 +85,11 @@ describe('review work follows the head commit', () => {
       expect(staged._tag).toBe('Staged')
       const publication = store.claimNextTerminalReviewStatus('publisher', '2026-08-13T02:02:00.000Z', 60_000)!
       expect(publication).not.toBeNull()
-      expect(store.claimReviewStatus(publication.id, 'another-publisher', '2026-08-13T02:02:30.000Z', 60_000)).toBeNull()
-      const recovered = store.claimReviewStatus(publication.id, 'another-publisher', '2026-08-13T02:03:00.000Z', 60_000)!
+      expect(store.claimNextTerminalReviewStatus('another-publisher', '2026-08-13T02:02:30.000Z', 60_000)).toBeNull()
+      expect(store.stageReviewGateStatus({ ...input, at: '2026-08-13T02:03:00.000Z' })).toEqual({ _tag: 'Duplicate', commandId: publication.id })
+      const recovered = store.claimNextTerminalReviewStatus('another-publisher', '2026-08-13T02:03:00.000Z', 60_000)!
       expect(recovered).not.toBeNull()
+      expect(recovered).toMatchObject({ id: publication.id, outcomeUnknown: true, fence: publication.fence + 1 })
       expect(store.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: '2026-08-13T02:03:01.000Z', commentId: 42, url: 'url' })).toBe(false)
       expect(store.completeReviewStatus({ commandId: recovered.id, workerId: recovered.workerId, fence: recovered.fence, at: '2026-08-13T02:03:02.000Z', commentId: 42, url: 'url' })).toBe(true)
 
@@ -166,6 +168,8 @@ describe('review work follows the head commit', () => {
       }
       else {
         expect(store.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at, commentId: 42, url: 'url' })).toBe(false)
+        expect(store.claimNextTerminalReviewStatus('replacement-publisher', '2026-08-13T02:03:00.000Z', 60_000)).toBeNull()
+        expect(store.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: '2026-08-13T02:03:01.000Z', commentId: 42, url: 'url' })).toBe(false)
       }
       expect(store.listReviewRuns(input.repository, 24).find(run => run.id === input.reviewRunId)?.gatePublication).toEqual({ _tag: 'Unpublished' })
     })
