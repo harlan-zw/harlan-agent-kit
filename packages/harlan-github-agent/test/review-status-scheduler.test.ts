@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { err, ok } from '../src/result.ts'
-import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { createReviewStatusScheduler } from '../src/review-status-scheduler.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -105,13 +104,16 @@ describe('review status scheduler', () => {
     const legacy = new DatabaseSync(path)
     legacy.exec('UPDATE revisions SET payload = json_remove(payload, \'$.baseRef\')')
     legacy.close()
-    const command = test.store.claimNextTerminalReviewStatus('publisher', '2026-08-13T01:01:30.000Z', 60_000)!
-    expect(command).not.toBeNull()
     const writes: string[] = []
-
-    const result = await publishClaimedReviewStatus({
+    const scheduler = createReviewStatusScheduler({
       store: test.store,
       now: () => new Date('2026-08-13T01:01:31.000Z'),
+      intervalMilliseconds: 5_000,
+      leaseMilliseconds: 60_000,
+      workerId: 'publisher',
+      onError: (error) => { throw error },
+      onFailure: (_repository, _number, reason) => { throw new Error(reason) },
+      onPublished: () => { throw new Error('The legacy status must retire before publication.') },
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
@@ -124,11 +126,14 @@ describe('review status scheduler', () => {
           return Promise.resolve(ok(undefined))
         },
       },
-    }, command, false, new AbortController().signal)
+    })
+    await scheduler.runNow()
 
     expect(writes).toEqual([])
-    expect(result._tag).toBe('Err')
-    expect(test.store.listWorkflowEvents({ stream: 'review_status', limit: 20 }).map(event => event.event)).not.toContain('Published')
+    expect(test.store.listWorkflowEvents({ stream: 'review_status', limit: 20 })).toContainEqual(expect.objectContaining({
+      entityId: test.staged.commandId,
+      event: 'Superseded',
+    }))
     expect(test.store.claimNextTerminalReviewStatus('next-publisher', '2026-08-13T01:02:00.000Z', 60_000)).toBeNull()
   })
 

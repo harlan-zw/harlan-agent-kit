@@ -855,7 +855,7 @@ export interface JournalStore extends BatchStore {
   completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string, usage?: AgentTokenUsage }) => boolean
   completeIssueTriageComment: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, url: string }) => boolean
   completeReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, url: string }) => boolean
-  /** Rechecks a claimed Review status command immediately before a GitHub write. */
+  /** Authorizes a write, or atomically defers Pause and supersedes revoked authority under the same lease. */
   authorizeReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
   recordReviewStatusReceipt: (input: {
     commandId: string
@@ -6488,7 +6488,7 @@ export function openJournalStore(
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
   // Retained gates answer the current head, target, and policy through stored Review evidence.
-  const reviewGateAuthoritySql = `
+  const reviewGateEvidenceAuthoritySql = `
     subjects.kind = 'pull_request'
     AND json_extract(revisions.payload, '$.state') = 'open'
     AND json_extract(revisions.payload, '$.headSha') = review_runs.head_sha
@@ -6506,7 +6506,6 @@ export function openJournalStore(
     )
     AND repositories.enabled = 1
     ${repositoryWriteAuthoritySql}
-    AND repositories.paused = 0
     AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
     AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
     AND NOT EXISTS (
@@ -6517,8 +6516,9 @@ export function openJournalStore(
         AND json_extract(cancelled_revision.payload, '$.headSha') = review_runs.head_sha
         AND task_cancellations.cancelled_at >= review_runs.started_at
     )`
-  // The worker supplies lineage only. The current projection authorizes detached Publication.
-  const retainedReviewGateClaimSql = `(review_status_commands.task_kind = 'adversarial_review'
+  const reviewGateAuthoritySql = `${reviewGateEvidenceAuthoritySql} AND repositories.paused = 0`
+  // Every terminal Review answers the exact projection, including a current Task.
+  const terminalReviewGateAuthoritySql = `(review_status_commands.task_kind = 'adversarial_review'
     AND review_status_commands.phase = 'terminal'
     AND EXISTS (
       SELECT 1 FROM review_runs
@@ -6529,25 +6529,54 @@ export function openJournalStore(
       JOIN worker_tasks AS lineage ON lineage.id = review_status_commands.task_id
         AND lineage.subject_id = subjects.id AND lineage.kind = 'adversarial_review'
         AND lineage.fence = review_status_commands.task_fence
-        AND lineage.state_tag NOT IN ('Queued', 'ActionRequired', 'Running')
       WHERE review_runs.id = review_status_commands.review_run_id
         AND projection.command_id = review_status_commands.id
         AND UPPER(projection.outcome_tag) = review_status_commands.desired_outcome
         AND review_status_commands.revision_id = subjects.current_revision_id
         AND review_status_commands.expected_head_sha = review_runs.head_sha
-        AND ${reviewGateAuthoritySql}
-        AND NOT EXISTS (
-          SELECT 1 FROM worker_tasks AS live
-          WHERE live.subject_id = subjects.id AND live.kind = 'adversarial_review'
-            AND live.state_tag IN ('Queued', 'ActionRequired', 'Running')
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM tasks AS repair
-          WHERE repair.subject_id = subjects.id AND repair.kind = 'review_fix'
-            AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
-            AND (repair.state_tag != 'ActionRequired' OR repair.updated_at >= review_runs.started_at)
+        AND ${reviewGateEvidenceAuthoritySql}
+        AND (
+          lineage.revision_id = subjects.current_revision_id
+          OR (
+            lineage.state_tag NOT IN ('Queued', 'ActionRequired', 'Running')
+            AND NOT EXISTS (
+              SELECT 1 FROM worker_tasks AS live
+              WHERE live.subject_id = subjects.id AND live.kind = 'adversarial_review'
+                AND live.state_tag IN ('Queued', 'ActionRequired', 'Running')
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM tasks AS repair
+              WHERE repair.subject_id = subjects.id AND repair.kind = 'review_fix'
+                AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+                AND (repair.state_tag != 'ActionRequired' OR repair.updated_at >= review_runs.started_at)
+            )
+          )
         )
     ))`
+  const retainedReviewGateClaimSql = `(${terminalReviewGateAuthoritySql}
+    AND EXISTS (
+      SELECT 1 FROM subjects JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE subjects.current_revision_id = review_status_commands.revision_id AND repositories.paused = 0
+    ))`
+  // Claiming, retirement, and pre-write authorization share this decision. Pause
+  // cannot retire valid evidence, and a changed projection cannot retry forever.
+  const reviewStatusAuthoritySql = `CASE
+    WHEN NOT COALESCE((
+      review_status_commands.revision_id = subjects.current_revision_id
+      AND repositories.enabled = 1
+      ${repositoryWriteAuthoritySql}
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+      AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = review_status_commands.task_id)
+      AND (
+        review_status_commands.phase != 'terminal'
+        OR review_status_commands.review_run_id IS NULL
+        OR ${terminalReviewGateAuthoritySql}
+      )
+    ), 0) THEN 'Revoked'
+    WHEN repositories.paused = 1 THEN 'Paused'
+    ELSE 'Authorized'
+  END`
 
   const getAgentSelection = (): AgentSelection => {
     const row = database.prepare('SELECT tag, provider, model, reasoning_effort, provider_order FROM agent_selection WHERE singleton = 1').get() as {
@@ -10017,6 +10046,49 @@ export function openJournalStore(
     }
   }
 
+  /** Runs inside the caller's claim transaction, after expired leases recover. */
+  const supersedeRevokedReviewStatuses = (now: string, commandId: string | null = null): void => {
+    const stale = database.prepare(`
+      SELECT review_status_commands.id, review_status_commands.fence
+      FROM review_status_commands
+      LEFT JOIN worker_tasks ON review_status_commands.task_kind = 'adversarial_review'
+        AND worker_tasks.id = review_status_commands.task_id
+      LEFT JOIN tasks ON review_status_commands.task_kind = 'review_fix'
+        AND tasks.id = review_status_commands.task_id
+      JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+      JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+        CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE review_status_commands.state_tag = 'Pending' AND review_status_commands.phase = 'terminal'
+        AND (? IS NULL OR review_status_commands.id = ?)
+        AND (
+          (${reviewStatusAuthoritySql}) = 'Revoked'
+          OR (COALESCE(worker_tasks.revision_id, tasks.revision_id) != subjects.current_revision_id
+            AND NOT ${terminalReviewGateAuthoritySql})
+          OR (review_status_commands.task_kind = 'existing_review' AND NOT ${existingReviewLabelClaimSql})
+        )
+    `).all(commandId, commandId) as unknown as Array<{ id: string, fence: number }>
+    const reason = 'The Review changed before it could publish.'
+    const supersede = database.prepare(`
+      UPDATE review_status_commands
+      SET state_tag = 'Superseded', reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND state_tag = 'Pending' AND phase = 'terminal' AND fence = ?
+    `)
+    stale.forEach((command) => {
+      if (supersede.run(reason, now, command.id, command.fence).changes !== 1)
+        return
+      recordReviewStatusEvent(database, {
+        commandId: command.id,
+        event: 'Superseded',
+        from: 'Pending',
+        to: 'Superseded',
+        reason,
+        fence: command.fence,
+        at: now,
+      })
+    })
+  }
+
   const claimReviewStatus: JournalStore['claimReviewStatus'] = (commandId, workerId, now, leaseMilliseconds) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -10036,6 +10108,7 @@ export function openJournalStore(
           at: now,
         })
       }
+      supersedeRevokedReviewStatuses(now, commandId)
       const row = database.prepare(`
         SELECT
           review_status_commands.id,
@@ -10074,6 +10147,7 @@ export function openJournalStore(
           CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Pending'
+          AND (${reviewStatusAuthoritySql}) = 'Authorized'
           AND (
             (
               review_status_commands.phase = 'terminal'
@@ -10201,47 +10275,7 @@ export function openJournalStore(
         })
       })
       supersedeUnauthorizedReviewStatuses(database, now)
-      const stale = database.prepare(`
-        SELECT review_status_commands.id, review_status_commands.fence
-        FROM review_status_commands
-        LEFT JOIN worker_tasks
-          ON review_status_commands.task_kind = 'adversarial_review'
-          AND worker_tasks.id = review_status_commands.task_id
-        LEFT JOIN tasks
-          ON review_status_commands.task_kind = 'review_fix'
-          AND tasks.id = review_status_commands.task_id
-        JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
-        JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
-          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
-        JOIN repositories ON repositories.id = subjects.repository_id
-        WHERE review_status_commands.state_tag = 'Pending'
-          AND review_status_commands.phase = 'terminal'
-          AND (
-            review_status_commands.revision_id != subjects.current_revision_id
-            OR (COALESCE(worker_tasks.revision_id, tasks.revision_id) != subjects.current_revision_id
-              AND NOT ${retainedReviewGateClaimSql})
-            OR (review_status_commands.task_kind = 'existing_review' AND NOT ${existingReviewLabelClaimSql})
-          )
-      `).all() as unknown as Array<{ id: string, fence: number }>
-      const supersede = database.prepare(`
-        UPDATE review_status_commands
-        SET state_tag = 'Superseded', reason = 'The pull request changed before terminal Publication.',
-          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-        WHERE id = ? AND state_tag = 'Pending' AND phase = 'terminal' AND fence = ?
-      `)
-      stale.forEach((command) => {
-        if (supersede.run(now, command.id, command.fence).changes !== 1)
-          return
-        recordReviewStatusEvent(database, {
-          commandId: command.id,
-          event: 'Superseded',
-          from: 'Pending',
-          to: 'Superseded',
-          reason: 'The pull request changed before terminal Publication.',
-          fence: command.fence,
-          at: now,
-        })
-      })
+      supersedeRevokedReviewStatuses(now)
       database.exec('COMMIT')
     }
     catch (error) {
@@ -10263,6 +10297,7 @@ export function openJournalStore(
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE review_status_commands.state_tag = 'Pending'
         AND review_status_commands.phase = 'terminal'
+        AND (${reviewStatusAuthoritySql}) = 'Authorized'
         AND review_status_commands.revision_id = subjects.current_revision_id
         AND (
           COALESCE(worker_tasks.revision_id, tasks.revision_id,
@@ -10293,6 +10328,10 @@ export function openJournalStore(
         -- record refused because a lease ran out cannot un-send it. The worker
         -- and fence prove this is the authorized attempt.
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+          AND (
+            review_status_commands.phase != 'terminal' OR review_status_commands.review_run_id IS NULL
+            OR ${retainedReviewGateClaimSql}
+          )
           AND (
             ${retainedReviewGateClaimSql}
             OR
@@ -10436,47 +10475,55 @@ export function openJournalStore(
     }
   }
 
-  const authorizeReviewStatus: JournalStore['authorizeReviewStatus'] = input => database.prepare(`
-    SELECT 1
-    FROM review_status_commands
-    LEFT JOIN worker_tasks ON review_status_commands.task_kind = 'adversarial_review'
-      AND worker_tasks.id = review_status_commands.task_id
-    LEFT JOIN tasks ON review_status_commands.task_kind = 'review_fix'
-      AND tasks.id = review_status_commands.task_id
-    JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
-    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
-      CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
-    JOIN repositories ON repositories.id = subjects.repository_id
-    WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Running'
-      AND review_status_commands.worker_id = ? AND review_status_commands.fence = ?
-      AND review_status_commands.lease_expires_at > ?
-      AND review_status_commands.revision_id = subjects.current_revision_id
-      AND repositories.enabled = 1
-      ${repositoryWriteAuthoritySql}
-      AND repositories.paused = 0
-      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
-      AND NOT EXISTS (
-        SELECT 1 FROM task_cancellations
-        WHERE task_cancellations.task_id = review_status_commands.task_id
-      )
-      AND (
-        review_status_commands.review_run_id IS NULL
-        OR review_status_commands.task_kind != 'adversarial_review'
-        OR review_status_commands.phase != 'terminal'
-        OR (
-          EXISTS (
-            SELECT 1 FROM review_evidence_scopes
-            WHERE review_evidence_scopes.review_run_id = review_status_commands.review_run_id
-              AND review_evidence_scopes.policy_digest = repositories.policy_digest
-          )
-          AND (
-            worker_tasks.revision_id = subjects.current_revision_id
-            OR ${retainedReviewGateClaimSql}
-          )
-        )
-      )
-  `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
+  const authorizeReviewStatus: JournalStore['authorizeReviewStatus'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = database.prepare(`
+        SELECT (${reviewStatusAuthoritySql}) AS authority
+        FROM review_status_commands
+        LEFT JOIN worker_tasks ON review_status_commands.task_kind = 'adversarial_review'
+          AND worker_tasks.id = review_status_commands.task_id
+        LEFT JOIN tasks ON review_status_commands.task_kind = 'review_fix'
+          AND tasks.id = review_status_commands.task_id
+        JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+        JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+          CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Running'
+          AND review_status_commands.worker_id = ? AND review_status_commands.fence = ?
+          AND review_status_commands.lease_expires_at > ?
+      `).get(input.commandId, input.workerId, input.fence, input.at) as { authority: 'Authorized' | 'Paused' | 'Revoked' } | undefined
+      if (row !== undefined && row.authority !== 'Authorized') {
+        const state = row.authority === 'Paused' ? 'Pending' : 'Superseded'
+        const reason = row.authority === 'Paused'
+          ? 'The repository is paused. Resume the repository to publish the Review.'
+          : 'The Review changed before it could publish.'
+        // Receipts survive loss of authority. They record writes GitHub already accepted.
+        const changed = database.prepare(`
+          UPDATE review_status_commands
+          SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+          WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
+        `).run(state, reason, input.at, input.commandId, input.workerId, input.fence)
+        if (changed.changes === 1) {
+          recordReviewStatusEvent(database, {
+            commandId: input.commandId,
+            event: row.authority === 'Paused' ? 'Deferred' : 'Superseded',
+            from: 'Running',
+            to: state,
+            reason,
+            fence: input.fence,
+            at: input.at,
+          })
+        }
+      }
+      database.exec('COMMIT')
+      return row?.authority === 'Authorized'
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
 
   const deferReviewStatus: JournalStore['deferReviewStatus'] = (input) => {
     database.exec('BEGIN IMMEDIATE')

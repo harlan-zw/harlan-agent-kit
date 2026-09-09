@@ -64,7 +64,7 @@ it('requires fresh Review before publishing a READY label for an unscoped commen
   expect(store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:02:00.000Z', 60_000)?.pullRequest.baseRef).toBe('main')
 })
 
-it('stops a claimed existing review label when its read revokes writes', async () => {
+it.each(['kept', 'revoked'] as const)('publishes an existing review label only while write authority is %s', async (authority) => {
   const directory = mkdtempSync(join(tmpdir(), 'existing-review-label-'))
   const path = join(directory, 'journal.sqlite')
   const repository = repositoryMapping()
@@ -89,7 +89,8 @@ it('stops a claimed existing review label when its read revokes writes', async (
       getPullRequestReviewSnapshot: () => { throw new Error('Unexpected snapshot.') },
       upsertReviewStatus: () => { throw new Error('Unexpected comment.') },
       readExistingReviewLabel: () => {
-        reopened.setRepositoryWritesEnabled(repository.github, false)
+        if (authority === 'revoked')
+          reopened.setRepositoryWritesEnabled(repository.github, false)
         return Promise.resolve(ok({ commentId: 42, url: pullRequest.url, label: 'READY' }))
       },
       stampAgentLabel: () => {
@@ -97,8 +98,9 @@ it('stops a claimed existing review label when its read revokes writes', async (
         return Promise.resolve(ok(undefined))
       },
     } }, command, false, new AbortController().signal)
-    expect(result._tag).toBe('Err')
-    expect(labels).toEqual([])
+    expect(result._tag).toBe(authority === 'kept' ? 'Ok' : 'Err')
+    expect(labels).toEqual(authority === 'kept' ? ['READY'] : [])
+    expect(reopened.claimNextTerminalReviewStatus('next-publisher', '2026-08-13T01:02:00.000Z', 60_000)).toBeNull()
   }
   finally {
     reopened.close()
