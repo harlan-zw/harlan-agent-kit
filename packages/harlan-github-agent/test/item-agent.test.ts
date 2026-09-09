@@ -2,7 +2,7 @@ import type { RecordPullRequestTriageRunInput } from '../src/stats.ts'
 import type { GitHubPullRequestItem, RecordReviewRunInput } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
-import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { CODEX_AGENT_PROFILE, createAgentRuntimeSource } from '../src/agent-profile.ts'
 import { createIssueTriageWorker, createReviewWorker, issueMovedUnderTriage, reviewSnapshotDigest } from '../src/item-agent.ts'
 import { createPullRequestTriageAgent } from '../src/pull-request-triage.ts'
 import { err, ok } from '../src/result.ts'
@@ -44,11 +44,20 @@ describe('subject Workers', () => {
     const stamped: string[] = []
     let attempt: RecordReviewRunInput | undefined
     const worker = createReviewWorker({
-      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
-        findings: [],
-        confidence: 96,
-      }), capture)),
+      runtime: createAgentRuntimeSource({
+        configuredProvider: 'codex',
+        maximumActiveAgents: 6,
+        providers: {
+          codex: stubProvider(turnEvents({
+            premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
+            findings: [],
+            confidence: 96,
+          }), capture),
+          opencode: stubProvider([], undefined, 'opencode'),
+        },
+        repositoryReasoningEfforts: new Map([['harlan-zw/example', { codex: { adversarial_review: 'medium' } }]]),
+        selection: () => ({ _tag: 'FollowsConfiguration' }),
+      }),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
@@ -139,7 +148,7 @@ describe('subject Workers', () => {
     expect(comments.join('\n')).toMatch(/\b(?:10|35|55|70|90)%/)
     expect(stamped).toEqual(['READY'])
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
-    expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })])
+    expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'medium' })])
     expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
     expect(capture.requests[0]?.prompt).toContain('Read only the changed hunks plus the symbols they call.')
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')

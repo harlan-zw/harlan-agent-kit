@@ -331,6 +331,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     configuredProvider: configuredProfile.provider,
     maximumActiveAgents: configuredProfile.maximumActiveAgents,
     roleReasoningEfforts: config.agent.reasoningEffort,
+    repositoryReasoningEfforts: new Map(config.repositories.map(repository => [repository.github, repository.reasoningEffort ?? {}])),
     providers: {
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,

@@ -1271,7 +1271,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
 
       // The Review run records which Agent provider and model answered, so the
       // runtime is read once and reused for the whole review.
-      const reviewRuntime = options.runtime()
+      const reviewRuntime = options.runtime(task.repository)
       const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess)
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       // The slug comes from the primary checkout, never from this worktree.

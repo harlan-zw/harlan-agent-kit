@@ -38,6 +38,8 @@ export interface RepositoryMapping {
   priority?: number
   /** A dedicated repository poll interval. Omit to use the service interval. */
   pollIntervalSeconds?: number
+  /** Overrides global Reasoning effort for this repository. An explicit pinned effort still wins. */
+  reasoningEffort?: RoleReasoningEfforts
   /**
    * `app` uses the GitHub App installation. `user` uses Harlan's own token, for
    * a repository he maintains in an organization that cannot install the App.

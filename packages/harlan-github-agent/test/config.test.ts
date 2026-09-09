@@ -43,6 +43,28 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('reads Reasoning effort for one repository without changing the global overrides', () => {
+    const parsed = parseConfigText(configText.replace('    enabled: true', `    enabled: true
+    reasoning_effort:
+      opencode:
+        adversarial_review: medium`))
+
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.reasoningEffort).toEqual({ opencode: { adversarial_review: 'medium' } })
+    expect(parsed._tag === 'Ok' && parsed.value.agent.reasoningEffort).toEqual({})
+  })
+
+  it.each([
+    ['medium', '$.repositories[0].reasoning_effort'],
+    ['{other: {adversarial_review: medium}}', '$.repositories[0].reasoning_effort.other'],
+    ['{opencode: medium}', '$.repositories[0].reasoning_effort.opencode'],
+    ['{opencode: {review: medium}}', '$.repositories[0].reasoning_effort.opencode.review'],
+    ['{opencode: {adversarial_review: extreme}}', '$.repositories[0].reasoning_effort.opencode.adversarial_review'],
+  ])('rejects invalid repository Reasoning effort %s at its own path', (value, path) => {
+    const parsed = parseConfigText(configText.replace('    enabled: true', `    enabled: true\n    reasoning_effort: ${value}`))
+
+    expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain(path)
+  })
+
   it('reads repository priority and its polling interval', () => {
     const parsed = parseConfigText(configText.replace('    enabled: true', '    enabled: true\n    priority: 100\n    poll_interval_seconds: 15'))
     expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.priority).toBe(100)
