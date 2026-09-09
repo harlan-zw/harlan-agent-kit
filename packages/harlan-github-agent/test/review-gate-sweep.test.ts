@@ -7,6 +7,7 @@ import { err, ok } from '../src/result.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { githubPublicationFixture } from './github-publication-fixture.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 
@@ -964,4 +965,39 @@ describe('refreshReviewGates against the journal store', () => {
 
     expect(store.listIncidents()).toHaveLength(1)
   })
+})
+
+it.each(['labels', 'create label', 'add label', 'remove label', 'kept', 'idempotent'] as const)('checks unchanged Review authority during real %s helper boundaries', async (boundary) => {
+  const store = openJournalStore(':memory:', true)
+  stores.push(store)
+  const repository = recordPublishedRefreshReview(store)
+  const github = githubPublicationFixture({
+    body: '',
+    mode: 'idempotent',
+    ...(boundary === 'idempotent' ? { labels: ['harlan-agent-ready'] } : {}),
+    ...(boundary === 'kept' || boundary === 'idempotent' ? {} : { boundary }),
+    change: () => store.setRepositoryPaused(repository.github, true),
+  })
+  const result = await refreshReviewGates({
+    store,
+    repositories: [repository],
+    now: () => new Date('2026-08-27T08:23:00.000Z'),
+    preflightRepair: () => Promise.resolve(ok(undefined)),
+    github: {
+      getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
+      editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      stampAgentLabel: github.source.stampAgentLabel,
+    },
+  }, new AbortController().signal)
+  expect(result[0]?._tag).toBe(boundary === 'kept' || boundary === 'idempotent' ? 'Ok' : 'Err')
+  const accepted = boundary === 'labels' || boundary === 'idempotent'
+    ? []
+    : boundary === 'create label'
+      ? ['create label']
+      : boundary === 'add label'
+        ? ['create label', 'add label']
+        : boundary === 'remove label'
+          ? ['create label', 'add label', 'remove label']
+          : ['create label', 'add label', 'remove label', 'remove label']
+  expect(github.writes).toEqual(accepted)
 })

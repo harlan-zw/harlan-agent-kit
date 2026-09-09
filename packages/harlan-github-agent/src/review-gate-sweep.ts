@@ -1,5 +1,5 @@
 import type { CiGateCause } from './ci-gate-pending.ts'
-import type { GitHubAgentSource } from './github-agent-source.ts'
+import type { GitHubAgentSource, ReviewPublicationSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { BaselineRepairQueueResult, JournalStore, ReviewGateRefresh } from './store.ts'
 import type { RepositoryMapping, ReviewGates, ReviewOutcomeName } from './types.ts'
@@ -20,7 +20,7 @@ export type ReviewGateRefreshOutcome
     | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 export interface ReviewGateSweepOptions {
-  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampAgentLabel'>
+  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'> & Pick<ReviewPublicationSource, 'stampAgentLabel'>
   now: () => Date
   /** Proves the controller may publish Repair commits in this repository. */
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -149,7 +149,10 @@ export async function refreshReviewGates(
       }
       if (!hasCurrentRefreshAuthority(options, review))
         return err(`${review.repository}#${review.pullRequestNumber}: The Review authority changed before its label write.`)
-      const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal)
+      const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal, () =>
+        hasCurrentRefreshAuthority(options, review)
+          ? ok(undefined)
+          : err('The Review authority changed before its label write.'))
       if (stamped._tag === 'Err')
         return err(`${review.repository}#${review.pullRequestNumber}: ${stamped.error}`)
       const unsettled = [gates.merge, gates.ci].find(gate => gate._tag !== 'Passed')

@@ -1,3 +1,4 @@
+import type { ReviewStatusPublicationOptions } from '../src/review-status-controller.ts'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -9,6 +10,7 @@ import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { createReviewStatusScheduler } from '../src/review-status-scheduler.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { githubPublicationFixture } from './github-publication-fixture.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 afterEach(() => stores.splice(0).forEach(store => store.close()))
@@ -64,7 +66,7 @@ it('requires fresh Review before publishing a READY label for an unscoped commen
   expect(store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:02:00.000Z', 60_000)?.pullRequest.baseRef).toBe('main')
 })
 
-it.each(['kept', 'revoked'] as const)('publishes an existing review label only while write authority is %s', async (authority) => {
+it.each(['kept', 'revoked', 'rerun', 'Pause', 'labels', 'create label', 'add label', 'remove label'] as const)('publishes an existing review label only while write authority is %s', async (authority) => {
   const directory = mkdtempSync(join(tmpdir(), 'existing-review-label-'))
   const path = join(directory, 'journal.sqlite')
   const repository = repositoryMapping()
@@ -85,22 +87,53 @@ it.each(['kept', 'revoked'] as const)('publishes an existing review label only w
   try {
     const command = reopened.claimNextTerminalReviewStatus('publisher', '2026-08-13T01:00:04.000Z', 60_000)!
     const labels: string[] = []
-    const result = await publishClaimedReviewStatus({ store: reopened, now: () => new Date('2026-08-13T01:00:05.000Z'), github: {
+    const github = githubPublicationFixture({ body: '', mode: 'idempotent', ...(['labels', 'create label', 'add label', 'remove label'].includes(authority) ? { boundary: authority as 'labels' | 'create label' | 'add label' | 'remove label' } : {}), change: () => expect(reopened.requestReviewRerun({ repository: repository.github, pullRequestNumber: 24, revisionId: observed.revisionId, requestId: 'boundary-rerun', source: 'dashboard', requestedBy: 'harlan-zw', at: '2026-08-13T01:00:05.000Z' })._tag).toBe('Queued') })
+    let paused = false
+    const options = { store: reopened, now: () => new Date('2026-08-13T01:00:05.000Z'), github: {
       getPullRequestReviewSnapshot: () => { throw new Error('Unexpected snapshot.') },
       upsertReviewStatus: () => { throw new Error('Unexpected comment.') },
       readExistingReviewLabel: () => {
         if (authority === 'revoked')
           reopened.setRepositoryWritesEnabled(repository.github, false)
+        if (authority === 'Pause' && !paused) {
+          paused = true
+          reopened.setRepositoryPaused(repository.github, true)
+        }
+        if (authority === 'rerun')
+          expect(reopened.requestReviewRerun({ repository: repository.github, pullRequestNumber: 24, revisionId: observed.revisionId, requestId: 'rerun', source: 'dashboard', requestedBy: 'harlan-zw', at: '2026-08-13T01:00:05.000Z' })._tag).toBe('Queued')
         return Promise.resolve(ok({ commentId: 42, url: pullRequest.url, label: 'READY' }))
       },
-      stampAgentLabel: () => {
-        labels.push('READY')
-        return Promise.resolve(ok(undefined))
+      stampAgentLabel: async (...args) => {
+        const result = await github.source.stampAgentLabel(...args)
+        if (result._tag === 'Ok')
+          labels.push('READY')
+        return result
       },
-    } }, command, false, new AbortController().signal)
+    } } satisfies ReviewStatusPublicationOptions
+    const result = await publishClaimedReviewStatus(options, command, false, new AbortController().signal)
     expect(result._tag).toBe(authority === 'kept' ? 'Ok' : 'Err')
     expect(labels).toEqual(authority === 'kept' ? ['READY'] : [])
     expect(reopened.claimNextTerminalReviewStatus('next-publisher', '2026-08-13T01:02:00.000Z', 60_000)).toBeNull()
+    const accepted = authority === 'kept'
+      ? ['create label', 'add label', 'remove label', 'remove label']
+      : authority === 'create label'
+        ? ['create label']
+        : authority === 'add label'
+          ? ['create label', 'add label']
+          : authority === 'remove label' ? ['create label', 'add label', 'remove label'] : []
+    expect(github.writes).toEqual(accepted)
+    const events = reopened.listWorkflowEvents({ stream: 'review_status', limit: 100 }).filter(event => event.entityId === command.id)
+    expect(events).toContainEqual(expect.objectContaining({ event: authority === 'kept' ? 'Published' : authority === 'Pause' ? 'Deferred' : 'Superseded' }))
+    if (authority === 'rerun' || ['labels', 'create label', 'add label', 'remove label'].includes(authority))
+      expect(reopened.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:02:01.000Z', 60_000)?.rerun._tag).toBe('Requested')
+    if (authority === 'Pause') {
+      reopened.setRepositoryPaused(repository.github, false)
+      const resumed = reopened.claimNextTerminalReviewStatus('resumed-publisher', '2026-08-13T01:02:01.000Z', 60_000)!
+      expect(resumed.id).toBe(command.id)
+      expect((await publishClaimedReviewStatus({ ...options, now: () => new Date('2026-08-13T01:02:02.000Z') }, resumed, false, new AbortController().signal))._tag).toBe('Ok')
+      expect(github.writes).toEqual(['create label', 'add label', 'remove label', 'remove label'])
+      expect(reopened.claimNextTerminalReviewStatus('finished-publisher', '2026-08-13T01:03:02.000Z', 60_000)).toBeNull()
+    }
   }
   finally {
     reopened.close()

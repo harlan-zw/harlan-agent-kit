@@ -240,6 +240,15 @@ export interface ExistingReviewLabelSource {
   readExistingReviewLabel: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, headSha: string, baseRef: string, signal: AbortSignal) => Promise<Result<ExistingReviewLabel, ExistingReviewLabelFailure>>
 }
 
+/** Synchronous, so no await separates current authority from the GitHub write. */
+export type ReviewPublicationAuthority = () => Result<void, string>
+
+/** Review publishers must supply current authority to every mutation helper. */
+export interface ReviewPublicationSource {
+  stampAgentLabel: (repository: RepositoryMapping, itemNumber: number, state: AgentLabelState, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<void, string>>
+  upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<PublishedReviewStatus, string>>
+}
+
 export interface GitHubAgentSource {
   /** Finds the open pull request whose head is `headRef`, if one exists. */
   findOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal: AbortSignal) => Promise<Result<OpenPullRequestReference | null, string>>
@@ -261,7 +270,7 @@ export interface GitHubAgentSource {
    * The write is skipped when the pull request already carries the label, so a
    * rerun that reaches the same verdict costs one read.
    */
-  stampAgentLabel: (repository: RepositoryMapping, itemNumber: number, state: AgentLabelState, signal: AbortSignal) => Promise<Result<void, string>>
+  stampAgentLabel: (repository: RepositoryMapping, itemNumber: number, state: AgentLabelState, signal: AbortSignal, authorize?: ReviewPublicationAuthority) => Promise<Result<void, string>>
   /**
    * Takes the verdict off a pull request no Review has answered for.
    *
@@ -295,7 +304,7 @@ export interface GitHubAgentSource {
    * the window between the read and the write cannot be closed here.
    */
   editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, expectedBody: string, body: string, signal: AbortSignal) => Promise<Result<EditedReviewStatus, string>>
-  upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
+  upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal, authorize?: ReviewPublicationAuthority) => Promise<Result<PublishedReviewStatus, string>>
 }
 
 export interface GitHubAgentSourceOptions {
@@ -610,7 +619,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       }).catch((error: unknown): Result<ExistingReviewLabel, ExistingReviewLabelFailure> => err({ _tag: 'Transient', message: message(error) }))
     },
 
-    async stampAgentLabel(repository, itemNumber, state, signal) {
+    async stampAgentLabel(repository, itemNumber, state, signal, authorize) {
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -630,6 +639,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       // reported a failed write for a write that had landed.
       let held = current.value
       if (plan.add !== null) {
+        const creationAuthority = authorize?.()
+        if (creationAuthority?._tag === 'Err')
+          return creationAuthority
         const created = await octokit.value.rest.issues.createLabel({
           owner,
           repo,
@@ -642,6 +654,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           .catch((error: unknown): Result<void, string> => errorStatus(error) === 422 ? ok(undefined) : err(message(error)))
         if (created._tag === 'Err')
           return created
+        const additionAuthority = authorize?.()
+        if (additionAuthority?._tag === 'Err')
+          return additionAuthority
         const added = await octokit.value.rest.issues.addLabels({ ...request, labels: [plan.add.name] })
           .then((response): Result<string[], string> => ok(labelNames(response.data)))
           .catch((error: unknown): Result<string[], string> => err(message(error)))
@@ -651,6 +666,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       }
       // One at a time, so the last answer names every label GitHub still holds.
       for (const label of plan.remove) {
+        const removalAuthority = authorize?.()
+        if (removalAuthority?._tag === 'Err')
+          return removalAuthority
         // A label another writer already removed answers this call.
         const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
           .then((response): Result<string[], string> => ok(labelNames(response.data)))
@@ -929,7 +947,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown) => isMissingComment(error) ? ok({ _tag: 'Missing' as const }) : err(message(error)))
     },
 
-    async upsertReviewStatus(repository, pullRequestNumber, commentId, body, replacePriorReview, signal) {
+    async upsertReviewStatus(repository, pullRequestNumber, commentId, body, replacePriorReview, signal, authorize) {
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -983,6 +1001,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           : octokit
         if (writer._tag === 'Err')
           return writer
+        const authorization = authorize?.()
+        if (authorization?._tag === 'Err')
+          return authorization
         const written = existing === undefined
           ? await writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body, ...requestOptions })
           : await writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body, ...requestOptions })

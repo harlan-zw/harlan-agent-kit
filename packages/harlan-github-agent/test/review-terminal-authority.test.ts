@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { createReviewStatusScheduler } from '../src/review-status-scheduler.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { githubPublicationFixture } from './github-publication-fixture.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 const directories: string[] = []
@@ -17,11 +18,11 @@ afterEach(() => {
   directories.splice(0).forEach(directory => rmSync(directory, { recursive: true, force: true }))
 })
 
-function terminalStatus(lineage: 'current' | 'retained', outcome: 'READY' | 'PENDING' | 'BLOCKED' = 'READY', path = ':memory:') {
+function terminalStatus(lineage: 'current' | 'retained', outcome: 'READY' | 'PENDING' | 'BLOCKED' = 'READY', path = ':memory:', headSha = 'abc123') {
   const store = openJournalStore(path, true)
   stores.push(store)
   const repository = repositoryMapping()
-  let pullRequest = pullRequestItem({ mergeState: 'clean' })
+  let pullRequest = pullRequestItem({ mergeState: 'clean', headSha })
   store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
   store.setRepositoryWritesEnabled(repository.github, true)
   store.recordObservation({ externalId: 'initial', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequest })
@@ -55,7 +56,9 @@ function terminalStatus(lineage: 'current' | 'retained', outcome: 'READY' | 'PEN
       : [],
   }
   expect(store.recordReviewRun(run)._tag).toBe('Inserted')
-  const body = `### ${outcome}`
+  const body = `<!-- harlan-agent-kit:pr-triage -->
+<!-- reviewed-sha: ${headSha} -->
+### 🤖 ${outcome}`
   let staged
   if (lineage === 'current') {
     staged = store.stageReviewStatus({
@@ -104,7 +107,7 @@ function terminalStatus(lineage: 'current' | 'retained', outcome: 'READY' | 'PEN
       reason: 'GitHub request timed out.',
     })).toBe('Retrying')
     for (const [index, mergeState] of ['conflicting', 'clean'].entries()) {
-      pullRequest = pullRequestItem({ baseSha: `base-${index}`, mergeState: mergeState as 'conflicting' | 'clean' })
+      pullRequest = pullRequestItem({ headSha, baseSha: `base-${index}`, mergeState: mergeState as 'conflicting' | 'clean' })
       store.recordObservation({ externalId: `base-${index}`, observedAt: `2026-08-13T01:02:0${index}.000Z`, source: 'poll', subject: pullRequest })
     }
     const refresh = store.listReviewGateRefreshes().find(candidate => candidate.reviewRunId === run.id)!
@@ -423,4 +426,141 @@ it.each(['WAITING', 'SKIPPED', 'snapshot', 'review'] as const)('publishes %s wit
   }
   expect(harness.writes).toEqual(status === 'WAITING' ? ['comment', 'PENDING'] : ['comment'])
   expect(harness.claim()).toBeNull()
+})
+
+describe('live terminal Review publication boundaries', () => {
+  it.each(['closed', 'head', 'target'] as const)('retires live %s mismatch while stored observation stays unchanged', async (mismatch) => {
+    const test = terminalStatus('current', 'BLOCKED')
+    const harness = publicationHarness(test, 'none')
+    const snapshot = harness.options.github.getPullRequestReviewSnapshot
+    harness.options.github.getPullRequestReviewSnapshot = async () => {
+      const result = await snapshot()
+      if (result._tag === 'Err')
+        throw new Error('Expected a Review snapshot.')
+      return ok({ ...result.value, pullRequest: {
+        ...result.value.pullRequest,
+        ...(mismatch === 'closed' ? { state: 'closed' as const } : mismatch === 'head' ? { headSha: 'new-head' } : { baseRef: 'next' }),
+      } })
+    }
+    expect(test.store.claimNextReviewFixTask('repair', '2026-08-13T01:03:00.000Z', 60_000)).toBeNull()
+    for (let index = 0; index < 4; index += 1) {
+      await harness.scheduler.runNow()
+      harness.advance()
+    }
+    expect(harness.reads()).toBe(1)
+    expect(harness.writes).toEqual([])
+    expect(harness.events().filter(event => event.event === 'Claimed')).toHaveLength(1)
+    expect(harness.events()).toContainEqual(expect.objectContaining({ event: 'Superseded' }))
+    const repair = test.store.claimNextReviewFixTask('repair', '2026-08-13T01:04:00.000Z', 60_000)
+    expect(repair?.pullRequest).toMatchObject({ state: 'open', headSha: test.pullRequest.headSha, baseRef: 'main' })
+  })
+
+  it('retries a transient live read and publishes once after recovery', async () => {
+    const test = terminalStatus('current')
+    const harness = publicationHarness(test, 'none')
+    const snapshot = harness.options.github.getPullRequestReviewSnapshot
+    let unavailable = true
+    const options = { ...harness.options, github: { ...harness.options.github, getPullRequestReviewSnapshot: () => unavailable ? Promise.resolve(err('GitHub timed out.')) : snapshot() } }
+    expect((await publishClaimedReviewStatus(options, harness.claim()!, false, new AbortController().signal))._tag).toBe('Err')
+    expect(harness.events()).toContainEqual(expect.objectContaining({ event: 'Deferred' }))
+    unavailable = false
+    harness.advance()
+    expect((await publishClaimedReviewStatus(options, harness.claim()!, false, new AbortController().signal))._tag).toBe('Ok')
+    expect(harness.writes).toEqual(['comment', 'READY'])
+  })
+
+  it.each(['expired', 'reclaimed'] as const)('cannot retire a live mismatch through an %s publisher lease', async (lease) => {
+    const test = terminalStatus('current')
+    const harness = publicationHarness(test, 'none')
+    const command = harness.claim()!
+    const snapshot = harness.options.github.getPullRequestReviewSnapshot
+    harness.options.github.getPullRequestReviewSnapshot = async () => {
+      harness.advance()
+      if (lease === 'reclaimed')
+        expect(harness.claim()?.fence).toBeGreaterThan(command.fence)
+      const result = await snapshot()
+      if (result._tag === 'Err')
+        throw new Error('Expected a Review snapshot.')
+      return ok({ ...result.value, pullRequest: { ...result.value.pullRequest, state: 'closed' as const } })
+    }
+    expect((await publishClaimedReviewStatus(harness.options, command, false, new AbortController().signal))._tag).toBe('Err')
+    expect(harness.events().some(event => event.event === 'Superseded')).toBe(false)
+    harness.advance()
+    const next = harness.claim()!
+    expect(next.fence).toBeGreaterThan(command.fence)
+    expect(test.store.authorizeReviewStatus({ commandId: next.id, workerId: next.workerId, fence: next.fence, at: '2026-08-13T01:03:04.000Z' })).toBe(true)
+  })
+})
+
+describe.each(['current', 'retained'] as const)('%s Review with real GitHub mutation helpers', (lineage) => {
+  it.each([
+    ['create', 'comments'],
+    ['update', 'comments'],
+    ['legacy', 'comments'],
+    ['legacy', 'legacy token'],
+    ['create', 'label token'],
+    ['create', 'labels'],
+    ['create', 'create label'],
+    ['create', 'add label'],
+    ['create', 'remove label'],
+  ] as const)('stops %s writes after projection replacement during %s', async (mode, boundary) => {
+    const test = terminalStatus(lineage, 'READY', ':memory:', 'a'.repeat(40))
+    const harness = publicationHarness(test, 'none')
+    const command = harness.claim()!
+    const github = githubPublicationFixture({ body: command.body, mode, boundary, change: () => replaceProjection(test) })
+    const result = await publishClaimedReviewStatus({ ...harness.options, github: { ...harness.options.github, ...github.source } }, command, true, new AbortController().signal)
+    expect(result._tag).toBe('Err')
+    const accepted = boundary === 'label token' || boundary === 'labels'
+      ? ['create comment']
+      : boundary === 'create label'
+        ? ['create comment', 'create label']
+        : boundary === 'add label'
+          ? ['create comment', 'create label', 'add label']
+          : boundary === 'remove label' ? ['create comment', 'create label', 'add label', 'remove label'] : []
+    expect(github.writes).toEqual(accepted)
+    expect(harness.events()).toContainEqual(expect.objectContaining({ event: 'Superseded' }))
+    if (accepted.includes('create comment'))
+      expect(harness.events()).toContainEqual(expect.objectContaining({ event: 'CommentConfirmed' }))
+    for (let index = 0; index < 3; index += 1) {
+      harness.advance()
+      expect(harness.claim()).toBeNull()
+    }
+  })
+
+  it.each(['create', 'update', 'legacy', 'idempotent'] as const)('publishes valid %s comments and labels once', async (mode) => {
+    const test = terminalStatus(lineage, 'READY', ':memory:', 'a'.repeat(40))
+    const harness = publicationHarness(test, 'none')
+    const command = harness.claim()!
+    const github = githubPublicationFixture({ body: command.body, mode, ...(mode === 'idempotent' ? { labels: ['harlan-agent-ready'] } : {}) })
+    const result = await publishClaimedReviewStatus({ ...harness.options, github: { ...harness.options.github, ...github.source } }, command, true, new AbortController().signal)
+    expect(result._tag).toBe('Ok')
+    expect(github.writes).toEqual(mode === 'idempotent' ? [] : [mode === 'create' ? 'create comment' : 'update comment', 'create label', 'add label', 'remove label', 'remove label'])
+    expect(harness.claim()).toBeNull()
+  })
+
+  it.each(['Pause', 'writes'] as const)('preserves accepted comments when %s occurs during label reads', async (loss) => {
+    const test = terminalStatus(lineage, 'READY', ':memory:', 'a'.repeat(40))
+    const harness = publicationHarness(test, 'none')
+    const command = harness.claim()!
+    const github = githubPublicationFixture({ body: command.body, mode: 'create', boundary: 'labels', change: () => {
+      if (loss === 'Pause')
+        test.store.setRepositoryPaused(test.repository.github, true)
+      else
+        test.store.setRepositoryWritesEnabled(test.repository.github, false)
+    } })
+    const options = { ...harness.options, github: { ...harness.options.github, ...github.source } }
+    expect((await publishClaimedReviewStatus(options, command, true, new AbortController().signal))._tag).toBe('Err')
+    expect(github.writes).toEqual(['create comment'])
+    expect(harness.events()).toContainEqual(expect.objectContaining({ event: 'CommentConfirmed' }))
+    expect(harness.events()).toContainEqual(expect.objectContaining({ event: loss === 'Pause' ? 'Deferred' : 'Superseded' }))
+    harness.advance()
+    expect(harness.claim()).toBeNull()
+    if (loss === 'Pause') {
+      test.store.setRepositoryPaused(test.repository.github, false)
+      const resumed = harness.claim()!
+      expect(resumed.commentId).toBe(42)
+      expect((await publishClaimedReviewStatus(options, resumed, true, new AbortController().signal))._tag).toBe('Ok')
+      expect(github.writes).toEqual(['create comment', 'create label', 'add label', 'remove label', 'remove label'])
+    }
+  })
 })

@@ -1,4 +1,4 @@
-import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
+import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
@@ -15,7 +15,7 @@ export interface ReviewStatusController {
 }
 
 export interface ReviewStatusControllerOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
   store: Pick<JournalStore, 'authorizeReviewStatus' | 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus' | 'supersedeReviewStatus'>
@@ -23,7 +23,7 @@ export interface ReviewStatusControllerOptions {
 }
 
 export interface ReviewStatusPublicationOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
   now: () => Date
   store: Pick<JournalStore, 'authorizeReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
 }
@@ -89,6 +89,7 @@ async function publishExistingReviewLabel(
     command.pullRequestNumber,
     existing.value.label,
     signal,
+    () => authorizeWrite(options, command),
   )
   if (stamped._tag === 'Err') {
     options.store.deferReviewStatus({
@@ -160,7 +161,7 @@ export async function publishClaimedReviewStatus(
     || current.value.pullRequest.baseRef !== command.expectedBaseRef
   ) {
     const reason = 'The pull request changed before the review comment was posted.'
-    options.store.deferReviewStatus({
+    options.store.supersedeReviewStatus({
       commandId: command.id,
       workerId: command.workerId,
       fence: command.fence,
@@ -180,6 +181,7 @@ export async function publishClaimedReviewStatus(
     command.body,
     replacePriorReview,
     signal,
+    () => authorizeWrite(options, command),
   )
   if (published._tag === 'Err') {
     options.store.deferReviewStatus({
@@ -219,6 +221,7 @@ export async function publishClaimedReviewStatus(
       command.pullRequestNumber,
       label,
       signal,
+      () => authorizeWrite(options, command),
     )
     if (stamped._tag === 'Err') {
       options.store.deferReviewStatus({

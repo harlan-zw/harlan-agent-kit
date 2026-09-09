@@ -6568,6 +6568,7 @@ export function openJournalStore(
       AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
       AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = review_status_commands.task_id)
+      AND (review_status_commands.task_kind != 'existing_review' OR ${existingReviewLabelClaimSql})
       AND (
         review_status_commands.phase != 'terminal'
         OR review_status_commands.review_run_id IS NULL
@@ -10563,7 +10564,8 @@ export function openJournalStore(
         SET state_tag = 'Superseded', reason = ?, worker_id = NULL,
           lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+          AND lease_expires_at > ?
+      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence, input.at).changes === 1
       if (changed) {
         recordReviewStatusEvent(database, {
           commandId: input.commandId,
