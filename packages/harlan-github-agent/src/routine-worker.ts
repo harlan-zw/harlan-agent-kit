@@ -96,6 +96,20 @@ Follow its workflow completely, including running its data script and writing it
 
 Return each proposed action as one Candidate. Use the ledger fingerprint as the Candidate fingerprint when the action has one. Put a short issue title in \`title\`, the action in \`claim\`, the file or system it changes in \`target\`, and the check that proves it in \`verification\`.`
 
+function sentryCheckinTurn(mode: ClaimedRoutineRun['mode']): string {
+  return `Apply the harlan-agent-kit:sentry-checkin skill and its references/scheduled-routine.md contract. Read both before you start.
+
+This is a scheduled Routine for the named repository and the controller's prepared worktree only.
+Do not edit repository files, commit, push, open pull requests, deploy, or delegate another site Agent.
+Persist the audited ledger and record the run history, even with zero code proposals.
+Return the complete issue report in \`report\`, including issue counts, resolution results, and artifact paths.
+Return only code repairs as Candidates. Sentry resolutions do not require code proposals.
+
+${mode === 'propose'
+  ? 'Resolve eligible issues in their verified deployed release during this run. Run the resolution plan before --apply, then verify each issue status.'
+  : 'Keep Sentry read only. Do not resolve issues or run resolve with --apply. Report eligible resolutions for a propose run.'}`
+}
+
 const agentFeedbackSkillTarget = /^harlan-agent-kit\/skills\/[^/]+\/SKILL\.md$/
 
 /** Applies the controller-owned publication scope after the Agent answers. */
@@ -134,7 +148,9 @@ export function routineScanPrompt(input: {
 
   const turn = input.name === 'daily-checkin'
     ? DAILY_CHECKIN_TURN
-    : `Apply the ${ROUTINE_SKILLS[input.name]} skill. Read it before you start.
+    : input.name === 'sentry-checkin'
+      ? sentryCheckinTurn(input.mode)
+      : `Apply the ${ROUTINE_SKILLS[input.name]} skill. Read it before you start.
 
 This turn is read only. The worktree is the default branch. Do not edit, commit,
 or push anything. Report what you find and stop.`
@@ -261,13 +277,13 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           // A Routine answers a clock, so it belongs to no issue or pull
           // request. Nothing reads this number, because no session is saved.
           number: 0,
-          prompt: routineScanPrompt({
+          prompt: `${routineScanPrompt({
             mode: task.mode,
             name: task.name,
             rejected: options.store.listCandidates(task.routineId),
             repository: task.repository,
             feedback,
-          }),
+          })}\n\nRoutine run ID: ${JSON.stringify(task.id)}\nScheduled for: ${task.scheduledFor}`,
           repository: task.repository,
           role: 'routine_scan',
           schema: CANDIDATE_SCHEMA,
@@ -292,6 +308,8 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       // The run log is the only place a check-in report lives once the
       // worktree is gone, so the whole report travels with the evidence line.
       const detail = typeof response.report === 'string' ? response.report.trim() : ''
+      if (task.name === 'sentry-checkin' && detail === '')
+        return err('The Sentry Routine answered without its issue report.')
 
       // Oversized proposals are dropped here rather than recorded and skipped
       // later, so the ledger never holds a Candidate nothing will ever open.
@@ -330,7 +348,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
 
       const evidence = [
         `${task.name} on ${task.repository}`,
-        `${response.candidates.length} found`,
+        `${response.candidates.length} ${task.name === 'sentry-checkin' ? 'code proposals' : 'found'}`,
         `${fresh.length} new`,
         `${withinSize.length - fresh.length} already known`,
         `${outsideScope} outside allowed scope`,

@@ -7,6 +7,9 @@ description: "Triage and repair all open Sentry issues across Harlan's sites. Us
 
 Turn the complete open Sentry backlog into one verified PR per affected site. Account for every issue present at discovery time.
 
+For a controller-scheduled Routine, follow [the scheduled Routine contract](references/scheduled-routine.md) instead of the all-sites workflow below.
+The controller supplies one repository, its prepared worktree, the Routine run ID, and `report` or `propose` mode.
+
 ## Worktree isolation
 
 Before site edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.

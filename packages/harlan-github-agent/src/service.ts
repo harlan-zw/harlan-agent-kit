@@ -637,7 +637,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onTaskStarted: stampRunningLabel,
         onTaskSettled: settleTask,
         permits,
-        // A scan is read only, so it needs no write access to start.
+        // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
           activityLog,
           logger: {

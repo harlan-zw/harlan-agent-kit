@@ -48,16 +48,16 @@ function workerFor(
   })
 }
 
-function seed(store: ReturnType<typeof openJournalStore>): void {
+function seed(store: ReturnType<typeof openJournalStore>, name: ClaimedRoutineRun['name'] = 'pr-triage'): void {
   store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
   store.syncRoutines({
     repository: 'harlan-zw/example',
     specSha: 'abc123',
-    entries: [{ name: 'pr-triage', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+    entries: [{ name, crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
     at: '2026-08-27T00:00:00.000Z',
   })
   store.openRoutineRun({
-    routineId: 'harlan-zw/example:pr-triage',
+    routineId: `harlan-zw/example:${name}`,
     scheduledFor: '2026-08-27T07:00:00.000Z',
     specSha: 'abc123',
     at: '2026-08-27T07:00:05.000Z',
@@ -108,10 +108,22 @@ describe('building the scan prompt', () => {
     expect(prompt).toContain('controller defect')
   })
 
-  it('names the skill that answers the routine', () => {
+  it('lets a proposing Sentry Routine close verified fixes and persist its ledger', () => {
     const prompt = routineScanPrompt({ mode: 'propose', name: 'sentry-checkin', rejected: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('harlan-agent-kit:sentry-checkin')
+    expect(prompt).toContain('references/scheduled-routine.md')
+    expect(prompt).toContain('Resolve eligible issues in their verified deployed release during this run.')
+    expect(prompt).toContain('Persist the audited ledger and record the run history, even with zero code proposals.')
+    expect(prompt).not.toContain('This turn is read only')
+  })
+
+  it('keeps Sentry report mode read only while allowing local evidence files', () => {
+    const prompt = routineScanPrompt({ mode: 'report', name: 'sentry-checkin', rejected: [], repository: 'harlan-zw/example' })
+
+    expect(prompt).toContain('Keep Sentry read only. Do not resolve issues or run resolve with --apply.')
+    expect(prompt).toContain('Persist the audited ledger and record the run history, even with zero code proposals.')
+    expect(prompt).not.toContain('Resolve eligible issues in their verified deployed release during this run.')
   })
 
   it('points a check-in at the repository skill and lets it write its report files', () => {
@@ -184,6 +196,45 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it('reports zero code proposals without hiding the Sentry issue ledger', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'sentry-checkin')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const detail = '12 Sentry issues. 12 ledger rows. 12 resolved in release abc123. History recorded.'
+
+      const result = await workerFor(store, scanning({ report: detail, candidates: [] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+
+      expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('0 code proposals') } })
+      const report = store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)
+      expect(report?.body).toContain('0 code proposals')
+      expect(report?.body).toContain(detail)
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it.each([undefined, '', '  '])('refuses a Sentry result without a report: %s', async (report) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'sentry-checkin')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+
+      const result = await workerFor(store, scanning({ report, candidates: [candidate] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+
+      expect(result).toEqual({ _tag: 'Err', error: 'The Sentry Routine answered without its issue report.' })
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('refuses the global Agent feedback Routine in another repository', async () => {
     const store = openJournalStore(':memory:')
     try {
