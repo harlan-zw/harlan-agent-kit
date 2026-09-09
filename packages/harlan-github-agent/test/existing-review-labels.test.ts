@@ -86,12 +86,22 @@ it('stops a claimed existing review label when its read revokes writes', async (
     const command = reopened.claimNextTerminalReviewStatus('publisher', '2026-08-13T01:00:04.000Z', 60_000)!
     const labels: string[] = []
     const result = await publishClaimedReviewStatus({ store: reopened, now: () => new Date('2026-08-13T01:00:05.000Z'), github: {
-      getPullRequestReviewSnapshot: () => { throw new Error('Unexpected snapshot.') }, upsertReviewStatus: () => { throw new Error('Unexpected comment.') },
-      readExistingReviewLabel: () => { reopened.setRepositoryWritesEnabled(repository.github, false); return Promise.resolve(ok({ commentId: 42, url: pullRequest.url, label: 'READY' })) },
-      stampAgentLabel: () => { labels.push('READY'); return Promise.resolve(ok(undefined)) },
+      getPullRequestReviewSnapshot: () => { throw new Error('Unexpected snapshot.') },
+      upsertReviewStatus: () => { throw new Error('Unexpected comment.') },
+      readExistingReviewLabel: () => {
+        reopened.setRepositoryWritesEnabled(repository.github, false)
+        return Promise.resolve(ok({ commentId: 42, url: pullRequest.url, label: 'READY' }))
+      },
+      stampAgentLabel: () => {
+        labels.push('READY')
+        return Promise.resolve(ok(undefined))
+      },
     } }, command, false, new AbortController().signal)
     expect(result._tag).toBe('Err')
     expect(labels).toEqual([])
   }
-  finally { reopened.close(); rmSync(directory, { recursive: true, force: true }) }
+  finally {
+    reopened.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
 })

@@ -40,11 +40,21 @@ function stagedTerminalStatus(path = ':memory:') {
     ci: { _tag: 'Passed' as const, evidence: [] },
   }
   expect(store.recordReviewRun({
-    id: 'review-1', repository: repository.github, pullRequestNumber: pullRequest.number,
-    revisionId: task.revisionId, headSha: pullRequest.headSha, provider: 'codex', sessionId: 'session',
-    model: 'gpt-5.6', agentVersion: '1.2.3', skillDigest: 'a'.repeat(64),
-    startedAt: '2026-08-13T01:01:00.000Z', completedAt: '2026-08-13T01:01:05.000Z',
-    gates, confidence: 96, findings: [],
+    id: 'review-1',
+    repository: repository.github,
+    pullRequestNumber: pullRequest.number,
+    revisionId: task.revisionId,
+    headSha: pullRequest.headSha,
+    provider: 'codex',
+    sessionId: 'session',
+    model: 'gpt-5.6',
+    agentVersion: '1.2.3',
+    skillDigest: 'a'.repeat(64),
+    startedAt: '2026-08-13T01:01:00.000Z',
+    completedAt: '2026-08-13T01:01:05.000Z',
+    gates,
+    confidence: 96,
+    findings: [],
   })._tag).toBe('Inserted')
   const staged = store.stageReviewStatus({
     taskKind: 'adversarial_review',
