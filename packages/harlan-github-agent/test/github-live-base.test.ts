@@ -190,8 +190,8 @@ describe('live pull request base', () => {
         }
         if (method === listWorkflowRunsForRepo && input.head_sha === liveBaseSha) {
           return Promise.resolve([
-            { id: 70, event: 'schedule', check_suite_id: 7 },
-            { id: 80, event: 'push', check_suite_id: 8 },
+            { id: 70, event: 'schedule', status: 'queued', check_suite_id: 7 },
+            { id: 80, event: 'push', status: 'completed', check_suite_id: 8 },
           ])
         }
         return Promise.resolve([])
@@ -224,6 +224,59 @@ describe('live pull request base', () => {
       baseChecks: {
         _tag: 'Available',
         checks: [expect.objectContaining({ name: 'test', status: 'completed', conclusion: 'success' })],
+      },
+    })))
+  })
+
+  it('keeps a concluded failed scheduled run as base evidence', async () => {
+    const listForRef = () => undefined
+    const listWorkflowRunsForRepo = () => undefined
+    const client = {
+      paginate: (method: unknown, input: { ref?: string, head_sha?: string }) => {
+        if (method === listForRef && input.ref === liveBaseSha) {
+          return Promise.resolve([
+            { id: 1, name: 'Fuzz', status: 'completed', conclusion: 'failure', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 7 } },
+            { id: 2, name: 'test', status: 'completed', conclusion: 'success', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 8 } },
+          ])
+        }
+        if (method === listWorkflowRunsForRepo && input.head_sha === liveBaseSha) {
+          return Promise.resolve([
+            { id: 70, event: 'schedule', status: 'completed', check_suite_id: 7 },
+            { id: 80, event: 'push', status: 'completed', check_suite_id: 8 },
+          ])
+        }
+        return Promise.resolve([])
+      },
+      rest: {
+        actions: { getJobForWorkflowRun: () => Promise.reject(new Error('Unexpected job lookup.')), listWorkflowRunsForRepo },
+        checks: { listForRef },
+        issues: { listComments: () => undefined },
+        pulls: {
+          get: () => Promise.resolve({ data: pullRequest() }),
+          listReviewComments: () => undefined,
+          listReviews: () => undefined,
+        },
+        repos: {
+          getBranch: () => Promise.resolve({ data: { commit: { sha: liveBaseSha } } }),
+          getBranchRules: () => Promise.resolve({ data: [] }),
+          getCombinedStatusForRef: () => Promise.resolve({ data: { statuses: [] } }),
+        },
+      },
+    } as unknown as Octokit
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      baseChecks: {
+        _tag: 'Available',
+        checks: expect.arrayContaining([
+          expect.objectContaining({ name: 'Fuzz', status: 'completed', conclusion: 'failure' }),
+        ]),
       },
     })))
   })
