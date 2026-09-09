@@ -10464,6 +10464,7 @@ export function openJournalStore(
         review_status_commands.review_run_id IS NULL
         OR review_status_commands.task_kind != 'adversarial_review'
         OR review_status_commands.phase != 'terminal'
+        OR worker_tasks.revision_id = subjects.current_revision_id
         OR ${retainedReviewGateClaimSql}
       )
   `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
