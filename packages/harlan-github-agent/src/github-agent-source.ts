@@ -101,10 +101,16 @@ export function currentGitHubChecks(checks: GitHubCheck[]): GitHubCheck[] {
  * nuxtseo.com `main` held the base gate at PENDING for a day while its runner
  * fleet was down, and Repair for the reviewed pull request never started.
  *
+ * `dynamic`: Dependabot's updater workflow runs with this event on the branch
+ * tip. Its `Dependabot` check fails when an update was not possible, such as a
+ * security update with no compatible version. That is a fact about the
+ * dependency, not the commit, and a failed base would queue a pointless
+ * Baseline repair.
+ *
  * `workflow_dispatch` stays. A person starts it on purpose, often to rerun the
  * real checks, so its result is evidence about the commit.
  */
-const DERIVED_RUN_EVENTS = new Set(['workflow_run', 'schedule'])
+const DERIVED_RUN_EVENTS = new Set(['workflow_run', 'schedule', 'dynamic'])
 
 /** The check suites of workflow runs that answer for a timer or another commit. */
 export function derivedCheckSuiteIds(runs: ReadonlyArray<{ event: string, check_suite_id?: number | null }>): Set<number> {
