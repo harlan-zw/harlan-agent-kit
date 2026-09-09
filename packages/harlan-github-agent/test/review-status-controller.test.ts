@@ -58,7 +58,7 @@ describe('review status controller', () => {
           pullRequestNumber: pullRequest.number,
           revisionId: task.revisionId,
           expectedHeadSha: pullRequest.headSha,
-          expectedBaseRef: pullRequest.baseRef,
+          expectedBaseRef: pullRequest.baseRef ?? null,
           phase: 'repair',
           body: stagedBody,
           reviewRunId: null,
