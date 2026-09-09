@@ -1,0 +1,18 @@
+@agent host agent.harlanzw.com
+
+handle @agent {
+	@agentHttp header X-Forwarded-Proto http
+	redir @agentHttp https://agent.harlanzw.com{uri} 308
+
+	@agentForeignOrigin {
+		not method GET HEAD
+		not header Origin https://agent.harlanzw.com
+	}
+	respond @agentForeignOrigin "Request origin is not allowed." 403
+
+	reverse_proxy 127.0.0.1:3210 {
+		header_up Host hogwild.tailcad325.ts.net
+		# Translate only the exact public origin. Preserve every other value.
+		header_up Origin "^https://agent[.]harlanzw[.]com$" "https://hogwild.tailcad325.ts.net"
+	}
+}
