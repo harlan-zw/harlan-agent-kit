@@ -32,6 +32,39 @@ const ready = {
 }
 
 describe('review target branch authority', () => {
+  it.each(['current', 'Pause', 'Dismissal', 'review disabled', 'writes disabled'] as const)('retargets a merged parent child only while authority is %s', async (authority) => {
+    const store = openJournalStore(':memory:', true)
+    cleanups.push(() => store.close())
+    const repository = repositoryMapping()
+    const child = pullRequestItem({ autoMerge: true, mergeState: 'clean', baseRef: 'fix/parent' })
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordObservation({ externalId: 'merged-parent-child', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: child })
+    if (authority === 'Pause')
+      store.setRepositoryPaused(repository.github, true)
+    if (authority === 'Dismissal')
+      store.dismissItem({ repository: repository.github, itemNumber: child.number, at: '2026-08-13T01:01:00.000Z' })
+    if (authority === 'review disabled')
+      store.syncRepositories([repositoryMapping({ pullRequestReview: false })], '2026-08-13T01:01:00.000Z')
+    if (authority === 'writes disabled')
+      store.setRepositoryWritesEnabled(repository.github, false)
+    const retargets: string[] = []
+    const controller = createAutoMergeController({
+      policy: { _tag: 'Enabled', minimumConfidence: 100, method: 'squash' },
+      store,
+      report: () => undefined,
+      merger: {
+        merge: async () => { throw new Error('A stacked pull request must retarget first.') },
+        retargetMergedParent: async (input) => {
+          retargets.push(input.expectedHeadSha)
+          return { _tag: 'Ok', value: false }
+        },
+      },
+    })
+    await controller.reconcile(repository, child, new AbortController().signal)
+    expect(retargets).toEqual(authority === 'current' ? [child.headSha] : [])
+  })
+
   it('requires a new Review after retargeting, including after restart', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'harlan-review-target-'))
     cleanups.push(() => rmSync(directory, { recursive: true, force: true }))

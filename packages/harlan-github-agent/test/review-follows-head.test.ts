@@ -151,6 +151,39 @@ describe('review work follows the head commit', () => {
     expect(writes).toEqual([])
   })
 
+  it('stops a claimed retained Publication when the repository policy changes', async () => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    recordRetryingReview(store)
+    const input = retainedGateInput(store)
+    expect(store.stageReviewGateStatus(input)._tag).toBe('Staged')
+    const publication = store.claimNextTerminalReviewStatus('publisher', input.at, 60_000)!
+    const writes: string[] = []
+
+    const result = await publishClaimedReviewStatus({
+      store,
+      now: () => new Date('2026-08-13T02:02:01.000Z'),
+      github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestReviewSnapshot: () => {
+          store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })], '2026-08-13T02:02:01.000Z')
+          return Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] }))
+        },
+        upsertReviewStatus: () => {
+          writes.push('comment')
+          return Promise.resolve(ok({ commentId: 43, url: 'url' }))
+        },
+        stampAgentLabel: () => {
+          writes.push('label')
+          return Promise.resolve(ok(undefined))
+        },
+      },
+    }, publication, false, new AbortController().signal)
+
+    expect(result._tag).toBe('Err')
+    expect(writes).toEqual([])
+  })
+
   it('keeps an accepted comment receipt when authority ends before the label', async () => {
     const store = openJournalStore(':memory:', true)
     stores.push(store)
