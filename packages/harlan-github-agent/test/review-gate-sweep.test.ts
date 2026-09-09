@@ -2,7 +2,7 @@ import type { GitHubCheck } from '../src/github-agent-source.ts'
 import type { RecordIncidentInput, ReviewGateRefresh } from '../src/store.ts'
 import type { Incident, ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
-import { refreshControllerGates } from '../src/item-agent.ts'
+import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -23,6 +23,14 @@ function pendingControllerGates(): ReviewGates {
       reason: 'Base branch CI: deploy (pro-admin) is still running.',
       evidence: [{ label: 'base-ci', sha256: 'b'.repeat(64) }],
     },
+  }
+}
+
+function passedControllerGates(): ReviewGates {
+  return {
+    merge: passed('mergeability'),
+    review: passed('review'),
+    ci: passed('required-ci'),
   }
 }
 
@@ -76,6 +84,101 @@ function snapshot(baseChecks: GitHubCheck[], headChecks: GitHubCheck[] = [check(
     requiredChecks: { _tag: 'None' as const },
     reviews: [],
   })
+}
+
+function recordPublishedRefreshReview(store: ReturnType<typeof openJournalStore>) {
+  const repository = repositoryMapping()
+  const live = snapshot([check()])
+  if (live._tag !== 'Ok')
+    throw new Error('Expected a Review snapshot.')
+  const refreshed = refreshControllerGates(passedControllerGates(), live.value, repository)
+  const gates = refreshed.gates
+  store.syncRepositories([repository], '2026-08-27T08:00:00.000Z')
+  store.setRepositoryWritesEnabled(repository.github, true)
+  const observed = store.recordObservation({
+    externalId: 'published-refresh-pr',
+    observedAt: '2026-08-27T08:01:00.000Z',
+    source: 'poll',
+    subject: pullRequestItem({ mergeState: 'clean' }),
+  })
+  if (observed._tag !== 'Inserted')
+    throw new Error('Expected a new pull request revision.')
+  const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-27T08:02:00.000Z', 60_000)
+  if (task === null)
+    throw new Error('Expected a Review Task.')
+  store.completeWorkerTask({
+    taskId: task.id,
+    workerId: task.state.workerId,
+    fence: task.state.fence,
+    at: '2026-08-27T08:02:30.000Z',
+    evidence: 'published-refresh-review',
+  })
+  expect(store.recordReviewRun({
+    id: 'published-refresh-review',
+    repository: repository.github,
+    pullRequestNumber: 24,
+    revisionId: observed.revisionId,
+    headSha: 'abc123',
+    provider: 'codex',
+    sessionId: 'session-1',
+    model: 'gpt-5.6-sol',
+    agentVersion: '0.0.0',
+    skillDigest: 'c'.repeat(64),
+    startedAt: '2026-08-27T08:11:00.000Z',
+    completedAt: '2026-08-27T08:20:00.000Z',
+    usage: { _tag: 'Unavailable' },
+    gates,
+    confidence: 88,
+    findings: [],
+  })).toEqual({ _tag: 'Inserted', reviewRunId: 'published-refresh-review' })
+  expect(store.recordReviewPublication({
+    id: 'published-refresh-publication',
+    reviewRunId: 'published-refresh-review',
+    body: '### 🤖 READY',
+    at: '2026-08-27T08:21:00.000Z',
+    result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+  })).toEqual({ _tag: 'Inserted', publicationId: 'published-refresh-publication' })
+  const body = terminalComment('abc123', 'base123', gates, [], 88, refreshed.reportedChecks)
+  expect(store.stageReviewGateStatus({
+    reviewRunId: 'published-refresh-review',
+    repository: repository.github,
+    pullRequestNumber: 24,
+    revisionId: observed.revisionId,
+    expectedHeadSha: 'abc123',
+    gates,
+    body,
+    desiredOutcome: 'READY',
+    at: '2026-08-27T08:22:00.000Z',
+  })._tag).toBe('Staged')
+  const publication = store.claimNextTerminalReviewStatus('publisher-1', '2026-08-27T08:22:01.000Z', 60_000)
+  if (publication === null)
+    throw new Error('Expected a Review gate Publication.')
+  expect(store.completeReviewStatus({
+    commandId: publication.id,
+    workerId: publication.workerId,
+    fence: publication.fence,
+    at: '2026-08-27T08:22:02.000Z',
+    commentId: 42,
+    url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+  })).toBe(true)
+  return repository
+}
+
+type AuthorityRevocation = 'Dismissal' | 'Pause' | 'writes' | 'policy'
+
+function revokeRefreshAuthority(
+  store: ReturnType<typeof openJournalStore>,
+  repository: ReturnType<typeof repositoryMapping>,
+  change: AuthorityRevocation,
+) {
+  if (change === 'Dismissal')
+    store.dismissItem({ repository: repository.github, itemNumber: 24, at: '2026-08-27T11:15:00.000Z' })
+  if (change === 'Pause')
+    store.setRepositoryPaused(repository.github, true)
+  if (change === 'writes')
+    store.setRepositoryWritesEnabled(repository.github, false)
+  if (change === 'policy')
+    store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })], '2026-08-27T11:15:00.000Z')
 }
 
 interface Recorded {
@@ -289,6 +392,21 @@ describe('refreshReviewGates', () => {
     })
     expect(recorded.staged).toEqual([])
     expect(recorded.stamped).toEqual(['PENDING'])
+  })
+
+  it('keeps an unchanged BLOCKED label when the Review remains authorized', async () => {
+    const live = snapshot([check()], [check({ name: 'code', conclusion: 'failure' })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    const { recorded, run } = harness({
+      live,
+      review: gateRefresh({
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+      }),
+    })
+
+    expect(await run()).toEqual([ok(expect.objectContaining({ _tag: 'Unchanged', outcome: 'BLOCKED' }))])
+    expect(recorded.stamped).toEqual(['BLOCKED'])
   })
 
   it('reports BLOCKED when the fresh CI read fails', async () => {
@@ -571,6 +689,128 @@ describe('refreshReviewGates against the journal store', () => {
       desiredOutcome: 'READY',
       body: expect.stringContaining('### 🤖 READY'),
     })
+  })
+
+  it.each(['Dismissal', 'Pause', 'writes', 'policy'] as const)('does not stamp an unchanged Review label when %s revokes authority during the snapshot read', async (change) => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    const repository = recordPublishedRefreshReview(store)
+    const stamped: string[] = []
+
+    const results = await refreshReviewGates({
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      github: {
+        getPullRequestReviewSnapshot: () => {
+          revokeRefreshAuthority(store, repository, change)
+          return Promise.resolve(snapshot([check()]))
+        },
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'url' })),
+        stampAgentLabel: (_repository, _number, outcome) => {
+          stamped.push(outcome)
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      now: () => new Date('2026-08-27T11:15:00.000Z'),
+      repositories: [repository],
+      store,
+    }, new AbortController().signal)
+
+    expect(results).toEqual([err('harlan-zw/example#24: The Review authority changed before its label write.')])
+    expect(stamped).toEqual([])
+  })
+
+  it.each(['Dismissal', 'Pause', 'writes', 'policy'] as const)('does not stamp an unchanged Review label when %s revokes authority during confirmation', async (change) => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    const repository = recordPublishedRefreshReview(store)
+    const stamped: string[] = []
+
+    const results = await refreshReviewGates({
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
+        editReviewStatus: () => {
+          revokeRefreshAuthority(store, repository, change)
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'url' }))
+        },
+        stampAgentLabel: (_repository, _number, outcome) => {
+          stamped.push(outcome)
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      now: () => new Date('2026-08-27T11:15:00.000Z'),
+      repositories: [repository],
+      store,
+    }, new AbortController().signal)
+
+    expect(results).toEqual([err('harlan-zw/example#24: The Review authority changed before its label write.')])
+    expect(stamped).toEqual([])
+  })
+
+  it('does not stamp an unchanged Review label when its gate Publication changes during confirmation', async () => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    const repository = recordPublishedRefreshReview(store)
+    const stamped: string[] = []
+
+    const results = await refreshReviewGates({
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
+        editReviewStatus: () => {
+          const review = store.listReviewGateRefreshes()[0]
+          if (review === undefined)
+            throw new Error('Expected the current Review gate refresh.')
+          expect(store.stageReviewGateStatus({
+            reviewRunId: review.reviewRunId,
+            repository: review.repository,
+            pullRequestNumber: review.pullRequestNumber,
+            revisionId: review.revisionId,
+            expectedHeadSha: review.headSha,
+            gates: { ...review.gates, ci: { _tag: 'Pending', reason: 'CI is running.', evidence: [] } },
+            body: '### 🤖 PENDING',
+            desiredOutcome: 'PENDING',
+            at: '2026-08-27T11:15:00.000Z',
+          })._tag).toBe('Staged')
+          return Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'url' }))
+        },
+        stampAgentLabel: (_repository, _number, outcome) => {
+          stamped.push(outcome)
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      now: () => new Date('2026-08-27T11:15:00.000Z'),
+      repositories: [repository],
+      store,
+    }, new AbortController().signal)
+
+    expect(results).toEqual([err('harlan-zw/example#24: The Review authority changed before its label write.')])
+    expect(stamped).toEqual([])
+  })
+
+  it('stamps an unchanged Review label while its current authority remains valid', async () => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    const repository = recordPublishedRefreshReview(store)
+    const stamped: string[] = []
+
+    const results = await refreshReviewGates({
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      github: {
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot([check()])),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'url' })),
+        stampAgentLabel: (_repository, _number, outcome) => {
+          stamped.push(outcome)
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      now: () => new Date('2026-08-27T11:15:00.000Z'),
+      repositories: [repository],
+      store,
+    }, new AbortController().signal)
+
+    expect(results).toEqual([ok(expect.objectContaining({ _tag: 'Unchanged', outcome: 'READY' }))])
+    expect(stamped).toEqual(['READY'])
   })
 
   it('keeps one journal entry when controller gates refresh', async () => {

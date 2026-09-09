@@ -147,6 +147,8 @@ export async function refreshReviewGates(
           return err(`${review.repository}#${review.pullRequestNumber}: ${staged.reason}`)
         return ok({ _tag: 'PublicationQueued', repository: review.repository, pullRequestNumber: review.pullRequestNumber, outcome, ...baselineRepair })
       }
+      if (!hasCurrentRefreshAuthority(options, review))
+        return err(`${review.repository}#${review.pullRequestNumber}: The Review authority changed before its label write.`)
       const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal)
       if (stamped._tag === 'Err')
         return err(`${review.repository}#${review.pullRequestNumber}: ${stamped.error}`)
@@ -183,6 +185,22 @@ export async function refreshReviewGates(
     results.push(await settle(review))
   resolveSettledCiGates(options, signal, unread, stalled)
   return results
+}
+
+/** Rechecks the exact published Review after GitHub confirmation and before its label write. */
+function hasCurrentRefreshAuthority(options: ReviewGateSweepOptions, review: ReviewGateRefresh): boolean {
+  return options.store.listReviewGateRefreshes().some(candidate =>
+    candidate.reviewRunId === review.reviewRunId
+    && candidate.revisionId === review.revisionId
+    && candidate.baseRef === review.baseRef
+    && candidate.headSha === review.headSha
+    && candidate.commentId === review.commentId
+    && candidate.publishedBody === review.publishedBody
+    && JSON.stringify(candidate.gates) === JSON.stringify(review.gates)
+    && candidate.gatePublication._tag === 'Published'
+    && review.gatePublication._tag === 'Published'
+    && candidate.gatePublication.publicationId === review.gatePublication.publicationId,
+  )
 }
 
 /**
