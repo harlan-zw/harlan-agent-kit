@@ -84,6 +84,27 @@ describe('gitHub reconciliation', () => {
     }
   })
 
+  it('does not Auto merge an eligible pull request when the gate refresh aborts', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    const signal = new AbortController()
+    signal.abort()
+    let merges = 0
+    const result = await reconcileRepository(repository, {
+      github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([pullRequestItem({ autoMerge: true, mergeState: 'clean' })])) },
+      store,
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      signal: signal.signal,
+      refreshReviewGates: async (_repository, refreshSignal) => refreshSignal.aborted ? err('Review gate refresh was aborted.') : ok(undefined),
+      autoMerge: { reconcile: async () => { merges++ } },
+    })
+    expect(result._tag).toBe('Ok')
+    expect(merges).toBe(0)
+    store.close()
+  })
+
   it('ignores issues authored by automated accounts', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
