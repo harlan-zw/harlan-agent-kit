@@ -28,8 +28,10 @@ export type CiGateCause
     | { _tag: 'BaseBranchFailed', check: string }
     /** GitHub owes a check run it has never reported. */
     | { _tag: 'NoCheckRun', detail: string }
-    /** A check run exists and has not reported a conclusion. */
+    /** A check run started and has not reported a conclusion. */
     | { _tag: 'CheckRunning', check: string }
+    /** A check run is queued, so no runner has accepted its job. */
+    | { _tag: 'CheckQueued', check: string }
     /** The controller could not read the check runs at all. */
     | { _tag: 'ChecksUnreadable', reason: string }
     /** A runner stopped mid job. `runner_lost` already names this one. */
@@ -42,6 +44,10 @@ export type CiGateCause
  * has killed the job, so a check run that still reports no conclusion will
  * never report one. The bound is GitHub's own, not a number picked to feel
  * right, and it never fires while a job could still finish.
+ *
+ * A queued job shares the bound for a different reason. The runner supervisor
+ * on Hogwild drops a queued run older than six hours, so past that no runner
+ * will ever take the job, and a re-run keeps the run's creation time.
  */
 export const RUNNING_CHECK_BOUND_MILLISECONDS = 6 * 60 * 60_000
 
@@ -78,7 +84,7 @@ export interface CiGateReadingInput {
 }
 
 function boundMilliseconds(cause: CiGateCause): number {
-  return cause._tag === 'CheckRunning' ? RUNNING_CHECK_BOUND_MILLISECONDS : IDLE_GATE_BOUND_MILLISECONDS
+  return cause._tag === 'CheckRunning' || cause._tag === 'CheckQueued' ? RUNNING_CHECK_BOUND_MILLISECONDS : IDLE_GATE_BOUND_MILLISECONDS
 }
 
 /**
@@ -115,6 +121,8 @@ function causeSentence(cause: CiGateCause): string {
       return cause.detail
     case 'CheckRunning':
       return `Check run "${cause.check}" has not reported a conclusion.`
+    case 'CheckQueued':
+      return `Check run "${cause.check}" is queued, and no runner has accepted the job.`
     case 'ChecksUnreadable':
       return `The controller cannot read the check runs. GitHub said: ${cause.reason}`
     default:
@@ -130,6 +138,8 @@ function actionSentence(cause: CiGateCause): string {
       return 'If CI never started, read the workflow triggers and the runner.'
     case 'CheckRunning':
       return 'GitHub stops a job after six hours, so re-run the check run.'
+    case 'CheckQueued':
+      return 'If the job stays queued, read the runner supervisor on Hogwild.'
     case 'ChecksUnreadable':
       return 'If the read keeps failing, read the GitHub App installation permissions.'
     default:

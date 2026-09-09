@@ -29,6 +29,7 @@ function gates(overrides: Partial<ReviewGates> = {}): ReviewGates {
 
 const baseFailed: CiGateCause = { _tag: 'BaseBranchFailed', check: 'build' }
 const running: CiGateCause = { _tag: 'CheckRunning', check: 'ci / test' }
+const queued: CiGateCause = { _tag: 'CheckQueued', check: 'test' }
 
 describe('readCiGate', () => {
   it('reports a base branch failure the pull request cannot resolve as overdue', () => {
@@ -130,5 +131,23 @@ describe('ciGatePendingMessage', () => {
 
     expect(ciGatePendingMessage('harlan-zw/example', 24, early)).toBe(ciGatePendingMessage('harlan-zw/example', 24, late))
     expect(ciGatePendingMessage('harlan-zw/example', 24, early)).toContain('Check run "ci / test" has not reported a conclusion.')
+  })
+
+  it('names a queued job no runner accepted, and does not tell Harlan to re-run it', () => {
+    const reading = readCiGate({ gates: gates(), cause: queued, pendingSince, now: at(RUNNING_CHECK_BOUND_MILLISECONDS + 60_000) })
+    if (reading._tag !== 'Overdue')
+      throw new Error('Expected an overdue CI Review gate.')
+
+    expect(ciGatePendingMessage('harlan-zw/gscdump', 49, reading)).toBe([
+      'harlan-zw/gscdump#49: the CI Review gate reads PENDING for more than 6 hours.',
+      'The gate last moved at 2026-09-05 00:00 UTC.',
+      'Check run "test" is queued, and no runner has accepted the job.',
+      'If the job stays queued, read the runner supervisor on Hogwild.',
+    ].join(' '))
+  })
+
+  it('gives a queued job the six hour bound, because the runner supervisor drops older runs', () => {
+    expect(readCiGate({ gates: gates(), cause: queued, pendingSince, now: at(RUNNING_CHECK_BOUND_MILLISECONDS - 60_000) })._tag).toBe('Within')
+    expect(readCiGate({ gates: gates(), cause: queued, pendingSince, now: at(RUNNING_CHECK_BOUND_MILLISECONDS + 60_000) })._tag).toBe('Overdue')
   })
 })
