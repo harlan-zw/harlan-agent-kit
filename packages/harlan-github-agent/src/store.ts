@@ -10025,6 +10025,7 @@ export function openJournalStore(
           subjects.github_number,
           review_status_commands.revision_id,
           review_status_commands.expected_head_sha,
+          json_extract(status_revision.payload, '$.baseRef') AS expected_base_ref,
           review_status_commands.phase,
           review_status_commands.body,
           review_status_commands.review_run_id,
@@ -10095,6 +10096,7 @@ export function openJournalStore(
             github_number: number
             revision_id: string
             expected_head_sha: string
+            expected_base_ref: unknown
             phase: 'snapshot' | 'review' | 'repair' | 'terminal'
             body: string
             review_run_id: string | null
@@ -10138,6 +10140,7 @@ export function openJournalStore(
         pullRequestNumber: row.github_number,
         revisionId: row.revision_id,
         expectedHeadSha: row.expected_head_sha,
+        expectedBaseRef: typeof row.expected_base_ref === 'string' && row.expected_base_ref.length > 0 ? row.expected_base_ref : null,
         ...taskPhase,
         body: row.body,
         reviewRunId: row.review_run_id,

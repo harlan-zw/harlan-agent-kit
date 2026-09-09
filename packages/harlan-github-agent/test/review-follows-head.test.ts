@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
+import { ok } from '../src/result.ts'
+import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -70,6 +72,46 @@ function retainedGateInput(store: ReturnType<typeof openJournalStore>) {
 }
 
 describe('review work follows the head commit', () => {
+  it.each(['main', 'another-base'])('checks the live base branch before publishing retained gates to %s', async (baseRef) => {
+    const store = createStore()
+    recordRetryingReview(store)
+    const input = retainedGateInput(store)
+    expect(store.stageReviewGateStatus(input)._tag).toBe('Staged')
+    const publication = store.claimNextTerminalReviewStatus('publisher', input.at, 60_000)!
+    expect(publication).not.toBeNull()
+    const writes: string[] = []
+
+    const result = await publishClaimedReviewStatus({
+      store,
+      now: () => new Date('2026-08-13T02:02:01.000Z'),
+      github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [] },
+          body: '',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest: pullRequestItem({ baseRef, baseSha: 'base-after-claim', mergeState: 'clean' }),
+          requiredChecks: { _tag: 'None' },
+          reviews: [],
+        })),
+        upsertReviewStatus: () => {
+          writes.push('comment')
+          return Promise.resolve(ok({ commentId: 42, url: 'url' }))
+        },
+        stampAgentLabel: () => {
+          writes.push('label')
+          return Promise.resolve(ok(undefined))
+        },
+      },
+    }, publication, false, new AbortController().signal)
+
+    expect(writes).toEqual(baseRef === 'main' ? ['comment', 'label'] : [])
+    expect(result._tag).toBe(baseRef === 'main' ? 'Ok' : 'Err')
+    expect(store.listReviewRuns(input.repository, 24)[0]?.gatePublication._tag).toBe(baseRef === 'main' ? 'Published' : 'Unpublished')
+  })
+
   it('publishes retained Review gates after a retrying worker is superseded by base changes', () => {
     const directory = mkdtempSync(join(tmpdir(), 'retained-review-publication-'))
     const path = join(directory, 'journal.sqlite')

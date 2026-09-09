@@ -932,6 +932,8 @@ interface ReviewStatusCommandBase {
   pullRequestNumber: number
   revisionId: string
   expectedHeadSha: string
+  /** The command's recorded base branch. Unknown legacy scope cannot authorize a write. */
+  expectedBaseRef: string | null
   body: string
   reviewRunId: string | null
   desiredOutcome: ReviewDesiredOutcome | null

@@ -51,9 +51,10 @@ function settleUnpublished(
 async function publishExistingReviewLabel(
   options: ReviewStatusPublicationOptions,
   command: ClaimedReviewStatusCommand,
+  baseRef: string,
   signal: AbortSignal,
 ): Promise<Result<PublishedReviewStatus, string>> {
-  // The read re-validates the state and the head itself, so the heavier review
+  // The read re-validates the state, head, and base branch, so the heavier review
   // snapshot would spend GitHub calls re-reading the same truth.
   const existing = command.commentId === null
     ? err({ _tag: 'Permanent' as const, message: 'The existing review has no comment identifier.' })
@@ -62,6 +63,7 @@ async function publishExistingReviewLabel(
         command.pullRequestNumber,
         command.commentId,
         command.expectedHeadSha,
+        baseRef,
         signal,
       )
   if (existing._tag === 'Err') {
@@ -113,8 +115,19 @@ export async function publishClaimedReviewStatus(
   replacePriorReview: boolean,
   signal: AbortSignal,
 ): Promise<Result<PublishedReviewStatus, string>> {
+  if (command.expectedBaseRef === null) {
+    const reason = 'The review has no recorded base branch. Run a new Review.'
+    options.store.supersedeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: options.now().toISOString(),
+      reason,
+    })
+    return err(reason)
+  }
   if (command.taskKind === 'existing_review')
-    return publishExistingReviewLabel(options, command, signal)
+    return publishExistingReviewLabel(options, command, command.expectedBaseRef, signal)
 
   const current = await options.github.getPullRequestReviewSnapshot(command.repositoryMapping, command.pullRequestNumber, signal)
   if (current._tag === 'Err') {
@@ -127,7 +140,11 @@ export async function publishClaimedReviewStatus(
     })
     return current
   }
-  if (current.value.pullRequest.state !== 'open' || current.value.pullRequest.headSha !== command.expectedHeadSha) {
+  if (
+    current.value.pullRequest.state !== 'open'
+    || current.value.pullRequest.headSha !== command.expectedHeadSha
+    || current.value.pullRequest.baseRef !== command.expectedBaseRef
+  ) {
     const reason = 'The pull request changed before the review comment was posted.'
     options.store.deferReviewStatus({
       commandId: command.id,

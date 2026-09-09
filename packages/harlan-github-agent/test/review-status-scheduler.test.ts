@@ -1,15 +1,24 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { err, ok } from '../src/result.ts'
+import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { createReviewStatusScheduler } from '../src/review-status-scheduler.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
+const directories: string[] = []
 
-afterEach(() => stores.splice(0).forEach(store => store.close()))
+afterEach(() => {
+  stores.splice(0).forEach(store => store.close())
+  directories.splice(0).forEach(directory => rmSync(directory, { recursive: true, force: true }))
+})
 
-function stagedTerminalStatus() {
-  const store = openJournalStore(':memory:')
+function stagedTerminalStatus(path = ':memory:') {
+  const store = openJournalStore(path)
   stores.push(store)
   const repository = repositoryMapping()
   const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -62,6 +71,42 @@ function snapshot(pullRequest: ReturnType<typeof pullRequestItem>) {
 }
 
 describe('review status scheduler', () => {
+  it('retires a legacy status without a recorded base branch before any GitHub write', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'legacy-review-status-'))
+    directories.push(directory)
+    const path = join(directory, 'journal.sqlite')
+    const test = stagedTerminalStatus(path)
+    // Old Revision payloads can lack the base branch that current observations record.
+    const legacy = new DatabaseSync(path)
+    legacy.exec('UPDATE revisions SET payload = json_remove(payload, \'$.baseRef\')')
+    legacy.close()
+    const command = test.store.claimNextTerminalReviewStatus('publisher', '2026-08-13T01:01:30.000Z', 60_000)!
+    expect(command).not.toBeNull()
+    const writes: string[] = []
+
+    const result = await publishClaimedReviewStatus({
+      store: test.store,
+      now: () => new Date('2026-08-13T01:01:31.000Z'),
+      github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
+        upsertReviewStatus: () => {
+          writes.push('comment')
+          return Promise.resolve(ok({ commentId: 42, url: test.pullRequest.url }))
+        },
+        stampAgentLabel: () => {
+          writes.push('label')
+          return Promise.resolve(ok(undefined))
+        },
+      },
+    }, command, false, new AbortController().signal)
+
+    expect(writes).toEqual([])
+    expect(result._tag).toBe('Err')
+    expect(test.store.listWorkflowEvents({ stream: 'review_status', limit: 20 }).map(event => event.event)).not.toContain('Published')
+    expect(test.store.claimNextTerminalReviewStatus('next-publisher', '2026-08-13T01:02:00.000Z', 60_000)).toBeNull()
+  })
+
   it('publishes terminal status after the Agent Task completed', async () => {
     const test = stagedTerminalStatus()
     const bodies: string[] = []

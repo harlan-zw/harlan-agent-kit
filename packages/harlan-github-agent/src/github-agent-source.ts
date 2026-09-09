@@ -236,8 +236,8 @@ export type ExistingReviewLabelFailure
     | { _tag: 'Transient', message: string }
 
 export interface ExistingReviewLabelSource {
-  /** Reads the latest trusted review for the pinned head without editing its comment. */
-  readExistingReviewLabel: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, headSha: string, signal: AbortSignal) => Promise<Result<ExistingReviewLabel, ExistingReviewLabelFailure>>
+  /** Reads the latest trusted review for the pinned head and base branch without editing its comment. */
+  readExistingReviewLabel: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, headSha: string, baseRef: string, signal: AbortSignal) => Promise<Result<ExistingReviewLabel, ExistingReviewLabelFailure>>
 }
 
 export interface GitHubAgentSource {
@@ -568,7 +568,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown): Result<void, string> => errorStatus(error) === 404 ? ok(undefined) : err(message(error)))
     },
 
-    async readExistingReviewLabel(repository, pullRequestNumber, commentId, headSha, signal) {
+    async readExistingReviewLabel(repository, pullRequestNumber, commentId, headSha, baseRef, signal) {
       const octokit = await client(repository.github, 'read', signal)
       if (octokit._tag === 'Err')
         return err({ _tag: 'Transient', message: octokit.error })
@@ -602,9 +602,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             : outcome === 'PENDING' || outcome === 'BLOCKED' ? outcome : null
         if (label === null)
           return err({ _tag: 'Permanent', message: 'The completed review has no recognized outcome.' })
-        // Read the head after the comments, immediately before the label write.
+        // Read the head and base branch after the comments, immediately before the label write.
         const pull = await octokit.value.rest.pulls.get({ owner, repo, pull_number: pullRequestNumber, request: { signal } })
-        if (pull.data.state !== 'open' || pull.data.head.sha !== headSha)
+        if (pull.data.state !== 'open' || pull.data.head.sha !== headSha || pull.data.base.ref !== baseRef)
           return err({ _tag: 'Permanent', message: 'The pull request changed before its review label was restored.' })
         return ok({ commentId: comment.id, url: comment.html_url, label })
       }).catch((error: unknown): Result<ExistingReviewLabel, ExistingReviewLabelFailure> => err({ _tag: 'Transient', message: message(error) }))
