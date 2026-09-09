@@ -1022,6 +1022,8 @@ export interface JournalStore extends BatchStore {
     at: string
   }) => boolean
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
+  /** Answers whether the current pull request remains eligible for Review writes. */
+  hasCurrentReviewAuthority: (repository: string, pullRequestNumber: number) => boolean
   /** What this service already holds for one head commit. */
   storedReviewForHead: (repository: string, pullRequestNumber: number, headSha: string) => StoredReviewForHead
   /** Replaces one person's explicit judgment about one Review run. */
@@ -8136,6 +8138,21 @@ export function openJournalStore(
     return reviewRuns.map(row => reviewRunFromRow(row, publicationsByRun.get(row.id) ?? []))
   }
 
+  const hasCurrentReviewAuthority: JournalStore['hasCurrentReviewAuthority'] = (repository, pullRequestNumber) => database.prepare(`
+    SELECT 1
+    FROM subjects
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = subjects.current_revision_id
+    WHERE repositories.github = ? AND subjects.github_number = ?
+      AND subjects.kind = 'pull_request'
+      AND json_extract(revisions.payload, '$.state') = 'open'
+      AND repositories.enabled = 1
+      ${repositoryWriteAuthoritySql}
+      AND repositories.paused = 0
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+  `).get(repository, pullRequestNumber) !== undefined
+
   const getReviewFixFindings: JournalStore['getReviewFixFindings'] = (repository, pullRequestNumber, revisionId) => {
     // The Review answers the head commit the Revision names, whichever
     // Revision of that head the run sits on now.
@@ -10442,11 +10459,6 @@ export function openJournalStore(
       AND NOT EXISTS (
         SELECT 1 FROM task_cancellations
         WHERE task_cancellations.task_id = review_status_commands.task_id
-      )
-      AND (
-        review_status_commands.task_kind != 'adversarial_review'
-        OR review_status_commands.phase != 'terminal'
-        OR ${retainedReviewGateClaimSql}
       )
   `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
 
@@ -14330,6 +14342,7 @@ export function openJournalStore(
     getRepairedHeadFindings,
     listAgentFeedback,
     listReviewRuns,
+    hasCurrentReviewAuthority,
     storedReviewForHead,
     recordAgentFeedback,
     needsAttentionTask,
