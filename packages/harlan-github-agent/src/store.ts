@@ -1024,6 +1024,8 @@ export interface JournalStore extends BatchStore {
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
   /** Answers whether the current pull request remains eligible for Review writes. */
   hasCurrentReviewAuthority: (repository: string, pullRequestNumber: number) => boolean
+  /** Reads current Auto merge inputs only while operator authority remains active. */
+  getAutoMergeContext: (repository: string, pullRequestNumber: number) => { repository: RepositoryMapping, pullRequest: Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'> } | null
   /** What this service already holds for one head commit. */
   storedReviewForHead: (repository: string, pullRequestNumber: number, headSha: string) => StoredReviewForHead
   /** Replaces one person's explicit judgment about one Review run. */
@@ -8192,6 +8194,24 @@ export function openJournalStore(
       AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
   `).get(repository, pullRequestNumber) !== undefined
 
+  const getAutoMergeContext: JournalStore['getAutoMergeContext'] = (repository, pullRequestNumber) => {
+    if (getAgentControl()._tag === 'Paused' || !hasCurrentReviewAuthority(repository, pullRequestNumber))
+      return null
+    const row = database.prepare(`
+      SELECT repositories.policy_json, revisions.payload
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+    `).get(repository, pullRequestNumber) as { policy_json: string, payload: string } | undefined
+    return row === undefined
+      ? null
+      : {
+          repository: JSON.parse(row.policy_json) as RepositoryMapping,
+          pullRequest: JSON.parse(row.payload) as Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'>,
+        }
+  }
+
   const getReviewFixFindings: JournalStore['getReviewFixFindings'] = (repository, pullRequestNumber, revisionId) => {
     // The Review answers the head commit the Revision names, whichever
     // Revision of that head the run sits on now.
@@ -14436,6 +14456,7 @@ export function openJournalStore(
     listAgentFeedback,
     listReviewRuns,
     hasCurrentReviewAuthority,
+    getAutoMergeContext,
     storedReviewForHead,
     recordAgentFeedback,
     needsAttentionTask,

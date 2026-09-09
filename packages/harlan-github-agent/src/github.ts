@@ -870,12 +870,16 @@ export interface GitHubPullRequestMerger {
     number: number
     expectedHeadSha: string
     expectedBaseRef: string
+    /** Synchronous current authority, checked immediately before each GitHub mutation. */
+    authorize: (autoMerge: boolean) => Result<void, string>
   }, signal?: AbortSignal) => Promise<Result<boolean, GitHubReadError>>
   merge: (input: {
     repository: RepositoryMapping
     number: number
     expectedHeadSha: string
     method: AutoMergeMethod
+    /** Synchronous current authority, checked again before a fallback merge. */
+    authorize: (autoMerge: boolean) => Result<void, string>
   }, signal?: AbortSignal) => Promise<Result<MergeHandoff, GitHubReadError>>
 }
 
@@ -906,6 +910,26 @@ const enableAutoMergeMutation = `
   }
 `
 
+function autoMergePullRequestRefusal(
+  repository: RepositoryMapping,
+  expectedHeadSha: string,
+  expectedBaseRef: string,
+  pullRequest: Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data'],
+): string | null {
+  if (pullRequest.head.sha !== expectedHeadSha)
+    return 'The head commit moved before the merge was handed to GitHub.'
+  if (pullRequest.base.ref !== expectedBaseRef)
+    return 'The pull request no longer targets the default branch.'
+  if (!repository.enabled || repository.ownership !== 'owned'
+    || pullRequest.state !== 'open' || pullRequest.draft || pullRequest.merged_at !== null
+    || pullRequest.head.repo?.full_name.toLowerCase() !== repository.github.toLowerCase()
+    || pullRequest.base.repo.full_name.toLowerCase() !== repository.github.toLowerCase()
+    || !repository.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.user?.login.toLowerCase())) {
+    return 'The pull request no longer permits Auto merge.'
+  }
+  return null
+}
+
 export function createGitHubPullRequestMerger(options: GitHubPullRequestPublisherOptions): GitHubPullRequestMerger {
   return {
     async retargetMergedParent(input, signal) {
@@ -935,13 +959,8 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       if (current._tag === 'Err')
         return current
       const pullRequest = current.value
-      if (pullRequest.state !== 'open' || pullRequest.draft || pullRequest.merged_at !== null
-        || pullRequest.head.sha !== input.expectedHeadSha || pullRequest.base.ref !== input.expectedBaseRef
-        || pullRequest.head.repo?.full_name.toLowerCase() !== mapping.github.toLowerCase()
-        || pullRequest.base.repo.full_name.toLowerCase() !== mapping.github.toLowerCase()
-        || !mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.user?.login.toLowerCase())) {
+      if (autoMergePullRequestRefusal(mapping, input.expectedHeadSha, input.expectedBaseRef, pullRequest) !== null)
         return ok(false)
-      }
       const parents = await octokit.rest.pulls.list({ owner, repo, head: `${owner}:${input.expectedBaseRef}`, state: 'all', per_page: 100, ...request })
         .then(response => ok(response.data))
         .catch(failure)
@@ -952,7 +971,19 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         && parent.head.repo?.full_name.toLowerCase() === mapping.github.toLowerCase())
       if (!integrated)
         return ok(false)
+      const latest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
+        .then(response => ok(response.data))
+        .catch(failure)
+      if (latest._tag === 'Err')
+        return latest
+      if (autoMergePullRequestRefusal(mapping, input.expectedHeadSha, input.expectedBaseRef, latest.value) !== null
+        || latest.value.base.sha !== pullRequest.base.sha) {
+        return ok(false)
+      }
       // GitHub stores this idempotent change. A restart resumes from the live base ref.
+      const authorization = input.authorize(hasAutoMergeLabel(labelNames(latest.value.labels)))
+      if (authorization._tag === 'Err')
+        return err({ repository: mapping.github, message: authorization.error })
       return octokit.rest.pulls.update({ owner, repo, pull_number: input.number, base: mapping.defaultBranch, ...request })
         .then(response => response.data.base.ref === mapping.defaultBranch
           ? ok(true)
@@ -991,40 +1022,48 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
        * about. GitHub rejects the call when `sha` is not the current head, so a
        * head that moved after the review can still never be merged here.
        */
-      const mergeNow = (): Promise<Result<MergeHandoff, GitHubReadError>> => octokit.rest.pulls.merge({
-        owner,
-        repo,
-        pull_number: input.number,
-        sha: input.expectedHeadSha,
-        merge_method: input.method,
-        ...request,
-      })
-        .then((response): Result<MergeHandoff, GitHubReadError> => response.data.merged
-          ? ok({ _tag: 'Merged', sha: response.data.sha })
-          : err({ repository: input.repository.github, message: response.data.message }))
-        .catch(failure)
+      const mergeNow = async (): Promise<Result<MergeHandoff, GitHubReadError>> => {
+        const latest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
+          .then(response => ok(response.data))
+          .catch(failure)
+        if (latest._tag === 'Err')
+          return latest
+        const refusal = autoMergePullRequestRefusal(input.repository, input.expectedHeadSha, input.repository.defaultBranch, latest.value)
+        if (refusal !== null)
+          return err({ repository: input.repository.github, message: refusal })
+        const authorization = input.authorize(hasAutoMergeLabel(labelNames(latest.value.labels)))
+        if (authorization._tag === 'Err')
+          return err({ repository: input.repository.github, message: authorization.error })
+        return octokit.rest.pulls.merge({
+          owner,
+          repo,
+          pull_number: input.number,
+          sha: input.expectedHeadSha,
+          merge_method: input.method,
+          ...request,
+        })
+          .then((response): Result<MergeHandoff, GitHubReadError> => response.data.merged
+            ? ok({ _tag: 'Merged', sha: response.data.sha })
+            : err({ repository: input.repository.github, message: response.data.message }))
+          .catch(failure)
+      }
 
       const pullRequest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
         .then(response => ok(response.data))
         .catch(failure)
       if (pullRequest._tag === 'Err')
         return pullRequest
-      if (pullRequest.value.head.sha !== input.expectedHeadSha) {
-        return err({
-          repository: input.repository.github,
-          message: 'The head commit moved before the merge was handed to GitHub.',
-        })
-      }
-      if (pullRequest.value.base.ref !== input.repository.defaultBranch) {
-        return err({
-          repository: input.repository.github,
-          message: 'The pull request no longer targets the default branch.',
-        })
-      }
+      const refusal = autoMergePullRequestRefusal(input.repository, input.expectedHeadSha, input.repository.defaultBranch, pullRequest.value)
+      if (refusal !== null)
+        return err({ repository: input.repository.github, message: refusal })
 
       // GitHub owns the merge decision from here. `expectedHeadOid` makes GitHub
       // cancel its own auto-merge when a new commit lands, so a review can never
       // merge a commit it did not read.
+      const autoMerge = hasAutoMergeLabel(labelNames(pullRequest.value.labels))
+      const authorization = input.authorize(autoMerge)
+      if (authorization._tag === 'Err')
+        return err({ repository: input.repository.github, message: authorization.error })
       return octokit.graphql(enableAutoMergeMutation, {
         pullRequestId: pullRequest.value.node_id,
         mergeMethod: graphqlMergeMethod(input.method),
