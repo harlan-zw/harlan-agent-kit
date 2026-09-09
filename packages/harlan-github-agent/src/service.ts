@@ -838,7 +838,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store,
     workerId: randomUUID(),
   })
-  const refreshRepositoryReviewGates = async (repository: RepositoryMapping, signal: AbortSignal): Promise<void> => {
+  const refreshRepositoryReviewGates = async (repository: RepositoryMapping, signal: AbortSignal): Promise<Result<void, string>> => {
     const settled = await refreshReviewGates({
       github: workerGithub,
       now,
@@ -869,12 +869,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }
     })
     if (signal.aborted)
-      return
+      return err('Review gate refresh was aborted.')
     const messages = settled.flatMap(result => result._tag === 'Err' ? [result.error] : [])
     const scope = { _tag: 'Repository' as const, repository: repository.github }
     const at = now().toISOString()
     messages.forEach(message => recordServiceIncident(store, at, 'review_gate_refresh', message, scope))
     store.resolveIncidents(scope, at, 'review_gate_refresh', messages)
+    return messages.length === 0 ? ok(undefined) : err(messages.join('\n'))
   }
   const poller = createPoller({
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,

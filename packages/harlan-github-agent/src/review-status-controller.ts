@@ -18,14 +18,25 @@ export interface ReviewStatusControllerOptions {
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
-  store: Pick<JournalStore, 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus' | 'supersedeReviewStatus'>
+  store: Pick<JournalStore, 'authorizeReviewStatus' | 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus' | 'supersedeReviewStatus'>
   workerId: string
 }
 
 export interface ReviewStatusPublicationOptions {
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
   now: () => Date
-  store: Pick<JournalStore, 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
+  store: Pick<JournalStore, 'authorizeReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
+}
+
+function authorizeWrite(options: ReviewStatusPublicationOptions, command: ClaimedReviewStatusCommand): Result<void, string> {
+  return options.store.authorizeReviewStatus({
+    commandId: command.id,
+    workerId: command.workerId,
+    fence: command.fence,
+    at: options.now().toISOString(),
+  })
+    ? ok(undefined)
+    : err('The Review publication lost its current authority before the GitHub write.')
 }
 
 /** Files one failure with the store that answers for it: defer or retire. */
@@ -70,6 +81,9 @@ async function publishExistingReviewLabel(
     settleUnpublished(options, command, existing.error)
     return err(existing.error.message)
   }
+  const authorization = authorizeWrite(options, command)
+  if (authorization._tag === 'Err')
+    return authorization
   const stamped = await options.github.stampAgentLabel(
     command.repositoryMapping,
     command.pullRequestNumber,
@@ -156,6 +170,9 @@ export async function publishClaimedReviewStatus(
     return err(reason)
   }
 
+  const authorization = authorizeWrite(options, command)
+  if (authorization._tag === 'Err')
+    return authorization
   const published = await options.github.upsertReviewStatus(
     command.repositoryMapping,
     command.pullRequestNumber,
@@ -194,6 +211,9 @@ export async function publishClaimedReviewStatus(
         ? 'PENDING'
         : null
   if (label !== null) {
+    const labelAuthorization = authorizeWrite(options, command)
+    if (labelAuthorization._tag === 'Err')
+      return labelAuthorization
     const stamped = await options.github.stampAgentLabel(
       command.repositoryMapping,
       command.pullRequestNumber,

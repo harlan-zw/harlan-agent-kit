@@ -855,6 +855,8 @@ export interface JournalStore extends BatchStore {
   completeWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string, usage?: AgentTokenUsage }) => boolean
   completeIssueTriageComment: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, url: string }) => boolean
   completeReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, url: string }) => boolean
+  /** Rechecks a claimed Review status command immediately before a GitHub write. */
+  authorizeReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
   recordReviewStatusReceipt: (input: {
     commandId: string
     workerId: string
@@ -8087,6 +8089,7 @@ export function openJournalStore(
             AND published.body_sha256 = command.body_sha256
             AND command.desired_outcome = UPPER(review_gate_projections.outcome_tag)
             AND scope.policy_digest = repositories.policy_digest
+            AND ${reviewGateAuthoritySql}
         ) AS gate_publication_id,
         COALESCE(review_gate_projections.gates, review_runs.gates) AS gates,
         COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
@@ -10415,6 +10418,37 @@ export function openJournalStore(
       throw error
     }
   }
+
+  const authorizeReviewStatus: JournalStore['authorizeReviewStatus'] = input => database.prepare(`
+    SELECT 1
+    FROM review_status_commands
+    LEFT JOIN worker_tasks ON review_status_commands.task_kind = 'adversarial_review'
+      AND worker_tasks.id = review_status_commands.task_id
+    LEFT JOIN tasks ON review_status_commands.task_kind = 'review_fix'
+      AND tasks.id = review_status_commands.task_id
+    JOIN revisions AS status_revision ON status_revision.id = review_status_commands.revision_id
+    JOIN subjects ON subjects.id = COALESCE(worker_tasks.subject_id, tasks.subject_id,
+      CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Running'
+      AND review_status_commands.worker_id = ? AND review_status_commands.fence = ?
+      AND review_status_commands.lease_expires_at > ?
+      AND review_status_commands.revision_id = subjects.current_revision_id
+      AND repositories.enabled = 1
+      ${repositoryWriteAuthoritySql}
+      AND repositories.paused = 0
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM task_cancellations
+        WHERE task_cancellations.task_id = review_status_commands.task_id
+      )
+      AND (
+        review_status_commands.task_kind != 'adversarial_review'
+        OR review_status_commands.phase != 'terminal'
+        OR ${retainedReviewGateClaimSql}
+      )
+  `).get(input.commandId, input.workerId, input.fence, input.at) !== undefined
 
   const deferReviewStatus: JournalStore['deferReviewStatus'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
@@ -14237,6 +14271,7 @@ export function openJournalStore(
     recordReviewClosure,
     approvePullRequest,
     authorizePublication,
+    authorizeReviewStatus,
     cancelTask,
     recordPullRequestTriageRun,
     getLatestPullRequestTriageRun,

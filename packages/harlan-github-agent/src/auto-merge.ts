@@ -46,6 +46,15 @@ function latestReviewForHead(attempts: ReviewRun[], headSha: string, baseRef: st
     .sort((left, right) => right.completedAt.localeCompare(left.completedAt))[0]
 }
 
+/** A gate Publication is usable only while the store confirms its current authority. */
+export function hasCurrentPublishedReadyReview(attempts: ReviewRun[], headSha: string, baseRef: string): boolean {
+  const attempt = latestReviewForHead(attempts, headSha, baseRef)
+  if (attempt?.outcome._tag !== 'Ready' || attempt.gatePublication._tag !== 'Published')
+    return false
+  const publicationId = attempt.gatePublication.publicationId
+  return attempt.publications.some(publication => publication.id === publicationId && publication.result._tag === 'Published')
+}
+
 /** Every condition is rechecked against GitHub immediately before the merge. */
 export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   const { attempts, policy, pullRequest, repository } = input
@@ -71,9 +80,7 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   const attempt = latestReviewForHead(attempts, pullRequest.headSha, pullRequest.baseRef)
   if (attempt === undefined || attempt.outcome._tag !== 'Ready')
     return { _tag: 'Hold', reason: 'The current head commit has no READY review.' }
-  const gatePublication = attempt.gatePublication
-  if (gatePublication._tag !== 'Published'
-    || !attempt.publications.some(publication => publication.id === gatePublication.publicationId && publication.result._tag === 'Published')) {
+  if (!hasCurrentPublishedReadyReview(attempts, pullRequest.headSha, pullRequest.baseRef)) {
     return { _tag: 'Hold', reason: 'The current head commit has no published READY review.' }
   }
   if (attempt.findings.some(finding => finding._tag === 'Open'))

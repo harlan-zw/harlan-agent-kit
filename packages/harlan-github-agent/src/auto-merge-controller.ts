@@ -2,7 +2,7 @@ import type { AutoMergePolicy } from './auto-merge.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubItem, RepositoryMapping } from './types.ts'
-import { autoMergeCandidate, autoMergeDecision } from './auto-merge.ts'
+import { autoMergeCandidate, autoMergeDecision, hasCurrentPublishedReadyReview } from './auto-merge.ts'
 
 export type AutoMergeEvent
   /** GitHub owns the merge from here and performs it when its checks pass. */
@@ -32,6 +32,8 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
       if (subject.baseRef === undefined)
         return
       if (subject.baseRef !== repository.defaultBranch) {
+        if (!hasCurrentPublishedReadyReview(options.store.listReviewRuns(repository.github, subject.number), subject.headSha, subject.baseRef))
+          return
         const retargeted = await options.merger.retargetMergedParent({
           repository,
           number: subject.number,
