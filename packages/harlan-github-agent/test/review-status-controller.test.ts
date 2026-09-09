@@ -46,6 +46,7 @@ describe('review status controller', () => {
       leaseMilliseconds: 60_000,
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
+        authorizeReviewStatus: () => true,
         stageReviewStatus: (input) => {
           stagedBody = input.body
           return { _tag: 'Staged', commandId: 'status-command' }
@@ -58,6 +59,7 @@ describe('review status controller', () => {
           pullRequestNumber: pullRequest.number,
           revisionId: task.revisionId,
           expectedHeadSha: pullRequest.headSha,
+          expectedBaseRef: pullRequest.baseRef ?? null,
           phase: 'repair',
           body: stagedBody,
           reviewRunId: null,

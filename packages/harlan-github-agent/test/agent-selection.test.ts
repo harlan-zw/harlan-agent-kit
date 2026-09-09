@@ -6,7 +6,8 @@ import {
   parseAgentSelection,
   resolveAgentProfile,
 } from '../src/agent-profile.ts'
-import { runAgentTurn } from '../src/agent-turn.ts'
+import { runAgentTurn, runRepairedAgentTurn } from '../src/agent-turn.ts'
+import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { stubProvider, turnEvents } from './fixtures.ts'
 
@@ -140,6 +141,57 @@ describe('agent profile resolution', () => {
 })
 
 describe('agent runtime source', () => {
+  it.each(['codex', 'opencode'] as const)('scopes %s Review effort by repository and preserves global and pinned settings', async (provider) => {
+    const capture = { requests: [] as AgentTurnRequest[] }
+    let selection: AgentSelection = { _tag: 'Automatic', order: [provider] }
+    const runtime = createAgentRuntimeSource({
+      configuredProvider: provider,
+      maximumActiveAgents: 6,
+      providers: {
+        codex: stubProvider(turnEvents({ outcome: 'resolved' }), capture),
+        opencode: stubProvider(turnEvents({ outcome: 'resolved' }), capture, 'opencode'),
+      },
+      roleReasoningEfforts: { [provider]: { review_fix: 'low' } },
+      repositoryReasoningEfforts: new Map([
+        ['harlan-zw/melbjs-clone', { [provider]: { adversarial_review: 'medium' as const } }],
+      ]),
+      selection: () => selection,
+    })
+    const options = {
+      now: () => new Date('2026-09-09T01:00:00.000Z'),
+      runtime,
+      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined },
+    }
+    const input = {
+      number: 24,
+      prompt: 'Review this pull request.',
+      repository: 'harlan-zw/melbjs-clone',
+      role: 'adversarial_review' as const,
+      schema: { type: 'object' },
+      taskId: 'task-1',
+      workspace: '/tmp/worktree',
+    }
+    const signal = new AbortController().signal
+    await runAgentTurn(options, input, signal)
+    await runAgentTurn(options, { ...input, repository: 'harlan-zw/another-repository' }, signal)
+    await runAgentTurn(options, { ...input, role: 'review_fix' }, signal)
+
+    selection = { _tag: 'Pinned', provider, model: null, reasoningEffort: 'xhigh' }
+    await runAgentTurn(options, input, signal)
+    expect(capture.requests.map(request => request.reasoningEffort)).toEqual(['medium', 'high', 'low', 'xhigh'])
+
+    selection = { _tag: 'FollowsConfiguration' }
+    let parses = 0
+    await runRepairedAgentTurn({
+      ...options,
+      parse: () => {
+        selection = { _tag: 'Pinned', provider, model: null, reasoningEffort: 'xhigh' }
+        return ++parses === 1 ? err('Invalid result.') : ok('resolved')
+      },
+    }, input, signal)
+    expect(capture.requests.slice(-2).map(request => request.reasoningEffort)).toEqual(['medium', 'medium'])
+  })
+
   it('answers with the configured provider until the selection pins one', () => {
     let selection: AgentSelection = { _tag: 'FollowsConfiguration' }
     const runtime = createAgentRuntimeSource({

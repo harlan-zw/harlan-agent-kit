@@ -156,8 +156,9 @@ ${TOOLCHAIN_LINES}
 Investigation defaults, unless repository policy sets a narrower scope:
 - Select every installed code-domain skill whose trigger matches the affected implementation.
 - Inspect enough surrounding code to expose hidden scope. Verify that the target file and symbol exist. Do not run test suites. Do not prove library types exist.
+- Choose the route once intent, scope, and the next action are clear. Leave implementation checks to Issue work.
+- Do not start a browser or dev server. Do not install packages.
 - Use the GitHub CLI to inspect related issues, linked pull requests, and repository history when useful.
-- Use live search and run code when useful.
 
 Choose exactly one route:
 - READY_TO_IMPLEMENT: desired behavior and success criteria are clear, the scope is bounded, and one implementation Agent can likely finish safely.
@@ -168,7 +169,8 @@ Difficulty alone never means WAIT_TO_IMPLEMENT. Use READY_TO_SPEC for worthwhile
 For NEEDS_INFO, make nextAction the smallest concrete questions that unblock triage.
 For every other route, make nextAction the exact next Agent or human action.
 Estimate difficulty and impact from 1 to 5.
-List relatedIssues: the numbers of open issues in this repository that one change should fix together with this one, because they share a cause or the same code. Stay within the repository's investigation scope. Return an empty array when none are known.
+List relatedIssues: open issues in this repository that share a cause and need one fix. Check related open issues once, within the repository's investigation scope.
+Sharing a file alone does not mean issues need one fix. Return an empty array when none are known.
 Do not commit, push, or post comments. Return only the required JSON.`
 const skillDigest = createHash('sha256').update(reviewPolicy).digest('hex')
 
@@ -1152,7 +1154,7 @@ async function projectReviewRun(
       : finding)
   }
 
-  if (!gatesChanged && run.publications.some(publication => publication.result._tag === 'Published')) {
+  if (!gatesChanged && run.gatePublication._tag === 'Published') {
     await stampAgentLabel(options, task, storedOutcomeName(run), signal)
     return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
   }
@@ -1163,7 +1165,7 @@ async function projectReviewRun(
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication
     ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
-    : options.status.stageTerminal?.(task, body, outcome, run.id) ?? err('The terminal Review status could not be staged.')
+    : options.status.stageTerminal?.(task, body, outcome, run.id, gates) ?? err('The terminal Review status could not be staged.')
   if (staged._tag === 'Err')
     return staged
   if (!durablePublication)
@@ -1292,7 +1294,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
 
       // The Review run records which Agent provider and model answered, so the
       // runtime is read once and reused for the whole review.
-      const reviewRuntime = options.runtime()
+      const reviewRuntime = options.runtime(task.repository)
       const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess)
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       // The slug comes from the primary checkout, never from this worktree.
@@ -1383,6 +1385,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           : { _tag: 'Blocked' as const, confidence: response.confidence }
       return projectReviewRun(options, task, frozen.value, {
         id: reviewRunId,
+        gatePublication: { _tag: 'Unpublished' },
         baseRef: task.pullRequest.baseRef ?? null,
         repository: task.repository,
         pullRequestNumber: task.pullRequestNumber,

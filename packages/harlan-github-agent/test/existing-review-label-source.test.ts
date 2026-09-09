@@ -14,7 +14,7 @@ function harness(heading = '### 🤖 READY · 95/100') {
     html_url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
   }
   const comments = [comment]
-  const pull = { state: 'open', head: { sha: headSha } }
+  const pull = { state: 'open', head: { sha: headSha }, base: { ref: 'main', sha: 'base-before-read' } }
   const client = {
     paginate: () => Promise.resolve(comments),
     rest: {
@@ -30,7 +30,7 @@ function harness(heading = '### 🤖 READY · 95/100') {
       invalidate: () => undefined,
     },
   })
-  return { comment, comments, pull, read: () => source.readExistingReviewLabel(repositoryMapping(), 24, 42, headSha, AbortSignal.timeout(1000)) }
+  return { comment, comments, pull, read: () => source.readExistingReviewLabel(repositoryMapping(), 24, 42, headSha, 'main', AbortSignal.timeout(1000)) }
 }
 
 describe('reading an existing review label', () => {
@@ -67,15 +67,23 @@ describe('reading an existing review label', () => {
     expect((await test.read())._tag).toBe('Err')
   })
 
-  it.each(['closed', 'moved'])('rejects a pull request that %s after the comments were read', async (change) => {
+  it.each(['closed', 'moved', 'retargeted'])('rejects a pull request that %s after the comments were read', async (change) => {
     const test = harness()
     if (change === 'closed')
       test.pull.state = 'closed'
+    else if (change === 'retargeted')
+      test.pull.base.ref = 'another-base'
     else
       test.pull.head.sha = 'b'.repeat(40)
     expect(await test.read()).toEqual({
       _tag: 'Err',
       error: { _tag: 'Permanent', message: 'The pull request changed before its review label was restored.' },
     })
+  })
+
+  it('keeps the Review label valid when only the base SHA moves', async () => {
+    const test = harness()
+    test.pull.base.sha = 'base-after-read'
+    expect(await test.read()).toEqual(ok({ commentId: 42, url: test.comment.html_url, label: 'READY' }))
   })
 })

@@ -83,6 +83,13 @@ repositories: []
 # Set repositories[].poll_interval_seconds to poll that repository separately.
 # It accepts 10 to 3600 seconds. Omit it to use the service polling interval.
 # A live demo can use priority: 100 and poll_interval_seconds: 15.
+# Set repositories[].reasoning_effort to override the listed provider roles for one repository.
+# Unlisted roles keep the global setting. An explicit pinned Reasoning effort wins.
+#   reasoning_effort:
+#     opencode:
+#       adversarial_review: medium
+#     codex:
+#       adversarial_review: medium
 # Set repositories[].auto_merge to widen Auto merge past the label for one owned
 # repository where a wrong merge costs little, such as a demo site:
 #   auto_merge:

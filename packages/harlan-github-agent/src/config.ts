@@ -225,35 +225,35 @@ function reservePercent(value: unknown, issues: ConfigIssue[]): Record<AgentProv
   return reserve
 }
 
-/** Reads `agent.reasoning_effort`, one Reasoning effort per Agent provider and role. */
-function roleReasoningEfforts(value: unknown, issues: ConfigIssue[]): RoleReasoningEfforts | undefined {
+/** Reads one Reasoning effort per Agent provider and role at either configuration scope. */
+function roleReasoningEfforts(value: unknown, path: string, issues: ConfigIssue[]): RoleReasoningEfforts | undefined {
   if (value === undefined)
     return {}
   if (!isRecord(value)) {
-    issues.push({ path: '$.agent.reasoning_effort', message: 'Expected a Reasoning effort per Agent provider and role.' })
+    issues.push({ path, message: 'Expected a Reasoning effort per Agent provider and role.' })
     return undefined
   }
   const efforts: RoleReasoningEfforts = {}
   for (const [providerKey, roles] of Object.entries(value)) {
     const provider = providerName(providerKey)
     if (provider === undefined) {
-      issues.push({ path: `$.agent.reasoning_effort.${providerKey}`, message: 'Expected codex or opencode.' })
+      issues.push({ path: `${path}.${providerKey}`, message: 'Expected codex or opencode.' })
       return undefined
     }
     if (!isRecord(roles)) {
-      issues.push({ path: `$.agent.reasoning_effort.${provider}`, message: 'Expected a Reasoning effort per Agent role.' })
+      issues.push({ path: `${path}.${provider}`, message: 'Expected a Reasoning effort per Agent role.' })
       return undefined
     }
     const providerEfforts: Partial<Record<AgentRole, CodexReasoningEffort>> = {}
     for (const [roleKey, effort] of Object.entries(roles)) {
       const role = AGENT_ROLES.find(candidate => candidate === roleKey)
       if (role === undefined) {
-        issues.push({ path: `$.agent.reasoning_effort.${provider}.${roleKey}`, message: `Expected one Agent role: ${AGENT_ROLES.join(', ')}.` })
+        issues.push({ path: `${path}.${provider}.${roleKey}`, message: `Expected one Agent role: ${AGENT_ROLES.join(', ')}.` })
         return undefined
       }
       const known = REASONING_EFFORTS.find(candidate => candidate === effort)
       if (known === undefined) {
-        issues.push({ path: `$.agent.reasoning_effort.${provider}.${role}`, message: `Expected one Reasoning effort: ${REASONING_EFFORTS.join(', ')}.` })
+        issues.push({ path: `${path}.${provider}.${role}`, message: `Expected one Reasoning effort: ${REASONING_EFFORTS.join(', ')}.` })
         return undefined
       }
       providerEfforts[role] = known
@@ -330,7 +330,7 @@ function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfi
   if (maximumActiveAgents === undefined)
     issues.push({ path: '$.agent.maximum_active_agents', message: 'Expected a whole number from 1 to 16.' })
 
-  const reasoningEffort = roleReasoningEfforts(agent.reasoning_effort, issues)
+  const reasoningEffort = roleReasoningEfforts(agent.reasoning_effort, '$.agent.reasoning_effort', issues)
 
   if (provider === undefined || reserve === undefined || order === undefined || maximumActiveAgents === undefined || reasoningEffort === undefined)
     return undefined
@@ -449,6 +449,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
   if (pollIntervalSeconds !== undefined && (typeof pollIntervalSeconds !== 'number' || !Number.isInteger(pollIntervalSeconds) || pollIntervalSeconds < 10 || pollIntervalSeconds > 3600))
     issues.push({ path: `${path}.poll_interval_seconds`, message: 'Expected an integer from 10 to 3600.' })
   const repositoryOwnership = ownership(value, path, issues)
+  const reasoningEffort = roleReasoningEfforts(value.reasoning_effort, `${path}.reasoning_effort`, issues)
   const defaultBranch = requiredString(value, 'default_branch', path, issues)
   const writablePullRequestAuthors = stringArray(value, 'writable_pr_authors', path, issues)
   const writablePullRequestHeadPrefixes = stringArray(value, 'writable_pr_head_prefixes', path, issues)
@@ -493,6 +494,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     || checkout === undefined
     || enabled === undefined
     || repositoryOwnership === undefined
+    || reasoningEffort === undefined
     || defaultBranch === undefined
     || writablePullRequestAuthors === undefined
     || writablePullRequestHeadPrefixes === undefined
@@ -512,6 +514,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     enabled,
     ...(typeof priority === 'number' ? { priority } : {}),
     ...(typeof pollIntervalSeconds === 'number' ? { pollIntervalSeconds } : {}),
+    ...(value.reasoning_effort === undefined ? {} : { reasoningEffort }),
     authentication: 'app',
     ownership: repositoryOwnership,
     defaultBranch,

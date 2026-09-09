@@ -12,6 +12,99 @@ const noFinalRead = {
 }
 
 describe('gitHub reconciliation', () => {
+  it('keeps a failed Review refresh visible until its own operation recovers', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const scope = { _tag: 'Repository' as const, repository: repository.github }
+    const at = '2026-08-13T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordPollFailure(repository.github, at, 'GitHub could not list open items.')
+    store.recordIncident({ scope, kind: 'unknown', severity: 'error', operation: 'review_status_publication', message: 'GitHub could not publish the Review.', recovery: { _tag: 'ActionRequired' }, at })
+    const github = { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([])) }
+    let refreshes = 0
+    let merges = 0
+    try {
+      const failedRefresh = await reconcileRepository(repository, {
+        github,
+        store,
+        now: () => new Date(at),
+        refreshReviewGates: async () => {
+          refreshes++
+          store.recordIncident({ scope, kind: 'unknown', severity: 'error', operation: 'review_gate_refresh', message: 'GitHub could not read the Review gates.', recovery: { _tag: 'ActionRequired' }, at })
+          return err('GitHub could not read the Review gates.')
+        },
+        autoMerge: { reconcile: async () => { merges++ } },
+      })
+      expect(failedRefresh._tag).toBe('Ok')
+      expect(refreshes).toBe(1)
+      expect(merges).toBe(0)
+      expect(store.listIncidents().map(incident => incident.operation).sort()).toEqual(['review_gate_refresh', 'review_status_publication'])
+
+      const recovered = await reconcileRepository(repository, {
+        github,
+        store,
+        now: () => new Date('2026-08-13T01:01:00.000Z'),
+        refreshReviewGates: async () => {
+          store.resolveIncidents(scope, '2026-08-13T01:01:00.000Z', 'review_gate_refresh')
+          return ok(undefined)
+        },
+      })
+      expect(recovered._tag).toBe('Ok')
+      expect(store.listIncidents().map(incident => incident.operation)).toEqual(['review_status_publication'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('refreshes settled Review gates after observations and before Auto merge', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const order: string[] = []
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    try {
+      const result = await reconcileRepository(repository, {
+        github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([pullRequestItem({ mergeState: 'clean' })])) },
+        store,
+        now: () => new Date('2026-08-13T01:00:00.000Z'),
+        refreshReviewGates: async (mapping) => {
+          expect(store.listOpenPullRequestNumbers(mapping.github)).toEqual([24])
+          order.push('refresh')
+          return ok(undefined)
+        },
+        autoMerge: { reconcile: async () => { order.push('merge') } },
+      })
+      expect(result._tag).toBe('Ok')
+      expect(order).toEqual(['refresh', 'merge'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('does not Auto merge an eligible pull request when the gate refresh aborts', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    const signal = new AbortController()
+    signal.abort()
+    let merges = 0
+    const result = await reconcileRepository(repository, {
+      github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([pullRequestItem({ autoMerge: true, mergeState: 'clean' })])) },
+      store,
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      signal: signal.signal,
+      refreshReviewGates: async (_repository, refreshSignal) => refreshSignal.aborted ? err('Review gate refresh was aborted.') : ok(undefined),
+      autoMerge: { reconcile: async () => { merges++ } },
+    })
+    expect(result._tag).toBe('Ok')
+    expect(merges).toBe(0)
+    store.close()
+  })
+
   it('ignores issues authored by automated accounts', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()

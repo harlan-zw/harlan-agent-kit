@@ -108,6 +108,9 @@ For `codex`, use `gpt-5.6-luna` with low reasoning for Pull request triage. Use 
 
 For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role. `agent.reasoning_effort.<provider>.<role>` in the configuration replaces one role's default, for example `agent.reasoning_effort.opencode.review_fix: medium`. A pinned Agent selection with an explicit Reasoning effort still wins over the file.
 
+Use `repositories[].reasoning_effort.<provider>.<role>` to override Reasoning effort for one repository.
+Unlisted roles keep their global setting. An explicit pinned Reasoning effort wins over both scopes.
+
 A saved session belongs to the Agent provider that created it. Switching providers starts new sessions.
 
 Agent selection has no matching CLI subcommand. Switch it with an authenticated Control API request. Send the whole selection. A null model or Reasoning effort keeps that provider's own per-role default. A switch starts the next agent turn, and an agent already running keeps the model it started with.

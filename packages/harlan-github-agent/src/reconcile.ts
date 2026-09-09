@@ -25,6 +25,7 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
+  refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
   store: JournalStore
   now: () => Date
@@ -145,7 +146,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     }
   }
 
-  if (writesEnabled && dependencies.autoMerge !== undefined) {
+  const reviewGates = writesEnabled && dependencies.refreshReviewGates !== undefined
+    ? await dependencies.refreshReviewGates(repository, dependencies.signal ?? AbortSignal.timeout(30_000))
+    : ok(undefined)
+
+  if (writesEnabled && reviewGates._tag === 'Ok' && dependencies.autoMerge !== undefined) {
     const merges = dependencies.autoMerge
     await Promise.all(eligibleItems.map(subject => merges.reconcile(
       repository,

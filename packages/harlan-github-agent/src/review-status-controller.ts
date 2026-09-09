@@ -1,7 +1,7 @@
-import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus } from './github-agent-source.ts'
+import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewStatusTaskPhase } from './types.ts'
+import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
@@ -10,22 +10,33 @@ import { updatedAtLabel } from './text.ts'
 
 export interface ReviewStatusController {
   publish: (task: ClaimedAdversarialReviewTask, phase: 'snapshot' | 'review' | 'terminal', body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
-  stageTerminal?: (task: ClaimedAdversarialReviewTask, body: string, desiredOutcome: ReviewDesiredOutcome, reviewRunId?: string) => Result<{ commandId: string }, string>
+  stageTerminal?: (task: ClaimedAdversarialReviewTask, body: string, desiredOutcome: ReviewDesiredOutcome, reviewRunId?: string, gates?: ReviewGates) => Result<{ commandId: string }, string>
   publishRepair: (task: ClaimedReviewFixTask, progress: AgentProgress, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
 export interface ReviewStatusControllerOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
-  store: Pick<JournalStore, 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus' | 'supersedeReviewStatus'>
+  store: Pick<JournalStore, 'authorizeReviewStatus' | 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus' | 'supersedeReviewStatus'>
   workerId: string
 }
 
 export interface ReviewStatusPublicationOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
   now: () => Date
-  store: Pick<JournalStore, 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
+  store: Pick<JournalStore, 'authorizeReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
+}
+
+function authorizeWrite(options: ReviewStatusPublicationOptions, command: ClaimedReviewStatusCommand): Result<void, string> {
+  return options.store.authorizeReviewStatus({
+    commandId: command.id,
+    workerId: command.workerId,
+    fence: command.fence,
+    at: options.now().toISOString(),
+  })
+    ? ok(undefined)
+    : err('The Review publication lost its current authority before the GitHub write.')
 }
 
 /** Files one failure with the store that answers for it: defer or retire. */
@@ -51,9 +62,10 @@ function settleUnpublished(
 async function publishExistingReviewLabel(
   options: ReviewStatusPublicationOptions,
   command: ClaimedReviewStatusCommand,
+  baseRef: string,
   signal: AbortSignal,
 ): Promise<Result<PublishedReviewStatus, string>> {
-  // The read re-validates the state and the head itself, so the heavier review
+  // The read re-validates the state, head, and base branch, so the heavier review
   // snapshot would spend GitHub calls re-reading the same truth.
   const existing = command.commentId === null
     ? err({ _tag: 'Permanent' as const, message: 'The existing review has no comment identifier.' })
@@ -62,17 +74,22 @@ async function publishExistingReviewLabel(
         command.pullRequestNumber,
         command.commentId,
         command.expectedHeadSha,
+        baseRef,
         signal,
       )
   if (existing._tag === 'Err') {
     settleUnpublished(options, command, existing.error)
     return err(existing.error.message)
   }
+  const authorization = authorizeWrite(options, command)
+  if (authorization._tag === 'Err')
+    return authorization
   const stamped = await options.github.stampAgentLabel(
     command.repositoryMapping,
     command.pullRequestNumber,
     existing.value.label,
     signal,
+    () => authorizeWrite(options, command),
   )
   if (stamped._tag === 'Err') {
     options.store.deferReviewStatus({
@@ -113,8 +130,19 @@ export async function publishClaimedReviewStatus(
   replacePriorReview: boolean,
   signal: AbortSignal,
 ): Promise<Result<PublishedReviewStatus, string>> {
+  if (command.expectedBaseRef === null) {
+    const reason = 'The review has no recorded base branch. Run a new Review.'
+    options.store.supersedeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: options.now().toISOString(),
+      reason,
+    })
+    return err(reason)
+  }
   if (command.taskKind === 'existing_review')
-    return publishExistingReviewLabel(options, command, signal)
+    return publishExistingReviewLabel(options, command, command.expectedBaseRef, signal)
 
   const current = await options.github.getPullRequestReviewSnapshot(command.repositoryMapping, command.pullRequestNumber, signal)
   if (current._tag === 'Err') {
@@ -127,9 +155,13 @@ export async function publishClaimedReviewStatus(
     })
     return current
   }
-  if (current.value.pullRequest.state !== 'open' || current.value.pullRequest.headSha !== command.expectedHeadSha) {
+  if (
+    current.value.pullRequest.state !== 'open'
+    || current.value.pullRequest.headSha !== command.expectedHeadSha
+    || current.value.pullRequest.baseRef !== command.expectedBaseRef
+  ) {
     const reason = 'The pull request changed before the review comment was posted.'
-    options.store.deferReviewStatus({
+    options.store.supersedeReviewStatus({
       commandId: command.id,
       workerId: command.workerId,
       fence: command.fence,
@@ -139,6 +171,9 @@ export async function publishClaimedReviewStatus(
     return err(reason)
   }
 
+  const authorization = authorizeWrite(options, command)
+  if (authorization._tag === 'Err')
+    return authorization
   const published = await options.github.upsertReviewStatus(
     command.repositoryMapping,
     command.pullRequestNumber,
@@ -146,6 +181,7 @@ export async function publishClaimedReviewStatus(
     command.body,
     replacePriorReview,
     signal,
+    () => authorizeWrite(options, command),
   )
   if (published._tag === 'Err') {
     options.store.deferReviewStatus({
@@ -177,11 +213,15 @@ export async function publishClaimedReviewStatus(
         ? 'PENDING'
         : null
   if (label !== null) {
+    const labelAuthorization = authorizeWrite(options, command)
+    if (labelAuthorization._tag === 'Err')
+      return labelAuthorization
     const stamped = await options.github.stampAgentLabel(
       command.repositoryMapping,
       command.pullRequestNumber,
       label,
       signal,
+      () => authorizeWrite(options, command),
     )
     if (stamped._tag === 'Err') {
       options.store.deferReviewStatus({
@@ -275,7 +315,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
         signal,
       )
     },
-    stageTerminal(task, body, desiredOutcome, reviewRunId) {
+    stageTerminal(task, body, desiredOutcome, reviewRunId, gates) {
       const staged = options.store.stageReviewStatus({
         taskKind: 'adversarial_review',
         phase: 'terminal',
@@ -288,6 +328,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
         body,
         desiredOutcome,
         ...(reviewRunId === undefined ? {} : { reviewRunId }),
+        ...(gates === undefined ? {} : { gates }),
       })
       return staged._tag === 'Rejected' ? err(staged.reason) : ok({ commandId: staged.commandId })
     },

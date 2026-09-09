@@ -1,4 +1,4 @@
-import type { ExistingReviewLabelSource, GitHubAgentSource } from './github-agent-source.ts'
+import type { ReviewStatusPublicationOptions } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
 import { publishClaimedReviewStatus } from './review-status-controller.ts'
 
@@ -9,7 +9,7 @@ export interface ReviewStatusScheduler {
 }
 
 export interface ReviewStatusSchedulerOptions {
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'stampAgentLabel' | 'upsertReviewStatus'> & ExistingReviewLabelSource
+  github: ReviewStatusPublicationOptions['github']
   intervalMilliseconds: number
   leaseMilliseconds: number
   now: () => Date
@@ -23,7 +23,7 @@ export interface ReviewStatusSchedulerOptions {
    * after the defect behind it was fixed.
    */
   onPublished: (repository: string, pullRequestNumber: number) => void
-  store: Pick<JournalStore, 'claimNextTerminalReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
+  store: Pick<JournalStore, 'authorizeReviewStatus' | 'claimNextTerminalReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
   workerId: string
 }
 

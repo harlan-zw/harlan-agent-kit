@@ -1,5 +1,5 @@
 import type { CiGateCause } from './ci-gate-pending.ts'
-import type { GitHubAgentSource } from './github-agent-source.ts'
+import type { GitHubAgentSource, ReviewPublicationSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { BaselineRepairQueueResult, JournalStore, ReviewGateRefresh } from './store.ts'
 import type { RepositoryMapping, ReviewGates, ReviewOutcomeName } from './types.ts'
@@ -20,7 +20,7 @@ export type ReviewGateRefreshOutcome
     | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 export interface ReviewGateSweepOptions {
-  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'stampAgentLabel'>
+  github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'> & Pick<ReviewPublicationSource, 'stampAgentLabel'>
   now: () => Date
   /** Proves the controller may publish Repair commits in this repository. */
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -48,7 +48,7 @@ export async function refreshReviewGates(
   signal: AbortSignal,
 ): Promise<Array<Result<ReviewGateRefreshOutcome, string>>> {
   const mappings = new Map(options.repositories.map(mapping => [mapping.github.toLowerCase(), mapping]))
-  const reviews = options.store.listReviewGateRefreshes()
+  const reviews = options.store.listReviewGateRefreshes().filter(review => mappings.has(review.repository.toLowerCase()))
   /** Every overdue CI Review gate message this pass raised, by repository. */
   const stalled = new Map<string, string[]>()
   /** Repositories whose live state this pass could not read. */
@@ -65,7 +65,7 @@ export async function refreshReviewGates(
     }
     // A moved head commit gets its own Review. Restating this verdict against it
     // would answer for a diff nothing read.
-    if (live.value.pullRequest.state !== 'open' || live.value.pullRequest.headSha !== review.headSha)
+    if (live.value.pullRequest.state !== 'open' || live.value.pullRequest.headSha !== review.headSha || live.value.pullRequest.baseRef !== review.baseRef)
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
     const { gates, reportedChecks, ciCause } = refreshControllerGates(review.gates, live.value, mapping)
@@ -99,11 +99,9 @@ export async function refreshReviewGates(
       ? { baselineRepair: await queueBaselineRepair(options, review, live.value.pullRequest.baseSha, signal) }
       : {}
     const gatesChanged = JSON.stringify(gates) !== JSON.stringify(review.gates)
-    if (!gatesChanged && !(repairable && body !== review.publishedBody)) {
-      // Only a gate that did not move can be overdue. A gate that changed this
-      // pass rewrites its own timestamp, so the old one would report a wait
-      // that has just ended.
+    if (!gatesChanged)
       reportOverdueCiGate(options, review, gates, ciCause, stalled)
+    if (!gatesChanged && review.gatePublication._tag === 'Published' && !(repairable && body !== review.publishedBody)) {
       const confirmed = await options.github.editReviewStatus(
         mapping,
         review.pullRequestNumber,
@@ -149,7 +147,12 @@ export async function refreshReviewGates(
           return err(`${review.repository}#${review.pullRequestNumber}: ${staged.reason}`)
         return ok({ _tag: 'PublicationQueued', repository: review.repository, pullRequestNumber: review.pullRequestNumber, outcome, ...baselineRepair })
       }
-      const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal)
+      if (!hasCurrentRefreshAuthority(options, review))
+        return err(`${review.repository}#${review.pullRequestNumber}: The Review authority changed before its label write.`)
+      const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal, () =>
+        hasCurrentRefreshAuthority(options, review)
+          ? ok(undefined)
+          : err('The Review authority changed before its label write.'))
       if (stamped._tag === 'Err')
         return err(`${review.repository}#${review.pullRequestNumber}: ${stamped.error}`)
       const unsettled = [gates.merge, gates.ci].find(gate => gate._tag !== 'Passed')
@@ -185,6 +188,22 @@ export async function refreshReviewGates(
     results.push(await settle(review))
   resolveSettledCiGates(options, signal, unread, stalled)
   return results
+}
+
+/** Rechecks the exact published Review after GitHub confirmation and before its label write. */
+function hasCurrentRefreshAuthority(options: ReviewGateSweepOptions, review: ReviewGateRefresh): boolean {
+  return options.store.listReviewGateRefreshes().some(candidate =>
+    candidate.reviewRunId === review.reviewRunId
+    && candidate.revisionId === review.revisionId
+    && candidate.baseRef === review.baseRef
+    && candidate.headSha === review.headSha
+    && candidate.commentId === review.commentId
+    && candidate.publishedBody === review.publishedBody
+    && JSON.stringify(candidate.gates) === JSON.stringify(review.gates)
+    && candidate.gatePublication._tag === 'Published'
+    && review.gatePublication._tag === 'Published'
+    && candidate.gatePublication.publicationId === review.gatePublication.publicationId,
+  )
 }
 
 /**

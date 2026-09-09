@@ -114,7 +114,7 @@ export interface AgentRuntime {
 }
 
 /** Reads the Agent runtime that answers the next agent turn. */
-export type AgentRuntimeSource = () => AgentRuntime
+export type AgentRuntimeSource = (repository?: string) => AgentRuntime
 
 export function agentProfile(provider: AgentProviderName): AgentProfile {
   return profiles[provider]
@@ -228,9 +228,10 @@ export function resolveAgentProfile(
   selection: PinnedAgentSelection,
   maximumActiveAgents: number,
   roleReasoningEfforts: RoleReasoningEfforts = {},
+  repositoryReasoningEfforts: RoleReasoningEfforts = {},
 ): AgentProfile {
   const base = agentProfile(selection.provider)
-  const configured = roleReasoningEfforts[selection.provider] ?? {}
+  const configured = { ...roleReasoningEfforts[selection.provider], ...repositoryReasoningEfforts[selection.provider] }
   const roles = Object.fromEntries(
     AGENT_ROLES.map(role => [role, roleWithSelection(base.roles[role], selection, configured[role])]),
   ) as Record<AgentRole, RoleProfile>
@@ -246,6 +247,8 @@ export interface AgentRuntimeSourceOptions {
   providers: Record<AgentProviderName, AgentProvider>
   /** Reasoning effort overrides the configuration file names, per provider and role. */
   roleReasoningEfforts?: RoleReasoningEfforts
+  /** Repository overrides replace only the listed provider roles. */
+  repositoryReasoningEfforts?: ReadonlyMap<string, RoleReasoningEfforts>
   selection: () => AgentSelection
 }
 
@@ -257,10 +260,10 @@ export interface AgentRuntimeSourceOptions {
  */
 export function createAgentRuntimeSource(options: AgentRuntimeSourceOptions): AgentRuntimeSource {
   const configured = providerAgentSelection(options.configuredProvider)
-  return () => {
+  return (repository) => {
     const selection = resolveAgentSelection(options.selection(), configured, options.chooseProvider)
     return {
-      profile: resolveAgentProfile(selection, options.maximumActiveAgents, options.roleReasoningEfforts),
+      profile: resolveAgentProfile(selection, options.maximumActiveAgents, options.roleReasoningEfforts, repository === undefined ? undefined : options.repositoryReasoningEfforts?.get(repository)),
       provider: options.providers[selection.provider],
     }
   }

@@ -19,6 +19,19 @@ interface Recorded {
   merges: Array<Record<string, unknown>>
 }
 
+function currentPullRequest(github: FakeGitHub = {}) {
+  return {
+    node_id: 'PR_node_1',
+    state: 'open',
+    draft: false,
+    merged_at: null,
+    user: { login: 'harlan-zw' },
+    labels: [],
+    head: { sha: github.headSha ?? 'abc123', repo: { full_name: 'harlan-zw/example' } },
+    base: { ref: github.baseRef ?? 'main', repo: { full_name: 'harlan-zw/example' } },
+  }
+}
+
 function merger(github: FakeGitHub, recorded: Recorded) {
   return createGitHubPullRequestMerger({
     createClient: () => ({
@@ -31,7 +44,7 @@ function merger(github: FakeGitHub, recorded: Recorded) {
       rest: {
         pulls: {
           get: () => Promise.resolve({
-            data: { node_id: 'PR_node_1', head: { sha: github.headSha ?? 'abc123' }, base: { ref: github.baseRef ?? 'main' } },
+            data: currentPullRequest(github),
           }),
           merge: (input: Record<string, unknown>) => {
             recorded.merges.push(input)
@@ -53,6 +66,7 @@ const input = {
   number: 24,
   expectedHeadSha: 'abc123',
   method: 'squash' as const,
+  authorize: () => ok(undefined),
 }
 
 describe('gitHub auto-merge handoff', () => {
@@ -62,6 +76,7 @@ describe('gitHub auto-merge handoff', () => {
     const updates: unknown[] = []
     const current = {
       state: 'open',
+      labels: [],
       draft: false,
       merged_at: null,
       user: { login: scenario === 'outside-author' ? 'outside' : 'harlan-zw' },
@@ -129,7 +144,7 @@ describe('gitHub auto-merge handoff', () => {
         merged.push(JSON.parse(String(init?.body)))
         return json({ merged: true, sha: 'merge-sha' })
       }
-      return json({ node_id: 'PR_node_1', head: { sha: 'abc123' }, base: { ref: 'main' } })
+      return json(currentPullRequest())
     })
 
     const result = await createGitHubPullRequestMerger({ tokens }).merge(input)

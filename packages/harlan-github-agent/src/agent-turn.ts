@@ -132,7 +132,7 @@ export async function runAgentTurn(
   const sessionId = input.freshSession === true
     ? null
     : options.store.getWorkerSession(input.repository, input.number, sessionRole, input.scopeDigest)
-  const runtime = options.runtime()
+  const runtime = options.runtime(input.repository)
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({
     ...(input.instructionPaths === undefined ? {} : { instructionPaths: input.instructionPaths }),
@@ -231,7 +231,7 @@ export async function runRepairedAgentTurn<Value>(
 ): Promise<Result<RepairedAgentTurn<Value>, string>> {
   // The repair turn quotes the first answer, so both turns use one runtime even
   // when the Agent selection changes between them.
-  const runtime = options.runtime()
+  const runtime = options.runtime(input.repository)
   const frozen = { ...options, runtime: () => runtime }
   const turn = await runAgentTurn(frozen, input, signal)
   if (turn._tag === 'Err')

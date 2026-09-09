@@ -18,6 +18,30 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('retires legacy Service Review refresh incidents when repository ownership starts', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  const at = '2026-08-18T00:00:00.000Z'
+  const incident = { kind: 'unknown' as const, severity: 'error' as const, message: 'GitHub could not read the Review gates.', recovery: { _tag: 'ActionRequired' as const }, at }
+  const legacyRefresh = before.recordIncident({ ...incident, scope: { _tag: 'Service' }, operation: 'review_gate_refresh' })
+  const unrelatedService = before.recordIncident({ ...incident, scope: { _tag: 'Service' }, operation: 'review_status_publication' })
+  const repositoryRefresh = before.recordIncident({ ...incident, scope: { _tag: 'Repository', repository: 'harlan-zw/example' }, operation: 'review_gate_refresh' })
+  before.close()
+  const legacy = new DatabaseSync(path)
+  legacy.exec('ALTER TABLE review_gate_projections DROP COLUMN command_id; PRAGMA user_version = 69;')
+  legacy.close()
+
+  const migrated = openJournalStore(path)
+  try {
+    const incidents = migrated.listIncidents()
+    expect(incidents).not.toContainEqual(expect.objectContaining({ id: legacyRefresh.id }))
+    expect(incidents).toEqual(expect.arrayContaining([unrelatedService, repositoryRefresh]))
+  }
+  finally {
+    migrated.close()
+  }
+})
+
 function dropReviewResolutionAdditions(database: DatabaseSync): void {
   dropRestartOperationAdditions(database)
   database.exec('DROP TABLE IF EXISTS review_gate_projections')

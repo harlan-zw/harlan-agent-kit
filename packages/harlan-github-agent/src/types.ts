@@ -38,6 +38,8 @@ export interface RepositoryMapping {
   priority?: number
   /** A dedicated repository poll interval. Omit to use the service interval. */
   pollIntervalSeconds?: number
+  /** Overrides global Reasoning effort for this repository. An explicit pinned effort still wins. */
+  reasoningEffort?: RoleReasoningEfforts
   /**
    * `app` uses the GitHub App installation. `user` uses Harlan's own token, for
    * a repository he maintains in an organization that cannot install the App.
@@ -377,7 +379,12 @@ export type RecordAgentFeedbackResult
   = | { _tag: 'Recorded', feedback: AgentFeedback }
     | { _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }
 
+export type ReviewGatePublication
+  = | { _tag: 'Unpublished' }
+    | { _tag: 'Published', publicationId: string }
+
 export interface ReviewRun {
+  gatePublication: ReviewGatePublication
   /** The target branch whose diff this Review covered. */
   baseRef: string | null
   id: string
@@ -424,7 +431,7 @@ export type ReviewResolution
 
 export type ReviewDesiredOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'WAITING' | 'EXISTING' | 'SKIPPED'
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'outcome' | 'publications' | 'usage'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'gatePublication' | 'outcome' | 'publications' | 'usage'> {
   confidence?: number
   /** Trusted repository policy used by this Review. */
   policyDigest?: string
@@ -925,6 +932,8 @@ interface ReviewStatusCommandBase {
   pullRequestNumber: number
   revisionId: string
   expectedHeadSha: string
+  /** The command's recorded base branch. Unknown legacy scope cannot authorize a write. */
+  expectedBaseRef: string | null
   body: string
   reviewRunId: string | null
   desiredOutcome: ReviewDesiredOutcome | null

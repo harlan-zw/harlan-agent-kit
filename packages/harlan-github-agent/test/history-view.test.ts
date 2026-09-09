@@ -45,6 +45,7 @@ function reviewAgent(overrides: Partial<ReviewAgent> = {}): ReviewAgent {
     findings: [],
     usage: { _tag: 'Unavailable' },
     feedback: null,
+    gatePublication: { _tag: 'Unpublished' as const },
     publications: [],
     ...overrides,
   }
