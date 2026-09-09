@@ -440,10 +440,24 @@ function checkUndecided(check: GitHubCheck): boolean {
   return checkRunning(check) || checkRunnerLost(check)
 }
 
+/**
+ * True when GitHub holds the job and no runner has accepted it.
+ *
+ * On 2026-09-09 gscdump#49 read "has not reported a conclusion" for ten hours
+ * while its job had never started: the self-hosted runners could not resolve
+ * GitHub. The advice to re-run was wrong, because the runner supervisor drops
+ * a queued run older than six hours and a re-run keeps its creation time.
+ */
+function checkQueued(check: GitHubCheck): boolean {
+  return check.status === 'queued'
+}
+
 function undecidedReason(check: GitHubCheck): string {
-  return checkRunnerLost(check)
-    ? `${cleanLine(check.name)} lost its runner, so it has not reported.`
-    : `${cleanLine(check.name)} is still running.`
+  if (checkRunnerLost(check))
+    return `${cleanLine(check.name)} lost its runner, so it has not reported.`
+  if (checkQueued(check))
+    return `${cleanLine(check.name)} is queued, and no runner has accepted the job.`
+  return `${cleanLine(check.name)} is still running.`
 }
 
 /** True when any check run in one snapshot lost its runner. */
@@ -452,9 +466,11 @@ function checksLostRunner(checks: GitHubChecksSnapshot): boolean {
 }
 
 function undecidedCause(check: GitHubCheck): CiGateCause {
-  return checkRunnerLost(check)
-    ? { _tag: 'RunnerLost', check: cleanLine(check.name) }
-    : { _tag: 'CheckRunning', check: cleanLine(check.name) }
+  if (checkRunnerLost(check))
+    return { _tag: 'RunnerLost', check: cleanLine(check.name) }
+  if (checkQueued(check))
+    return { _tag: 'CheckQueued', check: cleanLine(check.name) }
+  return { _tag: 'CheckRunning', check: cleanLine(check.name) }
 }
 
 function checksGate(
