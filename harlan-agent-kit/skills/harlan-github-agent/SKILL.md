@@ -213,7 +213,7 @@ If Review records `Repair` findings, queue all findings immediately under the ex
 
 Available empty base and head check sets with no declared required checks mean the repository has no CI. This passes the CI Review gate and permits Repair. An unavailable, running, or failed base check set does not permit Repair.
 
-Ignore a base check run that a `workflow_run` event attached to the base commit. It reports on another commit's workflow, not on the base commit.
+Ignore a base check run that a `workflow_run`, `dynamic`, or an unfinished `schedule` event attached to the base commit. The first reports on another commit's workflow. The second is Dependabot's updater, which fails when an update is not possible. A cron run GitHub has not reported `completed` stalls the base gate on a timer, in any of its unfinished statuses, so drop it too. A cron run reported `completed` executed on the base commit tip: keep it as base evidence, so a failed one holds the gate red and queues a Baseline repair.
 
 When the gate refresh of a settled review finds the default branch failed, queue one Baseline repair for that exact base commit. Report Existing on every later pass.
 
