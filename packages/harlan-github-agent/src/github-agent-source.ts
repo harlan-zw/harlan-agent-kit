@@ -96,13 +96,14 @@ export function currentGitHubChecks(checks: GitHubCheck[]): GitHubCheck[] {
  * ends, and the base gate read that as "the default branch has not passed"
  * while Repair waited.
  *
- * `schedule`: an unfinished cron run also lands on the default branch tip, and
- * a stalled one holds the base gate at PENDING while Repair waits. A queued
- * cleanup sweep on nuxtseo.com `main` held the gate for a day while its runner
- * fleet was down. A concluded cron run is different: it executed on the base
- * commit tip and its result is real evidence, so a failed one must keep the
- * base red and queue a Baseline repair. Only an unfinished scheduled run is
- * derived here.
+ * `schedule`: a cron run also lands on the default branch tip, and a stalled
+ * one holds the base gate at PENDING while Repair waits: a queued cleanup
+ * sweep on nuxtseo.com `main` held the gate for a day while its runner fleet
+ * was down. GitHub reports an unfinished run with more statuses than the two
+ * everyone remembers, and one more added later must not reopen the stall, so
+ * only a run already reported `completed` counts as concluded. A concluded
+ * cron run executed on the base commit tip and its result is real evidence, so
+ * a failed one must keep the base red and queue a Baseline repair.
  *
  * `dynamic`: Dependabot's updater workflow runs with this event on the branch
  * tip. Its `Dependabot` check fails when an update was not possible, such as a
@@ -115,13 +116,11 @@ export function currentGitHubChecks(checks: GitHubCheck[]): GitHubCheck[] {
  */
 const DERIVED_RUN_EVENTS = new Set(['workflow_run', 'schedule', 'dynamic'])
 
-const UNFINISHED_RUN_STATUSES = new Set(['queued', 'in_progress'])
-
 /** The check suites of workflow runs that answer for a timer or another commit. */
 export function derivedCheckSuiteIds(runs: ReadonlyArray<{ event: string, status?: string | null, check_suite_id?: number | null }>): Set<number> {
   return new Set(runs.flatMap(run => DERIVED_RUN_EVENTS.has(run.event)
     && typeof run.check_suite_id === 'number'
-    && !(run.event === 'schedule' && !UNFINISHED_RUN_STATUSES.has(run.status ?? ''))
+    && !(run.event === 'schedule' && run.status === 'completed')
     ? [run.check_suite_id]
     : []))
 }
