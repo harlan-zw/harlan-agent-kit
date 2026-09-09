@@ -651,8 +651,8 @@ export type RoutineName = 'sentry-checkin' | 'pr-triage' | 'agent-feedback' | 'd
  * What a Routine run does with what it finds.
  *
  * `report` writes to the tracking issue and opens nothing. `propose` opens one
- * pull request per Candidate. An unproven Routine earns `propose` by holding
- * its Candidate precision in `report` first.
+ * pull request per Candidate. Sentry `propose` runs may also resolve verified
+ * deployed fixes. An unproven Routine earns `propose` through Candidate precision.
  */
 export type RoutineMode = 'report' | 'propose'
 

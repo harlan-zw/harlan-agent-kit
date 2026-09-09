@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { HistoryRow, OutcomeFilter } from '../utils/history.ts'
+import HistoryEvidenceSlideover from '../components/HistoryEvidenceSlideover.vue'
 import { routineRunPresentation, taskNumber, taskRowSummary, taskSubjectUrl } from '../utils/dashboard.ts'
 import {
   canRerunReview,
@@ -11,7 +12,6 @@ import {
   historyRowWork,
   outcomeFilters,
 } from '../utils/history.ts'
-import HistoryEvidenceSlideover from './_HistoryEvidenceSlideover.vue'
 
 /**
  * What already happened, on what evidence. GitHub style list rows; every row
@@ -178,12 +178,12 @@ useHead({
               size="sm"
             />
             <p v-else-if="row._tag === 'Task'" class="flex min-w-0 flex-wrap items-baseline gap-x-2">
-              <a :href="taskSubjectUrl(row.task)" target="_blank" rel="noreferrer" class="entity-link shrink-0 font-mono text-sm">{{ row.task.repository }}#{{ taskNumber(row.task) }}</a>
+              <a :href="taskSubjectUrl(row.task)" target="_blank" rel="noreferrer" class="entity-link shrink-0 font-mono text-sm"><RepositoryIdentity :repository="row.task.repository"> #{{ taskNumber(row.task) }}</RepositoryIdentity></a>
               <span v-if="taskRowSummary(row.task)" class="min-w-0 flex-1 truncate text-sm text-muted">{{ taskRowSummary(row.task) }}</span>
             </p>
             <p v-else class="flex min-w-0 flex-wrap items-baseline gap-x-2">
               <span class="text-sm font-medium text-highlighted">{{ row.run.name }}</span>
-              <span class="font-mono text-sm text-dimmed">{{ row.run.repository }}</span>
+              <RepositoryIdentity :repository="row.run.repository" class="font-mono text-sm text-dimmed" />
               <span v-if="routineRunPresentation(row.run).detail" class="min-w-0 flex-1 truncate text-sm text-muted">{{ routineRunPresentation(row.run).detail }}</span>
             </p>
           </div>

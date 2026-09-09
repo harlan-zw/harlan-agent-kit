@@ -293,7 +293,7 @@ defineExpose({
         <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ identity.title }}<span class="sr-only"> on GitHub</span></a>
       </p>
       <p class="min-w-0 truncate text-sm text-muted [grid-area:repository]">
-        <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
+        <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link"><RepositoryIdentity :repository="identity.repository"><span class="text-dimmed"> #{{ identity.number }}</span></RepositoryIdentity></a>
       </p>
       <div class="min-w-0 text-sm [grid-area:meta]">
         <p v-if="recommendation" class="whitespace-nowrap text-sm font-medium lg:text-xs" :class="recommendation.owner === 'You' ? 'text-warning' : 'text-muted'">
@@ -371,7 +371,7 @@ defineExpose({
         <p v-if="identity" class="flex min-w-0 flex-1 items-center gap-1 text-sm text-muted">
           <UIcon :name="kindIcon[identity.kind]" class="size-3.5 shrink-0 text-dimmed" aria-hidden="true" />
           <span class="sr-only">{{ identity.kind === 'issue' ? 'Issue' : 'Pull request' }}</span>
-          <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ identity.repository }}<span class="text-dimmed"> #{{ identity.number }}</span></a>
+          <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate"><RepositoryIdentity :repository="identity.repository"><span class="text-dimmed"> #{{ identity.number }}</span></RepositoryIdentity></a>
         </p>
         <span v-if="card._tag === 'Queued'" class="shrink-0 font-mono text-sm text-dimmed">{{ String(entry?.position).padStart(2, '0') }}</span>
         <a

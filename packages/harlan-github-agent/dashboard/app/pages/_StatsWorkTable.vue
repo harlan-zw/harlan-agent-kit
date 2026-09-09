@@ -15,7 +15,7 @@ const maximumRuns = computed(() => Math.max(...work.map(entry => entry.runs), 0)
 <template>
   <section class="min-w-0" aria-labelledby="stats-work-heading">
     <UiSectionHeader id="stats-work-heading" title="Work" />
-    <UiTableShell label="Runs and results per kind of work" size="sm" row-hover>
+    <UiTableShell label="Runs and results per kind of work" size="sm" row-hover table-class="min-w-3xl">
       <template #head>
         <UiTableTh>Work</UiTableTh>
         <UiTableTh numeric>

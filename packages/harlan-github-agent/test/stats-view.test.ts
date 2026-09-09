@@ -124,6 +124,7 @@ describe('stats work rows', () => {
       },
       days: [],
       work: [],
+      repositories: [],
     }
     expect(hasStatsResults(empty)).toBe(false)
     expect(hasStatsResults({ ...empty, work: [task] })).toBe(true)

@@ -2,6 +2,7 @@
 import type { StatsSnapshot } from '../../../src/stats.ts'
 import { activeStatsPreset, coverageText, hasStatsResults, outcomeStats, statsDateRange, statsPresets, statsRequestRange } from '../utils/stats.ts'
 import StatsDailyChart from './_StatsDailyChart.vue'
+import StatsRepositoryTable from './_StatsRepositoryTable.vue'
 import StatsWorkTable from './_StatsWorkTable.vue'
 
 /**
@@ -183,8 +184,9 @@ useHead({
 
     <template v-else-if="snapshot">
       <div v-if="hasResults" class="grid min-w-0 gap-10">
-        <UiStats :data="strip" variant="card" />
+        <UiStats :data="strip" variant="card" wrap class="gap-y-4" />
         <StatsDailyChart :days="snapshot.days" />
+        <StatsRepositoryTable :repositories="snapshot.repositories" />
         <StatsWorkTable :work="snapshot.work" :from="from" :to="to" />
       </div>
 

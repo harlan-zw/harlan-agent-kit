@@ -254,6 +254,23 @@ function harness(options: {
   return { recorded, run }
 }
 
+describe('refreshControllerGates', () => {
+  it('names a queued check run no runner accepted, apart from one that runs', () => {
+    const queued = snapshot([check({ name: 'test', status: 'queued', conclusion: null })])
+    const running = snapshot([check({ name: 'test', status: 'in_progress', conclusion: null })])
+    if (queued._tag !== 'Ok' || running._tag !== 'Ok')
+      throw new Error('Expected Review snapshots.')
+
+    const queuedGates = refreshControllerGates(pendingControllerGates(), queued.value, repositoryMapping())
+    const runningGates = refreshControllerGates(pendingControllerGates(), running.value, repositoryMapping())
+
+    expect(queuedGates.ciCause).toEqual({ _tag: 'CheckQueued', check: 'test' })
+    expect(queuedGates.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'Base branch CI: test is queued, and no runner has accepted the job.' })
+    expect(runningGates.ciCause).toEqual({ _tag: 'CheckRunning', check: 'test' })
+    expect(runningGates.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'Base branch CI: test is still running.' })
+  })
+})
+
 describe('refreshReviewGates', () => {
   it('skips Reviews outside the requested Repository mappings', async () => {
     const { recorded, run } = harness({ review: gateRefresh({ repository: 'harlan-zw/other' }) })
