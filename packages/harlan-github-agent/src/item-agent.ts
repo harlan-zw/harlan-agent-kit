@@ -502,7 +502,7 @@ function checksGate(
     return {
       state: { _tag: 'Pending', reason: base ? 'Base branch CI is unavailable.' : 'Required CI is unavailable.', evidence: checkEvidence },
       reported: [],
-      cause: { _tag: 'NoCheckRun', detail: base ? 'GitHub reported no check run for the base commit.' : 'GitHub reported no check run for the head commit.' },
+      cause: { _tag: 'NoCheckRun', detail: base ? 'GitHub reported no check run for the base commit or the ten commits before it.' : 'GitHub reported no check run for the head commit.' },
     }
   }
   const failed = checks.checks.find(checkFailed)
