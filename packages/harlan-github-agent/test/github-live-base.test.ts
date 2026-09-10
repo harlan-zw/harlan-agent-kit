@@ -389,7 +389,7 @@ describe('base checks behind a commit that ran no CI', () => {
   const docsOnlyBaseSha = 'd'.repeat(40)
   const lastCodeBaseSha = 'e'.repeat(40)
 
-  function clientReadingHistory(checksBySha: Record<string, unknown[]>, checkedRefs: string[]) {
+  function clientReadingHistory(checksBySha: Record<string, unknown[]>, checkedRefs: string[], history: string[] = [docsOnlyBaseSha, lastCodeBaseSha, historicBaseSha]) {
     const listForRef = () => undefined
     const listCommits = () => undefined
     return {
@@ -417,7 +417,7 @@ describe('base checks behind a commit that ran no CI', () => {
           getCombinedStatusForRef: () => Promise.resolve({ data: { statuses: [] } }),
           listCommits: (input: { sha: string, per_page: number }) => {
             expect(input.sha).toBe(docsOnlyBaseSha)
-            return Promise.resolve({ data: [{ sha: docsOnlyBaseSha }, { sha: lastCodeBaseSha }, { sha: historicBaseSha }] })
+            return Promise.resolve({ data: history.slice(0, input.per_page).map(sha => ({ sha })) })
           },
         },
       },
@@ -472,7 +472,8 @@ describe('base checks behind a commit that ran no CI', () => {
 
   it('reports no base check run when no listed commit has one', async () => {
     const checkedRefs: string[] = []
-    const client = clientReadingHistory({}, checkedRefs)
+    const ancestors = Array.from({ length: 10 }, (_, index) => String(index + 1).padStart(2, '0').repeat(20))
+    const client = clientReadingHistory({}, checkedRefs, [docsOnlyBaseSha, ...ancestors])
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
       createClient: () => client,
@@ -484,6 +485,7 @@ describe('base checks behind a commit that ran no CI', () => {
     expect(result).toEqual(ok(expect.objectContaining({
       baseChecks: { _tag: 'Available', checks: [] },
     })))
-    expect(checkedRefs).toEqual([headSha, docsOnlyBaseSha, lastCodeBaseSha, historicBaseSha])
+    expect(checkedRefs).toEqual([headSha, docsOnlyBaseSha, ...ancestors])
+    expect(checkedRefs).toContain(ancestors[9])
   })
 })

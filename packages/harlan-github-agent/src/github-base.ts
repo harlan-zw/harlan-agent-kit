@@ -21,7 +21,9 @@ export async function currentBaseSha(
  * How many base branch commits the CI read walks back from the branch head.
  *
  * A run of docs-only merges is a few commits long. Ten covers that, and it
- * bounds the API cost on a repository that runs no CI at all.
+ * bounds the API cost on a repository that runs no CI at all. The commit
+ * listing includes the base head itself, so the read requests one extra
+ * commit to examine ten ancestors.
  */
 export const BASE_CHECKS_HISTORY = 10
 
@@ -46,7 +48,7 @@ export async function currentBaseChecks<Checks extends { _tag: 'Available', chec
   const head = await checksFor(headSha)
   if (head._tag !== 'Available' || head.checks.length > 0)
     return head
-  const earlier = (await commits(headSha, BASE_CHECKS_HISTORY)).filter(sha => sha !== headSha)
+  const earlier = (await commits(headSha, BASE_CHECKS_HISTORY + 1)).filter(sha => sha !== headSha)
   for (const sha of earlier) {
     const checks = await checksFor(sha)
     if (checks._tag !== 'Available' || checks.checks.length > 0)
