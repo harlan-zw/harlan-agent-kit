@@ -4,8 +4,8 @@ import { ok } from '../src/result.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const unusedIssueApproval = {
-  approveIssueWork: () => { throw new Error('Unexpected issue Approval.') },
-  isIssueWorkApprovalReady: () => false,
+  approveIssue: () => { throw new Error('Unexpected issue Approval.') },
+  isIssueApprovalPending: () => false,
 }
 
 describe('approval controller', () => {
@@ -195,8 +195,8 @@ describe('approval controller', () => {
         recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
-        isIssueWorkApprovalReady: () => false,
-        approveIssueWork: () => { throw new Error('Unexpected Approval.') },
+        isIssueApprovalPending: () => false,
+        approveIssue: () => { throw new Error('Unexpected Approval.') },
         approvePullRequest: () => { throw new Error('Unexpected Approval.') },
       },
     })
@@ -206,7 +206,7 @@ describe('approval controller', () => {
     expect(calls).toEqual([])
   })
 
-  it('makes the shared Approval label available after valid issue triage', async () => {
+  it('makes the shared Approval label available before outside issue triage', async () => {
     const calls: string[] = []
     const controller = createApprovalController({
       github: {
@@ -222,8 +222,8 @@ describe('approval controller', () => {
         recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
-        isIssueWorkApprovalReady: () => true,
-        approveIssueWork: () => { throw new Error('Unexpected Approval.') },
+        isIssueApprovalPending: () => true,
+        approveIssue: () => { throw new Error('Unexpected Approval.') },
         approvePullRequest: () => { throw new Error('Unexpected Approval.') },
       },
     })
@@ -272,11 +272,11 @@ describe('approval controller', () => {
         recordApprovalPromptComment: () => true,
         getSelectionMode: () => 'auto' as const,
         hasPullRequestApproval: () => false,
-        isIssueWorkApprovalReady: () => true,
-        approveIssueWork(input) {
+        isIssueApprovalPending: () => true,
+        approveIssue(input) {
           calls.push('approve')
           expect(input.revisionId).toBe(revisionId)
-          return { _tag: 'Approved', taskId: 'task' }
+          return { _tag: 'Approved', work: 'issue_work', taskId: 'task' }
         },
         approvePullRequest: () => { throw new Error('Unexpected pull request Approval.') },
       },

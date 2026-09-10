@@ -1180,7 +1180,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const app = createAgentApp({
     activityLog,
     store: {
-      approveIssueWork: store.approveIssueWork,
+      approveIssue: store.approveIssue,
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
       listRoutines: store.listRoutines,

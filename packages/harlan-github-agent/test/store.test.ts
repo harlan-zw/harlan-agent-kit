@@ -1367,7 +1367,7 @@ describe('journal store', () => {
       externalId: 'active-issue',
       observedAt: '2026-08-13T01:00:01.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     const conflict = store.claimNextConflictTask('conflict-worker', '2026-08-13T01:01:00.000Z', 600_000)
     const issue = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:02:00.000Z', 600_000)
@@ -1419,7 +1419,7 @@ describe('journal store', () => {
       externalId: 'issue',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     store.recordObservation({
       externalId: 'review-ready',
@@ -1460,7 +1460,7 @@ describe('journal store', () => {
       externalId: 'issue-triage',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
     if (task === null)
@@ -1480,31 +1480,35 @@ describe('journal store', () => {
     expect(store.getIssueTriageEvidence('harlan-zw/example', 12, 'other-revision')).toBeNull()
   })
 
-  it('queues outside contributor issue work after approval and keeps the same agent session', () => {
+  it('holds outside contributor issue triage until Approval, then continues into work on its own', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    store.recordObservation({
+    const observed = store.recordObservation({
       externalId: 'issue-triage',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
       subject: issueItem(),
     })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new issue Revision.')
 
-    const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
+    expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)).toBeNull()
+    expect(store.getDashboardSnapshot('2026-08-13T01:01:00.000Z').queue).toEqual([
+      expect.objectContaining({ number: 12, state: { _tag: 'AwaitingApproval', kind: 'issue_triage' } }),
+    ])
+    expect(store.isIssueApprovalPending('harlan-zw/example', 12, observed.revisionId)).toBe(true)
+    expect(store.approveIssue({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:01:01.000Z',
+    })).toEqual({ _tag: 'Approved', work: 'issue_triage', taskId: expect.any(String) })
+    expect(store.isIssueApprovalPending('harlan-zw/example', 12, observed.revisionId)).toBe(false)
+
+    const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:02.000Z', 600_000)
     if (task === null)
       throw new Error('Expected an issue triage Task.')
     store.saveWorkerSession('harlan-zw/example', 12, 'issue_triage', 'issue-session', '2026-08-13T01:01:05.000Z')
-
-    expect(store.getDashboardSnapshot('2026-08-13T01:02:00.000Z').agents).toEqual([
-      expect.objectContaining({
-        _tag: 'ActiveAgent',
-        id: task.id,
-        role: 'issue_triage',
-        subjectKind: 'issue',
-        itemNumber: 12,
-        session: { _tag: 'Connected', id: 'issue-session' },
-      }),
-    ])
     expect(store.completeWorkerTask({
       taskId: task.id,
       workerId: 'issue-worker',
@@ -1512,55 +1516,20 @@ describe('journal store', () => {
       at: '2026-08-13T01:02:00.000Z',
       evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })).toBe(true)
-    expect(store.isIssueWorkApprovalReady('harlan-zw/example', 12, task.revisionId)).toBe(true)
-    expect(store.approveIssueWork({
+
+    // One Approval covers the whole path. Nothing waits on a person again.
+    expect(store.getDashboardSnapshot('2026-08-13T01:02:01.000Z').queue).toEqual([
+      expect.objectContaining({ number: 12, state: { _tag: 'Queued', work: 'issue_work' } }),
+    ])
+    const work = store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:02.000Z', 600_000)
+    expect(work).toEqual(expect.objectContaining({ kind: 'issue_work', issueNumber: 12, revisionId: task.revisionId }))
+    expect(store.getWorkerSession('harlan-zw/example', 12, 'issue_triage')).toBe('issue-session')
+    expect(store.approveIssue({
       repository: 'harlan-zw/example',
       issueNumber: 12,
-      revisionId: task.revisionId,
-      at: '2026-08-13T01:02:01.000Z',
-    })).toEqual({ _tag: 'Approved', taskId: expect.any(String) })
-    expect(store.isIssueWorkApprovalReady('harlan-zw/example', 12, task.revisionId)).toBe(false)
-    const work = store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:02.000Z', 600_000)
-    expect(work).toEqual(expect.objectContaining({
-      kind: 'issue_work',
-      issueNumber: 12,
-      revisionId: task.revisionId,
-    }))
-    expect(store.getWorkerSession('harlan-zw/example', 12, 'issue_triage')).toBe('issue-session')
-    expect(store.getDashboardSnapshot('2026-08-13T01:02:03.000Z').agents).toEqual([
-      expect.objectContaining({ role: 'issue_work', session: { _tag: 'Connected', id: 'issue-session' } }),
-    ])
-    if (work === null)
-      throw new Error('Expected approved issue work.')
-    expect(store.stagePublication({
-      taskId: work.id,
-      workerId: work.state.workerId,
-      fence: work.state.fence,
-      at: '2026-08-13T01:02:04.000Z',
-      publication: {
-        _tag: 'OpenPullRequest',
-        taskKind: 'issue_work',
-        issueNumber: 12,
-        pullRequestTitle: 'Fix #12: Broken thing',
-        pullRequestBody: 'Closes #12.',
-        diagram: { svg: '<svg/>', alt: 'The handler reads through the cache' },
-        commitSha: 'issue-commit',
-        baseSha: 'base-sha',
-        baseRef: 'main',
-        expectedHeadSha: 'base-sha',
-        headRef: 'fix/issue-12',
-        artifactRef: 'refs/harlan-github-agent/publications/issue-work',
-        patchDigest: 'issue-patch',
-        changedFiles: 2,
-      },
-    })._tag).toBe('Staged')
-    expect(store.claimNextPublication('publisher', '2026-08-13T01:02:05.000Z', 60_000)).toEqual(expect.objectContaining({
-      _tag: 'OpenPullRequest',
-      taskKind: 'issue_work',
-      issueNumber: 12,
-      pullRequestTitle: 'Fix #12: Broken thing',
-      diagram: { svg: '<svg/>', alt: 'The handler reads through the cache' },
-    }))
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:02:03.000Z',
+    })).toEqual({ _tag: 'Duplicate', work: 'issue_work', taskId: work?.id })
   })
 
   it('records a triage comment GitHub accepted after the lease ran out', () => {
@@ -1570,7 +1539,7 @@ describe('journal store', () => {
       externalId: 'slow-issue-triage-comment',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new issue Revision.')
@@ -1627,7 +1596,7 @@ describe('journal store', () => {
       externalId: 'issue-triage-comment',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new issue Revision.')
@@ -1676,7 +1645,7 @@ describe('journal store', () => {
       externalId: 'issue-triage-comment-rerun',
       observedAt: '2026-08-13T02:00:00.000Z',
       source: 'poll',
-      subject: issueItem({ title: 'Changed issue', updatedAt: '2026-08-13T02:00:00.000Z' }),
+      subject: issueItem({ author: 'harlan-zw', title: 'Changed issue', updatedAt: '2026-08-13T02:00:00.000Z' }),
     })
     if (changed._tag !== 'Inserted')
       throw new Error('Expected a changed issue Revision.')
@@ -1704,7 +1673,7 @@ describe('journal store', () => {
       externalId: 'label-bumped-issue',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new issue Revision.')
@@ -1718,7 +1687,7 @@ describe('journal store', () => {
       externalId: 'label-bumped-issue-again',
       observedAt: '2026-08-13T01:01:30.000Z',
       source: 'poll',
-      subject: issueItem({ updatedAt: '2026-08-13T01:01:30.000Z' }),
+      subject: issueItem({ author: 'harlan-zw', updatedAt: '2026-08-13T01:01:30.000Z' }),
     })
 
     const staged = store.stageIssueTriageComment({
@@ -1762,7 +1731,7 @@ describe('journal store', () => {
     expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:02.000Z', 600_000)).toEqual(
       expect.objectContaining({ kind: 'issue_work', issueNumber: 12, revisionId: triage.revisionId }),
     )
-    expect(store.approveIssueWork({
+    expect(store.approveIssue({
       repository: 'harlan-zw/example',
       issueNumber: 12,
       revisionId: triage.revisionId,
@@ -1844,6 +1813,18 @@ describe('journal store', () => {
     })
     if (observed._tag !== 'Inserted')
       throw new Error('Expected a new issue.')
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:01.000Z').queue).toContainEqual(expect.objectContaining({
+      repository: 'nuxt/scripts',
+      number: 12,
+      state: { _tag: 'AwaitingApproval', kind: 'issue_triage' },
+    }))
+    expect(store.approveIssue({
+      repository: 'nuxt/scripts',
+      issueNumber: 12,
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:00:02.000Z',
+    })).toEqual({ _tag: 'Approved', work: 'issue_triage', taskId: expect.any(String) })
     const triage = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
     if (triage === null)
       throw new Error('Expected issue triage.')
@@ -1854,18 +1835,6 @@ describe('journal store', () => {
       at: '2026-08-13T01:02:00.000Z',
       evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
-
-    expect(store.getDashboardSnapshot('2026-08-13T01:02:01.000Z').queue).toContainEqual(expect.objectContaining({
-      repository: 'nuxt/scripts',
-      number: 12,
-      state: { _tag: 'AwaitingApproval', kind: 'issue_work' },
-    }))
-    expect(store.approveIssueWork({
-      repository: 'nuxt/scripts',
-      issueNumber: 12,
-      revisionId: observed.revisionId,
-      at: '2026-08-13T01:02:02.000Z',
-    })).toEqual({ _tag: 'Approved', taskId: expect.any(String) })
     expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:03.000Z', 600_000)).toEqual(
       expect.objectContaining({ kind: 'issue_work', issueNumber: 12, repositoryMapping: mapping }),
     )
@@ -1883,7 +1852,7 @@ describe('journal store', () => {
       externalId: 'user-authenticated-issue',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem({ repository: 'nuxt/scripts' }),
+      subject: issueItem({ repository: 'nuxt/scripts', author: 'harlan-zw' }),
     })
 
     expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)).toEqual(
@@ -1894,12 +1863,20 @@ describe('journal store', () => {
   it.each(['READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] as const)('does not queue issue work for the %s route', (route) => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    store.recordObservation({
+    const observed = store.recordObservation({
       externalId: `issue-${route}`,
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
       subject: issueItem(),
     })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new issue Revision.')
+    expect(store.approveIssue({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:00:01.000Z',
+    })).toEqual({ _tag: 'Approved', work: 'issue_triage', taskId: expect.any(String) })
     const task = store.claimNextIssueTriageTask('issue-worker', '2026-08-13T01:01:00.000Z', 600_000)
     if (task === null)
       throw new Error('Expected issue triage.')
@@ -1912,13 +1889,14 @@ describe('journal store', () => {
       evidence: JSON.stringify({ _tag: route }),
     })
 
-    expect(store.approveIssueWork({
+    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:01.000Z', 600_000)).toBeNull()
+    expect(store.isIssueApprovalPending('harlan-zw/example', 12, observed.revisionId)).toBe(false)
+    expect(store.approveIssue({
       repository: 'harlan-zw/example',
       issueNumber: 12,
-      revisionId: task.revisionId,
-      at: '2026-08-13T01:02:01.000Z',
-    })).toEqual({ _tag: 'Rejected', reason: { _tag: 'TriageRequired' } })
-    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:02:01.000Z', 600_000)).toBeNull()
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:02:02.000Z',
+    })).toEqual({ _tag: 'Rejected', reason: { _tag: 'NothingToStart' } })
   })
 
   it('requires attention when the pull request branch is outside authority', () => {
@@ -5014,11 +4992,19 @@ describe('journal store', () => {
   ] as const)('keeps Approval after fresh triage on $ownership with route $route', ({ ownership, route }) => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({ ownership })], '2026-08-13T00:00:00.000Z')
-    store.recordObservation({
+    const observed = store.recordObservation({
       externalId: 'issue-scope-retry',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
       subject: issueItem(),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new issue Revision.')
+    store.approveIssue({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:00:00.500Z',
     })
     const triage = store.claimNextIssueTriageTask('triage-worker', '2026-08-13T01:00:01.000Z', 10_000)
     if (triage === null)
@@ -5029,12 +5015,6 @@ describe('journal store', () => {
       fence: triage.state.fence,
       at: '2026-08-13T01:00:02.000Z',
       evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
-    })
-    store.approveIssueWork({
-      repository: 'harlan-zw/example',
-      issueNumber: 12,
-      revisionId: triage.revisionId,
-      at: '2026-08-13T01:00:03.000Z',
     })
     const reason = 'The issue changed before work started.'
     for (const attempt of [1, 2, 3]) {
@@ -5082,11 +5062,19 @@ describe('journal store', () => {
   it('retries changed-scope issue work on a maintained repository', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({ ownership: 'maintained' })], '2026-08-13T00:00:00.000Z')
-    store.recordObservation({
+    const observed = store.recordObservation({
       externalId: 'issue-scope-retry-maintained',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
       subject: issueItem(),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new issue Revision.')
+    store.approveIssue({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: observed.revisionId,
+      at: '2026-08-13T01:00:00.500Z',
     })
     const triage = store.claimNextIssueTriageTask('triage-worker', '2026-08-13T01:00:01.000Z', 10_000)
     if (triage === null)
@@ -5098,12 +5086,6 @@ describe('journal store', () => {
       at: '2026-08-13T01:00:02.000Z',
       evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
-    expect(store.approveIssueWork({
-      repository: 'harlan-zw/example',
-      issueNumber: 12,
-      revisionId: triage.revisionId,
-      at: '2026-08-13T01:00:03.000Z',
-    })).toEqual({ _tag: 'Approved', taskId: expect.any(String) })
     for (const attempt of [1, 2, 3]) {
       const at = `2026-08-13T01:00:0${attempt + 3}.000Z`
       const task = store.claimNextIssueWorkTask(`issue-worker-${attempt}`, at, 10_000)
@@ -5136,6 +5118,12 @@ describe('journal store', () => {
     })
     if (first._tag !== 'Inserted')
       throw new Error('Expected the first Issue Revision.')
+    expect(store.approveIssue({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: first.revisionId,
+      at: '2026-08-13T01:00:00.500Z',
+    })._tag).toBe('Approved')
     const triage = store.claimNextIssueTriageTask('triage-1', '2026-08-13T01:00:01.000Z', 60_000)
     if (triage === null)
       throw new Error('Expected Issue triage.')
@@ -5146,12 +5134,9 @@ describe('journal store', () => {
       at: '2026-08-13T01:00:02.000Z',
       evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
     })
-    expect(store.approveIssueWork({
-      repository: triage.repository,
-      issueNumber: triage.issueNumber,
-      revisionId: triage.revisionId,
-      at: '2026-08-13T01:00:03.000Z',
-    })._tag).toBe('Approved')
+    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:00:03.000Z', 60_000)).toEqual(
+      expect.objectContaining({ kind: 'issue_work', revisionId: first.revisionId }),
+    )
 
     const changed = store.recordObservation({
       externalId: 'issue-content-changed',
@@ -5162,19 +5147,26 @@ describe('journal store', () => {
     if (changed._tag !== 'Inserted')
       throw new Error('Expected changed Issue content to create a Revision.')
 
+    // New text is new outside text. The old Approval names a state that no longer exists.
     expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:00:05.000Z', 60_000)).toBeNull()
-    const fresh = store.claimNextIssueTriageTask('triage-2', '2026-08-13T01:00:05.000Z', 60_000)
-    if (fresh === null)
-      throw new Error('Expected Issue triage for the changed content.')
-    expect(fresh.revisionId).toBe(changed.revisionId)
-    store.completeWorkerTask({
-      taskId: fresh.id,
-      workerId: fresh.state.workerId,
-      fence: fresh.state.fence,
+    expect(store.claimNextIssueTriageTask('triage-2', '2026-08-13T01:00:05.000Z', 60_000)).toBeNull()
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:05.000Z').queue).toContainEqual(
+      expect.objectContaining({ number: 12, revisionId: changed.revisionId, state: { _tag: 'AwaitingApproval', kind: 'issue_triage' } }),
+    )
+    expect(store.approveIssue({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: first.revisionId,
       at: '2026-08-13T01:00:06.000Z',
-      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }),
-    })
-    expect(store.claimNextIssueWorkTask('issue-worker', '2026-08-13T01:00:07.000Z', 60_000)).toBeNull()
+    })).toEqual({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } })
+    expect(store.approveIssue({
+      repository: 'harlan-zw/example',
+      issueNumber: 12,
+      revisionId: changed.revisionId,
+      at: '2026-08-13T01:00:06.000Z',
+    })).toEqual({ _tag: 'Approved', work: 'issue_triage', taskId: expect.any(String) })
+    const fresh = store.claimNextIssueTriageTask('triage-2', '2026-08-13T01:00:07.000Z', 60_000)
+    expect(fresh?.revisionId).toBe(changed.revisionId)
   })
 
   it('shows repeated pull request description failures instead of the Agent fallback', () => {

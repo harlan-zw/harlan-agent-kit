@@ -15,7 +15,7 @@ import { parseAgentSelection } from './agent-profile.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -555,14 +555,14 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     }))
     if (body === undefined)
       throw createError({ status: 400, statusText: 'Bad Request', message: 'A valid issue Approval is required.' })
-    const result = options.store.approveIssueWork({ ...body, at: options.now().toISOString() })
+    const result = options.store.approveIssue({ ...body, at: options.now().toISOString() })
     if (result._tag !== 'Rejected')
       return result
     switch (result.reason._tag) {
       case 'ItemNotFound': throw createError({ status: 404, statusText: 'Not Found', message: 'The issue is no longer open.' })
       case 'RevisionMismatch': throw createError({ status: 409, statusText: 'Conflict', message: 'The issue changed. Refresh before approving it.' })
       case 'ApprovalNotRequired': throw createError({ status: 409, statusText: 'Conflict', message: 'This issue does not require local approval.' })
-      case 'TriageRequired': throw createError({ status: 409, statusText: 'Conflict', message: 'Issue triage must finish before approval.' })
+      case 'NothingToStart': throw createError({ status: 409, statusText: 'Conflict', message: 'Nothing on this issue is waiting for approval.' })
       case 'NotAuthorized': throw createError({ status: 409, statusText: 'Conflict', message: 'Repository policy does not permit issue work.' })
     }
   })

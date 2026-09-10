@@ -35,7 +35,7 @@ describe('persistent Agent provider circuits', () => {
       externalId: 'provider-paused-task',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
 
     for (let index = 0; index < 5; index += 1) {
@@ -63,7 +63,7 @@ describe('persistent Agent provider circuits', () => {
       externalId: 'provider-canary-worker-task',
       observedAt: '2026-08-13T01:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     journal.recordObservation({
       externalId: 'provider-canary-mutation-task',

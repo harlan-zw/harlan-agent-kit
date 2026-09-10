@@ -64,7 +64,7 @@ function createApp(snapshot = dashboardSnapshot()) {
     dashboardPassword,
     dashboardRoot,
     now,
-    store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
   })
 }
 
@@ -78,7 +78,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -134,7 +134,7 @@ describe('dashboard HTTP app', () => {
       dashboardRoot,
       now,
       activityLog: { read: id => id === runId ? [{ _tag: 'Reasoning', at: now().toISOString(), text: 'Reading Sentry issues.' }] : [] },
-      store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+      store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
     })
 
     const response = await app.request(`http://${allowedHost}/api/state`, { headers: { authorization, host: allowedHost } })
@@ -179,7 +179,7 @@ describe('dashboard HTTP app', () => {
       now,
       shutdownSignal: shutdown.signal,
       activityLog: { read: id => id === taskId ? activity : [] },
-      store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+      store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
     })
 
     const response = await app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } })
@@ -206,7 +206,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -262,7 +262,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -310,7 +310,7 @@ describe('dashboard HTTP app', () => {
       now: () => new Date('2026-09-03T04:10:42.000Z'),
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -358,7 +358,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -392,7 +392,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot({
@@ -435,7 +435,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot({
@@ -537,7 +537,7 @@ describe('dashboard HTTP app', () => {
       dashboardRoot,
       frameAncestors: ['https://deck.example.com'],
       now,
-      store: { ...agentControls, approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => dashboardSnapshot(), listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+      store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => dashboardSnapshot(), listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
     })
     const allowed = await framed.request(`http://${allowedHost}/`, { headers: { authorization, host: allowedHost } })
     expect(allowed.headers.get('content-security-policy')).toContain('frame-ancestors \'self\' https://deck.example.com')
@@ -577,7 +577,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -617,7 +617,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -665,7 +665,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -699,7 +699,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest(input) {
           approvals.push(input)
           return { _tag: 'Approved', approval: { _tag: 'ReviewApproved', approvedAt: input.at } }
@@ -737,9 +737,9 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork(input) {
+        approveIssue(input) {
           approvals.push(input)
-          return { _tag: 'Approved', taskId: 'b'.repeat(64) }
+          return { _tag: 'Approved', work: 'issue_work', taskId: 'b'.repeat(64) }
         },
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
@@ -755,7 +755,7 @@ describe('dashboard HTTP app', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ _tag: 'Approved', taskId: 'b'.repeat(64) })
+    expect(await response.json()).toEqual({ _tag: 'Approved', work: 'issue_work', taskId: 'b'.repeat(64) })
     expect(approvals).toEqual([{ repository: 'harlan-zw/example', issueNumber: 12, revisionId, at: now().toISOString() }])
   })
 
@@ -779,7 +779,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask(input) {
           cancellations.push(input)
@@ -837,7 +837,7 @@ describe('dashboard HTTP app', () => {
       settleTask: async () => true,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask(input) {
           cancellations.push(input)
@@ -907,7 +907,7 @@ describe('dashboard HTTP app', () => {
       },
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask(input) {
           cancellations.push(input)
@@ -970,7 +970,7 @@ describe('dashboard HTTP app', () => {
         settleTask: () => new Promise(resolve => setTimeout(resolve, 11_000, true)),
         store: {
           ...agentControls,
-          approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
           approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
           cancelTask: () => ({ _tag: 'Cancelled' }),
           getDashboardSnapshot: () => snapshot,
@@ -1035,7 +1035,7 @@ describe('dashboard HTTP app', () => {
         settleTask: () => new Promise(() => {}),
         store: {
           ...agentControls,
-          approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
           approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
           cancelTask: () => ({ _tag: 'Cancelled' }),
           getDashboardSnapshot: () => snapshot,
@@ -1101,7 +1101,7 @@ describe('dashboard HTTP app', () => {
       settleTask: async () => true,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask(input) {
           cancellations.push(input)
@@ -1133,7 +1133,7 @@ describe('dashboard HTTP app', () => {
       now,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot: () => dashboardSnapshot(),
@@ -1175,7 +1175,7 @@ describe('dashboard HTTP app', () => {
       shutdownSignal: shutdown.signal,
       store: {
         ...agentControls,
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         getDashboardSnapshot() {

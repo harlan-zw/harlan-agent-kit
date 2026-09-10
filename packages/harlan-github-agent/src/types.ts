@@ -250,10 +250,13 @@ export type PullRequestApprovalResult
     | { _tag: 'Duplicate', approval: PullRequestApprovalState }
     | { _tag: 'Rejected', reason: PullRequestApprovalRejection }
 
-export type IssueWorkApprovalResult
-  = | { _tag: 'Approved', taskId: string }
-    | { _tag: 'Duplicate', taskId: string }
-    | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'TriageRequired' | 'NotAuthorized' } }
+/** The work one issue Approval unlocks. Triage runs first; work follows on its own when triage says ready. */
+export type IssueApprovalWork = 'issue_triage' | 'issue_work'
+
+export type IssueApprovalResult
+  = | { _tag: 'Approved', work: IssueApprovalWork, taskId: string }
+    | { _tag: 'Duplicate', work: IssueApprovalWork, taskId: string }
+    | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'NotAuthorized' | 'NothingToStart' } }
 
 export type ReviewRerunSource = 'dashboard' | 'github_comment' | 'repair_dispute'
 
@@ -1359,7 +1362,7 @@ export type AgentSelection
 export type QueueState
   = | { _tag: 'Active', work: AgentRole }
     | { _tag: 'ActionRequired', reason: string }
-    | { _tag: 'AwaitingApproval', kind: PullRequestApprovalKind | 'issue_work' }
+    | { _tag: 'AwaitingApproval', kind: PullRequestApprovalKind | IssueApprovalWork }
     | { _tag: 'Queued', work: AgentRole }
     | { _tag: 'Pending', reason: string }
 

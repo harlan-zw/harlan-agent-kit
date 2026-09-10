@@ -136,8 +136,8 @@ describe('selection mode approval controller', () => {
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
-        approveIssueWork: () => { throw new Error('Unexpected issue Approval.') },
-        isIssueWorkApprovalReady: () => false,
+        approveIssue: () => { throw new Error('Unexpected issue Approval.') },
+        isIssueApprovalPending: () => false,
         recordApprovalPromptComment: () => true,
         getSelectionMode: () => mode,
         hasPullRequestApproval: () => false,
@@ -195,7 +195,7 @@ describe('selection mode route', () => {
       dashboardRoot: join(import.meta.dirname, 'fixtures', 'dashboard'),
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
-        approveIssueWork: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
         listRoutines: () => [],

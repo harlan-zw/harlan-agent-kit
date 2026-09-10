@@ -371,6 +371,8 @@ export interface CardStateLine {
 export function cardStateLine(entry: QueueEntry, snapshot: DashboardSnapshot, now: Date): CardStateLine {
   switch (entry.state._tag) {
     case 'AwaitingApproval':
+      if (entry.state.kind === 'issue_triage')
+        return { text: 'Outside contributor. Approval starts Issue triage.', tone: 'warning' }
       if (entry.state.kind === 'issue_work')
         return { text: 'Outside contributor. Approval starts Issue work.', tone: 'warning' }
       return snapshot.selectionMode === 'manual'
@@ -413,7 +415,7 @@ export function runningPhaseLine(agent: ActiveAgent): string | undefined {
 export function approvalActionLabel(entry: QueueEntry): 'Review and repair' | 'Approve' | undefined {
   if (entry.state._tag !== 'AwaitingApproval')
     return undefined
-  return entry.state.kind === 'issue_work' ? 'Approve' : 'Review and repair'
+  return entry.state.kind === 'review' ? 'Review and repair' : 'Approve'
 }
 
 /** Consequence first, in one sentence, as the Dismiss modal states it. */
@@ -431,9 +433,11 @@ export function cancelConsequence(work: AgentRole | undefined): string {
 export function approvalConsequence(entry: QueueEntry): string {
   if (entry.state._tag !== 'AwaitingApproval')
     return ''
-  return entry.state.kind === 'issue_work'
-    ? 'The agent implements the change, then the controller opens a draft pull request.'
-    : 'The controller may then push verified repair commits to this branch.'
+  switch (entry.state.kind) {
+    case 'issue_triage': return 'The agent reads the issue. If it is ready to implement, the agent implements it and the controller opens a draft pull request.'
+    case 'issue_work': return 'The agent implements the change, then the controller opens a draft pull request.'
+    case 'review': return 'The controller may then push verified repair commits to this branch.'
+  }
 }
 
 export function decisionKey(entry: QueueEntry): string {
@@ -753,7 +757,7 @@ export function queueWork(entry: QueueEntry): AgentRole | undefined {
   if (entry.state._tag === 'Active' || entry.state._tag === 'Queued')
     return entry.state.work
   if (entry.state._tag === 'AwaitingApproval')
-    return entry.state.kind === 'issue_work' ? 'issue_work' : 'adversarial_review'
+    return entry.state.kind === 'review' ? 'adversarial_review' : entry.state.kind
   return undefined
 }
 

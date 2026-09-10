@@ -616,7 +616,7 @@ describe('gitHub reconciliation', () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
-    const github = { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([issueItem()])) }
+    const github = { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([issueItem({ author: 'harlan-zw' })])) }
     const now = () => new Date('2026-08-13T01:00:00.000Z')
 
     const first = await reconcileRepository(repository, { github, store, now })
@@ -727,7 +727,7 @@ describe('gitHub reconciliation', () => {
   it('does not reuse legacy observation identities after revision schema changes', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
-    const incoming = issueItem()
+    const incoming = issueItem({ author: 'harlan-zw' })
     const legacyExternalId = createHash('sha256')
       .update(`${repository.github}:${incoming.kind}:${incoming.number}:${JSON.stringify(incoming)}`)
       .digest('hex')

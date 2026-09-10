@@ -58,7 +58,7 @@ describe('workflow telemetry', () => {
 
   it('keeps every Issue triage status transition with retry telemetry', () => {
     const store = createStore()
-    const issue = issueItem()
+    const issue = issueItem({ author: 'harlan-zw' })
     const observed = store.recordObservation({
       externalId: 'telemetry-issue-status',
       observedAt: '2026-08-13T00:00:00.000Z',
@@ -131,7 +131,7 @@ describe('workflow telemetry', () => {
 
   it('records status recovery when the service restarts', () => {
     const store = createStore()
-    const issue = issueItem()
+    const issue = issueItem({ author: 'harlan-zw' })
     const observedIssue = store.recordObservation({
       externalId: 'telemetry-restart-issue',
       observedAt: '2026-08-13T00:00:00.000Z',
@@ -214,7 +214,7 @@ describe('workflow telemetry', () => {
       externalId: 'telemetry-issue-triage',
       observedAt: '2026-08-13T00:01:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     const task = store.claimNextIssueTriageTask('triage-1', '2026-08-13T00:01:10.000Z', 60_000)
     if (task === null)

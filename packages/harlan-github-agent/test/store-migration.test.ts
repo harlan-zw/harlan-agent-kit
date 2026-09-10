@@ -18,6 +18,42 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('backfills an issue Approval from every issue work Task an older journal queued', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+  const observed = before.recordObservation({
+    externalId: 'approved-before-the-table-existed',
+    observedAt: '2026-08-13T01:00:00.000Z',
+    source: 'poll',
+    subject: issueItem({ author: 'contributor' }),
+  })
+  if (observed._tag !== 'Inserted')
+    throw new Error('Expected a new issue Revision.')
+  expect(before.approveIssue({ repository: 'harlan-zw/example', issueNumber: 12, revisionId: observed.revisionId, at: '2026-08-13T01:00:01.000Z' })._tag).toBe('Approved')
+  const triage = before.claimNextIssueTriageTask('triage', '2026-08-13T01:00:02.000Z', 60_000)
+  if (triage === null)
+    throw new Error('Expected Issue triage.')
+  before.completeWorkerTask({ taskId: triage.id, workerId: triage.state.workerId, fence: triage.state.fence, at: '2026-08-13T01:00:03.000Z', evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }) })
+  before.close()
+  // An older journal proved the Approval only through the work Task it queued.
+  const legacy = new DatabaseSync(path)
+  legacy.exec('DROP TABLE issue_approvals; PRAGMA user_version = 70;')
+  legacy.close()
+
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.isIssueApprovalPending('harlan-zw/example', 12, observed.revisionId)).toBe(false)
+    expect(migrated.approveIssue({ repository: 'harlan-zw/example', issueNumber: 12, revisionId: observed.revisionId, at: '2026-08-13T02:00:00.000Z' }))
+      .toEqual({ _tag: 'Duplicate', work: 'issue_work', taskId: expect.any(String) })
+    expect(migrated.getDashboardSnapshot('2026-08-13T02:00:00.000Z').queue)
+      .toContainEqual(expect.objectContaining({ number: 12, state: { _tag: 'Queued', work: 'issue_work' } }))
+  }
+  finally {
+    migrated.close()
+  }
+})
+
 it('retires legacy Service Review refresh incidents when repository ownership starts', () => {
   const path = join(directory, 'state.sqlite')
   const before = openJournalStore(path)
@@ -493,7 +529,7 @@ describe('provider session recovery migration', () => {
       externalId: 'stalled-issue',
       observedAt: '2026-08-18T00:00:00.000Z',
       source: 'poll',
-      subject: issueItem(),
+      subject: issueItem({ author: 'harlan-zw' }),
     })
     const reason = 'The opencode session stopped sending output.'
     let elapsedMilliseconds = 0

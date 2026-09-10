@@ -13,7 +13,7 @@ export interface ApprovalController {
 export interface ApprovalControllerOptions {
   github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
   now: () => Date
-  store: Pick<JournalStore, 'approveIssueWork' | 'approvePullRequest' | 'getSelectionMode' | 'hasPullRequestApproval' | 'isIssueWorkApprovalReady' | 'recordApprovalPromptComment'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'getSelectionMode' | 'hasPullRequestApproval' | 'isIssueApprovalPending' | 'recordApprovalPromptComment'>
 }
 
 function approvalPrompt(label: string, headSha: string): string {
@@ -31,7 +31,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
     async reconcile(repository, subject, revisionId, signal) {
       const trustedAuthor = repository.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
       if (subject.kind === 'issue') {
-        if (!repository.enabled || !repository.issueWork || trustedAuthor || !options.store.isIssueWorkApprovalReady(repository.github, subject.number, revisionId))
+        if (!repository.enabled || !repository.issueWork || trustedAuthor || !options.store.isIssueApprovalPending(repository.github, subject.number, revisionId))
           return ok(undefined)
         const label = APPROVAL_LABELS.review
         if (!subject.approvalLabels.includes('review'))
@@ -39,7 +39,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
         const consumed = await options.github.consumeApprovalLabel(repository, 'issue', subject.number, label, signal)
         if (consumed._tag === 'Err')
           return consumed
-        const approved = options.store.approveIssueWork({
+        const approved = options.store.approveIssue({
           repository: repository.github,
           issueNumber: subject.number,
           revisionId,
