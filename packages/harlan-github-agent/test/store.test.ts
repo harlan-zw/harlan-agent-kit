@@ -990,6 +990,41 @@ describe('journal store', () => {
     expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
   })
 
+  it('stops requeueing a pull request that conflicts again after every resolution', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    let elapsed = 0
+    const at = (): string => new Date(Date.parse('2026-08-13T01:00:00.000Z') + (elapsed += 1000)).toISOString()
+    // Every resolution publishes a merge commit, so the next poll sees a new
+    // head that GitHub still reports as conflicting. Each head is a new
+    // Revision with a fresh recovery budget, which is how one pull request
+    // took 148 turns in two days.
+    const observeConflict = (round: number): void => {
+      store.recordObservation({ externalId: `stale-${round}`, observedAt: at(), source: 'poll', subject: pullRequestItem({ mergeState: 'conflicting', headSha: `head-${round}` }) })
+    }
+    const resolveOnce = (): void => {
+      const task = store.claimNextConflictTask('worker-1', at(), 600_000)
+      if (task === null)
+        throw new Error('Expected a running conflict task.')
+      expect(store.completeTask({ taskId: task.id, workerId: 'worker-1', fence: task.state.fence, at: at(), evidence: 'merged' })).toBe(true)
+    }
+    for (let round = 0; round < MAXIMUM_RECOVERY_ATTEMPTS; round += 1) {
+      observeConflict(round)
+      resolveOnce()
+    }
+
+    observeConflict(MAXIMUM_RECOVERY_ATTEMPTS)
+
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    expect(store.getDashboardSnapshot(at()).queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'The controller resolved this conflict 5 times in one day and the pull request conflicts again. Rebase it by hand.',
+    })
+    // The same head polled again must not wake it.
+    store.recordObservation({ externalId: `stale-${MAXIMUM_RECOVERY_ATTEMPTS}`, observedAt: at(), source: 'poll', subject: pullRequestItem({ mergeState: 'conflicting', headSha: `head-${MAXIMUM_RECOVERY_ATTEMPTS}` }) })
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+  })
+
   it('does not requeue a conflict whose base merges cleanly until the head or the base changes', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
