@@ -50,8 +50,8 @@ function readyIssues(store: ReturnType<typeof openJournalStore>, repository: str
 
 it('claims newer priority issues before older background issues', () => {
   const store = setup()
-  store.recordObservation({ externalId: 'background', observedAt: earlier, source: 'poll', subject: issueItem() })
-  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
+  store.recordObservation({ externalId: 'background', observedAt: earlier, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
+  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, author: 'harlan-zw' }) })
 
   expect(store.claimNextIssueTriageTask('first', later, 60_000)?.repository).toBe(priority)
   expect(store.claimNextIssueTriageTask('second', later, 60_000)?.repository).toBe('harlan-zw/example')
@@ -60,7 +60,7 @@ it('claims newer priority issues before older background issues', () => {
 it('gives Review the next claim before older Issue work and Issue triage', () => {
   const store = setup(true)
   readyIssues(store, priority, earlier, [101])
-  store.recordObservation({ externalId: 'next-issue', observedAt: earlier, source: 'poll', subject: issueItem({ repository: priority, number: 102 }) })
+  store.recordObservation({ externalId: 'next-issue', observedAt: earlier, source: 'poll', subject: issueItem({ repository: priority, number: 102, author: 'harlan-zw' }) })
   store.recordObservation({ externalId: 'review', observedAt: later, source: 'poll', subject: pullRequestItem({ repository: priority, mergeState: 'clean' }) })
 
   expect(store.claimNextIssueWorkTask('implementation', later, 60_000)).toBeNull()
@@ -110,7 +110,7 @@ it('keeps ordinary Review outside the repository priority override for Routines'
 it('gives priority issues the next permit before background conflict work', () => {
   const store = setup()
   store.recordObservation({ externalId: 'background', observedAt: earlier, source: 'poll', subject: pullRequestItem() })
-  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
+  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, author: 'harlan-zw' }) })
 
   expect(store.claimNextConflictTask('background', later, 60_000)).toBeNull()
   expect(store.claimNextIssueTriageTask('priority', later, 60_000)?.repository).toBe(priority)
@@ -119,8 +119,8 @@ it('gives priority issues the next permit before background conflict work', () =
 
 it('lets background work run while a priority repository is paused', () => {
   const store = setup()
-  store.recordObservation({ externalId: 'background', observedAt: earlier, source: 'poll', subject: issueItem() })
-  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
+  store.recordObservation({ externalId: 'background', observedAt: earlier, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
+  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, author: 'harlan-zw' }) })
   store.setRepositoryPaused(priority, true)
 
   expect(store.claimNextIssueTriageTask('background', later, 60_000)?.repository).toBe('harlan-zw/example')
@@ -143,7 +143,7 @@ it('gives queued priority batches the next permit before background work across 
   readyIssues(store, priority, later)
   store.planBatches(later)
   store.recordObservation({ externalId: 'conflict', observedAt: later, source: 'poll', subject: pullRequestItem() })
-  store.recordObservation({ externalId: 'triage', observedAt: later, source: 'poll', subject: issueItem() })
+  store.recordObservation({ externalId: 'triage', observedAt: later, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
 
   expect(store.hasPriorityAgentTask()).toBe(true)
   expect(store.claimNextConflictTask('conflict', later, 60_000)).toBeNull()
@@ -164,7 +164,7 @@ it.each(['paused', 'capped', 'writes disabled'] as const)('lets background work 
     store.setRepositoryWritesEnabled(priority, false)
   else
     store.syncRepositories([repositoryMapping(), repositoryMapping({ github: priority, priority: 100, maxOpenPullRequests: 0 })], later)
-  store.recordObservation({ externalId: 'triage', observedAt: later, source: 'poll', subject: issueItem() })
+  store.recordObservation({ externalId: 'triage', observedAt: later, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
 
   expect(store.hasPriorityAgentTask()).toBe(false)
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe('harlan-zw/example')
@@ -174,7 +174,7 @@ it('keeps background batches queued while higher priority issue triage waits', (
   const store = setup()
   readyIssues(store, 'harlan-zw/example', earlier)
   store.planBatches(earlier)
-  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
+  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, author: 'harlan-zw' }) })
 
   expect(store.claimNextBatch('batch', later, 60_000)).toBeNull()
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe(priority)
@@ -197,7 +197,7 @@ it('lets an active batch start its next unit when higher priority work arrives',
   })
   if (plan._tag === 'Err' || plan.value[0] === undefined)
     throw new Error('Expected a batch unit.')
-  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
+  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, author: 'harlan-zw' }) })
 
   expect(store.claimBatchUnitTask({ unitId: plan.value[0].id, workerId: 'batch', now: later, leaseMilliseconds: 60_000 })?.issueNumber).toBe(101)
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe(priority)
@@ -403,7 +403,7 @@ it.each([
   { triggers: ['github', 'routine'] as const, expected: [] },
 ])('runs due routines with queued priority work only when GitHub is disabled: $triggers', async ({ triggers, expected }) => {
   const store = setup(true)
-  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority }) })
+  store.recordObservation({ externalId: 'priority', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, author: 'harlan-zw' }) })
   const [routine] = store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'spec', entries: [{ name: 'sentry-checkin', crons: ['0 0 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }], at: earlier })
   if (routine === undefined)
     throw new Error('Expected a Routine.')
@@ -468,7 +468,7 @@ it('ignores combined issues from settled units when a suspended batch asks for p
   store.settleBatchUnit({ unitId: plan.value[0].id, at: earlier, state: { _tag: 'ActionRequired', reason: 'Needs input.' } })
   store.recordObservation({ externalId: 'closed-unit', observedAt: later, source: 'poll', subject: issueItem({ repository: priority, number: 103, author: 'harlan-zw', state: 'closed' }) })
   store.suspendBatch({ batchId: batch.id, workerId: 'batch', fence: batch.state.fence, at: later })
-  store.recordObservation({ externalId: 'background', observedAt: later, source: 'poll', subject: issueItem() })
+  store.recordObservation({ externalId: 'background', observedAt: later, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
 
   expect(store.hasPriorityAgentTask()).toBe(false)
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe('harlan-zw/example')

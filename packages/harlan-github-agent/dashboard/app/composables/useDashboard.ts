@@ -292,7 +292,7 @@ function createDashboard() {
     const key = itemKey(entry.repository, entry.number, entry.revisionId)
     approvalPending.value = `${key}:${entry.state.kind}`
     approvalErrors.value = without(approvalErrors.value, key)
-    const request = entry.state.kind === 'issue_work'
+    const request = entry.state.kind !== 'review'
       ? $fetch('/api/issues/approve', {
           method: 'POST',
           body: { repository: entry.repository, issueNumber: entry.number, revisionId: entry.revisionId },

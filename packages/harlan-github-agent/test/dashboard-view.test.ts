@@ -556,6 +556,14 @@ describe('cardStateLine', () => {
     expect(cardStateLine(entry, available, now).text).toBe('Outside contributor. Approval starts Issue work.')
   })
 
+  it('names Issue triage for an outside issue that has not been read yet', () => {
+    const entry = queueEntry({ kind: 'issue', state: { _tag: 'AwaitingApproval', kind: 'issue_triage' } })
+    expect(cardStateLine(entry, available, now).text).toBe('Outside contributor. Approval starts Issue triage.')
+    expect(approvalActionLabel(entry)).toBe('Approve')
+    expect(approvalConsequence(entry)).toBe('The agent reads the issue. If it is ready to implement, the agent implements it and the controller opens a draft pull request.')
+    expect(queueWork(entry)).toBe('issue_triage')
+  })
+
   it('passes the reason through for Action required and Pending, with the right tone', () => {
     expect(cardStateLine(queueEntry({ state: { _tag: 'ActionRequired', reason: 'The fork branch is not writable.' } }), available, now))
       .toEqual({ text: 'The fork branch is not writable.', tone: 'error' })

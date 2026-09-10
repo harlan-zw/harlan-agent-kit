@@ -42,25 +42,17 @@ describe('inferred issue closures', () => {
       .toContainEqual(expect.objectContaining({ number: issue.number, state: 'open' }))
   })
 
-  it('restores the contributor issue without granting implementation approval', async () => {
+  it('restores the contributor issue without granting Approval', async () => {
     const { store, repository, issue, read } = setup()
     await read(issue, '2026-08-13T02:00:00.000Z')
-    const triage = store.claimNextIssueTriageTask('triage', '2026-08-13T02:01:00.000Z', 60_000)
-    if (triage === null)
-      throw new Error('Expected Issue triage.')
-    store.completeWorkerTask({
-      taskId: triage.id,
-      workerId: triage.state.workerId,
-      fence: triage.state.fence,
-      at: '2026-08-13T02:01:01.000Z',
-      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT', difficulty: 2, impact: 4, hasReproduction: true, needsCodebaseReview: false, summary: 'Verified.', nextAction: 'Fix the issue.' }),
-    })
+    expect(store.claimNextIssueTriageTask('triage', '2026-08-13T02:01:00.000Z', 60_000)).toBeNull()
     store.closeMissingItems(repository.github, [], '2026-08-14T00:00:00.000Z')
 
     await read(issue, '2026-08-15T00:00:00.000Z')
 
     expect(store.getDashboardSnapshot('2026-08-15T00:00:00.000Z').queue)
-      .toContainEqual(expect.objectContaining({ number: issue.number, state: { _tag: 'AwaitingApproval', kind: 'issue_work' } }))
+      .toContainEqual(expect.objectContaining({ number: issue.number, state: { _tag: 'AwaitingApproval', kind: 'issue_triage' } }))
+    expect(store.claimNextIssueTriageTask('triage', '2026-08-15T00:01:00.000Z', 60_000)).toBeNull()
     expect(store.claimNextIssueWorkTask('implementation', '2026-08-15T00:01:00.000Z', 60_000)).toBeNull()
   })
 

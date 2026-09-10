@@ -40,8 +40,8 @@ import type {
   IncidentKind,
   IncidentRecovery,
   IncidentScope,
+  IssueApprovalResult,
   IssueTriageTask,
-  IssueWorkApprovalResult,
   IssueWorkTask,
   ItemDismissalResult,
   ItemSummary,
@@ -707,13 +707,18 @@ export interface LatestPullRequestTriageRun {
 }
 
 export interface JournalStore extends BatchStore {
-  approveIssueWork: (input: {
+  /**
+   * Approves one exact issue state from an outside author. The Approval unlocks
+   * Issue triage, and Issue work follows on its own when triage says ready.
+   */
+  approveIssue: (input: {
     repository: string
     issueNumber: number
     revisionId: string
     at: string
-  }) => IssueWorkApprovalResult
-  isIssueWorkApprovalReady: (repository: string, issueNumber: number, revisionId: string) => boolean
+  }) => IssueApprovalResult
+  /** True while an outside author's open issue has triage or work that only an Approval can start. */
+  isIssueApprovalPending: (repository: string, issueNumber: number, revisionId: string) => boolean
   approvePullRequest: (input: {
     repository: string
     pullRequestNumber: number
@@ -1512,6 +1517,28 @@ const publicationJournalMigration = `
     WHERE state_tag IN ('Queued', 'NeedsAttention', 'Running', 'Publishing');
 
   PRAGMA user_version = 4;
+`
+
+const issueApprovalMigration = `
+  CREATE TABLE IF NOT EXISTS issue_approvals (
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    revision_id TEXT NOT NULL,
+    approved_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, revision_id),
+    FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS issue_approvals_revision ON issue_approvals(revision_id);
+
+  -- Issue work only ever started after an Approval or for a trusted author, so
+  -- every past work Task proves one. A trusted author's row is harmless.
+  INSERT OR IGNORE INTO issue_approvals (subject_id, revision_id, approved_at)
+  SELECT subject_id, revision_id, MIN(updated_at)
+  FROM tasks
+  WHERE kind = 'issue_work'
+  GROUP BY subject_id, revision_id;
+
+  PRAGMA user_version = 71;
 `
 
 const pullRequestApprovalMigration = `
@@ -2725,11 +2752,23 @@ function selectionMode(database: DatabaseSync): SelectionMode {
  */
 function requiresPullRequestApproval(database: DatabaseSync, mapping: RepositoryMapping, author: string): boolean {
   return mapping.pullRequestReview
-    && (selectionMode(database) === 'manual' || requiresIssueApproval(mapping, author))
+    && (selectionMode(database) === 'manual' || !isTrustedAuthor(mapping, author))
 }
 
-function requiresIssueApproval(mapping: RepositoryMapping, author: string): boolean {
-  return !mapping.writablePullRequestAuthors.some(candidate => candidate.toLowerCase() === author.toLowerCase())
+function isTrustedAuthor(mapping: RepositoryMapping, author: string): boolean {
+  return mapping.writablePullRequestAuthors.some(candidate => candidate.toLowerCase() === author.toLowerCase())
+}
+
+/** An issue the service filed for a Routine carries no outside text, so it never waits for a person. */
+function requiresIssueApproval(mapping: RepositoryMapping, issue: { author: string, routineFiled: boolean }): boolean {
+  return !issue.routineFiled && !isTrustedAuthor(mapping, issue.author)
+}
+
+/** An Approval names one exact issue state. A new Revision needs a new one. */
+function hasIssueApproval(database: DatabaseSync, subjectId: number, revisionId: string): boolean {
+  return database.prepare(`
+    SELECT 1 FROM issue_approvals WHERE subject_id = ? AND revision_id = ?
+  `).get(subjectId, revisionId) !== undefined
 }
 
 function canWritePullRequestHead(mapping: RepositoryMapping, subject: GitHubPullRequestItem): boolean {
@@ -2869,6 +2908,7 @@ function dashboardQueue(
   currentSelectionMode: SelectionMode,
   reviewResolutions: Map<string, ReviewResolution>,
   desiredReviewOutcomes: Map<string, ReviewDesiredOutcome>,
+  issueApprovals: Set<string> = new Set(),
   batchReservationReasons: Map<string, string> = new Map(),
 ): QueueEntry[] {
   const currentTasks = new Map<string, DashboardTask>()
@@ -2949,7 +2989,11 @@ function dashboardQueue(
         return []
       switch (task.state._tag) {
         case 'Running': return [{ ...base, kind: 'issue', state: { _tag: 'Active', work: 'issue_triage' } }]
-        case 'Queued': return [{ ...base, kind: 'issue', state: { _tag: 'Queued', work: 'issue_triage' } }]
+        case 'Queued': {
+          const awaiting = requiresIssueApproval(mapping, subject)
+            && !issueApprovals.has(`${subject.repository}:${subject.number}:${subject.revisionId}`)
+          return [{ ...base, kind: 'issue', state: awaiting ? { _tag: 'AwaitingApproval', kind: 'issue_triage' } : { _tag: 'Queued', work: 'issue_triage' } }]
+        }
         case 'ActionRequired': return [{ ...base, kind: 'issue', state: { _tag: 'ActionRequired', reason: task.state.reason } }]
         case 'Failed': return [{ ...base, kind: 'issue', state: failedQueueState(task.state.reason, task.recoveryAttempts) }]
         case 'Completed': {
@@ -4545,17 +4589,27 @@ function planIssueTriage(
   supersedeWorkerTasks(database, subjectId, 'issue_triage', observedAt, 'Updated issue state replaced this triage.', revisionId)
   supersedeTasks(database, subjectId, observedAt, 'Updated issue state replaced this work.', revisionId, 'issue_work')
   const existing = database.prepare(`
-    SELECT id, state_tag, evidence FROM worker_tasks
+    SELECT id, state_tag, evidence, fence FROM worker_tasks
     WHERE subject_id = ? AND kind = 'issue_triage' AND revision_id = ?
-  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], evidence: string | null } | undefined
+  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], evidence: string | null, fence: number } | undefined
   if (existing !== undefined) {
+    if (existing.state_tag === 'Superseded') {
+      // Closing the issue superseded a triage that had not run. The same
+      // content came back open, so the same triage waits again. An outside
+      // author's Approval, when one exists, names this Revision and still holds.
+      database.prepare(`
+        UPDATE worker_tasks SET state_tag = 'Queued', reason = NULL, updated_at = ? WHERE id = ?
+      `).run(observedAt, existing.id)
+      recordWorkerTransition(database, { taskId: existing.id, from: 'Superseded', to: 'Queued', reason: 'The issue is open again.', fence: existing.fence, at: observedAt })
+      return
+    }
     if (
       existing.state_tag === 'Completed'
       && existing.evidence !== null
       && issueTriageState(existing.evidence) === 'READY_TO_IMPLEMENT'
       && subject.kind === 'issue'
       && canWorkIssues(mapping)
-      && (!requiresIssueApproval(mapping, subject.author) || retainsIssueWorkApproval(database, subjectId, revisionId))
+      && (!requiresIssueApproval(mapping, subject) || hasIssueApproval(database, subjectId, revisionId))
     ) {
       queueIssueWork(database, subjectId, revisionId, subject, mapping, observedAt)
     }
@@ -4583,14 +4637,6 @@ function issuePublicationLostBase(database: DatabaseSync, subjectId: number, rev
 }
 
 /** Controller recovery preserves Approval for the same Issue Revision. */
-function retainsIssueWorkApproval(database: DatabaseSync, subjectId: number, revisionId: string): boolean {
-  return issuePublicationLostBase(database, subjectId, revisionId) || database.prepare(`
-    SELECT 1 FROM tasks
-    WHERE subject_id = ? AND revision_id = ? AND kind = 'issue_work'
-      AND state_tag = 'Superseded' AND reason = ?
-  `).get(subjectId, revisionId, freshIssueTriageReason) !== undefined
-}
-
 function queueIssueWork(
   database: DatabaseSync,
   subjectId: number,
@@ -6238,7 +6284,11 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 70
   }
-  if (version === 70)
+  if (version === 70) {
+    applyMigration(database, issueApprovalMigration)
+    version = 71
+  }
+  if (version === 71)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7168,22 +7218,24 @@ export function openJournalStore(
     }
   }
 
-  const approveIssueWork: JournalStore['approveIssueWork'] = (input) => {
+  const approveIssue: JournalStore['approveIssue'] = (input) => {
     const row = database.prepare(`
-      SELECT subjects.id AS subject_id, subjects.current_revision_id, revisions.payload,
-        repositories.policy_json, worker_tasks.evidence AS triage_evidence
+      SELECT subjects.id AS subject_id, subjects.current_revision_id, revisions.payload, repositories.policy_json,
+        triage.id AS triage_id, triage.state_tag AS triage_state, triage.evidence AS triage_evidence
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
       LEFT JOIN revisions ON revisions.id = subjects.current_revision_id
-      LEFT JOIN worker_tasks ON worker_tasks.subject_id = subjects.id
-        AND worker_tasks.revision_id = subjects.current_revision_id
-        AND worker_tasks.kind = 'issue_triage' AND worker_tasks.state_tag = 'Completed'
+      LEFT JOIN worker_tasks AS triage ON triage.subject_id = subjects.id
+        AND triage.revision_id = subjects.current_revision_id
+        AND triage.kind = 'issue_triage'
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
     `).get(input.repository, input.issueNumber) as {
       subject_id: number
       current_revision_id: string | null
       payload: string | null
       policy_json: string
+      triage_id: string | null
+      triage_state: TaskRow['state_tag'] | null
       triage_evidence: string | null
     } | undefined
     if (row === undefined || row.payload === null)
@@ -7197,16 +7249,29 @@ export function openJournalStore(
     const mapping = JSON.parse(row.policy_json) as RepositoryMapping
     if (!canWorkIssues(mapping))
       return { _tag: 'Rejected', reason: { _tag: 'NotAuthorized' } }
-    if (!requiresIssueApproval(mapping, issue.author))
+    if (!requiresIssueApproval(mapping, issue))
       return { _tag: 'Rejected', reason: { _tag: 'ApprovalNotRequired' } }
-    if (issueTriageState(row.triage_evidence) !== 'READY_TO_IMPLEMENT')
-      return { _tag: 'Rejected', reason: { _tag: 'TriageRequired' } }
+
+    // Triage that already said ready continues into work. Triage still waiting
+    // becomes claimable. Anything else has nothing an Approval can start, and
+    // recording one would only mislead the next Revision's reader.
+    const triageReady = row.triage_state === 'Completed' && issueTriageState(row.triage_evidence) === 'READY_TO_IMPLEMENT'
+    const triageWaiting = row.triage_id !== null && (row.triage_state === 'Queued' || row.triage_state === 'Running')
+    if (!triageReady && !triageWaiting)
+      return { _tag: 'Rejected', reason: { _tag: 'NothingToStart' } }
 
     database.exec('BEGIN IMMEDIATE')
     try {
-      const queued = queueIssueWork(database, row.subject_id, input.revisionId, issue, mapping, input.at)
+      const inserted = database.prepare(`
+        INSERT OR IGNORE INTO issue_approvals (subject_id, revision_id, approved_at) VALUES (?, ?, ?)
+      `).run(row.subject_id, input.revisionId, input.at).changes === 1
+      if (triageReady) {
+        const queued = queueIssueWork(database, row.subject_id, input.revisionId, issue, mapping, input.at)
+        database.exec('COMMIT')
+        return { _tag: inserted || queued.inserted ? 'Approved' : 'Duplicate', work: 'issue_work', taskId: queued.taskId }
+      }
       database.exec('COMMIT')
-      return { _tag: queued.inserted ? 'Approved' : 'Duplicate', taskId: queued.taskId }
+      return { _tag: inserted ? 'Approved' : 'Duplicate', work: 'issue_triage', taskId: row.triage_id as string }
     }
     catch (error) {
       database.exec('ROLLBACK')
@@ -7214,40 +7279,41 @@ export function openJournalStore(
     }
   }
 
-  const isIssueWorkApprovalReady: JournalStore['isIssueWorkApprovalReady'] = (repository, issueNumber, revisionId) => {
+  const isIssueApprovalPending: JournalStore['isIssueApprovalPending'] = (repository, issueNumber, revisionId) => {
     const row = database.prepare(`
       SELECT subjects.current_revision_id, revisions.payload, repositories.policy_json,
-        worker_tasks.evidence AS triage_evidence,
+        triage.state_tag AS triage_state, triage.evidence AS triage_evidence,
         EXISTS (
-          SELECT 1 FROM tasks
-          WHERE tasks.subject_id = subjects.id
-            AND tasks.revision_id = subjects.current_revision_id
-            AND tasks.kind = 'issue_work'
-            AND tasks.state_tag != 'Superseded'
-        ) AS work_exists
+          SELECT 1 FROM issue_approvals
+          WHERE issue_approvals.subject_id = subjects.id
+            AND issue_approvals.revision_id = subjects.current_revision_id
+        ) AS approved
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
       LEFT JOIN revisions ON revisions.id = subjects.current_revision_id
-      LEFT JOIN worker_tasks ON worker_tasks.subject_id = subjects.id
-        AND worker_tasks.revision_id = subjects.current_revision_id
-        AND worker_tasks.kind = 'issue_triage' AND worker_tasks.state_tag = 'Completed'
+      LEFT JOIN worker_tasks AS triage ON triage.subject_id = subjects.id
+        AND triage.revision_id = subjects.current_revision_id
+        AND triage.kind = 'issue_triage'
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
     `).get(repository, issueNumber) as {
       current_revision_id: string | null
       payload: string | null
       policy_json: string
+      triage_state: TaskRow['state_tag'] | null
       triage_evidence: string | null
-      work_exists: number
+      approved: number
     } | undefined
-    if (row === undefined || row.current_revision_id !== revisionId || row.payload === null || row.triage_evidence === null || row.work_exists === 1)
+    if (row === undefined || row.current_revision_id !== revisionId || row.payload === null || row.approved === 1 || row.triage_state === null)
       return false
     const issue = JSON.parse(row.payload) as GitHubItem
     const mapping = JSON.parse(row.policy_json) as RepositoryMapping
+    const startable = row.triage_state === 'Queued'
+      || (row.triage_state === 'Completed' && issueTriageState(row.triage_evidence) === 'READY_TO_IMPLEMENT')
     return issue.kind === 'issue'
       && issue.state === 'open'
       && canWorkIssues(mapping)
-      && requiresIssueApproval(mapping, issue.author)
-      && issueTriageState(row.triage_evidence) === 'READY_TO_IMPLEMENT'
+      && requiresIssueApproval(mapping, issue)
+      && startable
   }
 
   const hasPullRequestApproval: JournalStore['hasPullRequestApproval'] = (repository, pullRequestNumber, revisionId, kind) => database.prepare(`
@@ -8917,6 +8983,19 @@ export function openJournalStore(
                 AND pull_request_approvals.kind = 'review'
             )
           )
+          AND (
+            worker_tasks.kind != 'issue_triage'
+            OR json_extract(revisions.payload, '$.routineFiled') = 1
+            OR EXISTS (
+              SELECT 1 FROM json_each(repositories.policy_json, '$.writablePullRequestAuthors') AS author
+              WHERE lower(author.value) = lower(json_extract(revisions.payload, '$.author'))
+            )
+            OR EXISTS (
+              SELECT 1 FROM issue_approvals
+              WHERE issue_approvals.subject_id = worker_tasks.subject_id
+                AND issue_approvals.revision_id = worker_tasks.revision_id
+            )
+          )
         ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC,
           CASE WHEN worker_tasks.kind = 'adversarial_review' THEN 1 ELSE 0 END DESC,
           worker_tasks.updated_at, worker_tasks.id
@@ -9188,7 +9267,7 @@ export function openJournalStore(
           if (
             subject.kind === 'issue'
             && canWorkIssues(mapping)
-            && (!requiresIssueApproval(mapping, subject.author) || retainsIssueWorkApproval(database, row.subject_id, row.revision_id))
+            && (!requiresIssueApproval(mapping, subject) || hasIssueApproval(database, row.subject_id, row.revision_id))
             && issueTriageState(input.evidence) === 'READY_TO_IMPLEMENT'
           ) {
             queueIssueWork(database, row.subject_id, row.revision_id, subject, mapping, input.at)
@@ -12322,6 +12401,15 @@ export function openJournalStore(
       desired_outcome: ReviewDesiredOutcome
     }>).map(row => [`${row.repository}:${row.github_number}:${row.revision_id}`, row.desired_outcome]))
 
+    const issueApprovals = new Set((database.prepare(`
+      SELECT repositories.github AS repository, subjects.github_number, issue_approvals.revision_id
+      FROM issue_approvals
+      JOIN subjects ON subjects.id = issue_approvals.subject_id
+        AND subjects.current_revision_id = issue_approvals.revision_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+    `).all() as unknown as Array<{ repository: string, github_number: number, revision_id: string }>)
+      .map(row => `${row.repository}:${row.github_number}:${row.revision_id}`))
+
     const storedAgentControl = getAgentControl()
     const agentControl = storedAgentControl._tag === 'Running'
       ? storedAgentControl
@@ -12364,6 +12452,7 @@ export function openJournalStore(
         currentSelectionMode,
         reviewResolutions,
         desiredReviewOutcomes,
+        issueApprovals,
         batchStore.batchReservationReasons(),
       ),
       repositories,
@@ -14381,7 +14470,7 @@ export function openJournalStore(
   }
 
   return {
-    approveIssueWork,
+    approveIssue,
     syncRoutines,
     listRoutines,
     openRoutineRun,
@@ -14405,7 +14494,7 @@ export function openJournalStore(
     updateRoutineRunProgress,
     completeRoutineRun,
     failRoutineRun,
-    isIssueWorkApprovalReady,
+    isIssueApprovalPending,
     listOpenIssueNumbers,
     listOpenPullRequestNumbers,
     listUnverifiedClosedPullRequestNumbers,

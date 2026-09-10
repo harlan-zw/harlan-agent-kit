@@ -206,7 +206,7 @@ describe('issue work handoffs', () => {
     const store = openJournalStore(':memory:')
     stores.push(store)
     store.syncRepositories([repositoryMapping()], at(0))
-    store.recordObservation({ externalId: 'spec', observedAt: at(1), source: 'poll', subject: issueItem() })
+    store.recordObservation({ externalId: 'spec', observedAt: at(1), source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
     const task = store.claimNextIssueTriageTask('triage', at(2), 600_000)!
     store.completeWorkerTask({ taskId: task.id, workerId: 'triage', fence: task.state.fence, at: at(3), evidence: JSON.stringify({ _tag: 'READY_TO_SPEC', nextAction: 'Decide the discovery spending limit.' }) })
 
