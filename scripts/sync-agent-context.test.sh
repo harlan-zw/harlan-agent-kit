@@ -26,11 +26,18 @@ printf '%s\n' '- [Worktree](worktree.md)' > "$memory_root/$worktree_slug/memory/
 printf '%s\n' '- [Unrelated](unrelated.md)' > "$memory_root/-unrelated/memory/MEMORY.md"
 export HARLAN_AGENT_CONTEXT_MEMORY_ROOT="$memory_root"
 export HARLAN_AGENT_CONTEXT_CHECKOUT_ROOTS="$checkout_root"
+# The site inventory fixture stands in for ~/sites/SITES.md on the desktop.
+sites_fixture="$test_root/desktop-sites/SITES.md"
+mkdir -p "$(dirname "$sites_fixture")"
+printf '%s\n' '# Sites' '- example.com' > "$sites_fixture"
+export HARLAN_AGENT_CONTEXT_SITES_FILE="$sites_fixture"
 
 HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
 
 cmp "$memory_root/$primary_slug/memory/MEMORY.md" "$test_home/.claude/projects/$primary_slug/memory/MEMORY.md"
 cmp "$memory_root/$primary_slug/memory/deployment.md" "$test_home/.claude/projects/$primary_slug/memory/deployment.md"
+cmp "$sites_fixture" "$test_home/sites/SITES.md"
+test "$(stat -c %a "$test_home/sites/SITES.md")" = 644
 if [ -e "$test_home/.claude/projects/$worktree_slug" ]; then
   printf '%s\n' 'The sync copied memory for a wt worktree sibling.' >&2
   exit 1
@@ -95,6 +102,7 @@ export HARLAN_AGENT_CONTEXT_TEST_CALLS="$calls"
 export HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH="$claude_hash"
 export HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH="$codex_hash"
 export HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH="$hook_hash"
+export HARLAN_AGENT_CONTEXT_TEST_SITES_HASH="$(/usr/bin/sha256sum "$sites_fixture" | cut -d' ' -f1)"
 
 cat > "$test_root/bin/ssh" <<'FAKE_SSH'
 #!/usr/bin/env bash
@@ -107,6 +115,7 @@ if [[ "$1" != '-n' && ( "$*" == *"tar -C"* || "$*" == *"/memory'"* ) ]]; then ca
 if [[ "$*" == *CLAUDE.md.next*sha256sum* || "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '%s  CLAUDE.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH"; fi
 if [[ "$*" == *AGENTS.md.next*sha256sum* || "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '%s  AGENTS.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH"; fi
 if [[ "$*" == *commit-msg.next*sha256sum* || "$*" == *sha256sum*commit-msg.next* ]]; then printf '%s  commit-msg.next\n' "$HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH"; fi
+if [[ "$*" == *sha256sum*SITES.md.next* ]]; then printf '%s  SITES.md.next\n' "${HARLAN_AGENT_CONTEXT_TEST_SITES_HASH:-different}"; fi
 # The opencode files are verified in one batched sha256sum, so answer per path.
 if [[ "$*" == *"sha256sum "* && "$*" == *harlan-hooks.ts.next* ]]; then
   for token in $*; do
@@ -141,6 +150,8 @@ grep -F 'hogwild:/home/harlan/.codex/AGENTS.md.next' "$calls" >/dev/null
 grep -F "mv '/home/harlan/.claude/CLAUDE.md.next' '/home/harlan/.claude/CLAUDE.md'" "$calls" >/dev/null
 grep -F "mv '/home/harlan/.codex/AGENTS.md.next' '/home/harlan/.codex/AGENTS.md'" "$calls" >/dev/null
 grep -F 'hogwild:/home/harlan/.config/git/hooks/commit-msg.next' "$calls" >/dev/null
+grep -F 'hogwild:/home/harlan/sites/SITES.md.next' "$calls" >/dev/null
+grep -F "mv '/home/harlan/sites/SITES.md.next' '/home/harlan/sites/SITES.md'" "$calls" >/dev/null
 grep -F "mv '/home/harlan/.config/git/hooks/commit-msg.next' '/home/harlan/.config/git/hooks/commit-msg'" "$calls" >/dev/null
 grep -F "core.hooksPath '/home/harlan/.config/git/hooks'" "$calls" >/dev/null
 for hook_file in "${opencode_hooks[@]}"; do

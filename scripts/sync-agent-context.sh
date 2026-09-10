@@ -22,6 +22,10 @@ installed_hook_files=()
 hooks_install_suffix='.local/share/harlan-agent-kit/hooks'
 manifest_install_suffix='.local/share/harlan-agent-kit/.claude-plugin/plugin.json'
 plugin_install_suffix='.config/opencode/plugins/harlan-hooks.ts'
+# The site inventory the sentry-checkin skill reads first. The desktop owns it;
+# a worker on Hogwild starts without one and every routine run reports that.
+sites_inventory="${HARLAN_AGENT_CONTEXT_SITES_FILE:-$HOME/sites/SITES.md}"
+sites_install_suffix='sites/SITES.md'
 target_home="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 hogwild_host="${HARLAN_AGENT_CONTEXT_HOGWILD_HOST:-hogwild}"
 hogwild_home="${HARLAN_AGENT_CONTEXT_HOGWILD_HOME:-/home/harlan}"
@@ -114,6 +118,10 @@ sync_local() {
   done
   install -m 644 "$plugin_manifest" "$target_home/$manifest_install_suffix"
   install -m 644 "$opencode_plugin" "$target_home/$plugin_install_suffix"
+  if [ -f "$sites_inventory" ] && [ "$sites_inventory" != "$target_home/$sites_install_suffix" ]; then
+    mkdir -p "$target_home/$(dirname "$sites_install_suffix")"
+    install -m 644 "$sites_inventory" "$target_home/$sites_install_suffix"
+  fi
   printf '%s\n' 'Synced local Agent instructions.'
 }
 
@@ -212,6 +220,33 @@ sync_hogwild() {
   ssh -o BatchMode=yes "$hogwild_host" \
     "chmod 644 '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.codex/AGENTS.md.next' && mv '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.claude/CLAUDE.md' && mv '$hogwild_home/.codex/AGENTS.md.next' '$hogwild_home/.codex/AGENTS.md' && chmod 755 '$hogwild_home/.config/git/hooks/commit-msg.next' && mv '$hogwild_home/.config/git/hooks/commit-msg.next' '$hogwild_home/.config/git/hooks/commit-msg'$activation && git config --global core.hooksPath '$hogwild_home/.config/git/hooks'"
   printf '%s\n' 'Synced Hogwild Agent instructions.'
+}
+
+# The site inventory goes the same way as the instructions: stage, verify the
+# digest, then one mv. A missing inventory is reported, never invented.
+sync_hogwild_sites() {
+  local local_hash remote_hash target
+  validate_hogwild
+  if [ ! -f "$sites_inventory" ]; then
+    printf 'No site inventory at %s. Hogwild keeps its current one.\n' "$sites_inventory"
+    return 0
+  fi
+  target="$hogwild_home/$sites_install_suffix"
+  local_hash=$(sha256sum "$sites_inventory" | cut -d' ' -f1)
+  ssh -n -o BatchMode=yes "$hogwild_host" "mkdir -p '$(dirname "$target")'" \
+    || fail 'Hogwild did not accept the site inventory directory.'
+  if ! scp "$sites_inventory" "$hogwild_host:$target.next"; then
+    ssh -n -o BatchMode=yes "$hogwild_host" "rm -f '$target.next'" >/dev/null 2>&1 || true
+    fail 'Hogwild did not receive the site inventory.'
+  fi
+  remote_hash=$(ssh -n -o BatchMode=yes "$hogwild_host" "sha256sum '$target.next'" | cut -d' ' -f1)
+  if [ "$local_hash" != "$remote_hash" ]; then
+    ssh -n -o BatchMode=yes "$hogwild_host" "rm -f '$target.next'" >/dev/null 2>&1 || true
+    fail 'Hogwild received a different site inventory.'
+  fi
+  ssh -n -o BatchMode=yes "$hogwild_host" "chmod 644 '$target.next' && mv '$target.next' '$target'" \
+    || fail 'Hogwild did not activate the site inventory.'
+  printf '%s\n' 'Synced Hogwild site inventory.'
 }
 
 # ---------------------------------------------------------------------------
@@ -336,12 +371,14 @@ case "${1:-local}" in
     ;;
   hogwild)
     sync_hogwild
+    sync_hogwild_sites
     sync_hogwild_memory
     ;;
   all)
     sync_local
     sync_local_memory
     sync_hogwild
+    sync_hogwild_sites
     sync_hogwild_memory
     ;;
   *)

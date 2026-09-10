@@ -46,6 +46,7 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - Find and search files: ripgrep (`rg`).
 - Rename, move, or import update spanning 2+ files: `pnpm dlx @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
 - Browser testing and automation: `dev-browser` (`--help`). If `$DISPLAY` is empty, pass `--headless`; a headed launch exits with "launched a headed browser without having a XServer".
+- Wait for CI with `gh run watch <run-id>` or `gh pr checks <number> --watch`. Never poll with `sleep`; the shell tool times out first.
 - Give each task its own `dev-browser` name. Close every named page when browser work ends. Never run `dev-browser stop`; it stops shared browsers.
 
 ## Worktrees
