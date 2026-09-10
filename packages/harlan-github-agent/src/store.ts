@@ -3786,17 +3786,47 @@ function planConflictResolution(
     return
   resolveCleanMergeIncidents(database, subjectId, observedAt)
 
-  const state: TaskState = ready
-    ? { _tag: 'Queued' }
-    : { _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.' }
+  // A pull request that conflicts again after every resolution is stale, not
+  // unlucky. Each published merge commit is a new head, so a new Revision and
+  // a fresh recovery budget: nuxtseo.com#725 took 148 turns in two days and
+  // melbjs-clone#98 sixteen in three hours that way. Count the day's finished
+  // turns across Revisions. A task superseded before it started never ran, so
+  // a person pushing five times in a day spends nothing here.
+  const finishedTurns = countFinishedConflictTurns(database, subjectId, revisionId, observedAt)
+  const stale = finishedTurns >= MAXIMUM_RECOVERY_ATTEMPTS
+  const state: TaskState = !ready
+    ? { _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.' }
+    : stale
+      ? { _tag: 'ActionRequired', reason: `The controller resolved this conflict ${finishedTurns} times in one day and the pull request conflicts again. Rebase it by hand.` }
+      : { _tag: 'Queued' }
   const taskId = digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:resolve_conflict`)
   const reason = state._tag === 'ActionRequired' ? state.reason : null
+  // A stale task starts with its budget spent, so the approval path above
+  // never wakes it. Only a new head commit makes a new task.
+  const recoveryAttempts = stale ? MAXIMUM_RECOVERY_ATTEMPTS : 0
 
   database.prepare(`
-    INSERT INTO tasks (id, subject_id, revision_id, kind, state_tag, reason, updated_at)
-    VALUES (?, ?, ?, 'resolve_conflict', ?, ?, ?)
-  `).run(taskId, subjectId, revisionId, state._tag, reason, observedAt)
+    INSERT INTO tasks (id, subject_id, revision_id, kind, state_tag, reason, updated_at, recovery_attempts)
+    VALUES (?, ?, ?, 'resolve_conflict', ?, ?, ?, ?)
+  `).run(taskId, subjectId, revisionId, state._tag, reason, observedAt, recoveryAttempts)
   recordTransition(database, { taskId, from: null, to: state._tag, reason, fence: 0, at: observedAt })
+}
+
+const STALE_CONFLICT_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How many conflict resolutions for this subject ran to an end in the last
+ * day, on other Revisions. Completed counts. Superseded counts only when the
+ * turn had started, because a task retired while still Queued cost nothing.
+ */
+function countFinishedConflictTurns(database: DatabaseSync, subjectId: number, revisionId: string, observedAt: string): number {
+  const windowStart = new Date(Date.parse(observedAt) - STALE_CONFLICT_WINDOW_MS).toISOString()
+  const rows = database.prepare(`
+    SELECT id, state_tag FROM tasks
+    WHERE subject_id = ? AND kind = 'resolve_conflict' AND revision_id != ?
+      AND state_tag IN ('Completed', 'Superseded') AND updated_at >= ?
+  `).all(subjectId, revisionId, windowStart) as Array<{ id: string, state_tag: 'Completed' | 'Superseded' }>
+  return rows.filter(row => row.state_tag === 'Completed' || supersededAfterStarting(database, row.id)).length
 }
 
 /**
