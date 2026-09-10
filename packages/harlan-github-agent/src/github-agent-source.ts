@@ -9,7 +9,7 @@ import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
-import { currentBaseSha } from './github-base.ts'
+import { currentBaseChecks, currentBaseSha } from './github-base.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
@@ -886,9 +886,12 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           })
           .catch((error: unknown): RequiredChecks => ({ _tag: 'Unavailable', reason: message(error) }))
         const liveBaseSha = await currentBaseSha(octokit.value, owner, repo, pull.data.base.ref, signal)
+        const baseCommits = (sha: string, count: number): Promise<string[]> => octokit.value.rest.repos
+          .listCommits({ owner, repo, sha, per_page: count, request: { signal } })
+          .then(response => response.data.map(commit => commit.sha))
         const [checks, baseChecks, requiredChecks] = await Promise.all([
           checksFor(pull.data.head.sha),
-          checksFor(liveBaseSha),
+          currentBaseChecks(liveBaseSha, checksFor, baseCommits),
           requiredChecksFor(pull.data.base.ref),
         ])
         return ok({

@@ -40,6 +40,7 @@ function client(labels: string[]): Octokit {
         getBranch: () => Promise.resolve({ data: { commit: { sha: baseSha } } }),
         getBranchRules: () => Promise.resolve({ data: [] }),
         getCombinedStatusForRef: () => Promise.resolve({ data: { statuses: [] } }),
+        listCommits: () => Promise.resolve({ data: [{ sha: baseSha }] }),
       },
     },
   } as unknown as Octokit

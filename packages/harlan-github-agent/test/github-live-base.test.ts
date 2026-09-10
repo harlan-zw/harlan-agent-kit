@@ -108,6 +108,7 @@ describe('live pull request base', () => {
             checkedRefs.push(input.ref)
             return Promise.resolve({ data: { statuses: [] } })
           },
+          listCommits: () => Promise.resolve({ data: [{ sha: liveBaseSha }] }),
         },
       },
     } as unknown as Octokit
@@ -381,5 +382,108 @@ describe('live pull request base', () => {
         checks: [expect.objectContaining({ name: 'test', status: 'completed', conclusion: 'success' })],
       },
     })))
+  })
+})
+
+describe('base checks behind a commit that ran no CI', () => {
+  const docsOnlyBaseSha = 'd'.repeat(40)
+  const lastCodeBaseSha = 'e'.repeat(40)
+
+  function clientReadingHistory(checksBySha: Record<string, unknown[]>, checkedRefs: string[]) {
+    const listForRef = () => undefined
+    const listCommits = () => undefined
+    return {
+      paginate: (method: unknown, input: { ref?: string, sha?: string }) => {
+        if (method === listForRef && input.ref !== undefined) {
+          checkedRefs.push(input.ref)
+          return Promise.resolve(checksBySha[input.ref] ?? [])
+        }
+        if (method === listCommits)
+          return Promise.reject(new Error('Unexpected paginated commit listing.'))
+        return Promise.resolve([])
+      },
+      rest: {
+        actions: { getJobForWorkflowRun: () => Promise.reject(new Error('Unexpected job lookup.')), listWorkflowRunsForRepo: () => undefined },
+        checks: { listForRef },
+        issues: { listComments: () => undefined },
+        pulls: {
+          get: () => Promise.resolve({ data: pullRequest() }),
+          listReviewComments: () => undefined,
+          listReviews: () => undefined,
+        },
+        repos: {
+          getBranch: () => Promise.resolve({ data: { commit: { sha: docsOnlyBaseSha } } }),
+          getBranchRules: () => Promise.resolve({ data: [] }),
+          getCombinedStatusForRef: () => Promise.resolve({ data: { statuses: [] } }),
+          listCommits: (input: { sha: string, per_page: number }) => {
+            expect(input.sha).toBe(docsOnlyBaseSha)
+            return Promise.resolve({ data: [{ sha: docsOnlyBaseSha }, { sha: lastCodeBaseSha }, { sha: historicBaseSha }] })
+          },
+        },
+      },
+    } as unknown as Octokit
+  }
+
+  it('reads the newest base commit that has a check run when the head ran none', async () => {
+    // gscdump#55 on 2026-09-10: a docs-only merge became the main head, the
+    // test workflow ignores Markdown, and the CI gate reported "Base branch CI
+    // is unavailable" with nothing left to wait for.
+    const checkedRefs: string[] = []
+    const client = clientReadingHistory({
+      [lastCodeBaseSha]: [{ id: 2, name: 'test', status: 'completed', conclusion: 'success', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 8 } }],
+    }, checkedRefs)
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      baseChecks: {
+        _tag: 'Available',
+        checks: [expect.objectContaining({ name: 'test', conclusion: 'success' })],
+      },
+      pullRequest: expect.objectContaining({ baseSha: docsOnlyBaseSha }),
+    })))
+    expect(checkedRefs).toEqual([headSha, docsOnlyBaseSha, lastCodeBaseSha])
+  })
+
+  it('keeps a red earlier base commit red', async () => {
+    const client = clientReadingHistory({
+      [lastCodeBaseSha]: [{ id: 2, name: 'test', status: 'completed', conclusion: 'failure', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 8 } }],
+    }, [])
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      baseChecks: {
+        _tag: 'Available',
+        checks: [expect.objectContaining({ name: 'test', conclusion: 'failure' })],
+      },
+    })))
+  })
+
+  it('reports no base check run when no listed commit has one', async () => {
+    const checkedRefs: string[] = []
+    const client = clientReadingHistory({}, checkedRefs)
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      baseChecks: { _tag: 'Available', checks: [] },
+    })))
+    expect(checkedRefs).toEqual([headSha, docsOnlyBaseSha, lastCodeBaseSha, historicBaseSha])
   })
 })
