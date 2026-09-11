@@ -152,7 +152,11 @@ export function plan(argv: string[]): Plan {
           {
             host: 'local',
             title: 'runners.conf: live against repo (empty means equal)',
-            command: `diff <(ssh ${SSH_HOST.admin} sudo cat ${LIVE_RUNNER_CONF}) <(ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}')`,
+            command: [
+              `live=$(ssh ${SSH_HOST.admin} sudo cat ${LIVE_RUNNER_CONF}) || exit 1`,
+              `repo=$(ssh ${SSH_HOST.agent} cat ${RUNNER_REPO_CONF}) || exit 1`,
+              `diff <(printf '%s' "$live") <(printf '%s' "$repo")`,
+            ].join('\n'),
           },
           {
             host: 'admin',

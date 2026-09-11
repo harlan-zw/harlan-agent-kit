@@ -109,7 +109,8 @@ describe('hw plan', () => {
   it('diffs the live runners conf against the repo copy read on the agent account', () => {
     const [diff] = steps(['runners'])
     expect(diff?.host).toBe('local')
-    expect(diff?.command).toContain(`ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}'`)
+    expect(diff?.command).toContain(`ssh ${SSH_HOST.agent} cat ${RUNNER_REPO_CONF}`)
+    expect(diff?.command).toContain('|| exit 1')
     expect(diff?.command).not.toContain('|| true')
   })
 
@@ -129,21 +130,28 @@ describe('hw plan', () => {
     expect(status).not.toBe(0)
     expect(output).not.toBe('')
   })
+
+  it('runners diff exits non-zero when both conf reads fail', () => {
+    const { status } = runnersDiff(false, false)
+    expect(status).not.toBe(0)
+  })
 })
 
-/** Runs the runners diff step with its two ssh reads swapped for local files. */
-function runnersDiff(live: string, repo: string | undefined) {
+/** Runs the runners diff step with each ssh read swapped for a local read or a failing read. */
+function runnersDiff(live: string | false, repo: string | false | undefined) {
   const dir = mkdtempSync(join(tmpdir(), 'hw-runners-'))
   try {
     const liveFile = join(dir, 'live.conf')
-    writeFileSync(liveFile, live)
+    if (live !== false && live !== undefined)
+      writeFileSync(liveFile, live)
     const repoFile = join(dir, 'repo.conf')
-    if (repo !== undefined)
+    if (repo !== false && repo !== undefined)
       writeFileSync(repoFile, repo)
     const [step] = steps(['runners'])
     const command = step!.command
-      .replaceAll(`ssh ${SSH_HOST.admin} sudo cat /var/lib/github-runner/config/runners.conf`, `cat ${liveFile}`)
-      .replaceAll(`ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}'`, `cat ${repoFile}`)
+      .replaceAll(`ssh ${SSH_HOST.admin} sudo cat /var/lib/github-runner/config/runners.conf`, live === false ? 'false' : `cat ${liveFile}`)
+      .replaceAll(`ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}'`, repo === false ? 'false' : `cat ${repoFile}`)
+      .replaceAll(`ssh ${SSH_HOST.agent} cat ${RUNNER_REPO_CONF}`, repo === false ? 'false' : `cat ${repoFile}`)
     const { status, stdout, stderr } = spawnSync('bash', ['-o', 'pipefail', '-c', command], { encoding: 'utf8' })
     return { status: status ?? 1, output: `${stdout}${stderr}` }
   }
