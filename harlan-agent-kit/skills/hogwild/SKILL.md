@@ -29,9 +29,9 @@ The desktop zsh aliases `hogwild`, `hogwild-lan`, `hogwild-admin`, `hogwild-admi
 | Status site | `hogwild-status.service` | `hogwild-status` | `127.0.0.1:9100` | `/opt/hogwild-status/current` |
 | Dragon deck | `chasing-the-ai-dragon.service` | `dragon-deck` | `127.0.0.1:3031` | `/opt/chasing-the-ai-dragon/current` |
 | Caddy | `caddy.service` | `caddy` | `127.0.0.1:8080` | `/etc/caddy/Caddyfile`, routes in `/etc/caddy/routes/*.caddy` |
-| Cloudflare tunnel | `cloudflared.service` | root | outbound only | `/etc/cloudflared/config.yml` |
-| AdGuard Home | `adguardhome.service` | root | DNS `:53`, admin `:5380` | `/opt/AdGuardHome` |
-| Jellyfin | `jellyfin.service` | `jellyfin` | `:8096` tailnet | `/srv/jellyfin` |
+| Cloudflare tunnel | `cloudflared.service` | `cloudflared` | outbound only | `/etc/cloudflared/config.yml` |
+| AdGuard Home | `adguardhome.service` | `adguardhome` | DNS `:53` on the LAN and tailnet addresses, admin `:5380` on every interface, ufw blocks it from the LAN | `/opt/AdGuardHome`, config in `/var/lib/adguardhome` |
+| Jellyfin | `jellyfin.service` | `jellyfin` | `:8096`, ufw allows the LAN and the tailnet | `/srv/jellyfin` |
 | Docker | `docker.service` | root | published ports bind loopback | `/etc/docker/daemon.json`, `DOCKER-USER` rules from `hogwild-docker-user.service` |
 
 Public routes go internet, Cloudflare tunnel, Caddy `:8080`, then the loopback port above:
@@ -59,7 +59,7 @@ The live `runners.conf` is `/var/lib/github-runner/config/runners.conf`. Change 
 
 `harlan` holds a primary checkout for every repository the Agent works on. They live under `/home/harlan/pkg` and `/home/harlan/sites` and must stay clean on `main`. The Agent creates its worktrees under `~/.local/share/harlan-github-agent/worktrees/`.
 
-Mapped in `config.yml` today: `nuxt-modules/robots`, `nuxt-modules/og-image`, `nuxt-modules/sitemap`, `nuxt/scripts`, `harlan-zw/nuxt-seo-utils`, `harlan-zw/nuxt-site-config`, `harlan-zw/nuxt-seo`, and the sites under `~/sites`. Read the file for the current list; do not trust this paragraph.
+Not every checkout is mapped. `config.yml` lists the active `repositories` and the observe-only `external_repositories`. Read the file for the current list: `ssh hogwild 'rg -n "^  - github:" ~/.config/harlan-github-agent/config.yml'`.
 
 If a new repository joins, clone it as `harlan` into the matching directory, then add a `repositories` entry and restart the Agent.
 
@@ -78,7 +78,7 @@ Prefer the control CLI from the desktop over raw `systemctl`:
 ```bash
 harlan-github-agent control status
 harlan-github-agent control pause
-harlan-github-agent control restart --source helper
+harlan-github-agent control restart
 ```
 
 If a change needs the process to pick up new groups or a new Node, restart the user manager as admin. That kills in-flight Agent work, so pause first and get Harlan's say so:
@@ -91,7 +91,7 @@ Logs: `ssh hogwild 'journalctl --user -u harlan-github-agent -n 200'`.
 
 ## Docker and firewall
 
-`ufw` allows SSH, DNS, and the tailnet. Docker bypasses ufw, so `hogwild-docker-user.service` fills `DOCKER-USER`: containers cannot reach the LAN, the tailnet, or link-local; the LAN cannot open published ports. `daemon.json` binds published ports to loopback. After `ufw reload`, restart Docker. Verify with `sudo iptables -S DOCKER-USER`.
+`ufw` allows SSH, DNS, and Jellyfin from the LAN, and everything on `tailscale0`. Docker bypasses ufw, so `hogwild-docker-user.service` fills `DOCKER-USER`: containers cannot reach the LAN, the tailnet, or link-local; the LAN cannot open published ports. `daemon.json` binds published ports to loopback. After `ufw reload`, restart Docker. Verify with `sudo iptables -S DOCKER-USER`.
 
 ## Do not
 
