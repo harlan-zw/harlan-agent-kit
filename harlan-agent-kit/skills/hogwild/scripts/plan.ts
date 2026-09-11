@@ -152,7 +152,7 @@ export function plan(argv: string[]): Plan {
           {
             host: 'local',
             title: 'runners.conf: live against repo (empty means equal)',
-            command: `diff <(ssh ${SSH_HOST.admin} sudo cat ${LIVE_RUNNER_CONF}) ${RUNNER_REPO_CONF} || true`,
+            command: `diff <(ssh ${SSH_HOST.admin} sudo cat ${LIVE_RUNNER_CONF}) <(ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}')`,
           },
           {
             host: 'admin',
@@ -164,7 +164,7 @@ export function plan(argv: string[]): Plan {
     case 'pending':
       return {
         _tag: 'Ok',
-        steps: [{ host: 'local', command: `awk '/^## Pending/{f=1;next} f && /^## /{f=0} f' ${HOST_README}` }],
+        steps: [{ host: 'agent', command: `awk '/^## Pending/{f=1;next} f && /^## /{f=0} f' ${HOST_README}` }],
       }
     case 'run': {
       const [host, ...shell] = rest

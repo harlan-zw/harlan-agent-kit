@@ -1,9 +1,9 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { HOST_README, plan, stepArgv } from './plan.ts'
+import { HOST_README, plan, RUNNER_REPO_CONF, SSH_HOST, stepArgv } from './plan.ts'
 
 function steps(argv: string[]) {
   const result = plan(argv)
@@ -19,7 +19,9 @@ function pendingOutput(body: string) {
     writeFileSync(file, `# Host\n\n${body}`)
     const [step] = steps(['pending'])
     const command = step!.command.replace(HOST_README, file)
-    const argv = stepArgv({ ...step!, command })
+    // The plan sends this awk to the agent account; the helper runs the same
+    // command through the local executor so the test needs no host.
+    const argv = stepArgv({ ...step!, host: 'local', command })
     return execFileSync(argv[0]!, argv.slice(1), { encoding: 'utf8' })
   }
   finally {
@@ -91,4 +93,61 @@ describe('hw plan', () => {
     expect(output).toContain('item two')
     expect(output).not.toContain('##')
   })
+
+  it('reads the pending list on the agent account over ssh', () => {
+    const [step] = steps(['pending'])
+    expect(step?.host).toBe('agent')
+    expect(stepArgv(step!)).toEqual([
+      'ssh',
+      '-o',
+      'BatchMode=yes',
+      SSH_HOST.agent,
+      `awk '/^## Pending/{f=1;next} f && /^## /{f=0} f' ${HOST_README}`,
+    ])
+  })
+
+  it('diffs the live runners conf against the repo copy read on the agent account', () => {
+    const [diff] = steps(['runners'])
+    expect(diff?.host).toBe('local')
+    expect(diff?.command).toContain(`ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}'`)
+    expect(diff?.command).not.toContain('|| true')
+  })
+
+  it('runners diff exits 0 with empty output only when the confs are equal', () => {
+    expect(runnersDiff('same\n', 'same\n')).toEqual({ status: 0, output: '' })
+  })
+
+  it('runners diff prints a difference and exits non-zero', () => {
+    const { status, output } = runnersDiff('live\n', 'repo\n')
+    expect(status).not.toBe(0)
+    expect(output).toContain('live')
+    expect(output).toContain('repo')
+  })
+
+  it('runners diff exits non-zero when the repo copy cannot be read', () => {
+    const { status, output } = runnersDiff('live\n', undefined)
+    expect(status).not.toBe(0)
+    expect(output).not.toBe('')
+  })
 })
+
+/** Runs the runners diff step with its two ssh reads swapped for local files. */
+function runnersDiff(live: string, repo: string | undefined) {
+  const dir = mkdtempSync(join(tmpdir(), 'hw-runners-'))
+  try {
+    const liveFile = join(dir, 'live.conf')
+    writeFileSync(liveFile, live)
+    const repoFile = join(dir, 'repo.conf')
+    if (repo !== undefined)
+      writeFileSync(repoFile, repo)
+    const [step] = steps(['runners'])
+    const command = step!.command
+      .replaceAll(`ssh ${SSH_HOST.admin} sudo cat /var/lib/github-runner/config/runners.conf`, `cat ${liveFile}`)
+      .replaceAll(`ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}'`, `cat ${repoFile}`)
+    const { status, stdout, stderr } = spawnSync('bash', ['-o', 'pipefail', '-c', command], { encoding: 'utf8' })
+    return { status: status ?? 1, output: `${stdout}${stderr}` }
+  }
+  finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
