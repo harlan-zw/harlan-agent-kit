@@ -99,6 +99,9 @@ jobs:
       - name: Opencode hooks
         run: pnpm test:opencode-hooks
 
+      - name: Hogwild CLI
+        run: pnpm test:hogwild
+
       # These three enforce the worktree and pull request rules. `pnpm test`
       # does not run them.
       - name: Plugin hooks

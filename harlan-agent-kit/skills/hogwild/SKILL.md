@@ -9,6 +9,23 @@ argument-hint: "[task on Hogwild]"
 
 Hogwild is one Ubuntu host on the LAN and the tailnet. It runs the Harlan GitHub Agent, the GitHub runner supervisor, three public sites behind one Cloudflare tunnel, AdGuard DNS, and Jellyfin.
 
+## The `hw` CLI
+
+`scripts/hw.ts` in this skill runs the routine tasks below and picks the right account each time. Run it with bun; it has no dependencies. The desktop alias `hw` points at it.
+
+```bash
+hw status                                  # host, services, containers, Agent unit
+hw logs agent -n 100                       # or runner, caddy, tunnel, adguard, jellyfin, docker, status, dragon
+hw install fd-find --link fd=fdfind        # apt as admin, link as the Agent
+hw caddy check                             # or reload: validate first, then reload
+hw runners                                 # live runners.conf against the repo copy, job containers
+hw pending                                 # open host items from hogwild/README.md
+hw run admin 'sudo iptables -S DOCKER-USER'
+hw run agent 'ls ~/.local/bin'
+```
+
+`hw --help` lists every command. Reach for `ssh` directly only when `hw run` does not fit.
+
 ## Pick the SSH host first
 
 | Command | Account | Use it for |
