@@ -48,6 +48,13 @@ describe('hw plan', () => {
       expect(step.command).not.toContain('sudo')
   })
 
+  it('refuses sudo in run agent and keeps it for run admin', () => {
+    expect(plan(['run', 'agent', 'sudo', 'ls'])).toMatchObject({ _tag: 'Err' })
+    expect(plan(['run', 'agent', 'ls', '&&', 'sudo', 'ls'])).toMatchObject({ _tag: 'Err' })
+    expect(steps(['run', 'admin', 'sudo', 'ls'])).toEqual([{ host: 'admin', command: 'sudo ls' }])
+    expect(steps(['run', 'agent', 'echo', 'pseudo'])).toEqual([{ host: 'agent', command: 'echo pseudo' }])
+  })
+
   it('passes the remote command to ssh as one unquoted argument', () => {
     const argv = stepArgv({ host: 'admin', command: 'echo "here" | cat' })
     expect(argv).toEqual(['ssh', '-o', 'BatchMode=yes', 'hogwild-admin', 'echo "here" | cat'])

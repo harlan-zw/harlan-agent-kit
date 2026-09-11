@@ -65,6 +65,7 @@ export const USAGE = `hw <command>
 
 const APT_PACKAGE = /^[a-z0-9][a-z0-9+.-]*$/
 const LINK_NAME = /^[a-z0-9][\w.-]*$/i
+const SUDO_WORD = /(?:^|[\s;&|(`$])sudo(?:\s|$)/
 
 function flag(argv: string[], name: string): { value: string | undefined, rest: string[] } {
   const index = argv.indexOf(name)
@@ -171,7 +172,10 @@ export function plan(argv: string[]): Plan {
         return { _tag: 'Err', message: 'run takes agent or admin, then the command.' }
       if (shell.length === 0)
         return { _tag: 'Err', message: 'Give run a command.' }
-      return { _tag: 'Ok', steps: [{ host, command: shell.join(' ') }] }
+      const command = shell.join(' ')
+      if (host === 'agent' && SUDO_WORD.test(command))
+        return { _tag: 'Err', message: 'sudo does not run on the Agent account. Use hw run admin.' }
+      return { _tag: 'Ok', steps: [{ host, command }] }
     }
     case 'ssh': {
       const host = rest[0]
