@@ -76,3 +76,69 @@ The Dashboard's live Hogwild metrics remain available through Tailscale only.
 Remove the `agent.harlanzw.com` DNS record.
 Remove `/etc/caddy/routes/30-agent.caddy`, validate Caddy, then reload it.
 If replacing a previous route, restore that route instead.
+
+## GitHub webhooks
+
+The same hostname accepts GitHub deliveries at `https://agent.harlanzw.com/webhook`.
+Caddy sends only that exact path to the separate listener on `127.0.0.1:3211`.
+GitHub signatures authenticate deliveries. They do not use the Dashboard password or browser Origin.
+Every other path keeps the existing Dashboard authentication and Origin checks.
+The request body limit is 25 MB.
+
+```mermaid
+flowchart LR
+    GitHub -->|Signed POST /webhook| Caddy
+    Caddy --> Listener[Signature and delivery identity checks]
+    Listener --> Queue[Coalesce deliveries]
+    Queue --> Reconcile[Read current GitHub state]
+    Poll[Recovery polling] --> Reconcile
+    Browser -->|All other paths| Dashboard[Dashboard authentication and Origin checks]
+```
+
+After this change merges, update the Service and install the Caddy route using the commands above.
+Create a secret on Hogwild without printing it:
+
+```sh
+umask 077
+if [ ! -e ~/.config/harlan-github-agent/webhook-secret ]; then
+  openssl rand -hex 32 > ~/.config/harlan-github-agent/webhook-secret
+fi
+```
+
+Generate it once. If a secret already exists, keep it.
+Add this block to `~/.config/harlan-github-agent/config.yml`:
+
+```yaml
+webhook:
+  enabled: true
+  port: 3211
+  secret_path: /home/harlan/.config/harlan-github-agent/webhook-secret
+```
+
+Use `pnpm service:hogwild:restart` to let active Agents finish before the Service restarts.
+Keep `poll_interval_seconds` unchanged until real deliveries succeed.
+
+In [GitHub App settings](https://github.com/settings/apps/harlan-github-agent), enable Active under Webhook.
+Set the URL above and the same secret. Keep SSL verification enabled.
+Under Permissions and events, subscribe to:
+
+- Check run and Check suite
+- Commit status
+- Issue comment and Issues
+- Pull request and Pull request review
+- Push
+
+Use Recent deliveries to redeliver an event. Require a 204 response and a matching `Webhook:` Service log.
+Unsigned requests to `/webhook` must return 401.
+Requests to `/webhook/` and `/api/state` must still use Dashboard protection.
+Repeat the Origin checks above after installing the route.
+
+The listener remembers up to 10,000 delivery identities for one hour.
+A restart clears that cache. Repeated reads remain safe because GitHub supplies the current state.
+Deliveries during a read schedule at most one follow-up read.
+Polling recovers deliveries missed during shutdown or connection failures.
+GitHub does not automatically redeliver failed deliveries.
+See [GitHub delivery recovery](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).
+
+To disable deliveries, clear Active in GitHub App settings and set `webhook.enabled: false`.
+Restart through the same Service command. Keep polling enabled.

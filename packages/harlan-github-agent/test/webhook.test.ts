@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { createReconcileHint, createWebhookApp, verifyWebhookSignature, webhookHint } from '../src/webhook.ts'
+import { createReconcileHint, createWebhookApp, verifyWebhookSignature, webhookHint } from '../src/index.ts'
 
 const secret = 'a'.repeat(40)
 
@@ -10,10 +10,11 @@ function sign(body: string, key = secret): string {
 
 function deliver(app: ReturnType<typeof createWebhookApp>, input: {
   body: string
+  delivery?: string
   event?: string
   signature?: string | null
 }): Promise<Response> {
-  const headers = new Headers({ 'content-type': 'application/json' })
+  const headers = new Headers({ 'content-type': 'application/json', 'x-github-delivery': input.delivery ?? 'delivery-1' })
   if (input.event !== undefined)
     headers.set('x-github-event', input.event)
   if (input.signature !== null && input.signature !== undefined)
@@ -218,6 +219,86 @@ describe('coalescing a burst of deliveries', () => {
       await vi.advanceTimersByTimeAsync(5_000)
 
       expect(runs).toBe(0)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('delivery recovery', () => {
+  it('acknowledges a repeated delivery without requesting another read', async () => {
+    const hints: string[] = []
+    const app = createWebhookApp({ allowedOwners: ['harlan-zw'], logger: { info: () => undefined }, onHint: repository => hints.push(repository), secret })
+    const body = JSON.stringify({ repository: { full_name: 'harlan-zw/example' } })
+    const input = { body, event: 'check_run', signature: sign(body) }
+
+    expect((await deliver(app, input)).status).toBe(204)
+    expect((await deliver(app, input)).status).toBe(204)
+    expect(hints).toEqual(['harlan-zw/example'])
+  })
+
+  it('accepts another delivery and permits redelivery after retention expires', async () => {
+    const hints: string[] = []
+    let now = 0
+    const app = createWebhookApp({ allowedOwners: ['harlan-zw'], logger: { info: () => undefined }, onHint: repository => hints.push(repository), secret, now: () => now })
+    const body = JSON.stringify({ repository: { full_name: 'harlan-zw/example' } })
+    const input = { body, event: 'check_suite', signature: sign(body) }
+
+    await deliver(app, input)
+    await deliver(app, { ...input, delivery: 'delivery-2' })
+    now = 60 * 60_000
+    await deliver(app, input)
+    expect(hints).toEqual(['harlan-zw/example', 'harlan-zw/example', 'harlan-zw/example'])
+  })
+
+  it('does not let a rejected signature consume a delivery', async () => {
+    const hints: string[] = []
+    const app = createWebhookApp({ allowedOwners: ['harlan-zw'], logger: { info: () => undefined }, onHint: repository => hints.push(repository), secret })
+    const body = JSON.stringify({ repository: { full_name: 'harlan-zw/example' } })
+
+    expect((await deliver(app, { body, event: 'status', signature: sign(body, 'wrong') })).status).toBe(401)
+    expect((await deliver(app, { body, event: 'status', signature: sign(body) })).status).toBe(204)
+    expect(hints).toEqual(['harlan-zw/example'])
+  })
+
+  it('rejects a signed delivery without an identity', async () => {
+    const hints: string[] = []
+    const app = createWebhookApp({ allowedOwners: ['harlan-zw'], logger: { info: () => undefined }, onHint: repository => hints.push(repository), secret })
+    const body = JSON.stringify({ repository: { full_name: 'harlan-zw/example' } })
+
+    expect((await deliver(app, { body, event: 'status', delivery: '', signature: sign(body) })).status).toBe(400)
+    expect(hints).toEqual([])
+  })
+
+  it('coalesces all hints during an active read into one later read', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish = () => {}
+      const blocked = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      let runs = 0
+      const coalescer = createReconcileHint({
+        delayMilliseconds: 100,
+        onError: (error) => { throw error },
+        run: async () => {
+          runs += 1
+          if (runs === 1)
+            await blocked
+        },
+      })
+      coalescer.hint()
+      await vi.advanceTimersByTimeAsync(100)
+      for (let n = 0; n < 10; n += 1) {
+        coalescer.hint()
+        await vi.advanceTimersByTimeAsync(100)
+      }
+      expect(runs).toBe(1)
+      finish()
+      await vi.advanceTimersByTimeAsync(100)
+      await coalescer.stop()
+      expect(runs).toBe(2)
     }
     finally {
       vi.useRealTimers()
