@@ -1,12 +1,13 @@
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { glob } from 'node:fs/promises'
 import process from 'node:process'
 
+const dryRun = process.argv.includes('--dry-run')
 const bumpType = process.argv[2] as 'patch' | 'minor' | 'major' | undefined
 
 if (!bumpType || !['patch', 'minor', 'major'].includes(bumpType)) {
-  console.error('Usage: pnpm release <patch|minor|major>')
+  console.error('Usage: pnpm release <patch|minor|major> [--dry-run]')
   process.exit(1)
 }
 
@@ -29,7 +30,48 @@ const marketplace = JSON.parse(readFileSync(marketplacePath, 'utf-8'))
 const oldVersion = plugin.version
 const newVersion = bumpVersion(oldVersion, bumpType)
 
-console.log(`Bumping ${oldVersion} → ${newVersion}`)
+// Read the same reachable history that the new tag will contain.
+const git = (...args: string[]) => execFileSync('git', args, { encoding: 'utf8' }).trimEnd()
+const releaseTags = git('tag', '--merged', 'HEAD', '--list', 'v[0-9]*')
+const previousTag = releaseTags ? git('describe', '--tags', '--match', 'v[0-9]*', '--abbrev=0', 'HEAD') : undefined
+const range = previousTag ? `${previousTag}..HEAD` : 'HEAD'
+const fields = git('log', '--reverse', '-z', '--format=%h%x00%s%x00%b', range, '--').split('\0')
+const groups = new Map<string, string[]>([
+  ['breaking change', []],
+  ['feat', []],
+  ['fix', []],
+  ['chore', []],
+])
+
+for (let i = 0; i + 2 < fields.length; i += 3) {
+  const [hash, subject, body] = fields.slice(i, i + 3)
+  const conventional = subject.match(/^([a-z]+)(?:\([^()]+\))?(!)?: .+/i)
+  const breaking = body.match(/^BREAKING[ -]CHANGE: .*/m)
+  const type = conventional?.[2] || breaking ? 'breaking change' : conventional?.[1].toLowerCase() ?? 'other'
+  const entries = groups.get(type) ?? []
+  entries.push(`  • ${subject} (${hash})${breaking ? `\n    ${breaking[0]}` : ''}`)
+  groups.set(type, entries)
+}
+
+console.log(`\nRelease ${previousTag ?? '(no previous tag)'} → v${newVersion}`)
+console.log(`Commits: ${range}`)
+for (const [type, entries] of groups) {
+  if (entries.length)
+    console.log(`\n${type} (${entries.length})\n${entries.join('\n')}`)
+}
+if (!fields[0])
+  console.log(previousTag ? `\nNo commits since ${previousTag}.` : '\nNo commits.')
+
+const uncommitted = git('status', '--short')
+if (uncommitted)
+  console.log(`\nUncommitted files included by the release:\n${uncommitted}`)
+
+if (dryRun) {
+  console.log('\nDry run complete. No files, commits, or tags changed.')
+  process.exit(0)
+}
+
+console.log(`\nBumping ${oldVersion} → ${newVersion}`)
 
 // Update plugin.json
 plugin.version = newVersion
