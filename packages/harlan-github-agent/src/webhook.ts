@@ -91,25 +91,40 @@ export interface ReconcileHintOptions {
  */
 export function createReconcileHint(options: ReconcileHintOptions): ReconcileHint {
   const delayMilliseconds = options.delayMilliseconds ?? 3_000
-  let timer: NodeJS.Timeout | undefined
+  let state:
+    | { _tag: 'Idle' }
+    | { _tag: 'Scheduled', timer: NodeJS.Timeout }
+    | { _tag: 'Running', pending: boolean }
+    | { _tag: 'Stopped' } = { _tag: 'Idle' }
   let active: Promise<void> = Promise.resolve()
-  let stopped = false
+
+  const schedule = (): void => {
+    const timer = setTimeout(() => {
+      state = { _tag: 'Running', pending: false }
+      active = Promise.resolve().then(options.run).catch(options.onError).finally(() => {
+        if (state._tag !== 'Running')
+          return
+        const pending = state.pending
+        state = { _tag: 'Idle' }
+        if (pending)
+          schedule()
+      })
+    }, delayMilliseconds)
+    timer.unref()
+    state = { _tag: 'Scheduled', timer }
+  }
 
   return {
     hint: () => {
-      if (stopped || timer !== undefined)
-        return
-      timer = setTimeout(() => {
-        timer = undefined
-        active = active.then(options.run).catch(options.onError)
-      }, delayMilliseconds)
-      timer.unref()
+      if (state._tag === 'Idle')
+        schedule()
+      else if (state._tag === 'Running')
+        state.pending = true
     },
     stop: async () => {
-      stopped = true
-      if (timer !== undefined)
-        clearTimeout(timer)
-      timer = undefined
+      if (state._tag === 'Scheduled')
+        clearTimeout(state.timer)
+      state = { _tag: 'Stopped' }
       await active
     },
   }
@@ -120,6 +135,7 @@ export interface WebhookAppOptions {
   logger: { info: (message: string) => void }
   onHint: (repository: string) => void
   secret: string
+  now?: () => number
 }
 
 /**
@@ -131,6 +147,10 @@ export interface WebhookAppOptions {
  */
 export function createWebhookApp(options: WebhookAppOptions): H3 {
   const app = new H3()
+  const deliveries = new Map<string, number>()
+  const now = options.now ?? Date.now
+  const retentionMilliseconds = 60 * 60_000
+  const maximumDeliveries = 10_000
 
   app.get('/health', () => Response.json({ status: 'ok' }))
 
@@ -140,6 +160,19 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
       // Never say which part failed. A precise answer is a probing oracle.
       return new Response('Signature mismatch.', { status: 401 })
     }
+
+    const delivery = event.req.headers.get('x-github-delivery')
+    if (delivery === null || delivery.trim() === '' || delivery.length > 128)
+      return new Response('Delivery identity is missing or invalid.', { status: 400 })
+
+    const at = now()
+    for (const [id, expiresAt] of deliveries) {
+      if (expiresAt > at)
+        break
+      deliveries.delete(id)
+    }
+    if (deliveries.has(delivery))
+      return new Response(null, { status: 204 })
 
     const name = event.req.headers.get('x-github-event') ?? ''
     let payload: unknown
@@ -155,8 +188,14 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
       options.logger.info(`Webhook: ${name} on ${hint.repository}.`)
       options.onHint(hint.repository)
     }
-    // Always 204. GitHub retries a failure, and a delivery this service chose
-    // to ignore is not a failure it should send again.
+    // Record only accepted deliveries. Polling recovers work after a restart.
+    if (deliveries.size >= maximumDeliveries) {
+      const oldest = deliveries.keys().next().value
+      if (oldest !== undefined)
+        deliveries.delete(oldest)
+    }
+    deliveries.set(delivery, at + retentionMilliseconds)
+    // Acknowledge ignored events as well as scheduled reads.
     return new Response(null, { status: 204 })
   })
 

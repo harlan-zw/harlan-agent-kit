@@ -159,15 +159,18 @@ const client = createControlClient({
 
 ## Webhooks
 
-Set `webhook.enabled` to start a second listener on its own port. It carries one route, `POST /webhook`, and nothing else. Keep the dashboard port on loopback: it can pause agents, approve pull requests, cancel tasks, and eject sessions, so it must never be exposed.
+Set `webhook.enabled` to start the separate listener on port 3211.
+The public route exposes only `POST /webhook` through Caddy.
+Dashboard routes retain their password and Origin checks.
+Follow the [public route setup](../../scripts/public-dashboard.md#github-webhooks) to configure the listener and GitHub App subscriptions.
 
-Point a tunnel at the webhook port alone, then set that URL and a shared secret on the GitHub App. Write the same secret to `webhook.secret_path` with mode `0600` and at least 32 characters.
+Deliveries request a fresh GitHub read. Their bodies never authorize actions or replace GitHub state.
+Signatures authenticate requests. Delivery identities suppress duplicates for one hour, up to 10,000 identities.
+The cache clears on restart. Polling recovers missed deliveries.
 
-A delivery is a hint, never a payload. It says "read this repository again", and the service answers by running the reconciliation pass it already runs on a timer. The delivery body is never stored and never trusted beyond the repository name, so a missed, duplicated, or forged delivery cannot move the journal anywhere a poll would not.
-
-Deliveries within three seconds of each other cost one pass, so a busy repository cannot spend the rate limit this feature exists to save.
-
-Keep polling on. It is the safety net for a delivery GitHub never sent.
+Deliveries within three seconds share one read.
+Deliveries during that read schedule at most one follow-up read.
+Keep polling enabled for recovery.
 
 GitHub is the durable Review workflow record. The newest confirmed canonical comment state wins across Review and gate updates. Before finalizing `CLOSED`, the service reads the exact pull request. It then publishes `MERGED` or `CLOSED`, clears Agent labels, and stores completion for restart Recovery.
 
