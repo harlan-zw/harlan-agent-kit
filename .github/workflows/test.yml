@@ -83,6 +83,9 @@ jobs:
           sudo install "$RUNNER_TEMP/wt" /usr/local/bin/wt
           wt --version
 
+      - name: Release preview
+        run: pnpm test:release
+
       # `pnpm check:context` stays out of this workflow. It compares installed
       # files in a home directory against tracked sources. A runner installs
       # nothing, so it reports drift that does not exist. `pnpm test:context`
