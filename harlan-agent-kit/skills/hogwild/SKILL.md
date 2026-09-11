@@ -68,7 +68,7 @@ Public routes go internet, Cloudflare tunnel, Caddy `:8080`, then the loopback p
 | Runner supervisor, runners.conf, Dockerfile, host hardening | `harlan-zw/hogwild-gh-runner` (private) `github-runner/` | `~/pkg/hogwild-gh-runner` | install steps in its README |
 | Host security layout, Docker rules, pending items | same repo, `hogwild/` | same | `hogwild/README.md` |
 | Status site | `harlan-zw/hogwild.harlanzw.com` | `~/pkg/hogwild.harlanzw.com` | GitHub Actions deploy job to `hogwild-deploy` |
-| Caddy routes | `harlan-agent-kit/scripts/30-agent.caddy` for the agent route; others live only on the host | | `sudo systemctl reload caddy` |
+| Caddy routes | `scripts/30-agent.caddy` for the agent route; others live only on the host | | `sudo systemctl reload caddy` |
 
 The live `runners.conf` is `/var/lib/github-runner/config/runners.conf`. Change it in the repo first, then install it.
 

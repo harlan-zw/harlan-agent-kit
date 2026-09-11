@@ -164,7 +164,7 @@ export function plan(argv: string[]): Plan {
     case 'pending':
       return {
         _tag: 'Ok',
-        steps: [{ host: 'local', command: `sed -n '/^## Pending/,/^## /p' ${HOST_README} | sed '1d;$d'` }],
+        steps: [{ host: 'local', command: `awk '/^## Pending/{f=1;next} f && /^## /{f=0} f' ${HOST_README}` }],
       }
     case 'run': {
       const [host, ...shell] = rest

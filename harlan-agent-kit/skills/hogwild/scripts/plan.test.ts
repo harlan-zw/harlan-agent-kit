@@ -1,11 +1,30 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { plan, stepArgv } from './plan.ts'
+import { HOST_README, plan, stepArgv } from './plan.ts'
 
 function steps(argv: string[]) {
   const result = plan(argv)
   if (result._tag === 'Err')
     throw new Error(result.message)
   return result.steps
+}
+
+function pendingOutput(body: string) {
+  const dir = mkdtempSync(join(tmpdir(), 'hw-pending-'))
+  try {
+    const file = join(dir, 'README.md')
+    writeFileSync(file, `# Host\n\n${body}`)
+    const [step] = steps(['pending'])
+    const command = step!.command.replace(HOST_README, file)
+    const argv = stepArgv({ ...step!, command })
+    return execFileSync(argv[0]!, argv.slice(1), { encoding: 'utf8' })
+  }
+  finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 describe('hw plan', () => {
@@ -58,5 +77,18 @@ describe('hw plan', () => {
   it('passes the remote command to ssh as one unquoted argument', () => {
     const argv = stepArgv({ host: 'admin', command: 'echo "here" | cat' })
     expect(argv).toEqual(['ssh', '-o', 'BatchMode=yes', 'hogwild-admin', 'echo "here" | cat'])
+  })
+
+  it('prints every pending item when the Pending section ends the README', () => {
+    const output = pendingOutput('## Done\n\n- closed item\n\n## Pending\n\n- item one\n- item two\n')
+    expect(output).toContain('item one')
+    expect(output).toContain('item two')
+  })
+
+  it('prints every pending item and no heading when a section follows Pending', () => {
+    const output = pendingOutput('## Pending\n\n- item one\n- item two\n\n## Done\n\n- closed item\n')
+    expect(output).toContain('item one')
+    expect(output).toContain('item two')
+    expect(output).not.toContain('##')
   })
 })

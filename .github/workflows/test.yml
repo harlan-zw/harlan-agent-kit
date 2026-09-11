@@ -105,6 +105,9 @@ jobs:
       - name: Hogwild CLI
         run: pnpm test:hogwild
 
+      - name: Skill doc paths
+        run: pnpm test:skill-doc-paths
+
       # These three enforce the worktree and pull request rules. `pnpm test`
       # does not run them.
       - name: Plugin hooks
