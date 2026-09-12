@@ -841,16 +841,25 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
               checksClient.value.paginate(checksClient.value.rest.actions.listWorkflowRunsForRepo, { owner, repo, head_sha: ref, per_page: 100, request: { signal } }),
             ]).then(async ([allRuns, statuses, workflowRuns]): Promise<GitHubChecksSnapshot> => {
               const derivedSuites = derivedCheckSuiteIds(workflowRuns)
+              const completedWorkflows = new Map(workflowRuns.flatMap(run => run.status === 'completed' && run.conclusion && run.check_suite_id
+                ? [[run.check_suite_id, run.conclusion] as const]
+                : []))
               const runs = allRuns.filter(check => check.check_suite?.id === undefined || check.check_suite.id === null || !derivedSuites.has(check.check_suite.id))
               const current = currentGitHubChecks([
-                ...runs.map(check => ({
-                  id: check.id,
-                  failure: { _tag: 'NotAsked' as const },
-                  source: { _tag: 'CheckRun' as const, appId: check.app?.id ?? null },
-                  name: check.name,
-                  status: check.status,
-                  conclusion: check.conclusion,
-                })),
+                ...runs.map((check) => {
+                  // GitHub can leave jobs queued after their workflow has finished.
+                  const workflowConclusion = check.status !== 'completed' && check.check_suite?.id
+                    ? completedWorkflows.get(check.check_suite.id)
+                    : undefined
+                  return {
+                    id: check.id,
+                    failure: { _tag: 'NotAsked' as const },
+                    source: { _tag: 'CheckRun' as const, appId: check.app?.id ?? null },
+                    name: check.name,
+                    status: workflowConclusion ? 'completed' : check.status,
+                    conclusion: workflowConclusion || check.conclusion,
+                  }
+                }),
                 ...statuses.data.statuses.map(status => ({
                   id: status.id,
                   failure: { _tag: 'NotAsked' as const },

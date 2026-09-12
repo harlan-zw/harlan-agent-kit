@@ -127,6 +127,61 @@ describe('live pull request base', () => {
     expect(checkedRefs).not.toContain(historicBaseSha)
   })
 
+  it.each([
+    ['queued', null, 'completed', 'failure', 'completed', 'failure'],
+    ['in_progress', null, 'completed', 'cancelled', 'completed', 'cancelled'],
+    ['queued', null, 'completed', 'success', 'completed', 'success'],
+    ['completed', 'success', 'completed', 'failure', 'completed', 'success'],
+    ['queued', null, 'in_progress', null, 'queued', null],
+  ])('resolves check %s/%s against workflow %s/%s', async (status, conclusion, workflowStatus, workflowConclusion, expectedStatus, expectedConclusion) => {
+    const listForRef = () => undefined
+    const listWorkflowRunsForRepo = () => undefined
+    const client = {
+      paginate: (method: unknown, input: { ref?: string, head_sha?: string }) => {
+        if (method === listForRef && input.ref === liveBaseSha) {
+          return Promise.resolve([
+            { id: 1, name: 'build', status, conclusion, app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 7 } },
+          ])
+        }
+        if (method === listWorkflowRunsForRepo && input.head_sha === liveBaseSha) {
+          return Promise.resolve([
+            { id: 70, event: 'push', status: workflowStatus, conclusion: workflowConclusion, check_suite_id: 7 },
+          ])
+        }
+        return Promise.resolve([])
+      },
+      rest: {
+        actions: { getJobForWorkflowRun: () => Promise.reject(new Error('Unexpected job lookup.')), listWorkflowRunsForRepo },
+        checks: { listForRef },
+        issues: { listComments: () => undefined },
+        pulls: {
+          get: () => Promise.resolve({ data: pullRequest() }),
+          listReviewComments: () => undefined,
+          listReviews: () => undefined,
+        },
+        repos: {
+          getBranch: () => Promise.resolve({ data: { commit: { sha: liveBaseSha } } }),
+          getBranchRules: () => Promise.resolve({ data: [] }),
+          getCombinedStatusForRef: () => Promise.resolve({ data: { statuses: [] } }),
+        },
+      },
+    } as unknown as Octokit
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      baseChecks: {
+        _tag: 'Available',
+        checks: [expect.objectContaining({ name: 'build', status: expectedStatus, conclusion: expectedConclusion })],
+      },
+    })))
+  })
+
   it('drops base check runs that a workflow_run event attached to the base commit', async () => {
     const listForRef = () => undefined
     const listWorkflowRunsForRepo = () => undefined
