@@ -1,0 +1,15 @@
+{
+  "name": "notes-viewer",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "node start.mjs",
+    "build": "node start.mjs build",
+    "service:install": "bash install.sh"
+  },
+  "dependencies": {
+    "mermaid": "catalog:",
+    "vitepress": "catalog:",
+    "vitepress-plugin-mermaid": "catalog:"
+  }
+}

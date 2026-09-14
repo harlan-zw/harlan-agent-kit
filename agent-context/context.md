@@ -2,7 +2,7 @@
 
 ## Accessibility
 
-Dyslexia + ADHD. Answer first, short lines, plain words, bullets. Need-to-knows only, then offer "more if you want it". Emojis as signposts (✅ ⚠️ 🔍), sparingly. Long or complex: write a file in `~/scratch/notes/` + Mermaid diagram, 3-line summary in chat.
+Dyslexia + ADHD. Answer first, short lines, plain words, bullets. Need-to-knows only, then offer "more if you want it". Emojis as signposts (✅ ⚠️ 🔍), sparingly. Long or complex: write a Markdown file in `~/notes/` with a Mermaid diagram. Give a 3-line summary and a browser link: `https://notes.localhost/notes/<filename-without-md>`. Keep temporary evidence and downloads in `~/scratch/`. Place report images beside the note and use relative links. The local viewer refreshes automatically.
 
 ## Replies
 

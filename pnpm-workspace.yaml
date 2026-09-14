@@ -28,12 +28,15 @@ catalog:
   eslint: ^10.8.1
   eslint-plugin-harlanzw: ^0.20.0
   h3: ^2.0.1-rc.26
+  mermaid: ^11.12.0
   nuxt: ^4.5.2
   nuxt-skew-protection: ^1.5.2
   obuild: ^0.4.38
   octokit: ^5.0.5
   srvx: ^0.12.5
   typescript: 6.0.3
+  vitepress: ^1.6.4
+  vitepress-plugin-mermaid: ^2.0.17
   vitest: ^4.1.10
   vue: ^3.5.41
   vue-tsc: ^3.3.10

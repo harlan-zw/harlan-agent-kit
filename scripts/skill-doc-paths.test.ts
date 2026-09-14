@@ -23,3 +23,18 @@ it('resolves every repository path quoted in a skill to a file in this repositor
   }
   expect(missing).toEqual([])
 })
+
+it('publishes no skill output to the retired scratch notes path', () => {
+  const retired: string[] = []
+  function scan(dir: string) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory())
+        scan(path)
+      else if (readFileSync(path, 'utf8').includes('~/scratch/notes/'))
+        retired.push(path)
+    }
+  }
+  scan(skillsDir)
+  expect(retired).toEqual([])
+})
