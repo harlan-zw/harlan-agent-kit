@@ -133,6 +133,8 @@ Store verification media outside the worktree. Capture and inspect the repaired 
 Do not mark a UI repair complete while a visible defect remains.
 Do not expand scope. Return disputed only when a regression test or exact source behavior proves the finding false at this head commit.
 Return blocked when the requested scope is unsafe or cannot be verified.
+If a finding needs only a title or description edit, return blocked with the exact replacement text.
+Do not edit GitHub metadata or invent a file change to satisfy the result schema.
 Do not stage, commit, push, approve, merge, or post comments. The controller owns those operations.
 Choose a concise commit message that describes the actual fix.
 Return an empty commitMessage with outcome blocked or disputed.
@@ -292,6 +294,14 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')
         return verified
+      if (verified.value.changedFiles === 0) {
+        return ok({
+          _tag: 'ActionRequired',
+          reason: `Repair produced no file changes. ${turn.value.value.summary}`,
+          evidence: JSON.stringify({ findings, checks: turn.value.value.checks }),
+          usage: turn.value.usage,
+        })
+      }
       const checked = await progress({ percent: 90, label: 'Repair checked' })
       if (checked._tag === 'Err')
         return checked

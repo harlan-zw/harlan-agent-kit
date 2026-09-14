@@ -981,8 +981,6 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
       if (workflowPath !== undefined)
         return err(`The controller cannot publish workflow changes to a contributor fork: ${workflowPath}.`)
       const changedFiles = changedPaths.length
-      if (changedFiles === 0)
-        return err('The agent completed without changing any files.')
       return ok({
         digest: patch.digest,
         changedFiles,
@@ -1106,8 +1104,6 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       if (changed.exitCode !== 0)
         return err(`Could not inspect changed files: ${changed.stderr}`)
       const changedPaths = changed.stdout.split('\0').filter(Boolean)
-      if (changedPaths.length === 0)
-        return err('The agent completed without changing any files.')
       return ok({ digest: patch.digest, changedFiles: changedPaths.length, changedPaths })
     },
 
