@@ -9,6 +9,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { parse } from 'yaml'
 import { AGENT_ROLES, REASONING_EFFORTS } from './agent-profile.ts'
+import { parsePackageReleaseConfig } from './package-release-config.ts'
 import { err, ok } from './result.ts'
 
 export interface ConfigIssue {
@@ -439,6 +440,9 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     return undefined
   }
 
+  const release = value.release === undefined ? undefined : parsePackageReleaseConfig(value.release)
+  if (release?._tag === 'Err')
+    issues.push({ path: `${path}.release`, message: release.error })
   const github = requiredString(value, 'github', path, issues)
   const checkout = requiredString(value, 'checkout', path, issues)
   const enabled = requiredBoolean(value, 'enabled', path, issues)
@@ -449,6 +453,8 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
   if (pollIntervalSeconds !== undefined && (typeof pollIntervalSeconds !== 'number' || !Number.isInteger(pollIntervalSeconds) || pollIntervalSeconds < 10 || pollIntervalSeconds > 3600))
     issues.push({ path: `${path}.poll_interval_seconds`, message: 'Expected an integer from 10 to 3600.' })
   const repositoryOwnership = ownership(value, path, issues)
+  if (release?._tag === 'Ok' && repositoryOwnership !== 'owned')
+    issues.push({ path: `${path}.release`, message: 'Package releases require an owned repository.' })
   const reasoningEffort = roleReasoningEfforts(value.reasoning_effort, `${path}.reasoning_effort`, issues)
   const defaultBranch = requiredString(value, 'default_branch', path, issues)
   const writablePullRequestAuthors = stringArray(value, 'writable_pr_authors', path, issues)
@@ -464,6 +470,8 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
       ? openPullRequestsValue
       : undefined
   const pullRequestReview = requiredBoolean(value, 'pr_review', path, issues)
+  if (release?._tag === 'Ok' && pullRequestReview !== true)
+    issues.push({ path: `${path}.release`, message: 'Package releases require pull request Review.' })
   const conflictResolution = requiredBoolean(value, 'conflict_resolution', path, issues)
   const ownershipConfig = takeOwnership(value, path, repositoryOwnership, issues)
   const autoMerge = repositoryAutoMergeScope(value, path, repositoryOwnership, pullRequestReview, issues)
@@ -510,6 +518,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
 
   return {
     github,
+    ...(release?._tag === 'Ok' ? { release: release.value } : {}),
     checkout,
     enabled,
     ...(typeof priority === 'number' ? { priority } : {}),

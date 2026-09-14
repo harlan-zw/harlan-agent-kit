@@ -269,6 +269,26 @@ Use the dashboard `Cancel` control for active or queued tasks. Store that cancel
 
 When required CI fails on the current base of an owned repository, dispatch a separate baseline repair task. Use a fresh worktree and `../pr/SKILL.md`. Keep the original review waiting until the repair merges, then resume its existing review worker.
 
+## Package releases
+
+Use an explicit `repositories[].release` policy for stable patch and minor npm releases.
+Require an owned repository, enabled writes, signed webhooks, and pull request Review.
+Only Harlan's checkbox click or new `do release` comment authorizes publication.
+Feature pull requests offer minor. Fix and performance pull requests offer patch.
+Never offer patch when the unreleased range contains features.
+Suppress controls for known breaking changes, incomplete evidence, and already released merges.
+
+The controller pins the package, version, source commit, and policy before accepting a click.
+Prepare configured JSON version files through a separate pull request.
+Merge only that exact revision after current Review, required checks, and branch protection pass.
+This release authority does not permit merging unrelated pull requests.
+Publish a tag through the controller, then verify the existing GitHub Actions workflow and npm version.
+Keep progress in one self-identified release comment. Resume the same version after failures.
+Workers gain no GitHub or npm publication authority.
+
+Read the [package README](../../../packages/harlan-github-agent/README.md) for repository setup and adapter limits.
+Do not enable this adapter for custom version generators or non-npm publishing destinations.
+
 ## Resolve conflicts
 
 Create one conflict resolution task when GitHub reports an open pull request as conflicting.

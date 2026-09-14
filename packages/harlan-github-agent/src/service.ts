@@ -37,9 +37,11 @@ import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
-import { createIssueWorkWorker } from './issue-work-worker.ts'
+import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
+import { reconcilePackageReleases } from './package-release-controller.ts'
+import { createPackageReleaseSource } from './package-release-github.ts'
 import { runPassStep } from './poll-pass.ts'
 import { createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
@@ -1031,6 +1033,45 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })
       recordPassIncidents('pull_request_status', statusSync.errors)
       if (mutationSchedulers !== undefined) {
+        if (config.triggers.includes('github') && config.webhook._tag === 'Enabled' && store.getAgentControl()._tag !== 'Paused') {
+          for (const repository of config.repositories.filter(repository => repository.enabled && repository.release !== undefined)) {
+            if (!store.mayPublishPackageRelease(repository.github))
+              continue
+            const errors = await guarded('Package releases', async () => {
+              await reconcilePackageReleases({
+                repository,
+                store,
+                now: () => now().getTime(),
+                signal,
+                source: assertLease => createPackageReleaseSource({
+                  repository,
+                  tokens,
+                  actorLogin: actorLogin(repository),
+                  signal,
+                  now,
+                  template: async () => {
+                    const template = await workerGithub.getPullRequestTemplate(repository, signal)
+                    if (template._tag === 'Err')
+                      throw new Error(template.error)
+                    return pullRequestTemplateBody(template.value)
+                  },
+                  review: (number, sha) => {
+                    const eligible = store.listReviewGateRefreshes().find(run => run.repository === repository.github && run.pullRequestNumber === number && run.headSha === sha)
+                    const review = store.storedReviewForHead(repository.github, number, sha)
+                    return eligible !== undefined && review._tag === 'Current' && eligible.reviewRunId === review.run.id ? review : { _tag: 'None' }
+                  },
+                  assertLease: () => {
+                    if (store.getAgentControl()._tag === 'Paused' || !store.mayPublishPackageRelease(repository.github))
+                      throw new Error('Package releases are paused for this repository.')
+                    assertLease()
+                  },
+                }),
+              })
+              return [] as string[]
+            }, [`${repository.github}: package release reconciliation failed.`])
+            recordPassIncidents('package_release', errors)
+          }
+        }
         const stopped = await guarded('Stopped review comments', () => publishStoppedReviews({
           github: workerGithub,
           now,
@@ -1257,6 +1298,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           allowedOwners: config.github.allowedOwners,
           logger: { info: message => options.logger.info(message) },
           onHint: () => reconcileHint.hint(),
+          packageRelease: {
+            allowedAuthor: userLogin,
+            actorLogin: (name) => {
+              const repository = config.repositories.find(repository => repository.github === name && repository.enabled
+                && repository.release !== undefined && repository.ownership === 'owned')
+              return repository === undefined || !config.mutationsEnabled || !store.mayPublishPackageRelease(name)
+                ? null
+                : actorLogin(repository)
+            },
+            apply: (request) => { store.requestPackageRelease(request) },
+            command: command => store.queuePackageReleaseCommand(command),
+          },
           reviewCancellation: {
             actorLogin: (name) => {
               const repository = config.repositories.find(repository => repository.github === name && repository.enabled)

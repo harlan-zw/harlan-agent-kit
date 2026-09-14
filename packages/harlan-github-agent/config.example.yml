@@ -95,3 +95,15 @@ repositories: []
 #   auto_merge:
 #     pull_requests: every      # labelled (default) or every
 #     minimum_confidence: 80    # replaces $.auto_merge.minimum_confidence here
+# Package releases are disabled unless an owned Repository mapping includes release.
+# Enable webhooks, repository writes, pull_request_review, and automatic selection first.
+# Trust the publishing actor in writable_pr_authors so the version pull request receives Review.
+#   release:
+#     manifest: package.json
+#     version_files: [package.json]
+#     tag_prefix: v
+#     workflow: release.yml
+#     checks: [test, build]  # Exact GitHub Actions check names.
+#     changelog: CHANGELOG.md  # Optional existing file.
+# This policy permits the controller to merge its verified version pull request and create a tag.
+# Custom version generators, independent versions, and non-npm outputs need separate support.

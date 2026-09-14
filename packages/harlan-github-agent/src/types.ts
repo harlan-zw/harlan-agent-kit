@@ -1,6 +1,7 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
+import type { PackageReleaseConfig } from './package-release.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
@@ -31,6 +32,8 @@ export type RepositoryAutoMergeScope
     | { _tag: 'Every', minimumConfidence: number }
 
 export interface RepositoryMapping {
+  /** Explicit authority for stable patch and minor package releases. */
+  release?: PackageReleaseConfig
   github: string
   checkout: string
   enabled: boolean
