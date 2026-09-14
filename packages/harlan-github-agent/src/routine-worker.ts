@@ -122,9 +122,23 @@ export function selectRoutineCandidates(name: ClaimedRoutineRun['name'], candida
 }
 
 /**
+ * How many prior Candidates one scan prompt may carry.
+ *
+ * The ledger is insert-only, so a Routine's history grows by rows every day
+ * and never shrinks. A prompt that carried all of it would grow without
+ * limit until the turn drowned in its own memory. A bounded recent window
+ * keeps the payload flat, and the newest Candidates carry the most signal.
+ */
+export const MAXIMUM_MEMORY_CANDIDATES = 40
+
+/**
  * Builds the scan prompt for one Routine run.
  *
- * Prior proposals retain their identity and outcome. Prior rejections go in verbatim. A Routine that proposes the same rejected
+ * Merged and Superseded Candidates have left the open set, so they stop
+ * travelling with the prompt. Closed work is checked against the repository,
+ * not against the memory. Everything else is a recent window, because the
+ * ledger is insert-only and its history never shrinks. Prior rejections go
+ * in verbatim. A Routine that proposes the same rejected
  * change every morning costs more trust than a wrong fix, and the ledger can
  * only refuse the write. Telling the agent why the last one was rejected is
  * what stops it spending a turn rediscovering it.
@@ -136,7 +150,10 @@ export function routineScanPrompt(input: {
   repository: string
   feedback?: readonly AgentFeedbackSignal[]
 }): string {
-  const rejected = input.priorCandidates.filter(candidate => candidate.result._tag === 'Rejected')
+  const remembered = input.priorCandidates
+    .filter(candidate => candidate.result._tag !== 'Merged' && candidate.result._tag !== 'Superseded')
+    .slice(-MAXIMUM_MEMORY_CANDIDATES)
+  const rejected = remembered.filter(candidate => candidate.result._tag === 'Rejected')
   const memory = rejected.length === 0
     ? 'Nothing has been rejected yet.'
     : rejected
@@ -146,7 +163,7 @@ export function routineScanPrompt(input: {
         })
         .join('\n')
 
-  const known = input.priorCandidates.filter(candidate => candidate.result._tag !== 'Rejected')
+  const known = remembered.filter(candidate => candidate.result._tag !== 'Rejected')
   const knownMemory = JSON.stringify(known.map(candidate => ({
     fingerprint: candidate.fingerprint,
     title: candidate.title,

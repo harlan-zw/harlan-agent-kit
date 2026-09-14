@@ -41,7 +41,7 @@ export { createRoutineReportController, routineReportBody, routineReportCommand,
 export { DEFAULT_CATCH_UP_MINUTES, dueRoutine, matchesCron, parseCron, wallClockParts } from './routine-schedule.ts'
 export type { CronExpression, DueRoutine } from './routine-schedule.ts'
 export { parseRoutineSpec, ROUTINE_MODES, ROUTINE_NAMES, ROUTINE_SPEC_PATH } from './routine-spec.ts'
-export { CANDIDATE_SCHEMA, createRoutineScanWorker, DEFAULT_MAXIMUM_CHANGED_FILES, routineScanPrompt } from './routine-worker.ts'
+export { CANDIDATE_SCHEMA, createRoutineScanWorker, DEFAULT_MAXIMUM_CHANGED_FILES, MAXIMUM_MEMORY_CANDIDATES, routineScanPrompt } from './routine-worker.ts'
 export { startAgentServer } from './server.ts'
 export { combineServiceState } from './service-state.ts'
 export type { CombinedServiceState, CombineServiceStateError, CombineServiceStateInput } from './service-state.ts'
