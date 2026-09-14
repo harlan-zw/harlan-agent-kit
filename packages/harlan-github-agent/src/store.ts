@@ -3,6 +3,7 @@ import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { IssueTriageState } from './issue-triage.ts'
+import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageStatsOutcome, RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
@@ -112,6 +113,7 @@ import { createBatchStore } from './batch-store.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { isIssueTriageState } from './issue-triage.ts'
+import { createPackageReleaseStore } from './package-release-store.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { buildStats } from './stats.ts'
@@ -706,7 +708,7 @@ export interface LatestPullRequestTriageRun {
   completedAt: string
 }
 
-export interface JournalStore extends BatchStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore {
   /**
    * Approves one exact issue state from an outside author. The Approval unlocks
    * Issue triage, and Issue work follows on its own when triage says ready.
@@ -6593,6 +6595,7 @@ export function openJournalStore(
   roleReasoningEfforts: RoleReasoningEfforts = {},
 ): JournalStore {
   const database = openDatabase(path)
+  const packageReleaseStore = createPackageReleaseStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
   // Retained gates answer the current head, target, and policy through stored Review evidence.
@@ -14600,6 +14603,7 @@ export function openJournalStore(
     recordExactPullRequestObservation,
     recordVerifiedPullRequestClosure,
     ...batchStore,
+    ...packageReleaseStore,
     listOpenAgentPullRequests,
     listActiveTaskLeases,
     listRunningTaskItems,

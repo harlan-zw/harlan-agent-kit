@@ -205,3 +205,58 @@ Use `Dismiss` on a board card to never act on that pull request or issue again. 
 Use `Cancel` to stop an active or queued task. The task stays cancelled for that pull request commit. Closing the pull request uses the same path.
 
 Enable `mutations_enabled` only after the selected repository policy and GitHub App permissions are correct.
+
+## Package releases
+
+Eligible open pull requests get one release checkbox in a bot comment.
+Feature titles offer **Release minor after merge**. Fix and performance titles offer **Release patch after merge**.
+Select it before merging. Clear it to cancel while the pull request remains open.
+The selection survives service restarts. A changed head or release version clears the selection.
+After merge, the controller waits for passing default branch push checks before preparing the release.
+Pull request checks do not count as default branch checks.
+Merged pull requests also retain a release checkbox when no selection exists.
+Docs, chores, known breaking changes, and released changes get no checkbox.
+If the unreleased range contains features, a fix cannot offer patch.
+Use a feature pull request for that minor release.
+
+Harlan can select the checkbox or comment `do release`, `do release patch`, or `do release minor`.
+Only a signed GitHub webhook from the authenticated Harlan account grants release authority.
+Comment edits cannot create text commands. Duplicate clicks and deliveries cannot publish another version.
+
+Enable the webhook and `github` trigger. Enable repository writes and set Selection mode to Auto.
+Add this block to an owned Repository mapping with `pull_request_review: true`:
+
+```yaml
+writable_pr_authors: [harlan-zw, 'harlan-github-agent[bot]']
+release:
+  manifest: package.json
+  version_files: [package.json]
+  tag_prefix: v
+  workflow: release.yml
+  checks: [test, build] # Use exact GitHub Actions check names.
+  changelog: CHANGELOG.md # Optional. The file must already exist.
+```
+
+The policy authorizes stable patch and minor releases, including the release version pull request.
+That pull request requires fresh Review at 90% confidence, required checks, and GitHub branch protection.
+The general auto-merge label is not required. Source changes still follow their normal merge policy.
+
+Before merge, the controller binds the selection to the pull request head and proposed release version.
+After merge, it checks the full unreleased range again and pins the default branch commit.
+It never promotes an approved patch to minor. A changed release needs a new selection.
+It prepares configured JSON version files, then merges their verified pull request and creates the release tag.
+If version changes already merged, it uses that checked commit directly.
+The existing tag workflow builds and publishes. The controller verifies the workflow, npm versions, and GitHub release.
+Progress and failures stay in the release comment. Retries retain the original version.
+
+The first adapter supports one jointly versioned npm package group per repository.
+List every synchronized JSON version file. Public package manifests must appear in `version_files`.
+It does not execute the repository's release script or arbitrary shell commands.
+Do not enable it for independent versions, Cargo synchronization, custom version generators, or other publishing destinations.
+Those workflows need their own preparation and verification support.
+
+Only existing stable npm releases qualify. First releases, prereleases, and majors stay manual.
+Conventional Commits classify the full range. Missing classification, truncated diffs, and apparent exported API removals suppress the action.
+These checks cannot prove semantic compatibility for every possible source change.
+If the branch or release policy changes after authorization, the controller stops instead of expanding the approved release.
+A failed publishing workflow can be rerun in GitHub for the same tag.

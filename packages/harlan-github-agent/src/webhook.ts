@@ -1,7 +1,9 @@
+import type { PackageReleaseCommand, PackageReleaseRequest } from './package-release.ts'
 import type { ReviewCancellation } from './review-cancel.ts'
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
+import { packageReleaseCommand, releaseRequest } from './package-release.ts'
 import { reviewCancellation } from './review-cancel.ts'
 
 /**
@@ -140,6 +142,12 @@ export interface WebhookAppOptions {
     actorLogin: (repository: string) => string | null
     apply: (request: ReviewCancellation & { requestId: string }) => void
   }
+  packageRelease?: {
+    allowedAuthor: string
+    actorLogin: (repository: string) => string | null
+    apply: (request: PackageReleaseRequest & { requestId: string }) => void
+    command?: (command: PackageReleaseCommand) => void
+  }
   secret: string
   now?: () => number
 }
@@ -191,6 +199,18 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
 
     const hint = webhookHint(name, payload, options.allowedOwners)
     if (hint._tag === 'Reconcile') {
+      const command = packageReleaseCommand(name, payload)
+      if (command !== null && options.packageRelease !== undefined
+        && command.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
+        && options.packageRelease.actorLogin(hint.repository) !== null) {
+        options.packageRelease.command?.(command)
+      }
+      const release = releaseRequest(name, payload)
+      if (release !== null && options.packageRelease !== undefined
+        && release.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
+        && options.packageRelease.actorLogin(hint.repository)?.toLowerCase() === release.commentAuthor.toLowerCase()) {
+        options.packageRelease.apply({ ...release, requestId: delivery })
+      }
       const cancellation = reviewCancellation(name, payload)
       if (cancellation !== null
         && options.allowedOwners.some(author => author.toLowerCase() === cancellation.requestedBy.toLowerCase())
