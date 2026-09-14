@@ -76,6 +76,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
     now: () => new Date('2026-08-13T01:00:00.000Z'),
     preflightRepair: () => Promise.resolve(ok(undefined)),
     store: {
+      recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,

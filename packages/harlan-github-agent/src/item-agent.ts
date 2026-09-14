@@ -37,7 +37,7 @@ import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
-import { canRepairPullRequestHead } from './repository-policy.ts'
+import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
@@ -91,7 +91,7 @@ export interface ItemAgentOptions {
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   pullRequestTriage?: PullRequestTriageAgent
-  store: Pick<JournalStore, 'getRepairedHeadFindings' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -882,16 +882,19 @@ type RepairPreflight
     | { _tag: 'ActionRequired', reason: string }
 
 export function repairPreflight(mapping: RepositoryMapping, snapshot: PullRequestReviewSnapshot, access: Result<void, string>): RepairPreflight {
-  if (snapshot.pullRequest.state !== 'open')
+  const merged = snapshot.pullRequest.state === 'closed' && snapshot.pullRequest.mergedAt !== null
+  if (snapshot.pullRequest.state !== 'open' && !merged)
     return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.closed }
   if (snapshot.pullRequest.draft)
     return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.draft }
-  if (snapshot.pullRequest.mergeState !== 'clean')
+  if (!merged && snapshot.pullRequest.mergeState !== 'clean')
     return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.conflict }
-  if (!canRepairPullRequestHead(mapping, snapshot.pullRequest))
+  if (merged ? !canRepairBaseline(mapping) : !canRepairPullRequestHead(mapping, snapshot.pullRequest))
     return { _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.' }
   if (access._tag === 'Err')
     return { _tag: 'ActionRequired', reason: access.error }
+  if (merged)
+    return { _tag: 'Authorized' }
   const repairsBaseline = snapshot.pullRequest.purpose._tag === 'BaselineRepair'
     || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
   const baseAllowsRepair = snapshot.baseChecks._tag === 'Available'
@@ -1125,10 +1128,20 @@ async function projectReviewRun(
   preflight: RepairPreflight,
   signal: AbortSignal,
 ): Promise<Result<{ evidence: string, resolution: ReviewResolution }, string>> {
+  if (snapshot.pullRequest.state === 'closed' && snapshot.pullRequest.mergedAt !== null) {
+    const observed = options.store.recordExactPullRequestObservation({
+      externalId: `merged-review:${task.id}:${snapshot.pullRequest.updatedAt}:${snapshot.pullRequest.baseSha}`,
+      observedAt: options.now().toISOString(),
+      subject: snapshot.pullRequest,
+    })
+    if (observed._tag === 'Conflict' || observed._tag === 'Stale')
+      return err('The merged pull request changed before Repair was queued.')
+  }
   const refreshed = refreshControllerGates(run.gates, snapshot, task.repositoryMapping)
   const gates = refreshed.gates
   const gatesChanged = JSON.stringify(gates) !== JSON.stringify(run.gates)
   let findings = run.findings
+  let mergedEvidence = findings.length === 0 ? 'Review completed. No material findings.' : 'Action required. Review found unsafe scope after merge.'
   const recommendsDismissal = findings.some(finding => finding._tag === 'Open' && finding.resolution === 'Dismissal')
   const repairable = findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
 
@@ -1139,6 +1152,7 @@ async function projectReviewRun(
       fence: task.state.fence,
       at: options.now().toISOString(),
     })
+    mergedEvidence = queued._tag === 'Queued' ? 'Review completed. Repair will recheck findings on the default branch.' : `Action required. ${queued.reason}`
     findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
       ? {
           ...finding,
@@ -1149,10 +1163,14 @@ async function projectReviewRun(
       : finding)
   }
   else if (repairable && !recommendsDismissal && preflight._tag === 'ActionRequired') {
+    mergedEvidence = `Action required. ${preflight.reason}`
     findings = findings.map((finding, index) => finding._tag === 'Open' && index === 0
       ? { ...finding, nextAction: preflight.reason }
       : finding)
   }
+
+  if (snapshot.pullRequest.state === 'closed' && snapshot.pullRequest.mergedAt !== null)
+    return ok({ evidence: mergedEvidence, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
 
   if (!gatesChanged && run.gatePublication._tag === 'Published') {
     await stampAgentLabel(options, task, storedOutcomeName(run), signal)
@@ -1182,7 +1200,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const snapshot = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal)
       if (snapshot._tag === 'Err')
         return snapshot
-      if (snapshot.value.pullRequest.headSha !== task.pullRequest.headSha || snapshot.value.pullRequest.state !== 'open')
+      if (snapshot.value.pullRequest.headSha !== task.pullRequest.headSha || (snapshot.value.pullRequest.state !== 'open' && snapshot.value.pullRequest.mergedAt === null))
         return err('The pull request changed before review started.')
       const manualReview = snapshot.value.pullRequest.approvalLabels.includes('review')
       if (checksLostRunner(snapshot.value.checks) || checksLostRunner(snapshot.value.baseChecks))
@@ -1372,7 +1390,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         return frozen
       // A review describes one diff, so only the diff has to hold still. The
       // stored report remains valid history if this head moved meanwhile.
-      if (frozen.value.pullRequest.headSha !== snapshot.value.pullRequest.headSha || frozen.value.pullRequest.state !== 'open')
+      if (frozen.value.pullRequest.headSha !== snapshot.value.pullRequest.headSha || frozen.value.pullRequest.baseRef !== snapshot.value.pullRequest.baseRef || (frozen.value.pullRequest.state !== 'open' && frozen.value.pullRequest.mergedAt === null))
         return err('The pull request changed before the review completed.')
       const checked = await reportReviewProgress(options, task, 'review', { percent: 90, label: 'Head commit and CI checked' }, signal)
       if (checked._tag === 'Err')

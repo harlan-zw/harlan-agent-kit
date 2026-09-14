@@ -38,6 +38,7 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
@@ -91,8 +92,14 @@ describe('review fix Worker', () => {
     expect(committedMessage).toBe('')
   })
 
-  it('starts a fresh Repair Agent with the exact stored findings', async () => {
-    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+  it.each([
+    { merged: false, outcome: 'repaired', existing: false },
+    { merged: true, outcome: 'repaired', existing: false },
+    { merged: true, outcome: 'disputed', existing: false },
+    { merged: true, outcome: 'blocked', existing: false },
+    { merged: true, outcome: 'repaired', existing: true },
+  ])('repairs stored findings: %j', async ({ merged, outcome, existing }) => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean', ...(merged ? { state: 'closed', mergedAt: '2026-08-13T00:59:00.000Z' } as const : {}) })
     const mapping = repositoryMapping({ ownership: 'maintained' })
     const task: ClaimedReviewFixTask = {
       id: 'repair-task',
@@ -122,6 +129,7 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        findOpenPullRequestForBranch: () => Promise.resolve(ok(existing ? { number: 25, url: 'https://github.com/harlan-zw/example/pull/25' } : null)),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
@@ -135,7 +143,7 @@ describe('review fix Worker', () => {
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        outcome: 'repaired',
+        outcome,
         summary: 'Preserved buffered bytes.',
         checks: ['pnpm vitest run test/parser.test.ts'],
         commitMessage: 'fix(parser): preserve buffered bytes',
@@ -151,7 +159,7 @@ describe('review fix Worker', () => {
       },
       validateMapping: () => Promise.resolve(ok(mapping)),
       worktrees: {
-        prepare: () => Promise.resolve(ok({ path: '/tmp/repair-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        prepare: () => Promise.resolve(ok({ path: '/tmp/repair-worktree', baseSha: pullRequest.baseSha, headSha: merged ? pullRequest.baseSha : pullRequest.headSha })),
         verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 2 })),
         commit: (_task, _workspace, _patch, message) => {
           committedMessage = message
@@ -166,10 +174,17 @@ describe('review fix Worker', () => {
       },
     }).run(task, new AbortController().signal)
 
+    if (existing || outcome !== 'repaired') {
+      expect(result).toMatchObject(ok({ _tag: outcome === 'blocked' ? 'ActionRequired' : 'Completed' }))
+      expect(committedMessage).toBe('')
+      if (existing)
+        expect(capture.requests).toEqual([])
+      return
+    }
     expect(result).toEqual(ok({
       _tag: 'Publish',
       usage: { _tag: 'Unavailable' },
-      publication: expect.objectContaining({ taskKind: 'review_fix', expectedHeadSha: pullRequest.headSha }),
+      publication: expect.objectContaining({ _tag: merged ? 'OpenPullRequest' : 'UpdatePullRequest', taskKind: 'review_fix', expectedHeadSha: merged ? pullRequest.baseSha : pullRequest.headSha }),
     }))
     expect(committedMessage).toBe('fix(parser): preserve buffered bytes')
     expect(capture.requests).toEqual([expect.objectContaining({
@@ -223,6 +238,7 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
@@ -306,6 +322,7 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
@@ -400,7 +417,7 @@ describe('review fix Worker', () => {
     const run = async (findings: ReviewFinding[]) => {
       const reruns: string[] = []
       await createReviewFixWorker({
-        github: { getPullRequestReviewSnapshot: snapshot },
+        github: { findOpenPullRequestForBranch: () => Promise.resolve(ok(null)), getPullRequestReviewSnapshot: snapshot },
         now: () => new Date('2026-08-13T01:00:00.000Z'),
         runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
           outcome: 'disputed',
@@ -468,6 +485,7 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
@@ -541,6 +559,7 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',

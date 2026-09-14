@@ -727,6 +727,7 @@ export interface JournalStore extends BatchStore {
     at: string
   }) => PullRequestApprovalResult
   authorizePublication: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
+  cancelReviewForHead: (input: { repository: string, pullRequestNumber: number, headSha: string, requestId: string, requestedBy: string, at: string }) => boolean
   cancelTask: (input: { taskId: string, at: string }) => CancelTaskResult
   recordPullRequestTriageRun: (input: RecordPullRequestTriageRunInput) => RecordPullRequestTriageRunResult
   /** The newest recorded Pull request triage decision for one exact head commit, or null. */
@@ -3994,13 +3995,14 @@ function planReviewFix(
   }
   if (!mapping.enabled || !mapping.pullRequestReview)
     return refuse(REVIEW_REPAIR_REFUSALS.policy)
-  if (subject.state !== 'open')
+  const merged = subject.state === 'closed' && subject.mergedAt !== null
+  if (subject.state !== 'open' && !merged)
     return refuse(REVIEW_REPAIR_REFUSALS.closed)
   if (subject.draft)
     return refuse(REVIEW_REPAIR_REFUSALS.draft)
-  if (subject.mergeState !== 'clean')
+  if (!merged && subject.mergeState !== 'clean')
     return refuse(REVIEW_REPAIR_REFUSALS.conflict)
-  if (!canRepairPullRequestHead(mapping, subject))
+  if (merged ? !canRepairBaseline(mapping) : !canRepairPullRequestHead(mapping, subject))
     return refuse(REVIEW_REPAIR_REFUSALS.branch)
   const reviewAuthorized = !requiresPullRequestApproval(database, mapping, subject.author) || database.prepare(`
     SELECT 1 FROM pull_request_approvals
@@ -4072,7 +4074,7 @@ function currentSameHeadRevision(database: DatabaseSync, revisionId: string): st
     JOIN subjects ON subjects.id = claimed.subject_id
     JOIN revisions AS current ON current.id = subjects.current_revision_id
     WHERE claimed.id = ? AND subjects.kind = 'pull_request'
-      AND json_extract(current.payload, '$.state') = 'open'
+      AND (json_extract(current.payload, '$.state') = 'open' OR json_extract(current.payload, '$.mergedAt') IS NOT NULL)
       AND json_extract(current.payload, '$.headSha') = json_extract(claimed.payload, '$.headSha')
       AND json_extract(current.payload, '$.baseRef') IS json_extract(claimed.payload, '$.baseRef')
   `).get(revisionId) as { current_id: string } | undefined
@@ -4308,14 +4310,16 @@ function cancelStoredTask(database: DatabaseSync, taskId: string, at: string, re
   return { _tag: 'Cancelled' }
 }
 
-function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: string, reason: string): void {
+function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: string, reason: string, preserveMergedReview = false): void {
   const taskIds = database.prepare(`
     SELECT id FROM tasks
     WHERE subject_id = ? AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing', 'Failed')
+      AND NOT (? AND kind = 'review_fix' AND revision_id IN (SELECT id FROM revisions WHERE json_extract(payload, '$.mergedAt') IS NOT NULL))
     UNION ALL
     SELECT id FROM worker_tasks
     WHERE subject_id = ? AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Failed')
-  `).all(subjectId, subjectId) as unknown as Array<{ id: string }>
+      AND NOT (? AND kind = 'adversarial_review' AND revision_id IN (SELECT id FROM revisions WHERE json_extract(payload, '$.mergedAt') IS NOT NULL))
+  `).all(subjectId, preserveMergedReview ? 1 : 0, subjectId, preserveMergedReview ? 1 : 0) as unknown as Array<{ id: string }>
   taskIds.forEach(task => cancelStoredTask(database, task.id, at, reason))
 }
 
@@ -6297,7 +6301,20 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, issueApprovalMigration)
     version = 71
   }
-  if (version === 71)
+  if (version === 71) {
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS review_cancel_requests (
+        id TEXT PRIMARY KEY,
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        head_sha TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL
+      );
+      PRAGMA user_version = 72;
+    `)
+    version = 72
+  }
+  if (version === 72)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -6791,6 +6808,42 @@ export function openJournalStore(
     }
   }
 
+  const cancelReviewForHead: JournalStore['cancelReviewForHead'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const subject = database.prepare(`
+        SELECT subjects.id FROM subjects
+        JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        WHERE repositories.github = ? AND subjects.kind = 'pull_request' AND subjects.github_number = ?
+          AND json_extract(revisions.payload, '$.headSha') = ?
+          AND repositories.enabled = 1 AND repositories.ownership != 'external'
+          AND EXISTS (SELECT 1 FROM json_each(repositories.policy_json, '$.writablePullRequestAuthors')
+            WHERE lower(value) = lower(?))
+      `).get(input.repository, input.pullRequestNumber, input.headSha, input.requestedBy) as { id: number } | undefined
+      if (subject === undefined || database.prepare('SELECT 1 FROM review_cancel_requests WHERE id = ?').get(input.requestId) !== undefined) {
+        database.exec('COMMIT')
+        return false
+      }
+      database.prepare('INSERT INTO review_cancel_requests VALUES (?, ?, ?, ?, ?)')
+        .run(input.requestId, subject.id, input.headSha, input.requestedBy, input.at)
+      const tasks = database.prepare(`
+        SELECT id FROM worker_tasks WHERE subject_id = ? AND kind = 'adversarial_review'
+          AND state_tag IN ('Queued', 'Running', 'ActionRequired', 'Failed')
+        UNION ALL
+        SELECT id FROM tasks WHERE subject_id = ? AND kind = 'review_fix'
+          AND state_tag IN ('Queued', 'Running', 'Publishing', 'ActionRequired', 'Failed')
+      `).all(subject.id, subject.id) as Array<{ id: string }>
+      tasks.forEach(task => cancelStoredTask(database, task.id, input.at, 'Harlan stopped Review and follow-up repair.'))
+      database.exec('COMMIT')
+      return true
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const cancelTask: JournalStore['cancelTask'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -6982,11 +7035,45 @@ export function openJournalStore(
           return
         }
         if (input.subject.state === 'closed') {
+          const merged = input.subject.kind === 'pull_request' && input.subject.mergedAt !== null
+          if (merged && input.subject.kind === 'pull_request') {
+            // Only an already running Review survives its first merge observation.
+            const running = database.prepare(`
+              SELECT 1 FROM worker_tasks JOIN revisions ON revisions.id = worker_tasks.revision_id
+              WHERE worker_tasks.subject_id = ? AND worker_tasks.kind = 'adversarial_review'
+                AND worker_tasks.state_tag = 'Running'
+                AND json_extract(revisions.payload, '$.headSha') = ?
+                AND json_extract(revisions.payload, '$.baseRef') IS ?
+            `).get(subject.id, input.subject.headSha, input.subject.baseRef ?? null)
+            const prior = subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem
+            if (running !== undefined || (prior?.kind === 'pull_request' && prior.mergedAt !== null && prior.headSha === input.subject.headSha && prior.baseRef === input.subject.baseRef)) {
+              const oldRepairs = database.prepare(`
+                SELECT tasks.id FROM tasks JOIN revisions ON revisions.id = tasks.revision_id
+                WHERE tasks.subject_id = ? AND tasks.kind = 'review_fix'
+                  AND json_extract(revisions.payload, '$.mergedAt') IS NULL
+                  AND tasks.state_tag IN ('Queued', 'Running', 'Publishing')
+              `).all(subject.id) as Array<{ id: string }>
+              oldRepairs.forEach(task => cancelStoredTask(database, task.id, input.observedAt, 'The pull request merged.'))
+              followHeadCommit(database, subject.id, revisionId, input.subject.headSha)
+              // Review may finish its report just before this merge observation.
+              if (running !== undefined && openReviewFindings(database, subject.id, revisionId).length > 0)
+                planReviewFix(database, input.subject, subject.id, revisionId, input.observedAt, mapping)
+            }
+          }
+          if (merged) {
+            database.prepare(`
+              UPDATE review_status_commands SET state_tag = 'Superseded', reason = 'The pull request merged.',
+                worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+              WHERE revision_id IN (SELECT id FROM revisions WHERE subject_id = ?)
+                AND state_tag IN ('Pending', 'Running')
+            `).run(input.observedAt, subject.id)
+          }
           cancelSubjectTasks(
             database,
             subject.id,
             input.observedAt,
             input.subject.kind === 'pull_request' ? 'The pull request closed.' : 'The issue closed.',
+            merged,
           )
           return
         }
@@ -10964,6 +11051,8 @@ export function openJournalStore(
             && subject.kind === 'pull_request'
             && subject.baseSha === publication.expectedHeadSha
           )
+          || (task.kind === 'review_fix' && publication.taskKind === 'review_fix'
+            && subject.kind === 'pull_request' && subject.state === 'closed' && subject.mergedAt !== null)
       if (!matches) {
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: 'The publication does not match the current GitHub state.' }
@@ -11177,7 +11266,7 @@ export function openJournalStore(
         leaseExpiresAt,
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
       }
-      if (row.task_kind === 'issue_work' || row.task_kind === 'baseline_repair') {
+      if (row.task_kind === 'issue_work' || row.task_kind === 'baseline_repair' || (row.task_kind === 'review_fix' && row.pull_request_title !== null)) {
         if (row.pull_request_title === null || row.pull_request_body === null)
           throw new Error(`Pull request Publication ${row.id} has no pull request content.`)
         return row.task_kind === 'issue_work'
@@ -12893,14 +12982,14 @@ export function openJournalStore(
   const listStoppedReviews: JournalStore['listStoppedReviews'] = () => (database.prepare(`
     WITH stopped_candidates AS (
       SELECT worker_tasks.id, worker_tasks.subject_id, worker_tasks.revision_id,
-        worker_tasks.kind AS task_kind, worker_tasks.state_tag, worker_tasks.reason,
+        worker_tasks.kind AS task_kind, worker_tasks.state_tag, worker_tasks.reason, worker_tasks.evidence,
         worker_tasks.updated_at, revisions.observed_at AS revision_observed_at
       FROM worker_tasks
       JOIN revisions ON revisions.id = worker_tasks.revision_id
       WHERE worker_tasks.kind = 'adversarial_review'
       UNION ALL
       SELECT tasks.id, tasks.subject_id, tasks.revision_id, tasks.kind AS task_kind,
-        tasks.state_tag, tasks.reason, tasks.updated_at,
+        tasks.state_tag, tasks.reason, tasks.evidence, tasks.updated_at,
         revisions.observed_at AS revision_observed_at
       FROM tasks
       JOIN revisions ON revisions.id = tasks.revision_id
@@ -12966,7 +13055,7 @@ export function openJournalStore(
       current_revisions.id AS closure_revision_id,
       json_extract(current_revisions.payload, '$.headSha') AS current_head_sha,
       json_extract(current_revisions.payload, '$.baseSha') AS current_base_sha,
-      COALESCE(stopped.reason, 'The automated review stopped.') AS reason,
+      COALESCE(stopped.reason, stopped.evidence, 'The automated review stopped.') AS reason,
       json_extract(current_revisions.payload, '$.state') AS current_state,
       json_extract(current_revisions.payload, '$.mergedAt') AS current_merged_at,
       CASE
@@ -14527,6 +14616,7 @@ export function openJournalStore(
     authorizePublication,
     authorizeReviewStatus,
     cancelTask,
+    cancelReviewForHead,
     recordPullRequestTriageRun,
     getLatestPullRequestTriageRun,
     hasPriorityAgentTask: () => hasHigherPriorityTask(0, 'adversarial_review'),

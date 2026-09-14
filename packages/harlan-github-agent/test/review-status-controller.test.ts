@@ -5,7 +5,7 @@ import { createReviewStatusController } from '../src/review-status-controller.ts
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('review status controller', () => {
-  function harness() {
+  function harness(commentControls = false) {
     const repository = repositoryMapping()
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const task: ClaimedReviewFixTask = {
@@ -24,6 +24,7 @@ describe('review status controller', () => {
     let body = ''
     let stagedBody = ''
     const controller = createReviewStatusController({
+      commentControls,
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
@@ -89,6 +90,12 @@ describe('review status controller', () => {
 
     expect(read().replaced).toBe(true)
     expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 35% · Git worktree ready')
+  })
+
+  it.each([false, true])('offers a checkbox only with webhook controls enabled: %s', async (enabled) => {
+    const { controller, task, read } = harness(enabled)
+    await controller.publishRepair(task, { percent: 35, label: 'Reviewing' }, new AbortController().signal)
+    expect(read().body.includes('- [ ] Stop Review and any follow-up repair')).toBe(enabled)
   })
 
   it('says how long one phase has run, so a slow agent reads as alive', async () => {

@@ -62,7 +62,13 @@ export function stoppedReviewComment(
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, updatedAt: updatedAtLabel(at) })}
 
-GitHub ${action} this pull request. No further automated Review will run.`
+GitHub ${action} this pull request.${disposition._tag === 'Merged'
+  ? `
+
+${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map(finding => finding._tag === 'Open' ? `- ${cleanLine(finding.summary)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : `- Fixed: ${cleanLine(finding.summary)}`).join('\n')}
+
+${cleanLine(review.reason)}`
+  : ' No further automated Review will run.'}`
   }
   if (review.taskKind === 'review_fix') {
     const findings = review.findings.map(finding => finding._tag === 'Fixed'

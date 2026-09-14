@@ -76,6 +76,18 @@ describe('review status actor handoff', () => {
     expect(appUpdate).not.toHaveBeenCalled()
   })
 
+  it('preserves a checked control until cancellation closes the comment', async () => {
+    const unchecked = `${oldBody}\n\n- [ ] Stop Review and any follow-up repair`
+    const checked = unchecked.replace('[ ]', '[x]')
+    const { source, userUpdate } = legacySource(checked)
+    const pending = await source.upsertReviewStatus(repositoryMapping(), 24, null, newBody, false, new AbortController().signal)
+    expect(pending).toEqual({ _tag: 'Err', error: 'Review cancellation is pending.' })
+    expect(userUpdate).not.toHaveBeenCalled()
+    const stopped = await source.editReviewStatus(repositoryMapping(), 24, 5, unchecked, newBody, new AbortController().signal)
+    expect(stopped._tag === 'Ok' && stopped.value._tag).toBe('Edited')
+    expect(userUpdate).toHaveBeenCalledOnce()
+  })
+
   it('refuses an unmarked comment from the original user actor', async () => {
     const { appUpdate, source, userUpdate } = legacySource('Human review comment')
 

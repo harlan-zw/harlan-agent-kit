@@ -520,6 +520,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
     })
     const reviewStatus = createReviewStatusController({
+      commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
       github: workerGithub,
       leaseMilliseconds: 2 * 60_000,
       now,
@@ -1256,6 +1257,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           allowedOwners: config.github.allowedOwners,
           logger: { info: message => options.logger.info(message) },
           onHint: () => reconcileHint.hint(),
+          reviewCancellation: {
+            actorLogin: (name) => {
+              const repository = config.repositories.find(repository => repository.github === name && repository.enabled)
+              return repository === undefined ? null : actorLogin(repository)
+            },
+            apply: request => store.cancelReviewForHead({ ...request, at: now().toISOString() }),
+          },
           secret: options.webhookSecret,
         }),
         hostname: config.webhook.host,

@@ -5,6 +5,7 @@ import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask,
 import { formatPhaseDuration } from './agent-progress.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
+import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { updatedAtLabel } from './text.ts'
 
@@ -15,6 +16,7 @@ export interface ReviewStatusController {
 }
 
 export interface ReviewStatusControllerOptions {
+  commentControls?: boolean
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
@@ -286,6 +288,8 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
     replacePriorReview: boolean,
     signal: AbortSignal,
   ): Promise<Result<PublishedReviewStatus, string>> {
+    if (options.commentControls && taskPhase.phase !== 'terminal')
+      body += `\n\n${REVIEW_CANCEL_CONTROL}\n\nLeave unchecked to finish Review after merge.`
     const at = options.now().toISOString()
     const staged = options.store.stageReviewStatus({
       ...taskPhase,

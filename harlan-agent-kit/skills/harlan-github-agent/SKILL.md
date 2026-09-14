@@ -252,7 +252,18 @@ Allow Harlan to rerun the current head commit from the dashboard or with the exa
 
 If GitHub closes the pull request unmerged, revoke its running task. Stop the agent within five seconds.
 
-If GitHub merges without active ownership, revoke the review task. With active ownership, continue the same worker through delivery verification.
+If GitHub merges during an active Review, let that Review finish and store every finding.
+If Harlan needs to merge now, leave Review running.
+If Harlan decides Review is unnecessary, select Stop Review in the automated comment before merging.
+The checkbox cancels Review and follow-up Repair for its exact head commit.
+Show the checkbox only when signed GitHub webhooks are enabled. The dashboard Cancel control also remains available.
+Cancel queued Reviews that never started. Keep explicit Cancel and Dismissal effective.
+Recheck Repair findings on the current default branch in a fresh worktree.
+If confirmed bugs remain, open one linked Repair pull request and start fresh Review there.
+If no findings remain, record completion without opening a pull request.
+Deduplicate Repair work by the original pull request and reviewed head commit.
+Never push Repair to the merged branch. Surface unsafe fixes as Action required.
+With active Take Ownership, continue delivery verification.
 
 Use the dashboard `Cancel` control for active or queued tasks. Store that cancellation for the current commit. A later poll must not queue it again. Closing a pull request must use the same durable cancellation path.
 

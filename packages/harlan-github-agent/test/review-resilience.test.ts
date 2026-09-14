@@ -119,6 +119,7 @@ function harness(input: {
     },
     preflightRepair: input.preflightRepair ?? (() => Promise.resolve(ok(undefined))),
     store: {
+      recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
       queueReviewFixTaskForReview: input.queueRepair ?? (() => {
         repairs.queued += 1
         return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
