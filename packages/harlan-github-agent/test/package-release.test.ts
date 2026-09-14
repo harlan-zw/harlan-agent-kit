@@ -5,6 +5,7 @@ const input = {
   title: 'fix: handle empty input',
   body: '',
   merged: true,
+  headSha: 'f'.repeat(40),
   sourceIncluded: true,
   sourceSha: 'a'.repeat(40),
   mergeSha: 'b'.repeat(40),
@@ -62,4 +63,11 @@ it.each(['do release', 'do release patch', 'do release minor'])('parses a new te
   expect(packageReleaseCommand('issue_comment', { ...payload, action: 'edited' })).toBeNull()
   expect(packageReleaseCommand('issue_comment', { ...payload, comment: { ...payload.comment, body: 'do release major' } })).toBeNull()
   expect(packageReleaseCommand('issue_comment', { ...payload, comment: { ...payload.comment, body: '> do release' } })).toBeNull()
+})
+
+it.each(['x', 'X'])('accepts clearing a pre-merge selection marked %s', (mark) => {
+  const before = `<!-- harlan-agent-kit:package-release -->\n- [${mark}] Release minor after merge\n`
+  const payload = { action: 'edited', repository: { full_name: 'harlan-zw/example' }, issue: { number: 12, pull_request: {} }, sender: { login: 'harlan-zw' }, comment: { id: 99, user: { login: 'harlan-github-agent[bot]' }, body: before.replace(`[${mark}]`, '[ ]') }, changes: { body: { from: before } } }
+  expect(releaseRequest('issue_comment', payload)).toMatchObject({ selected: false, before })
+  expect(releaseRequest('issue_comment', { ...payload, comment: { ...payload.comment, body: `${payload.comment.body}changed` } })).toBeNull()
 })

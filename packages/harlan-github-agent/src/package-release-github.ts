@@ -5,7 +5,7 @@ import type { GitHubRepositoryAccess, RepositoryMapping, StoredReviewForHead } f
 import { Buffer } from 'node:buffer'
 import { Octokit } from 'octokit'
 import { parse } from 'yaml'
-import { PACKAGE_RELEASE_MARKER, planPackageRelease, stableVersion } from './package-release.ts'
+import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMerge, stableVersion } from './package-release.ts'
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
 
@@ -76,10 +76,20 @@ export function createPackageReleaseSource(options: {
       throw new Error('npm returned an invalid package record.')
     return value as { 'versions': Record<string, { version: string, gitHead?: string }>, 'dist-tags': Record<string, string> }
   }
-  const checkRunsPassed = async (sha: string): Promise<boolean> => {
+  const checkRunsPassed = async (sha: string, defaultBranch = false): Promise<boolean> => {
     const api = await client('checks_read')
-    const checks = await api.paginate(api.rest.checks.listForRef, { ...scope, ref: sha, per_page: 100, filter: 'latest' })
-    return config.checks.every(name => checks.some(check => check.name === name && check.app?.slug === 'github-actions'
+    const checks = await api.paginate(api.rest.checks.listForRef, { ...scope, ref: sha, per_page: 100, filter: defaultBranch ? 'all' : 'latest' })
+    // A passing pull request check on the same SHA is not default branch CI evidence.
+    const runs = defaultBranch
+      ? await api.paginate(api.rest.actions.listWorkflowRunsForRepo, { ...scope, head_sha: sha, event: 'push', branch: repository.defaultBranch, per_page: 100 })
+      : []
+    const suites = new Set(runs.filter(run => run.head_sha === sha && run.event === 'push'
+      && run.head_branch === repository.defaultBranch && run.status === 'completed' && run.conclusion === 'success')
+      .map(run => run.check_suite_id))
+    // Tag workflows can reuse check names. Keep the newest attempt within each check suite.
+    const latest = checks.filter(check => !checks.some(other => other.name === check.name
+      && other.check_suite?.id === check.check_suite?.id && other.id > check.id))
+    return config.checks.every(name => latest.some(check => (!defaultBranch || suites.has(check.check_suite?.id)) && check.name === name && check.app?.slug === 'github-actions'
       && check.status === 'completed' && check.conclusion === 'success'))
   }
   const blocked = (reason: string) => ({ _tag: 'Blocked' as const, reason })
@@ -89,8 +99,8 @@ export function createPackageReleaseSource(options: {
       return unavailable('Release preparation requires Review and a trusted publishing author.')
     const api = await client('read')
     const pull = (await api.rest.pulls.get({ ...scope, pull_number: number })).data
-    if (!pull.merged || pull.base.ref !== repository.defaultBranch || pull.merge_commit_sha === null)
-      return unavailable('The pull request is not merged into the default branch.')
+    if (pull.base.ref !== repository.defaultBranch || pull.draft || (!pull.merged && pull.state !== 'open'))
+      return unavailable('The pull request must be open or merged into the default branch.')
     if (!/^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title))
       return unavailable('This pull request does not need a package release.')
     const sha = await sourceSha()
@@ -115,10 +125,38 @@ export function createPackageReleaseSource(options: {
       || !push.tags.some(pattern => pattern === `${config.tagPrefix}*` || pattern === '*' || pattern === '**')) {
       return unavailable('The release workflow must match the configured tag prefix.')
     }
-    return planPackageRelease({ title: pull.title, body: pull.body ?? '', merged: true, sourceIncluded: range.commits.some(commit => commit.sha === pull.merge_commit_sha), sourceSha: sha, mergeSha: pull.merge_commit_sha, previousTag: tag, previousVersion: version, currentVersion: pkg.version, packageName: pkg.name, commits: range.commits.map(commit => commit.commit.message), files: (range.files ?? []).map(file => ({ filename: file.filename, patch: file.patch ?? '' })), complete: range.status === 'ahead' && range.total_commits === range.commits.length
-      && range.commits.length < 250 && range.files !== undefined && range.files.length < 300
-      && range.files.every(file => file.patch !== undefined) })
+    const common = {
+      title: pull.title,
+      body: pull.body ?? '',
+      headSha: pull.head.sha,
+      previousTag: tag,
+      previousVersion: version,
+      currentVersion: pkg.version,
+      packageName: pkg.name,
+      commits: range.commits.map(commit => commit.commit.message),
+      files: (range.files ?? []).map(file => ({ filename: file.filename, patch: file.patch ?? '' })),
+      complete: ['ahead', 'identical'].includes(range.status) && range.total_commits === range.commits.length
+        && range.commits.length < 250 && range.files !== undefined && range.files.length < 300
+        && range.files.every(file => file.patch !== undefined),
+    }
+    if (!pull.merged) {
+      const [commits, files] = await Promise.all([
+        api.paginate(api.rest.pulls.listCommits, { ...scope, pull_number: number, per_page: 100 }),
+        api.paginate(api.rest.pulls.listFiles, { ...scope, pull_number: number, per_page: 100 }),
+      ])
+      // Re-read after the unpinned pull request APIs. Never bind a new diff to an old head.
+      const current = (await api.rest.pulls.get({ ...scope, pull_number: number })).data
+      if (current.head.sha !== pull.head.sha || current.base.sha !== pull.base.sha
+        || current.base.ref !== pull.base.ref || current.title !== pull.title || current.body !== pull.body
+        || current.state !== pull.state || current.draft !== pull.draft || current.merged !== pull.merged) {
+        return unavailable('The pull request changed while reading its release range.')
+      }
+      return planPackageReleaseBeforeMerge({ ...common, commits: [...common.commits, ...commits.map(commit => commit.commit.message)], files: [...common.files, ...files.map(file => ({ filename: file.filename, patch: file.patch ?? '' }))], complete: common.complete && commits.length === pull.commits && commits.length < 250
+        && files.length === pull.changed_files && files.length < 300 && files.every(file => file.patch !== undefined) })
+    }
+    return planPackageRelease({ ...common, merged: true, sourceIncluded: pull.merge_commit_sha !== null && range.commits.some(commit => commit.sha === pull.merge_commit_sha), sourceSha: sha, mergeSha: pull.merge_commit_sha ?? '' })
   }
+
   const comment: PackageReleaseSource['comment'] = async (number, body, commentId) => {
     const api = await client('item_write')
     // Search on recovery too. A lost create response must not post another comment.
@@ -151,6 +189,8 @@ export function createPackageReleaseSource(options: {
       const api = await client('read')
       const numbers: number[] = []
       const cutoff = options.now().getTime() - 7 * 86_400_000
+      const open = await api.paginate(api.rest.pulls.list, { ...scope, state: 'open', base: repository.defaultBranch, per_page: 100 })
+      numbers.push(...open.filter(pull => !pull.draft && /^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title)).map(pull => pull.number))
       for await (const response of api.paginate.iterator(api.rest.pulls.list, { ...scope, state: 'closed', base: repository.defaultBranch, sort: 'updated', direction: 'desc', per_page: 100 })) {
         for (const pull of response.data) {
           if (Date.parse(pull.updated_at) < cutoff)
@@ -165,7 +205,7 @@ export function createPackageReleaseSource(options: {
       const plan = record.plan
       if (await sourceSha() !== plan.sourceSha)
         return blocked('The default branch advanced. Request a release from its latest merged pull request.')
-      if (!await checkRunsPassed(plan.sourceSha))
+      if (!await checkRunsPassed(plan.sourceSha, true))
         return null
       const current = await manifest(config.manifest, plan.sourceSha)
       const tag = `${config.tagPrefix}${plan.version}`
@@ -249,7 +289,7 @@ export function createPackageReleaseSource(options: {
     },
     async publish(record) {
       const { sha, tag } = record.state
-      if (!await checkRunsPassed(sha))
+      if (!await checkRunsPassed(sha, true))
         return null
       const existing = await getRef(`tags/${tag}`)
       if (existing !== null && existing !== sha)

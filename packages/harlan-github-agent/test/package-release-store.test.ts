@@ -8,17 +8,17 @@ import { repositoryMapping } from './fixtures.ts'
 it('binds a click to its stored offer and consumes it once across restart', () => {
   const db = new DatabaseSync(':memory:')
   const store = createPackageReleaseStore(db)
-  const plan = { _tag: 'Available' as const, bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
+  const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
   const body = renderPackageRelease(plan)
   const offer = { repository: 'harlan-zw/example', pullRequestNumber: 1, commentId: 2, body, plan, policy: 'policy' }
   store.saveReleaseOffer(offer)
-  const request = { repository: offer.repository, pullRequestNumber: 1, commentId: 2, before: body, requestedBy: 'harlan-zw', commentAuthor: 'bot' }
-  expect(store.requestPackageRelease({ ...request, before: `${body}changed` })).toBe(false)
+  const request = { repository: offer.repository, pullRequestNumber: 1, commentId: 2, before: body, selected: true, requestId: 'select', requestedBy: 'harlan-zw', commentAuthor: 'bot' }
+  expect(store.requestPackageRelease({ ...request, requestId: 'stale', before: `${body}changed` })).toBe(false)
   expect(store.requestPackageRelease(request)).toBe(true)
   expect(createPackageReleaseStore(db).requestPackageRelease(request)).toBe(false)
   expect(store.listPackageReleases(offer.repository)[0]?.state).toEqual({ _tag: 'Queued', requestedBy: 'harlan-zw' })
   store.saveReleaseOffer({ ...offer, plan: { ...plan, sourceSha: 'c'.repeat(40) } })
-  expect(store.listPackageReleases(offer.repository)[0]?.plan.sourceSha).toBe(plan.sourceSha)
+  expect(store.listPackageReleases(offer.repository)[0]?.plan).toEqual(plan)
   db.close()
 })
 

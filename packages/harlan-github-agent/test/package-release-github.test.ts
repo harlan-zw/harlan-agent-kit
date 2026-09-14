@@ -1,4 +1,3 @@
-import type { PackageReleaseRecord } from '../src/package-release-store.ts'
 import type { StoredReviewForHead } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { DatabaseSync } from 'node:sqlite'
@@ -12,8 +11,8 @@ import { repositoryMapping } from './fixtures.ts'
 const sha = 'a'.repeat(40)
 const mergeSha = 'b'.repeat(40)
 const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-github-agent[bot]'], release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'] } }
-const plan = { _tag: 'Available' as const, bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
-const record: PackageReleaseRecord = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued', requestedBy: 'harlan-zw' } }
+const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
+const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued' as const, requestedBy: 'harlan-zw' } }
 
 function fixture() {
   const writes: Array<{ path: string, body: Record<string, unknown> }> = []
@@ -24,6 +23,13 @@ function fixture() {
   let published = false
   let workflowSuccess = false
   let rangeSha = mergeSha
+  let commentBody = ''
+  let sourceOpen = false
+  let sourceTitle = 'fix: handle input'
+  let mainChecks = true
+  let checkEvent = 'push'
+  let checkBranch = 'main'
+  let sourceHead = 'f'.repeat(40)
   const fetcher: typeof fetch = async (input, init) => {
     const req = new Request(input, init)
     const url = new URL(req.url)
@@ -51,7 +57,16 @@ function fixture() {
       data = { tree: { sha: changedTree ? 'unexpected-tree' : 'release-tree' } }
     }
     else if (path === '/pulls/24') {
-      data = { merged: true, merge_commit_sha: mergeSha, base: { ref: 'main' }, title: 'fix: handle input', body: '', head: { sha } }
+      data = { merged: !sourceOpen, draft: false, state: sourceOpen ? 'open' : 'closed', commits: 1, changed_files: 1, merge_commit_sha: sourceOpen ? null : mergeSha, base: { ref: 'main' }, title: sourceTitle, body: '', head: { sha: sourceHead } }
+    }
+    else if (path === '/pulls/24/commits') {
+      data = [{ sha: sourceHead, commit: { message: sourceTitle } }]
+    }
+    else if (path === '/pulls/24/files') {
+      data = [{ filename: 'src/index.ts', patch: '+return []' }]
+    }
+    else if (path === '/actions/runs') {
+      data = { total_count: 1, workflow_runs: [{ id: 10, check_suite_id: 10, head_sha: url.searchParams.get('head_sha'), event: checkEvent, head_branch: checkBranch, status: mainChecks ? 'completed' : 'in_progress', conclusion: mainChecks ? 'success' : null }] }
     }
     else if (path.startsWith('/contents/')) {
       data = { type: 'file', content: Buffer.from(path.endsWith('.yml') ? 'on:\n  push:\n    tags: [\'v*\']\n' : JSON.stringify({ name: 'example', version: url.searchParams.get('ref') === 'c'.repeat(40) ? '1.0.1' : '1.0.0' })).toString('base64') }
@@ -60,7 +75,10 @@ function fixture() {
       data = { status: 'ahead', total_commits: 1, commits: [{ sha: rangeSha, commit: { message: 'fix: handle input' } }], files: [{ filename: 'src/index.ts', patch: '+return []' }] }
     }
     else if (path.endsWith('/check-runs')) {
-      data = { total_count: 1, check_runs: [{ name: 'test', app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success' }] }
+      const main = { id: 10, name: 'test', check_suite: { id: 10 }, app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success' }
+      const tag = { ...main, id: 20, check_suite: { id: 20 } }
+      const checkRuns = refs.has('tags/v1.0.1') ? url.searchParams.get('filter') === 'all' ? [tag, main] : [tag] : [main]
+      data = { total_count: checkRuns.length, check_runs: checkRuns }
     }
     else if (path === `/git/commits/${sha}`) {
       data = { tree: { sha: 'base-tree' } }
@@ -88,10 +106,16 @@ function fixture() {
     else if (path === '/releases/tags/v1.0.1') {
       data = { draft: false, prerelease: false, html_url: 'https://github.com/release/v1.0.1' }
     }
+    else if (path === '/issues/comments/100') {
+      if (req.method === 'PATCH')
+        commentBody = String(writes.at(-1)!.body.body)
+      data = { id: 100, body: commentBody, user: { login: 'harlan-github-agent[bot]' }, issue_url: `https://api.github.com/repos/${mapping.github}/issues/24` }
+    }
     else if (path === '/issues/comments/99') {
       return Response.json({ message: 'Not Found' }, { status: 404 })
     }
     else if (path === '/issues/24/comments' && req.method === 'POST') {
+      commentBody = String(writes.at(-1)!.body.body)
       data = { id: 100 }
     }
     else if (path === '/issues/24/comments') {
@@ -105,7 +129,18 @@ function fixture() {
     return response
   }
   const source = createPackageReleaseSource({ repository: mapping, actorLogin: 'harlan-github-agent[bot]', template: async () => '### 📚 Description', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }, assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: token => new Octokit({ auth: token, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
-  return { source, writes, refs, allowReview: () => {
+  return { source, writes, refs, openSource: (title = 'fix: handle input') => {
+    sourceOpen = true
+    sourceTitle = title
+  }, mergeSource: () => {
+    sourceOpen = false
+  }, changeSourceHead: () => {
+    sourceHead = 'e'.repeat(40)
+  }, setMainChecks: (passed: boolean, event = 'push', branch = 'main') => {
+    mainChecks = passed
+    checkEvent = event
+    checkBranch = branch
+  }, allowReview: () => {
     ready = true
   }, changeMergeTree: () => {
     changedTree = true
@@ -179,8 +214,47 @@ it('recreates a deleted release comment so one pass still advances the record', 
   const task = fixture()
   const store = createPackageReleaseStore(new DatabaseSync(':memory:'))
   store.saveReleaseOffer({ repository: mapping.github, pullRequestNumber: 24, plan, commentId: 99, body: '', policy: JSON.stringify(mapping) })
-  expect(store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })).toBe(true)
+  expect(store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', selected: true, requestId: 'select', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })).toBe(true)
   await reconcilePackageReleases({ webhookReady: true, repository: mapping, store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   expect(task.writes.some(write => write.path === '/issues/24/comments')).toBe(true)
   expect(store.listPackageReleases(mapping.github)[0]?.state).toEqual({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })
+})
+
+it.each(['fix: handle input', 'feat: add input'])('offers the matching selection on an open pull request: %s', async (title) => {
+  const task = fixture()
+  task.openSource(title)
+  expect(await task.source.inspect(24)).toMatchObject({ _tag: 'BeforeMerge', bump: title.startsWith('feat') ? 'minor' : 'patch', headSha: 'f'.repeat(40) })
+  expect(task.writes).toEqual([])
+})
+
+it.each(['pending', 'pull_request', 'other-branch'])('waits for default branch push checks, ignoring %s evidence', async (mode) => {
+  const task = fixture()
+  task.setMainChecks(mode !== 'pending', mode === 'pull_request' ? 'pull_request' : 'push', mode === 'other-branch' ? 'feature' : 'main')
+  expect(await task.source.prepare(record)).toBeNull()
+  expect(task.writes).toEqual([])
+  task.setMainChecks(true)
+  expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
+})
+
+it('releases a preselected pull request only after merge and passing default branch checks', async () => {
+  const task = fixture()
+  task.openSource()
+  const db = new DatabaseSync(':memory:')
+  const store = createPackageReleaseStore(db)
+  const run = () => reconcilePackageReleases({ webhookReady: true, repository: mapping, store: createPackageReleaseStore(db), source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  store.queuePackageReleaseCommand({ repository: mapping.github, pullRequestNumber: 24, commentId: 101, requestedBy: 'harlan-zw', bump: 'auto' })
+  await run()
+  await run()
+  expect(store.listPackageReleases(mapping.github)[0]?.state._tag).toBe('AwaitingMerge')
+  expect(task.refs.has('heads/release/24-1.0.1')).toBe(false)
+  task.mergeSource()
+  task.setMainChecks(false)
+  await run()
+  expect(store.listPackageReleases(mapping.github)[0]?.state._tag).toBe('Queued')
+  expect(task.refs.has('heads/release/24-1.0.1')).toBe(false)
+  task.setMainChecks(true)
+  await run()
+  expect(store.listPackageReleases(mapping.github)[0]?.state._tag).toBe('Prepared')
+  expect(task.refs.has('heads/release/24-1.0.1')).toBe(true)
+  db.close()
 })

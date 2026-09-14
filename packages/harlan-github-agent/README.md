@@ -208,11 +208,16 @@ Enable `mutations_enabled` only after the selected repository policy and GitHub 
 
 ## Package releases
 
-After merge, eligible pull requests get one release checkbox in a bot comment.
-Feature titles offer **Release minor**. Fix and performance titles offer **Release patch**.
+Eligible open pull requests get one release checkbox in a bot comment.
+Feature titles offer **Release minor after merge**. Fix and performance titles offer **Release patch after merge**.
+Select it before merging. Clear it to cancel while the pull request remains open.
+The selection survives service restarts. A changed head or release version clears the selection.
+After merge, the controller waits for passing default branch push checks before preparing the release.
+Pull request checks do not count as default branch checks.
+Merged pull requests also retain a release checkbox when no selection exists.
 Docs, chores, known breaking changes, and released changes get no checkbox.
 If the unreleased range contains features, a fix cannot offer patch.
-Use a merged feature pull request for that minor release.
+Use a feature pull request for that minor release.
 
 Harlan can select the checkbox or comment `do release`, `do release patch`, or `do release minor`.
 Only a signed GitHub webhook from the authenticated Harlan account grants release authority.
@@ -236,7 +241,9 @@ The policy authorizes stable patch and minor releases, including the release ver
 That pull request requires fresh Review at 90% confidence, required checks, and GitHub branch protection.
 The general auto-merge label is not required. Source changes still follow their normal merge policy.
 
-The controller pins the default branch commit and full unreleased range before offering the action.
+Before merge, the controller binds the selection to the pull request head and proposed release version.
+After merge, it checks the full unreleased range again and pins the default branch commit.
+It never promotes an approved patch to minor. A changed release needs a new selection.
 It prepares configured JSON version files, then merges their verified pull request and creates the release tag.
 If version changes already merged, it uses that checked commit directly.
 The existing tag workflow builds and publishes. The controller verifies the workflow, npm versions, and GitHub release.

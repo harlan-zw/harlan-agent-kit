@@ -145,7 +145,7 @@ export interface WebhookAppOptions {
   packageRelease?: {
     allowedAuthor: string
     actorLogin: (repository: string) => string | null
-    apply: (request: PackageReleaseRequest) => void
+    apply: (request: PackageReleaseRequest & { requestId: string }) => void
     command?: (command: PackageReleaseCommand) => void
   }
   secret: string
@@ -209,7 +209,7 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
       if (release !== null && options.packageRelease !== undefined
         && release.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
         && options.packageRelease.actorLogin(hint.repository)?.toLowerCase() === release.commentAuthor.toLowerCase()) {
-        options.packageRelease.apply(release)
+        options.packageRelease.apply({ ...release, requestId: delivery })
       }
       const cancellation = reviewCancellation(name, payload)
       if (cancellation !== null

@@ -17,6 +17,7 @@ export interface PackageReleaseInput {
   sourceIncluded: boolean
   sourceSha: string
   mergeSha: string
+  headSha: string
   previousTag: string
   previousVersion: string
   currentVersion: string
@@ -26,16 +27,19 @@ export interface PackageReleaseInput {
   complete: boolean
 }
 
-export interface PackageReleasePlan {
-  _tag: 'Available'
+interface PackageReleaseVersion {
   bump: 'patch' | 'minor'
   version: string
   previousVersion: string
   previousTag: string
   packageName: string
-  sourceSha: string
-  mergeSha: string
+  headSha: string
 }
+
+export type PackageReleasePlan = PackageReleaseVersion & (
+  | { _tag: 'Available', sourceSha: string, mergeSha: string }
+  | { _tag: 'BeforeMerge' }
+)
 
 export type PackageReleaseOffer = PackageReleasePlan | { _tag: 'Unavailable', reason: string }
 
@@ -52,6 +56,15 @@ export function planPackageRelease(input: PackageReleaseInput): PackageReleaseOf
   const unavailable = (reason: string): PackageReleaseOffer => ({ _tag: 'Unavailable', reason })
   if (!input.merged || !input.sourceIncluded)
     return unavailable('The pull request has no unreleased merge on the default branch.')
+  return classifyPackageRelease(input, { _tag: 'Available', sourceSha: input.sourceSha, mergeSha: input.mergeSha })
+}
+
+export function planPackageReleaseBeforeMerge(input: Omit<PackageReleaseInput, 'merged' | 'sourceIncluded' | 'sourceSha' | 'mergeSha'>): PackageReleaseOffer {
+  return classifyPackageRelease(input, { _tag: 'BeforeMerge' })
+}
+
+function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sourceIncluded' | 'sourceSha' | 'mergeSha'>, phase: { _tag: 'BeforeMerge' } | { _tag: 'Available', sourceSha: string, mergeSha: string }): PackageReleaseOffer {
+  const unavailable = (reason: string): PackageReleaseOffer => ({ _tag: 'Unavailable', reason })
   if (!input.complete)
     return unavailable('The complete release range could not be read.')
   const previous = stableVersion(input.previousVersion)
@@ -73,16 +86,19 @@ export function planPackageRelease(input: PackageReleaseInput): PackageReleaseOf
     return unavailable('An unreleased commit needs a release classification.')
   const bump = type === 'feat' || types.includes('feat') ? 'minor' : 'patch'
   if (bump === 'minor' && type !== 'feat')
-    return unavailable('Unreleased features require minor. Use a merged feature pull request.')
+    return unavailable('Unreleased features require minor. Use a feature pull request.')
   const version = bump === 'minor' ? `${previous[0]}.${previous[1] + 1}.0` : `${previous[0]}.${previous[1]}.${previous[2] + 1}`
   if (stableVersion(version) === null || ![input.previousVersion, version].includes(input.currentVersion))
     return unavailable('The package version does not match this patch or minor release.')
-  return { _tag: 'Available', bump, version, previousVersion: input.previousVersion, previousTag: input.previousTag, packageName: input.packageName, sourceSha: input.sourceSha, mergeSha: input.mergeSha }
+  return { ...phase, bump, version, previousVersion: input.previousVersion, previousTag: input.previousTag, packageName: input.packageName, headSha: input.headSha }
 }
 
 export const PACKAGE_RELEASE_MARKER = '<!-- harlan-agent-kit:package-release -->'
 
-export function renderPackageRelease(plan: PackageReleasePlan): string {
+export function renderPackageRelease(plan: PackageReleasePlan, selected = false): string {
+  if (plan._tag === 'BeforeMerge') {
+    return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease **${plan.packageName}@${plan.version}** after this pull request merges and default branch checks pass.\nIncludes all unreleased changes since \`${plan.previousTag}\`.\nSelection applies to head \`${plan.headSha}\`. A changed head or release version clears it.\nClear the checkbox to cancel before merge.\n\n- [${selected ? 'x' : ' '}] Release ${plan.bump} after merge\n`
+  }
   return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease **${plan.packageName}@${plan.version}** from \`${plan.sourceSha}\`.\nIncludes all unreleased changes since \`${plan.previousTag}\`.\n\n- [ ] Release ${plan.bump}\n`
 }
 
@@ -93,6 +109,7 @@ export interface PackageReleaseRequest {
   requestedBy: string
   commentAuthor: string
   before: string
+  selected: boolean
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -109,11 +126,16 @@ export function releaseRequest(event: string, payload: unknown): PackageReleaseR
   const after = comment.body
   if (typeof before !== 'string' || typeof after !== 'string' || !before.startsWith(PACKAGE_RELEASE_MARKER))
     return null
-  const controls = before.match(/^- \[ \] Release (patch|minor)$/gm)
-  if (controls?.length !== 1 || (after !== before.replace(controls[0]!, controls[0]!.replace('[ ]', '[x]'))
-    && after !== before.replace(controls[0]!, controls[0]!.replace('[ ]', '[X]')))) {
+  const controls = [...before.matchAll(/^- \[([ xX])\] Release (patch|minor)( after merge)?$/gm)]
+  const control = controls[0]
+  if (controls.length !== 1 || control === undefined)
     return null
-  }
+  const selected = control[1] === ' '
+  if (!selected && control[3] === undefined)
+    return null
+  const next = selected ? ['x', 'X'] : [' ']
+  if (!next.some(mark => after === before.replace(control[0], control[0].replace(/\[[ x]\]/i, `[${mark}]`))))
+    return null
   const repository = record(input.repository).full_name
   const issue = record(input.issue)
   const requestedBy = record(input.sender).login
@@ -123,7 +145,7 @@ export function releaseRequest(event: string, payload: unknown): PackageReleaseR
     || typeof requestedBy !== 'string' || typeof commentAuthor !== 'string') {
     return null
   }
-  return { repository, pullRequestNumber: issue.number, commentId: comment.id, requestedBy, commentAuthor, before }
+  return { repository, pullRequestNumber: issue.number, commentId: comment.id, requestedBy, commentAuthor, before, selected }
 }
 
 export interface PackageReleaseCommand {

@@ -8,7 +8,7 @@ import { renderPackageRelease } from '../src/package-release.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
 
-const plan = { _tag: 'Available' as const, bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
+const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
 const repository = { ...repositoryMapping(), release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'] } }
 
 function setup() {
@@ -23,7 +23,7 @@ function setup() {
     publish: vi.fn(async () => null),
   }
   const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
-  const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
+  const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
   return { database, store, source, run, click }
 }
 
@@ -107,5 +107,55 @@ it('does not offer or publish releases while the webhook listener is unavailable
   await task.run(false)
   expect(task.source.comment).not.toHaveBeenCalled()
   expect(task.store.listPackageReleases(repository.github)).toEqual([])
+  task.database.close()
+})
+
+it('saves a selection before merge and resumes after restart', async () => {
+  const task = setup()
+  const preview = { _tag: 'BeforeMerge' as const, bump: plan.bump, packageName: plan.packageName, version: plan.version, previousVersion: plan.previousVersion, previousTag: plan.previousTag, headSha: 'f'.repeat(40) }
+  task.source.inspect = async () => preview
+  await task.run()
+  const offer = task.store.listPackageReleases(repository.github)[0]!
+  expect(offer.body).toContain('- [ ] Release patch after merge')
+  expect(task.store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: offer.body, requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'bot' })).toBe(true)
+  await task.run()
+  await task.run()
+  expect(task.source.prepare).not.toHaveBeenCalled()
+  expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('- [x] Release patch after merge'), 99)
+  expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('AwaitingMerge')
+  task.source.inspect = async () => ({ ...plan, headSha: preview.headSha })
+  await task.run()
+  expect(task.source.prepare).toHaveBeenCalledTimes(1)
+  expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Prepared')
+  task.database.close()
+})
+
+it.each(['push', 'bump', 'closed'])('revokes a pre-merge selection after %s', async (change) => {
+  const task = setup()
+  const preview = { _tag: 'BeforeMerge' as const, bump: plan.bump, packageName: plan.packageName, version: plan.version, previousVersion: plan.previousVersion, previousTag: plan.previousTag, headSha: 'f'.repeat(40) }
+  task.source.inspect = async () => preview
+  await task.run()
+  const offer = task.store.listPackageReleases(repository.github)[0]!
+  task.store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: offer.body, requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'bot' })
+  task.source.inspect = async () => change === 'closed' ? { _tag: 'Unavailable', reason: 'Closed without merge.' } : change === 'push' ? { ...preview, headSha: 'e'.repeat(40) } : { ...plan, headSha: preview.headSha, bump: 'minor', version: '1.1.0' }
+  await task.run()
+  expect(task.source.prepare).not.toHaveBeenCalled()
+  expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).not.toBe('AwaitingMerge')
+  expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).not.toBe('Queued')
+  task.database.close()
+})
+
+it('lets Harlan clear a selection before merge, including before the next reconciliation', async () => {
+  const task = setup()
+  task.source.inspect = async () => ({ _tag: 'BeforeMerge', bump: plan.bump, packageName: plan.packageName, version: plan.version, previousVersion: plan.previousVersion, previousTag: plan.previousTag, headSha: 'f'.repeat(40) })
+  await task.run()
+  const offer = task.store.listPackageReleases(repository.github)[0]!
+  const request = { repository: repository.github, pullRequestNumber: 24, commentId: 99, before: offer.body, requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'bot' }
+  expect(task.store.requestPackageRelease(request)).toBe(true)
+  expect(task.store.requestPackageRelease({ ...request, requestId: 'cancel', selected: false, before: offer.body.replace('[ ]', '[x]') })).toBe(true)
+  expect(createPackageReleaseStore(task.database).requestPackageRelease(request)).toBe(false)
+  await task.run()
+  expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Available')
+  expect(task.source.prepare).not.toHaveBeenCalled()
   task.database.close()
 })

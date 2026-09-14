@@ -3,6 +3,7 @@ import type { PackageReleaseCommand, PackageReleasePlan, PackageReleaseRequest }
 
 export type PackageReleaseState
   = | { _tag: 'Available' }
+    | { _tag: 'AwaitingMerge', requestedBy: string }
     | { _tag: 'Queued', requestedBy: string }
     | { _tag: 'Prepared', pullRequestNumber: number, headSha: string, branch: string }
     | { _tag: 'Publishing', tag: string, sha: string }
@@ -24,6 +25,9 @@ export type PackageReleaseStore = ReturnType<typeof createPackageReleaseStore>
 /** Release offers and Publication commands share the controller's SQLite journal. */
 export function createPackageReleaseStore(database: DatabaseSync) {
   database.exec(`
+    CREATE TABLE IF NOT EXISTS package_release_requests (
+      repository TEXT NOT NULL, request_id TEXT NOT NULL, PRIMARY KEY(repository, request_id)
+    );
     CREATE TABLE IF NOT EXISTS package_release_commands (
       repository TEXT NOT NULL, comment_id INTEGER NOT NULL, payload TEXT NOT NULL,
       consumed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(repository, comment_id)
@@ -38,6 +42,23 @@ export function createPackageReleaseStore(database: DatabaseSync) {
       repository TEXT PRIMARY KEY, fence INTEGER NOT NULL, expires_at INTEGER NOT NULL
     );
   `)
+  const applyReleaseRequest = (input: PackageReleaseRequest): boolean => {
+    if (!input.selected) {
+      return database.prepare(`UPDATE package_releases SET state='{"_tag":"Available"}', body=?
+          WHERE repository=? AND pull_request_number=? AND comment_id=? AND body IN (?, ?, ?)
+          AND json_extract(state, '$._tag')='AwaitingMerge'
+        `).run(input.before.replace(/^- \[[xX]\] Release /m, '- [ ] Release '), input.repository, input.pullRequestNumber, input.commentId, input.before, input.before.replace(/^- \[[xX]\] Release /m, '- [ ] Release '), input.before.replace(/^- \[X\] Release /m, '- [x] Release ')).changes === 1
+    }
+    return database.prepare(`UPDATE package_releases SET state=json_object(
+          '_tag', CASE WHEN json_extract(plan, '$._tag')='BeforeMerge' THEN 'AwaitingMerge' ELSE 'Queued' END,
+          'requestedBy', ?)
+        WHERE repository=? AND pull_request_number=? AND comment_id=? AND body=?
+        AND json_extract(state, '$._tag')='Available'
+        AND (json_extract(plan, '$._tag')='BeforeMerge' OR NOT EXISTS (
+          SELECT 1 FROM package_releases AS other WHERE other.repository=?
+          AND json_extract(other.state, '$._tag') IN ('Queued','Prepared','Publishing')))
+      `).run(input.requestedBy, input.repository, input.pullRequestNumber, input.commentId, input.before, input.repository).changes === 1
+  }
   return {
     mayPublishPackageRelease(repository: string): boolean {
       return database.prepare('SELECT 1 FROM repositories WHERE github=? AND enabled=1 AND writes_enabled=1 AND paused=0')
@@ -61,13 +82,20 @@ export function createPackageReleaseStore(database: DatabaseSync) {
         WHERE json_extract(package_releases.state, '$._tag') = 'Available'
       `).run(input.repository, input.pullRequestNumber, input.commentId, input.body, input.policy, JSON.stringify(input.plan), JSON.stringify({ _tag: 'Available' }))
     },
-    requestPackageRelease(input: PackageReleaseRequest): boolean {
-      return database.prepare(`UPDATE package_releases SET state=?
-        WHERE repository=? AND pull_request_number=? AND comment_id=? AND body=?
-        AND json_extract(state, '$._tag')='Available'
-        AND NOT EXISTS (SELECT 1 FROM package_releases AS other WHERE other.repository=?
-          AND json_extract(other.state, '$._tag') IN ('Queued','Prepared','Publishing'))
-      `).run(JSON.stringify({ _tag: 'Queued', requestedBy: input.requestedBy }), input.repository, input.pullRequestNumber, input.commentId, input.before, input.repository).changes === 1
+    requestPackageRelease(input: PackageReleaseRequest & { requestId: string }): boolean {
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const fresh = database.prepare('INSERT OR IGNORE INTO package_release_requests VALUES (?, ?)')
+          .run(input.repository, input.requestId)
+          .changes === 1
+        const applied = fresh && applyReleaseRequest(input)
+        database.exec('COMMIT')
+        return applied
+      }
+      catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
     },
     listPackageReleases(repository: string): PackageReleaseRecord[] {
       const rows = database.prepare('SELECT * FROM package_releases WHERE repository=?').all(repository) as Array<{
@@ -96,15 +124,15 @@ export function createPackageReleaseStore(database: DatabaseSync) {
     releasePackageReleaseLease(repository: string, fence: number): void {
       database.prepare('UPDATE package_release_leases SET expires_at=0 WHERE repository=? AND fence=?').run(repository, fence)
     },
-    recordPackageReleaseComment(input: PackageReleaseRecord, body: string, fence: number, now: number): boolean {
-      return database.prepare(`UPDATE package_releases SET body=? WHERE repository=? AND pull_request_number=? AND state=?
+    recordPackageReleaseComment(input: PackageReleaseRecord, body: string, fence: number, now: number, commentId = input.commentId): boolean {
+      return database.prepare(`UPDATE package_releases SET body=?, comment_id=? WHERE repository=? AND pull_request_number=? AND state=?
         AND EXISTS (SELECT 1 FROM package_release_leases WHERE repository=? AND fence=? AND expires_at>?)
-      `).run(body, input.repository, input.pullRequestNumber, JSON.stringify(input.state), input.repository, fence, now).changes === 1
+      `).run(body, commentId, input.repository, input.pullRequestNumber, JSON.stringify(input.state), input.repository, fence, now).changes === 1
     },
-    updatePackageRelease(input: PackageReleaseRecord, state: PackageReleaseState, fence: number, now: number): boolean {
-      return database.prepare(`UPDATE package_releases SET state=? WHERE repository=? AND pull_request_number=? AND state=?
+    updatePackageRelease(input: PackageReleaseRecord, state: PackageReleaseState, fence: number, now: number, plan = input.plan): boolean {
+      return database.prepare(`UPDATE package_releases SET state=?, plan=? WHERE repository=? AND pull_request_number=? AND state=?
         AND EXISTS (SELECT 1 FROM package_release_leases WHERE repository=? AND fence=? AND expires_at>?)
-      `).run(JSON.stringify(state), input.repository, input.pullRequestNumber, JSON.stringify(input.state), input.repository, fence, now).changes === 1
+      `).run(JSON.stringify(state), JSON.stringify(plan), input.repository, input.pullRequestNumber, JSON.stringify(input.state), input.repository, fence, now).changes === 1
     },
   }
 }

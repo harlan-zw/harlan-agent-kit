@@ -278,7 +278,13 @@ Feature pull requests offer minor. Fix and performance pull requests offer patch
 Never offer patch when the unreleased range contains features.
 Suppress controls for known breaking changes, incomplete evidence, and already released merges.
 
-The controller pins the package, version, source commit, and policy before accepting a click.
+Offer the release checkbox on eligible open pull requests and unreleased merged pull requests.
+Bind a selection before merge to the exact pull request head, package version, and policy.
+Allow Harlan to clear the checkbox before merge. Keep selections across service restarts.
+A changed head or release version clears the selection. Never promote patch to minor automatically.
+After merge, recheck the full release range and pin the default branch commit.
+Require passing checks from a default branch push before preparing the release.
+Passing pull request checks cannot satisfy that requirement.
 Prepare configured JSON version files through a separate pull request.
 Merge only that exact revision after current Review, required checks, and branch protection pass.
 This release authority does not permit merging unrelated pull requests.
