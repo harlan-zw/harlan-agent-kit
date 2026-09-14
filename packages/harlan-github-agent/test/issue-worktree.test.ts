@@ -86,6 +86,16 @@ function pushStackBase(checkout: string, ref: string, contents: string): string 
 const defaultBranch: PullRequestBase = { _tag: 'DefaultBranch', ref: 'main' }
 
 describe('issue worktree', () => {
+  it('reports an unchanged worktree without losing the Agent result', async () => {
+    const { manager, task } = fixture()
+    const signal = new AbortController().signal
+    const prepared = await manager.prepare(task, defaultBranch, signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    expect(await manager.verify(task, prepared.value, signal)).toEqual(ok(expect.objectContaining({ changedFiles: 0 })))
+    expect(git(prepared.value.path, 'status', '--porcelain')).toBe('')
+  })
+
   it('publishes ten finished changes as main advances between each publication', async () => {
     const { checkout, manager, remote, root, task } = fixture()
     const signal = new AbortController().signal
