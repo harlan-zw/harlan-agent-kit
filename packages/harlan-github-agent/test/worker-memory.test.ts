@@ -147,7 +147,7 @@ describe('project memory in Agent prompts', () => {
   })
 
   it('withholds memory from a Routine scan, which proposes new work', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).not.toContain('MEMORY.md')
     expect(prompt).toContain('These proposals were rejected before.')

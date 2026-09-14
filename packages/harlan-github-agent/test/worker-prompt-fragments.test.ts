@@ -120,7 +120,7 @@ const prompts = {
     writesTests: false,
   },
   routineScan: {
-    build: () => routineScanPrompt({ mode: 'propose', name: 'pr-triage', rejected: [], repository: 'harlan-zw/example' }),
+    build: () => routineScanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' }),
     checkBudget: null,
     writesTests: false,
   },

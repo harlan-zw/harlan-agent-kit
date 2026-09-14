@@ -86,7 +86,7 @@ describe('building the scan prompt', () => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'agent-feedback',
-      rejected: [],
+      priorCandidates: [],
       repository: 'harlan-zw/harlan-agent-kit',
       feedback: [{
         reviewRunId: 'review-1',
@@ -109,7 +109,7 @@ describe('building the scan prompt', () => {
   })
 
   it('lets a proposing Sentry Routine close verified fixes and persist its ledger', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'sentry-checkin', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'sentry-checkin', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('harlan-agent-kit:sentry-checkin')
     expect(prompt).toContain('references/scheduled-routine.md')
@@ -119,7 +119,7 @@ describe('building the scan prompt', () => {
   })
 
   it('keeps Sentry report mode read only while allowing local evidence files', () => {
-    const prompt = routineScanPrompt({ mode: 'report', name: 'sentry-checkin', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'report', name: 'sentry-checkin', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('Keep Sentry read only. Do not resolve issues or run resolve with --apply.')
     expect(prompt).toContain('Persist the audited ledger and record the run history, even with zero code proposals.')
@@ -127,7 +127,7 @@ describe('building the scan prompt', () => {
   })
 
   it('points a check-in at the repository skill and lets it write its report files', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'daily-checkin', rejected: [], repository: 'skilld-dev/skilld.dev' })
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'daily-checkin', priorCandidates: [], repository: 'skilld-dev/skilld.dev' })
 
     expect(prompt).toContain('.claude/skills/daily-checkin/SKILL.md')
     expect(prompt).toContain('writing its report and ledger files')
@@ -135,7 +135,7 @@ describe('building the scan prompt', () => {
   })
 
   it('says the turn is read only', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('read only')
   })
@@ -144,7 +144,7 @@ describe('building the scan prompt', () => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'pr-triage',
-      rejected: [{
+      priorCandidates: [{
         id: 'c1',
         routineId: 'r1',
         runId: 'run-1',
@@ -164,11 +164,11 @@ describe('building the scan prompt', () => {
     expect(prompt).toContain('src/old.ts: This file is generated.')
   })
 
-  it('leaves a Candidate that was never rejected out of the memory', () => {
+  it('carries an open proposal into the next scan', () => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'pr-triage',
-      rejected: [{
+      priorCandidates: [{
         id: 'c1',
         routineId: 'r1',
         runId: 'run-1',
@@ -185,11 +185,41 @@ describe('building the scan prompt', () => {
       repository: 'harlan-zw/example',
     })
 
+    expect(prompt).toContain('src/open.ts')
+    expect(prompt).toContain('unused')
+    expect(prompt).toContain(JSON.stringify({ _tag: 'Proposed', pullRequest: null }))
+  })
+
+  it.each([
+    { _tag: 'Merged', pullRequest: 42 } as const,
+    { _tag: 'Superseded', reason: 'Handled by another fix.' } as const,
+  ])('leaves a $_tag Candidate out of the next scan memory', (result) => {
+    const prompt = routineScanPrompt({
+      mode: 'propose',
+      name: 'pr-triage',
+      priorCandidates: [{
+        id: 'c1',
+        routineId: 'r1',
+        runId: 'run-1',
+        fingerprint: 'src/closed.ts',
+        title: 'Fixture title',
+        target: 'src/closed.ts',
+        claim: 'unused',
+        verification: 'pnpm test',
+        estimatedChangedFiles: 1,
+        result,
+        createdAt: '',
+        updatedAt: '',
+      }],
+      repository: 'harlan-zw/example',
+    })
+
+    expect(prompt).not.toContain('src/closed.ts')
     expect(prompt).toContain('Nothing has been rejected yet.')
   })
 
   it('tells a report routine that nothing it proposes gets built', () => {
-    const prompt = routineScanPrompt({ mode: 'report', name: 'pr-triage', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'report', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('reports only')
   })
@@ -456,6 +486,60 @@ describe('running one scan', () => {
         .run(claimStoredRun(store), new AbortController().signal)
 
       expect(capture.prompts[0]).toContain('Nothing has been rejected yet.')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps the scan prompt bounded while the Candidate history grows', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const claim = 'This helper duplicates the lease check and confuses the retry path.'.padEnd(4096, ' pad')
+      for (let day = 0; day < 10; day += 1) {
+        const hour = String(8 + day).padStart(2, '0')
+        const task = claimStoredRun(store, `2026-08-27T${hour}:05:00.000Z`)
+        store.recordCandidates({
+          routineId: task.routineId,
+          runId: task.id,
+          candidates: Array.from({ length: 10 }, (_, index) => ({
+            fingerprint: `src/day${day}/feature${index}.ts`,
+            title: `Day ${day} finding ${index}`,
+            target: `src/day${day}/feature${index}.ts`,
+            claim,
+            verification: 'pnpm test',
+            estimatedChangedFiles: 1,
+          })),
+          at: `2026-08-27T${hour}:10:00.000Z`,
+        })
+        store.completeRoutineRun({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at: `2026-08-27T${hour}:20:00.000Z`,
+          evidence: `Day ${day} scan recorded.`,
+        })
+        store.openRoutineRun({
+          routineId: 'harlan-zw/example:pr-triage',
+          scheduledFor: `2026-08-27T${hour}:30:00.000Z`,
+          specSha: 'abc123',
+          at: `2026-08-27T${hour}:30:05.000Z`,
+        })
+      }
+
+      const capture = { prompts: [] as string[] }
+      const result = await workerFor(store, scanning({ candidates: [] }, capture))
+        .run(claimStoredRun(store, '2026-08-27T18:35:00.000Z'), new AbortController().signal)
+
+      expect(result).toMatchObject({ _tag: 'Ok' })
+      expect(store.listCandidates('harlan-zw/example:pr-triage')).toHaveLength(100)
+      // Ten runs of ten multi-Kilobyte Candidates build a history far larger
+      // than one turn may read. The prompt stays a fixed size whatever the
+      // ledger holds, and the window keeps the newest Candidates.
+      const prompt = capture.prompts[0] ?? ''
+      expect(prompt.length).toBeLessThan(200_000)
+      expect(prompt).toContain('src/day9/feature9.ts')
     }
     finally {
       store.close()
