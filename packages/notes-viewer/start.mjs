@@ -11,7 +11,7 @@ const accepted = /\.(?:md|png|jpe?g|gif|webp|svg|pdf)$/i
 const fingerprints = new Map()
 let previousIndex
 
-async function sync() {
+async function sync(build = false) {
   const files = []
   async function scan(dir) {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -38,6 +38,11 @@ async function sync() {
     const dest = join(target, 'notes', file.name)
     await mkdir(dirname(dest), { recursive: true })
     await cp(file.path, dest)
+    if (build && !file.name.endsWith('.md')) {
+      const asset = join(target, 'public', 'notes', file.name)
+      await mkdir(dirname(asset), { recursive: true })
+      await cp(file.path, asset)
+    }
     fingerprints.set(file.name, file.modified)
   }
   const entries = []
@@ -59,8 +64,8 @@ async function main() {
   await mkdir(source, { recursive: true })
   await rm(target, { recursive: true, force: true })
   await mkdir(target, { recursive: true })
-  await sync()
   const build = process.argv[2] === 'build'
+  await sync(build)
   const args = build ? ['build'] : ['dev', '--host', '127.0.0.1', '--port', process.env.PORT || '4173']
   const child = spawn(join(root, 'node_modules/.bin/vitepress'), args, { cwd: root, stdio: 'inherit' })
   let timer
