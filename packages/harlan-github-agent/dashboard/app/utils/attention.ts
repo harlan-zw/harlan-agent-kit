@@ -44,6 +44,17 @@ export function queueAttention(entry: QueueEntry, snapshot: DashboardSnapshot): 
       && ('issueNumber' in task ? task.issueNumber : task.pullRequestNumber) === entry.number
       && task.revisionId === entry.revisionId)
       .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    // A queued Issue work Task becomes Action required only while a pull request limit holds its claim.
+    // Keep this live condition ahead of older stopped Tasks and triage evidence.
+    if (tasks[0]?.kind === 'issue_work' && tasks[0].state._tag === 'Queued') {
+      return {
+        owner: 'You',
+        _tag: 'Decision',
+        blocker: 'Open pull request limit',
+        summary: entry.state.reason,
+        instructions: entry.state.reason,
+      }
+    }
     const stopped = tasks.find(task => task.kind === 'issue_work'
       && (task.state._tag === 'ActionRequired' || task.state._tag === 'Failed'))
     if (stopped?.state._tag === 'ActionRequired' || stopped?.state._tag === 'Failed') {

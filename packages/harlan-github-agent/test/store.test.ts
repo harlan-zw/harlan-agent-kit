@@ -1780,8 +1780,8 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:02:03.000Z').queue).toContainEqual(expect.objectContaining({
       number: 12,
       state: {
-        _tag: 'Pending',
-        reason: 'harlan-zw/example reached its limit of 1 open automated pull request. Merge or close one to start Issue work.',
+        _tag: 'ActionRequired',
+        reason: 'harlan-zw/example has 1 open automated pull request; its limit is 1. Merge or close a pull request to start Issue work.',
       },
     }))
 

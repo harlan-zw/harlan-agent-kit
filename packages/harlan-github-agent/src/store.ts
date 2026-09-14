@@ -2906,6 +2906,7 @@ function dashboardQueue(
   rejectedIssueWorkResults: Map<string, number>,
   openPullRequestsByRepository: Map<string, number>,
   currentSelectionMode: SelectionMode,
+  globalPullRequestLimit: { count: number, maximum: number },
   reviewResolutions: Map<string, ReviewResolution>,
   desiredReviewOutcomes: Map<string, ReviewDesiredOutcome>,
   issueApprovals: Set<string> = new Set(),
@@ -2947,22 +2948,30 @@ function dashboardQueue(
           case 'Running':
           case 'Publishing': return [{ ...base, kind: 'issue', state: { _tag: 'Active', work: 'issue_work' } }]
           case 'Queued': {
+            const limit = mapping.maxOpenPullRequests
+            const openPullRequests = openPullRequestsByRepository.get(subject.repository) ?? 0
+            if (currentSelectionMode === 'auto') {
+              const blocked = limit !== null && openPullRequests >= limit
+                ? { name: subject.repository, count: openPullRequests, maximum: limit }
+                : globalPullRequestLimit.count >= globalPullRequestLimit.maximum
+                  ? { name: 'The service', ...globalPullRequestLimit }
+                  : null
+              if (blocked !== null) {
+                const pullRequests = blocked.count === 1 ? 'pull request' : 'pull requests'
+                return [{
+                  ...base,
+                  kind: 'issue',
+                  state: {
+                    _tag: 'ActionRequired',
+                    reason: `${blocked.name} has ${blocked.count} open automated ${pullRequests}; its limit is ${blocked.maximum}. Merge or close a pull request to start Issue work.`,
+                  },
+                }]
+              }
+            }
+            // A Batch reservation must not hide the limit that prevents its next claim.
             const reserved = batchReservationReasons.get(work.id)
             if (reserved !== undefined)
               return [{ ...base, kind: 'issue', state: { _tag: 'Pending', reason: reserved } }]
-            const limit = mapping.maxOpenPullRequests
-            const openPullRequests = openPullRequestsByRepository.get(subject.repository) ?? 0
-            if (currentSelectionMode === 'auto' && limit !== null && openPullRequests >= limit) {
-              const pullRequest = limit === 1 ? 'pull request' : 'pull requests'
-              return [{
-                ...base,
-                kind: 'issue',
-                state: {
-                  _tag: 'Pending',
-                  reason: `${subject.repository} reached its limit of ${limit} open automated ${pullRequest}. Merge or close one to start Issue work.`,
-                },
-              }]
-            }
             return [{ ...base, kind: 'issue', state: { _tag: 'Queued', work: 'issue_work' } }]
           }
           case 'ActionRequired': {
@@ -12450,6 +12459,7 @@ export function openJournalStore(
         rejectedIssueWorkResults,
         openPullRequestsByRepository,
         currentSelectionMode,
+        { count: countOpenPullRequests(), maximum: maxOpenPullRequests },
         reviewResolutions,
         desiredReviewOutcomes,
         issueApprovals,
