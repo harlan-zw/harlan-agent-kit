@@ -122,12 +122,20 @@ export function createPackageReleaseSource(options: {
   const comment: PackageReleaseSource['comment'] = async (number, body, commentId) => {
     const api = await client('item_write')
     // Search on recovery too. A lost create response must not post another comment.
-    const comments = commentId === undefined
+    // A deleted comment falls back to the search, so the pass recreates it instead of failing forever.
+    const stored = commentId === undefined
+      ? null
+      : await api.rest.issues.getComment({ ...scope, comment_id: commentId }).then(result => result.data).catch((error: unknown) => {
+          if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404)
+            return null
+          throw error
+        })
+    const comments = stored === null
       ? await api.paginate(api.rest.issues.listComments, { ...scope, issue_number: number, per_page: 100 })
-      : [(await api.rest.issues.getComment({ ...scope, comment_id: commentId })).data]
+      : [stored]
     const existing = comments.find(comment => comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase()
       && comment.issue_url.endsWith(`/issues/${number}`) && comment.body?.startsWith(PACKAGE_RELEASE_MARKER))
-    if (commentId !== undefined && existing === undefined)
+    if (stored !== null && existing === undefined)
       throw new Error('The release comment no longer belongs to this Task.')
     if (existing !== undefined) {
       if (existing.body !== body)

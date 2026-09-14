@@ -1,9 +1,12 @@
 import type { PackageReleaseRecord } from '../src/package-release-store.ts'
 import type { StoredReviewForHead } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
+import { DatabaseSync } from 'node:sqlite'
 import { Octokit } from 'octokit'
 import { expect, it } from 'vitest'
+import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseSource } from '../src/package-release-github.ts'
+import { createPackageReleaseStore } from '../src/package-release-store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const sha = 'a'.repeat(40)
@@ -85,6 +88,15 @@ function fixture() {
     else if (path === '/releases/tags/v1.0.1') {
       data = { draft: false, prerelease: false, html_url: 'https://github.com/release/v1.0.1' }
     }
+    else if (path === '/issues/comments/99') {
+      return Response.json({ message: 'Not Found' }, { status: 404 })
+    }
+    else if (path === '/issues/24/comments' && req.method === 'POST') {
+      data = { id: 100 }
+    }
+    else if (path === '/issues/24/comments') {
+      data = []
+    }
     else {
       throw new Error(`Unexpected ${req.method} ${path}`)
     }
@@ -161,4 +173,14 @@ it('does not merge when the default branch advances after preparation', async ()
   expect(await task.source.merge({ ...record, state: { _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' } }))
     .toMatchObject({ _tag: 'Blocked' })
   expect(task.writes).toEqual([])
+})
+
+it('recreates a deleted release comment so one pass still advances the record', async () => {
+  const task = fixture()
+  const store = createPackageReleaseStore(new DatabaseSync(':memory:'))
+  store.saveReleaseOffer({ repository: mapping.github, pullRequestNumber: 24, plan, commentId: 99, body: '', policy: JSON.stringify(mapping) })
+  expect(store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })).toBe(true)
+  await reconcilePackageReleases({ webhookReady: true, repository: mapping, store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  expect(task.writes.some(write => write.path === '/issues/24/comments')).toBe(true)
+  expect(store.listPackageReleases(mapping.github)[0]?.state).toEqual({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })
 })
