@@ -95,6 +95,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
@@ -255,6 +256,7 @@ describe('subject Workers', () => {
         workspace: '/tmp/harlan-github-agent',
       }),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A clean Review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
@@ -467,6 +469,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
@@ -516,7 +519,7 @@ describe('subject Workers', () => {
     expect(workspaceCreated).toBe(true)
   })
 
-  it('queues every structured finding without changing the Review worktree', async () => {
+  it.each([false, true])('queues findings when merge happens during Review: %s', async (merged) => {
     const repository = repositoryMapping({ ownership: 'maintained' })
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let attempt: RecordReviewRunInput | undefined
@@ -566,6 +569,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => ({ _tag: 'Inserted', revisionId: 'merged-revision' }),
         queueReviewFixTaskForReview: () => {
           queued = true
           return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
@@ -599,6 +603,10 @@ describe('subject Workers', () => {
         prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
         verifyReview: () => {
           worktreeVerified = true
+          if (merged) {
+            pullRequest.state = 'closed'
+            pullRequest.mergedAt = '2026-08-13T01:01:00.000Z'
+          }
           return Promise.resolve(ok(undefined))
         },
       },
@@ -628,8 +636,13 @@ describe('subject Workers', () => {
       }),
     })])
     expect(queued).toBe(true)
-    expect(terminal).toContain('### 🤖 BLOCKED')
-    expect(terminal).toContain('The parser drops data.')
+    if (merged) {
+      expect(terminal).toBe('')
+    }
+    else {
+      expect(terminal).toContain('### 🤖 BLOCKED')
+      expect(terminal).toContain('The parser drops data.')
+    }
     expect(worktreeVerified).toBe(true)
   })
 
@@ -684,6 +697,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => {
           queued = true
           return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
@@ -792,6 +806,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A wrong premise must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
@@ -892,6 +907,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => {
           // The store refuses once the reused identity matches its guard.
           return { _tag: 'ActionRequired', reason: 'A repaired head still has the same Review finding: The parser drops data.' }
@@ -993,6 +1009,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent Repair work.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
@@ -1087,6 +1104,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
@@ -1178,6 +1196,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,
@@ -1265,6 +1284,7 @@ describe('subject Workers', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       preflightRepair: () => Promise.resolve(ok(undefined)),
       store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
         getWorkerSession: () => null,

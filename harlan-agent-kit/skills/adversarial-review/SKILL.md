@@ -127,6 +127,17 @@ Use a wrong premise when safe fixes must reverse the intent, remove a safeguard,
 
 ### 7. Hand off Repair and restart
 
+If the pull request merges during Review, finish and store the findings.
+If Harlan needs to merge now, leave Review running.
+If Harlan decides Review is unnecessary, select Stop Review in the automated comment before merging.
+The checkbox cancels Review and follow-up Repair for its exact head commit.
+Show the checkbox only when signed GitHub webhooks are enabled. The dashboard Cancel control also remains available.
+Recheck each Repair finding on the current default branch in a fresh worktree.
+Open one linked Repair pull request only for confirmed bugs. Require failing regression tests before fixes.
+Deduplicate by the original pull request and reviewed head commit. Never push to the merged branch.
+If no findings remain, record completion. If fixes are unsafe, record Action required.
+If the pull request closes unmerged, stop Review.
+
 When the premise is sound and findings remain, queue one fresh Repair Agent with all exact findings. Never reuse the Review session.
 
 For an outside contributor, use the existing Approval. A new external Revision invalidates Approval. The exact controller repair commit continues the workflow.

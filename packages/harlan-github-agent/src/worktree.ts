@@ -854,6 +854,10 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
     },
 
     async prepareFix(task, signal) {
+      if (task.pullRequest.state === 'closed' && task.pullRequest.mergedAt !== null) {
+        const ref = `refs/harlan-github-agent/fixes/${task.pullRequestNumber}/merged-base`
+        return prepareRepository(task, `fix-${task.pullRequestNumber}`, [`+refs/heads/${task.repositoryMapping.defaultBranch}:${ref}`], ref, signal)
+      }
       const headRef = `refs/harlan-github-agent/fixes/${task.pullRequestNumber}/head`
       const baseRef = `refs/harlan-github-agent/fixes/${task.pullRequestNumber}/base`
       const prepared = await prepareRepository(
@@ -952,7 +956,7 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
 
     async verify(task, worktree, signal) {
       const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
-      if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
+      if (head.exitCode !== 0 || head.stdout !== worktree.headSha)
         return err('The agent changed HEAD. Agents must not commit or rewrite history.')
       const staged = await runGit(worktree.path, ['diff', '--cached', '--quiet'], signal)
       if (staged.exitCode !== 0)
@@ -970,7 +974,7 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
       if (changed.exitCode !== 0)
         return err(`Could not inspect repaired files: ${changed.stderr}`)
       const changedPaths = changed.stdout.split('\0').filter(Boolean)
-      const contributorFork = task.pullRequest.headRepository.toLowerCase() !== task.repository.toLowerCase()
+      const contributorFork = task.pullRequest.mergedAt === null && task.pullRequest.headRepository.toLowerCase() !== task.repository.toLowerCase()
       const workflowPath = contributorFork
         ? changedPaths.find(path => path.startsWith('.github/workflows/'))
         : undefined
@@ -1281,6 +1285,8 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           return err('Repository policy no longer authorizes issue work.')
         if (command.taskKind === 'baseline_repair' && !canRepairBaseline(command.repositoryMapping))
           return err('Repository policy no longer authorizes Baseline repair.')
+        if (command.taskKind === 'review_fix' && (!canRepairBaseline(command.repositoryMapping) || command.baseRef !== command.repositoryMapping.defaultBranch))
+          return err('Repair must open its pull request against the default branch.')
         // A Baseline repair exists to fix the default branch, so it always targets it.
         if (command.taskKind === 'baseline_repair' && command.baseRef !== command.repositoryMapping.defaultBranch)
           return err('A Baseline repair must target the default branch.')

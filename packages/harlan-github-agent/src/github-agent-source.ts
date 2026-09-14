@@ -12,6 +12,7 @@ import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseChecks, currentBaseSha } from './github-base.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
+import { normalizeReviewControl } from './review-cancel.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
 
 /**
@@ -894,7 +895,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             return contexts.length === 0 ? { _tag: 'None' } : { _tag: 'Declared', contexts }
           })
           .catch((error: unknown): RequiredChecks => ({ _tag: 'Unavailable', reason: message(error) }))
-        const liveBaseSha = await currentBaseSha(octokit.value, owner, repo, pull.data.base.ref, signal)
+        const liveBaseSha = await currentBaseSha(octokit.value, owner, repo, pull.data.merged_at === null ? pull.data.base.ref : repository.defaultBranch, signal)
         const baseCommits = (sha: string, count: number): Promise<string[]> => octokit.value.rest.repos
           .listCommits({ owner, repo, sha, per_page: count, request: { signal } })
           .then(response => response.data.map(commit => commit.sha))
@@ -962,7 +963,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another GitHub actor.' as const })
           if (existing.data.body === body && existing.data.html_url !== undefined)
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
-          if (existing.data.body !== expectedBody)
+          if (normalizeReviewControl(existing.data.body ?? '') !== normalizeReviewControl(expectedBody))
             return ok({ _tag: 'Changed' as const })
           const writer = legacyOwned && legacyActor !== undefined
             ? await clientWith(legacyActor.tokens, repository.github, 'item_write', signal)
@@ -1031,6 +1032,11 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const adopted = existing !== undefined && existing.id === adoptablePrior?.id
         if (existing !== undefined && existing.user?.login.toLowerCase() !== actor && !adopted)
           return err('The stored automated review comment belongs to another GitHub actor.')
+        if (existing?.body !== undefined && existing.body !== null
+          && automatedReviewHead(existing.body) === headSha
+          && normalizeReviewControl(existing.body) !== existing.body) {
+          return err('Review cancellation is pending.')
+        }
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
         const writer = adopted && legacyActor !== undefined

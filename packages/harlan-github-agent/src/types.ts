@@ -1118,7 +1118,7 @@ export type PublicationCommand
   }
   | PublicationCommandBase & {
     _tag: 'OpenPullRequest'
-    taskKind: 'baseline_repair'
+    taskKind: 'baseline_repair' | 'review_fix'
     pullRequestNumber: number
     pullRequestTitle: string
     pullRequestBody: string

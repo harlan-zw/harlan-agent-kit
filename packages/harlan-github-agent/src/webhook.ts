@@ -1,6 +1,8 @@
+import type { ReviewCancellation } from './review-cancel.ts'
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
+import { reviewCancellation } from './review-cancel.ts'
 
 /**
  * Events that change something this service acts on.
@@ -134,6 +136,10 @@ export interface WebhookAppOptions {
   allowedOwners: readonly string[]
   logger: { info: (message: string) => void }
   onHint: (repository: string) => void
+  reviewCancellation?: {
+    actorLogin: (repository: string) => string | null
+    apply: (request: ReviewCancellation & { requestId: string }) => void
+  }
   secret: string
   now?: () => number
 }
@@ -141,7 +147,7 @@ export interface WebhookAppOptions {
 /**
  * One listener that answers GitHub and nothing else.
  *
- * This app carries no dashboard, no state, and no controls. It runs on its own
+ * This app accepts signed Review cancellation and reconciliation hints. It runs on its own
  * port so that exposing it through a tunnel cannot reach the control API, which
  * can pause agents, approve pull requests, and eject sessions.
  */
@@ -185,6 +191,12 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
 
     const hint = webhookHint(name, payload, options.allowedOwners)
     if (hint._tag === 'Reconcile') {
+      const cancellation = reviewCancellation(name, payload)
+      if (cancellation !== null
+        && options.allowedOwners.some(author => author.toLowerCase() === cancellation.requestedBy.toLowerCase())
+        && options.reviewCancellation?.actorLogin(hint.repository)?.toLowerCase() === cancellation.commentAuthor.toLowerCase()) {
+        options.reviewCancellation.apply({ ...cancellation, requestId: delivery })
+      }
       options.logger.info(`Webhook: ${name} on ${hint.repository}.`)
       options.onHint(hint.repository)
     }

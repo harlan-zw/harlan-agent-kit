@@ -73,6 +73,58 @@ function retainedGateInput(store: ReturnType<typeof openJournalStore>) {
 }
 
 describe('review work follows the head commit', () => {
+  it('finishes an active Review after merge and queues one separate Repair', () => {
+    const store = createStore()
+    const task = recordRetryingReview(store)
+    const running = store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:05:00.000Z', 3600000)!
+    const merged = pullRequestItem({ mergeState: 'clean', state: 'closed', mergedAt: '2026-08-13T01:06:00.000Z', baseSha: 'merged-base' })
+    store.recordExactPullRequestObservation({ externalId: 'merged', observedAt: '2026-08-13T01:06:00.000Z', subject: merged })
+    expect(store.heartbeatWorkerTask({ taskId: running.id, workerId: 'reviewer', fence: running.state.fence, at: '2026-08-13T01:07:00.000Z', leaseMilliseconds: 3600000 })).toBe(true)
+    expect(store.recordReviewRun({ ...reviewRun, id: 'after-merge', revisionId: task.revisionId, completedAt: '2026-08-13T01:07:00.000Z', gates: { ...passedReviewGates(), review: { _tag: 'Failed', reason: 'Drops bytes.', evidence: [] } }, confidence: 96, findings: [{ _tag: 'Open', resolution: 'Repair', summary: 'Drops bytes.', nextAction: 'Preserve bytes.' }] })._tag).toBe('Inserted')
+    const input = { taskId: running.id, workerId: 'reviewer', fence: running.state.fence, at: '2026-08-13T01:08:00.000Z' }
+    const queued = store.queueReviewFixTaskForReview(input)
+    expect(queued._tag).toBe('Queued')
+    expect(store.queueReviewFixTaskForReview(input)).toEqual(queued)
+    store.recordExactPullRequestObservation({ externalId: 'merged-again', observedAt: '2026-08-13T01:09:00.000Z', subject: merged })
+    const repair = store.claimNextReviewFixTask('repair', '2026-08-13T01:10:00.000Z', 60000)!
+    expect(repair.pullRequest.state).toBe('closed')
+    const staged = store.stagePublication({ taskId: repair.id, workerId: 'repair', fence: repair.state.fence, at: '2026-08-13T01:10:01.000Z', publication: {
+      _tag: 'OpenPullRequest',
+      taskKind: 'review_fix',
+      pullRequestNumber: 24,
+      pullRequestTitle: 'fix: preserve bytes',
+      pullRequestBody: 'Repair findings from #24.',
+      commitSha: 'fixed',
+      baseSha: 'latest-main',
+      baseRef: 'main',
+      expectedHeadSha: 'latest-main',
+      headRef: 'fix/review-24-abc123',
+      artifactRef: 'artifact',
+      patchDigest: 'digest',
+      changedFiles: 1,
+    } })
+    expect(staged._tag).toBe('Staged')
+    store.recordExactPullRequestObservation({ externalId: 'merged-publishing', observedAt: '2026-08-13T01:10:02.000Z', subject: merged })
+    const publication = store.claimNextPublication('publisher', '2026-08-13T01:10:03.000Z', 60000)
+    expect(publication).toMatchObject({ _tag: 'OpenPullRequest', taskKind: 'review_fix', headRef: 'fix/review-24-abc123', baseSha: 'latest-main' })
+    expect(store.completeReviewTask({ ...input, resolution: { _tag: 'Reviewed', reviewRunId: 'after-merge' }, evidence: 'after-merge' })).toBe(true)
+  })
+
+  it.each(['closed', 'queued', 'cancelled', 'dismissed'] as const)('stops Review when %s', (mode) => {
+    const store = createStore()
+    recordRetryingReview(store)
+    const task = mode === 'queued' ? null : store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:05:00.000Z', 3600000)!
+    const merged = pullRequestItem({ mergeState: 'clean', state: 'closed', mergedAt: mode === 'closed' ? null : '2026-08-13T01:06:00.000Z' })
+    store.recordExactPullRequestObservation({ externalId: 'closed', observedAt: '2026-08-13T01:06:00.000Z', subject: merged })
+    if (mode === 'cancelled')
+      store.cancelTask({ taskId: task!.id, at: '2026-08-13T01:07:00.000Z' })
+    if (mode === 'dismissed')
+      store.dismissItem({ repository: merged.repository, itemNumber: merged.number, at: '2026-08-13T01:07:00.000Z' })
+    if (task !== null)
+      expect(store.heartbeatWorkerTask({ taskId: task.id, workerId: 'reviewer', fence: task.state.fence, at: '2026-08-13T01:08:00.000Z', leaseMilliseconds: 60000 })).toBe(false)
+    expect(store.claimNextAdversarialReviewTask('other', '2026-08-13T01:09:00.000Z', 60000)).toBeNull()
+  })
+
   it.each(['main', 'another-base'])('checks the live base branch before publishing retained gates to %s', async (baseRef) => {
     const store = createStore()
     recordRetryingReview(store)
