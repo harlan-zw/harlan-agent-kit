@@ -22,7 +22,7 @@ function setup() {
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
   }
-  const run = () => reconcilePackageReleases({ repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
   return { database, store, source, run, click }
 }
@@ -99,5 +99,13 @@ it('keeps a text command that arrives before the offer exists', async () => {
   expect(task.source.prepare).toHaveBeenCalledTimes(1)
   task.store.queuePackageReleaseCommand({ repository: repository.github, pullRequestNumber: 24, commentId: 101, requestedBy: 'harlan-zw', bump: 'auto' })
   expect(task.store.listPackageReleaseCommands(repository.github)).toEqual([])
+  task.database.close()
+})
+
+it('does not offer or publish releases while the webhook listener is unavailable', async () => {
+  const task = setup()
+  await task.run(false)
+  expect(task.source.comment).not.toHaveBeenCalled()
+  expect(task.store.listPackageReleases(repository.github)).toEqual([])
   task.database.close()
 })

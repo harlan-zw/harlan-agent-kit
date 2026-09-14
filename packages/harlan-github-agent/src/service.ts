@@ -283,6 +283,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
   }
   const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort)
+  let releaseWebhookReady = false
   const processId = randomUUID()
   const restartController = createRestartController({
     store,
@@ -1040,6 +1041,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             const errors = await guarded('Package releases', async () => {
               await reconcilePackageReleases({
                 repository,
+                webhookReady: releaseWebhookReady,
                 store,
                 now: () => now().getTime(),
                 signal,
@@ -1326,6 +1328,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         options.logger.error(`The webhook listener did not start: ${error instanceof Error ? error.message : 'unknown error'}`)
         return null
       })
+
+  releaseWebhookReady = webhookServer !== null
 
   // A process that died mid-Task left the Running label saying an Agent is on
   // an Item nothing is on. The journal answers that, so it is settled once here

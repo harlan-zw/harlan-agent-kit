@@ -30,13 +30,14 @@ export function packageReleaseStatus(record: PackageReleaseRecord): string {
 /** One pass advances durable Publications. A network error leaves the phase resumable. */
 export async function reconcilePackageReleases(options: {
   repository: RepositoryMapping
+  webhookReady: boolean
   store: PackageReleaseStore
   source: (assertLease: () => void) => PackageReleaseSource
   now: () => number
   signal: AbortSignal
 }): Promise<void> {
   const { repository, store, now, signal } = options
-  if (!repository.enabled || repository.release === undefined || repository.ownership !== 'owned')
+  if (!options.webhookReady || !repository.enabled || repository.release === undefined || repository.ownership !== 'owned')
     return
   const fence = store.claimPackageReleaseLease(repository.github, now())
   if (fence === null)
