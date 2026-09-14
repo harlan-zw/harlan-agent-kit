@@ -86,7 +86,7 @@ describe('building the scan prompt', () => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'agent-feedback',
-      rejected: [],
+      priorCandidates: [],
       repository: 'harlan-zw/harlan-agent-kit',
       feedback: [{
         reviewRunId: 'review-1',
@@ -109,7 +109,7 @@ describe('building the scan prompt', () => {
   })
 
   it('lets a proposing Sentry Routine close verified fixes and persist its ledger', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'sentry-checkin', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'sentry-checkin', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('harlan-agent-kit:sentry-checkin')
     expect(prompt).toContain('references/scheduled-routine.md')
@@ -119,7 +119,7 @@ describe('building the scan prompt', () => {
   })
 
   it('keeps Sentry report mode read only while allowing local evidence files', () => {
-    const prompt = routineScanPrompt({ mode: 'report', name: 'sentry-checkin', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'report', name: 'sentry-checkin', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('Keep Sentry read only. Do not resolve issues or run resolve with --apply.')
     expect(prompt).toContain('Persist the audited ledger and record the run history, even with zero code proposals.')
@@ -127,7 +127,7 @@ describe('building the scan prompt', () => {
   })
 
   it('points a check-in at the repository skill and lets it write its report files', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'daily-checkin', rejected: [], repository: 'skilld-dev/skilld.dev' })
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'daily-checkin', priorCandidates: [], repository: 'skilld-dev/skilld.dev' })
 
     expect(prompt).toContain('.claude/skills/daily-checkin/SKILL.md')
     expect(prompt).toContain('writing its report and ledger files')
@@ -135,7 +135,7 @@ describe('building the scan prompt', () => {
   })
 
   it('says the turn is read only', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('read only')
   })
@@ -144,7 +144,7 @@ describe('building the scan prompt', () => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'pr-triage',
-      rejected: [{
+      priorCandidates: [{
         id: 'c1',
         routineId: 'r1',
         runId: 'run-1',
@@ -164,11 +164,15 @@ describe('building the scan prompt', () => {
     expect(prompt).toContain('src/old.ts: This file is generated.')
   })
 
-  it('leaves a Candidate that was never rejected out of the memory', () => {
+  it.each([
+    { _tag: 'Proposed', pullRequest: null } as const,
+    { _tag: 'Merged', pullRequest: 42 } as const,
+    { _tag: 'Superseded', reason: 'Handled by another fix.' } as const,
+  ])('carries $_tag proposal history into the next scan', (result) => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'pr-triage',
-      rejected: [{
+      priorCandidates: [{
         id: 'c1',
         routineId: 'r1',
         runId: 'run-1',
@@ -178,18 +182,20 @@ describe('building the scan prompt', () => {
         claim: 'unused',
         verification: 'pnpm test',
         estimatedChangedFiles: 1,
-        result: { _tag: 'Proposed', pullRequest: null },
+        result,
         createdAt: '',
         updatedAt: '',
       }],
       repository: 'harlan-zw/example',
     })
 
-    expect(prompt).toContain('Nothing has been rejected yet.')
+    expect(prompt).toContain('src/open.ts')
+    expect(prompt).toContain('unused')
+    expect(prompt).toContain(JSON.stringify(result))
   })
 
   it('tells a report routine that nothing it proposes gets built', () => {
-    const prompt = routineScanPrompt({ mode: 'report', name: 'pr-triage', rejected: [], repository: 'harlan-zw/example' })
+    const prompt = routineScanPrompt({ mode: 'report', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).toContain('reports only')
   })
