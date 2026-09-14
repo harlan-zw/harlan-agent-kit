@@ -76,6 +76,22 @@ function fixture(): { remote: string, root: string, task: ClaimedReviewFixTask }
 }
 
 describe('review fix worktree', () => {
+  it('reports an unchanged worktree without losing the Agent result', async () => {
+    const { root, task, remote } = fixture()
+    const manager = createReviewFixWorktreeManager({
+      gitIdentity: { name: 'Test Author', email: 'author@example.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: async () => ok({ token: 'unused', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+    })
+    const signal = new AbortController().signal
+    const prepared = await manager.prepare(task, signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    expect(await manager.verify(task, prepared.value, signal)).toEqual(ok(expect.objectContaining({ changedFiles: 0 })))
+    expect(git(prepared.value.path, 'status', '--porcelain')).toBe('')
+  })
+
   it('rejects any file change made during read only Review', async () => {
     const { remote, root, task } = fixture()
     const reviewTask: ClaimedAdversarialReviewTask = {

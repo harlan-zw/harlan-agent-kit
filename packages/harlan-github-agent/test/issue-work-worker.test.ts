@@ -16,6 +16,82 @@ import { ok } from '../src/result.ts'
 import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('issue work worker', () => {
+  it('preserves deployment evidence without committing an empty change', async () => {
+    const repository = repositoryMapping()
+    const issue = issueItem()
+    const bases: PullRequestBase[] = []
+    const worker = createIssueWorkWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'implemented',
+        summary: 'Dispatch the deployment workflow and verify production.',
+        checks: ['The deployment workflow has not run.'],
+        commitMessage: 'fix: shared helper',
+        pullRequestTitle: 'fix: shared helper',
+        // The Agent forgot the combined issue, so the controller substitutes metadata that closes both.
+        pullRequestBody: '### Description\n\nFixed.\n\n### Linked Issues\n\nCloses #12.\nCloses #13.',
+      }))),
+      github: {
+        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Body', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
+        listPullRequestFiles: () => Promise.reject(new Error('A planned base needs no overlap check.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      store: {
+        getIssueTriageEvidence: () => null,
+        getWorkerSession: () => 'triage-session',
+        listOpenAgentPullRequests: () => [],
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+      },
+      validateMapping: () => Promise.resolve(ok(repository)),
+      worktrees: {
+        prepare: (_task, base) => {
+          bases.push(base)
+          return Promise.resolve(ok({ path: '/tmp/issue-work', headSha: 'stack-head', baseSha: 'stack-head', defaultBranchSha: 'main-sha' }))
+        },
+        verify: () => Promise.resolve(ok({ digest: 'patch-digest', changedFiles: 0, changedPaths: [] })),
+        restack: () => Promise.reject(new Error('A planned base never restacks.')),
+        commit: () => Promise.reject(new Error('An empty change must not be committed.')),
+      },
+    })
+
+    const guarded = withGitHubWritePreflight({
+      accesses: ['item_write', 'contents_write'],
+      source: {
+        getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2126-01-01T00:00:00.000Z' })),
+        invalidate: () => undefined,
+      },
+      worker,
+    })
+    const result = await guarded.run({
+      id: 'issue-work-task',
+      kind: 'issue_work',
+      repository: repository.github,
+      issueNumber: issue.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      issue,
+    }, new AbortController().signal, {
+      combinedIssues: [{ number: 13, title: 'Same helper', body: 'Also broken.' }],
+      base: { _tag: 'Stacked', ref: 'fix/issue-9', pullRequestNumber: 9, headSha: 'stack-head' },
+    })
+
+    expect(result).toEqual(ok({
+      _tag: 'ActionRequired',
+      reason: 'Issue work produced no file changes. Dispatch the deployment workflow and verify production.',
+      evidence: expect.any(String),
+      usage: { _tag: 'Unavailable' },
+    }))
+    if (result._tag !== 'Ok' || result.value._tag !== 'ActionRequired')
+      throw new Error('Expected the deployment action.')
+    expect(JSON.parse(result.value.evidence)).toMatchObject({
+      summary: 'Dispatch the deployment workflow and verify production.',
+      checks: ['The deployment workflow has not run.'],
+    })
+  })
+
   it('keeps combined issues and the planned base through the GitHub write preflight', async () => {
     const repository = repositoryMapping()
     const issue = issueItem()
