@@ -29,6 +29,38 @@ function seed(store: ReturnType<typeof openJournalStore>, name: RoutineName = 'p
   })
 }
 
+/** Settles a queued run the way the scheduler does, so its staged report may publish. */
+function settleRun(store: ReturnType<typeof openJournalStore>, runId: string): void {
+  const task = store.claimNextRoutineRun('scanner', now().toISOString(), 45 * 60_000)
+  if (task === null || task.id !== runId)
+    throw new Error(`Expected the queued Routine run ${runId}.`)
+  store.completeRoutineRun({
+    taskId: task.id,
+    workerId: task.state.workerId,
+    fence: task.state.fence,
+    at: now().toISOString(),
+    evidence: 'settled for publication',
+  })
+}
+
+/** Fails a queued run on every attempt, the way a broken scan settles. */
+function failRun(store: ReturnType<typeof openJournalStore>, runId: string, reason: string): void {
+  for (;;) {
+    const task = store.claimNextRoutineRun('scanner', now().toISOString(), 45 * 60_000)
+    if (task === null || task.id !== runId)
+      throw new Error(`Expected the queued Routine run ${runId}.`)
+    if (store.failRoutineRun({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: now().toISOString(),
+      reason,
+    }) === 'Failed') {
+      return
+    }
+  }
+}
+
 function stage(store: ReturnType<typeof openJournalStore>, report: Parameters<typeof routineReportCommand>[0]['report']): boolean {
   return store.stageRoutineReport({
     command: routineReportCommand({
@@ -151,6 +183,7 @@ describe('publishing the run log', () => {
         at: now().toISOString(),
       })
       stage(store, { _tag: 'Completed', evidence: 'pr-triage | 2 found' })
+      settleRun(store, runId)
       const calls: Calls = { issues: [], comments: [] }
 
       const results = await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
@@ -171,6 +204,7 @@ describe('publishing the run log', () => {
     try {
       seed(store)
       stage(store, { _tag: 'Completed', evidence: 'first run' })
+      settleRun(store, runId)
       const calls: Calls = { issues: [], comments: [] }
       const controller = createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
       await controller.publishPending(new AbortController().signal)
@@ -191,6 +225,7 @@ describe('publishing the run log', () => {
         }),
         at: '2026-08-28T07:05:00.000Z',
       })
+      settleRun(store, `${routineId}:2026-08-28T07:00:00.000Z`)
       await controller.publishPending(new AbortController().signal)
 
       expect(calls.issues).toHaveLength(1)
@@ -220,6 +255,7 @@ describe('publishing the run log', () => {
     try {
       seed(store)
       stage(store, { _tag: 'Completed', evidence: 'first run' })
+      settleRun(store, runId)
       const refusing: GitHubIssuePublisher = {
         createIssue: async () => ok({ number: 42, url: 'https://github.com/harlan-zw/example/issues/42' }),
         createComment: async () => ({ _tag: 'Err' as const, error: { repository: 'harlan-zw/example', message: 'GitHub returned 502.' } }),
@@ -245,6 +281,7 @@ describe('publishing the run log', () => {
     try {
       seed(store)
       stage(store, { _tag: 'Completed', evidence: 'first run' })
+      settleRun(store, runId)
       let issue: { number: number, url: string } | null = null
       let comment: { id: number } | null = null
       let issueWrites = 0
@@ -311,6 +348,8 @@ describe('publishing the run log', () => {
         }),
         at: '2026-08-27T07:10:04.000Z',
       })
+      settleRun(store, runId)
+      settleRun(store, workingRun.id)
       const comments: Calls['comments'] = []
       const github: GitHubIssuePublisher = {
         createIssue: async input => input.repository.github === 'harlan-zw/example'
@@ -344,6 +383,7 @@ describe('publishing the run log', () => {
     try {
       seed(store)
       stage(store, { _tag: 'Completed', evidence: 'first run' })
+      settleRun(store, runId)
       store.setRepositoryWritesEnabled('harlan-zw/example', false)
       const calls: Calls = { issues: [], comments: [] }
 
@@ -363,6 +403,7 @@ describe('publishing the run log', () => {
     try {
       seed(store)
       stage(store, { _tag: 'Completed', evidence: 'first run' })
+      settleRun(store, runId)
       expect(store.claimNextRoutineReport('reporter', now().toISOString(), 60_000)).not.toBeNull()
       store.pauseAgents(now().toISOString())
 
@@ -401,6 +442,7 @@ describe('daily check-in issues', () => {
           }),
           at: now().toISOString(),
         })
+        settleRun(store, `${dailyId}:${scheduledFor}`)
         await controller.publishPending(new AbortController().signal)
       }
       expect(calls.issues).toEqual([
@@ -444,6 +486,7 @@ describe('daily check-in issues', () => {
         }),
         at: now().toISOString(),
       })
+      settleRun(store, dailyRun)
       const calls: Calls = { issues: [], comments: [] }
       await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
         .publishPending(new AbortController().signal)
@@ -457,14 +500,14 @@ describe('daily check-in issues', () => {
     }
   })
 
-  it('reads ACTION NEEDED when a retried run records Candidates after its CLEAR stage', async () => {
+  it('reads ACTION NEEDED once a retried run with Candidates settles its earlier CLEAR stage', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store, 'daily-checkin')
       const dailyId = 'harlan-zw/example:daily-checkin'
       const dailyRun = `${dailyId}:2026-08-27T07:00:00.000Z`
-      // The first attempt scans a clear morning, stages its report, and
-      // crashes before the run settles.
+      // Attempt one scans a clear morning, stages its report, and crashes
+      // before the run settles. The publication pass runs meanwhile.
       store.stageRoutineReport({
         command: routineReportCommand({
           repository: 'harlan-zw/example',
@@ -475,6 +518,11 @@ describe('daily check-in issues', () => {
         }),
         at: now().toISOString(),
       })
+      const calls: Calls = { issues: [], comments: [] }
+      const controller = createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      await controller.publishPending(new AbortController().signal)
+      expect(calls.issues).toEqual([])
+
       // The retry records a Candidate, and its re-stage keeps the report the
       // first attempt staged, because the run's identity owns the command.
       store.recordCandidates({
@@ -500,10 +548,18 @@ describe('daily check-in issues', () => {
         }),
         at: now().toISOString(),
       })).toBe(false)
+      const task = store.claimNextRoutineRun('scanner', now().toISOString(), 45 * 60_000)
+      if (task === null)
+        throw new Error('Expected a queued Routine run.')
+      expect(store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: now().toISOString(),
+        evidence: '1 found',
+      })).toBe(true)
 
-      const calls: Calls = { issues: [], comments: [] }
-      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
-        .publishPending(new AbortController().signal)
+      await controller.publishPending(new AbortController().signal)
 
       const heading = calls.comments[0]?.body.match(/^# \[([^\]]+)\] Daily check-in/m)?.[1] ?? ''
       expect(heading).toBe('ACTION NEEDED')
@@ -532,6 +588,7 @@ it('recovers a closed daily issue after a lost response and ignores older runs',
       }),
       at: now().toISOString(),
     })
+    failRun(store, dailyRun, 'Credentials expired.')
     const issues = [{
       number: 12,
       html_url: 'https://github.com/harlan-zw/example/issues/12',

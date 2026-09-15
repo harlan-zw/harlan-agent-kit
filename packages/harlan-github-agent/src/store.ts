@@ -14441,8 +14441,10 @@ export function openJournalStore(
           repositories.policy_json
         FROM routine_report_commands
         JOIN routines ON routines.id = routine_report_commands.routine_id
+        JOIN routine_runs ON routine_runs.id = routine_report_commands.run_id
         JOIN repositories ON repositories.github = routine_report_commands.repository
         WHERE routine_report_commands.state_tag = 'Pending'
+          AND routine_runs.state_tag NOT IN ('Queued', 'Running')
           AND repositories.enabled = 1
           AND repositories.writes_enabled = 1
           ${exclusion}
@@ -14485,10 +14487,11 @@ export function openJournalStore(
       }
       const candidates = (database.prepare('SELECT * FROM candidates WHERE run_id = ? ORDER BY created_at').all(row.run_id) as unknown as CandidateRow[])
         .map(readCandidate)
-      // The heading froze when the report was staged, but a retried run can
-      // record Candidates after that stage. Refolding here keeps the heading,
-      // the issue title derived from it, and the proposal block the comment
-      // lists in agreement.
+      // The report only claims once its run has settled, so a crash between
+      // staging and settling cannot publish a morning the retry is about to
+      // rewrite. The retry records its Candidates and settles first; the fold
+      // below then carries them into the heading, the issue title derived
+      // from it, and the proposal block the comment lists.
       const body = foldCandidatesIntoDailyHeading(row.body, candidates)
       database.exec('COMMIT')
       if (!claimed)

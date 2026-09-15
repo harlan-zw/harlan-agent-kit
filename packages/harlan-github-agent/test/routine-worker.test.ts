@@ -235,10 +235,18 @@ describe('running one scan', () => {
       store.setRepositoryWritesEnabled('harlan-zw/example', true)
       const detail = '12 Sentry issues. 12 ledger rows. 12 resolved in release abc123. History recorded.'
 
+      const task = claimStoredRun(store)
       const result = await workerFor(store, scanning({ report: detail, candidates: [] }))
-        .run(claimStoredRun(store), new AbortController().signal)
+        .run(task, new AbortController().signal)
 
       expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('0 code proposals') } })
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: now().toISOString(),
+        evidence: result._tag === 'Ok' ? result.value.evidence : '',
+      })
       const report = store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)
       expect(report?.body).toContain('0 code proposals')
       expect(report?.body).toContain(detail)
@@ -367,6 +375,15 @@ describe('running one scan', () => {
       const result = await worker.run(task, new AbortController().signal)
 
       expect(result._tag).toBe('Ok')
+      if (result._tag === 'Ok') {
+        store.completeRoutineRun({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at: now().toISOString(),
+          evidence: result.value.evidence,
+        })
+      }
       const report = store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)
       expect(report?.body).toContain('1 found | 1 new')
       expect(report?.body).toContain('AMBER. One probe failed.')
