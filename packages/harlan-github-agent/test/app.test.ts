@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
+import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { dashboardSnapshot } from './fixtures.ts'
 
 const allowedOrigin = 'https://harlan-github-agent.localhost'
@@ -58,8 +59,9 @@ const agentControls = {
 
 afterEach(() => vi.useRealTimers())
 
-function createApp(snapshot = dashboardSnapshot()) {
+function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>) {
   return createAgentApp({
+    ...(desktop === undefined ? {} : { desktop }),
     allowedOrigin,
     dashboardPassword,
     dashboardRoot,
@@ -1194,5 +1196,21 @@ describe('dashboard HTTP app', () => {
 
     expect(reads).toBe(readsBeforeShutdown)
     await response.body?.cancel()
+  })
+})
+
+describe('desktop capacity HTTP boundary', () => {
+  it('saves a valid memory setting and refuses malformed input', async () => {
+    const desktop = createDesktopBroker({ now: () => now().getTime() })
+    const app = createApp(dashboardSnapshot(), desktop)
+    const send = (body: unknown) => app.request(`http://${allowedHost}/api/desktop/capacity`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    expect((await send({ memoryGiB: 20 })).status).toBe(200)
+    expect(desktop.read().requestedMemoryGiB).toBe(20)
+    expect((await send({ memoryGiB: 0 })).status).toBe(400)
+    expect(desktop.read().requestedMemoryGiB).toBe(20)
   })
 })

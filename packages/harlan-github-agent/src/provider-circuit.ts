@@ -110,6 +110,11 @@ export function createCircuitProtectedProvider(options: CircuitProtectedProvider
         }
       }
       catch (error) {
+        if (error instanceof Error && error.cause === 'desktop-execution') {
+          if (!request.signal.aborted)
+            yield { _tag: 'Failed', reason: error.message }
+          return
+        }
         if (request.signal.aborted)
           return
         failed = true

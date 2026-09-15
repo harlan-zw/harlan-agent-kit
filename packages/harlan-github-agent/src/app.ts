@@ -1,4 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { DesktopBroker } from './desktop-broker.ts'
+import type { HostCapacity } from './host-capacity.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
@@ -12,9 +14,12 @@ import { fileURLToPath } from 'node:url'
 import { createError, createEventStream, H3, setResponseStatus } from 'h3'
 import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
+import { parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
+  desktop?: DesktopBroker
+  hostCapacity?: () => HostCapacity
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
@@ -69,7 +74,7 @@ function defaultDashboardRoot(): string {
  * They only meet here, on the way out to the dashboard.
  */
 function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
-  const snapshot = options.store.getDashboardSnapshot(options.now().toISOString())
+  const snapshot = { ...options.store.getDashboardSnapshot(options.now().toISOString()), ...(options.hostCapacity === undefined ? {} : { hostCapacity: options.hostCapacity() }), ...(options.desktop === undefined ? {} : { desktop: options.desktop.read() }) }
   const activityLog = options.activityLog
   if (activityLog === undefined)
     return snapshot
@@ -295,6 +300,24 @@ async function changeDismissal(options: AgentAppOptions, event: { req: Request }
   return result
 }
 
+async function desktopBody(event: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown>> {
+  const body = await event.req.json().catch(() => {
+    throw createError({ status: 400, statusText: 'Bad Request', message: 'Desktop requests must contain valid JSON.' })
+  })
+  if (typeof body !== 'object' || body === null || Array.isArray(body))
+    throw createError({ status: 400, statusText: 'Bad Request', message: 'Desktop requests must contain a JSON object.' })
+  return body as Record<string, unknown>
+}
+
+function desktopInput<Value>(parse: (value: unknown) => Value, value: unknown): Value {
+  try {
+    return parse(value)
+  }
+  catch (error) {
+    throw createError({ status: 400, statusText: 'Bad Request', message: error instanceof Error ? error.message : 'Desktop input is invalid.' })
+  }
+}
+
 export function createAgentApp(options: AgentAppOptions): H3 {
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot()
   const allowedHost = new URL(options.allowedOrigin).host
@@ -336,6 +359,38 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   })
 
   app.get('/api/state', () => dashboardSnapshot(options))
+
+  app.post('/api/desktop/capacity', async (event) => {
+    if (options.desktop === undefined)
+      throw createError({ statusCode: 503, message: 'Desktop execution is unavailable.' })
+    const memoryGiB = desktopInput(parseDesktopMemory, await desktopBody(event))
+    options.desktop.setMemory(memoryGiB)
+    return { memoryGiB }
+  })
+  app.post('/api/desktop/report', async (event) => {
+    if (options.desktop === undefined)
+      throw createError({ statusCode: 503, message: 'Desktop execution is unavailable.' })
+    return options.desktop.report(desktopInput(parseDesktopReport, await desktopBody(event)))
+  })
+  app.post('/api/desktop/claim', () => options.desktop?.claim() ?? null)
+  app.post('/api/desktop/defer', async (event) => {
+    const body = await desktopBody(event)
+    return { accepted: typeof body.id === 'string' && options.desktop?.defer(body.id) === true }
+  })
+  app.post('/api/desktop/heartbeat', async (event) => {
+    const body = await desktopBody(event)
+    return { active: typeof body.id === 'string' && options.desktop?.active(body.id) === true }
+  })
+  app.post('/api/desktop/events', async (event) => {
+    const body = await desktopBody(event)
+    return { accepted: typeof body.id === 'string' && options.desktop?.events(body.id, desktopInput(parseDesktopEvents, body.events)) === true }
+  })
+  app.post('/api/desktop/complete', async (event) => {
+    const body = await desktopBody(event)
+    const result = body.result === null ? null : desktopInput(parseDesktopWorktree, body.result)
+    const failure = typeof body.failure === 'string' ? body.failure : null
+    return { accepted: typeof body.id === 'string' && options.desktop?.complete(body.id, result, failure) === true }
+  })
 
   app.post('/api/agents/pause', () => options.store.pauseAgents(options.now().toISOString()))
 

@@ -11,6 +11,7 @@ import type { JournalStore } from './store.ts'
 import type { ClaimedAgentTask, DashboardSnapshot, IncidentScope, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { setTimeout as waitForHost } from 'node:timers/promises'
 import { createAgentActivityLog } from './agent-activity.ts'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
 import { agentLabelItem } from './agent-label.ts'
@@ -28,6 +29,7 @@ import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
+import { createDesktopBroker } from './desktop-broker.ts'
 import { createExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
@@ -36,6 +38,8 @@ import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
+import { createHostAgentPool } from './host-capacity.ts'
+import { agentSlotsForMemory, localAgentMemoryBytes } from './host-memory.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
@@ -329,23 +333,31 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
+  const desktop = createDesktopBroker({ now: () => now().getTime(), settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json') })
+  const localMaximum = agentSlotsForMemory(configuredProfile.maximumActiveAgents, await localAgentMemoryBytes(), 8)
+  const hosts = createHostAgentPool({
+    localMaximum,
+    desktopMaximum: 1,
+    desktopConnected: desktop.available,
+    wait: signal => waitForHost(500, undefined, { signal }),
+  })
   const runtime = createAgentRuntimeSource({
     chooseProvider,
     configuredProvider: configuredProfile.provider,
-    maximumActiveAgents: configuredProfile.maximumActiveAgents,
+    maximumActiveAgents: localMaximum + 1,
     roleReasoningEfforts: config.agent.reasoningEffort,
     repositoryReasoningEfforts: new Map(config.repositories.map(repository => [repository.github, repository.reasoningEffort ?? {}])),
     providers: {
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,
         now,
-        provider: createCodexProvider(),
+        provider: hosts.provider(createCodexProvider(), desktop.provider('codex')),
         store,
       }),
       opencode: createCircuitProtectedProvider({
         credential: agentProfile('opencode').authentication,
         now,
-        provider: createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }),
+        provider: hosts.provider(createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }), desktop.provider('opencode')),
         store,
       }),
     },
@@ -424,7 +436,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const fixWorktrees = createReviewFixWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const baselineWorktrees = createBaselineRepairWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const issueWorktrees = createIssueWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
-    const permits = createAgentPermitPool(profile.maximumActiveAgents)
+    const permits = createAgentPermitPool(() => localMaximum + (desktop.available() || hosts.read().desktopActive > 0 ? 1 : 0))
     /**
      * Whether a scheduler may start another agent Task right now.
      *
@@ -1199,6 +1211,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     return settled.includes(true)
   }
   const app = createAgentApp({
+    desktop,
+    hostCapacity: hosts.read,
     activityLog,
     store: {
       approveIssue: store.approveIssue,
