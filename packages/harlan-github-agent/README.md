@@ -260,3 +260,29 @@ Conventional Commits classify the full range. Missing classification, truncated 
 These checks cannot prove semantic compatibility for every possible source change.
 If the branch or release policy changes after authorization, the controller stops instead of expanding the approved release.
 A failed publishing workflow can be rerun in GitHub for the same tag.
+
+## Weekly dependency updates
+
+Add this entry to `.github/routines.yml` in each opted-in repository:
+
+```yaml
+version: 1
+routines:
+  - name: dependency-updates
+    on:
+      schedule:
+        - cron: '0 8 * * 1'
+    timezone: Australia/Melbourne
+    mode: propose
+    enabled: true
+```
+
+Keep other Routine entries when adding this one. This repository enables Monday at 08:00 Melbourne time.
+Deploy a service version that supports `dependency-updates` before enabling it in other repositories.
+The Routine scans npm dependencies across root manifests, workspaces, and pnpm catalogs.
+One Candidate becomes one issue. Issue work attempts all updates, including majors, in one pull request.
+Blocked upgrades remain unchanged and appear in the result. TypeScript stays on version 6 until Harlan clears its exception.
+A version-specific fingerprint prevents repeated proposals. A shared issue marker reuses any open dependency issue.
+Scans report existing dependency pull requests instead of creating another. Review and Repair continue the existing pull request.
+Registry failures fail the run. Non-registry dependencies appear in the report for follow-up.
+The controller retains its normal Review and merge policies.

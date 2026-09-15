@@ -651,7 +651,7 @@ export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair'
  * A repository spec selects from this list and never extends it, so a pull
  * request can change a schedule and can never name new work.
  */
-export type RoutineName = 'sentry-checkin' | 'pr-triage' | 'agent-feedback' | 'daily-checkin'
+export type RoutineName = 'sentry-checkin' | 'pr-triage' | 'agent-feedback' | 'daily-checkin' | 'dependency-updates'
 
 /**
  * What a Routine run does with what it finds.

@@ -226,6 +226,30 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it('publishes one dependency proposal across more than five manifests', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'dependency-updates')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const updates = Array.from({ length: 8 }, (_, index) => ({
+        manifest: `packages/app${index}/package.json`,
+        name: 'nuxt',
+        current: '4.0.0',
+        latest: '5.0.0',
+      }))
+      const result = await workerFor(store, scanning({ outcome: 'complete', report: 'Eight manifests scanned.', updates }))
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(result._tag).toBe('Ok')
+      const issue = store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)
+      expect(issue).toMatchObject({ routineName: 'dependency-updates', body: expect.stringContaining('packages/app7/package.json') })
+      expect(store.claimNextCandidateIssue('controller-2', now().toISOString(), 60_000)).toBeNull()
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain('Eight manifests scanned.')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('reports zero code proposals without hiding the Sentry issue ledger', async () => {
     const store = openJournalStore(':memory:')
     try {

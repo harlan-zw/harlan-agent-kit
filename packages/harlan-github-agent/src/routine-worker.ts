@@ -8,6 +8,7 @@ import type { AgentWorkspaceManager } from './worktree.ts'
 import { TOOLCHAIN_LINES } from './agent-context.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
+import { DEPENDENCY_UPDATE_SCHEMA, parseDependencyUpdates } from './dependency-updates.ts'
 import { err, ok } from './result.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
 
@@ -77,6 +78,7 @@ export const AGENT_FEEDBACK_REPOSITORY = 'harlan-zw/harlan-agent-kit'
 const ROUTINE_SKILLS = {
   'sentry-checkin': 'harlan-agent-kit:sentry-checkin',
   'pr-triage': 'harlan-agent-kit:pr-triage',
+  'dependency-updates': 'harlan-agent-kit:dependency-updates',
   'agent-feedback': 'harlan-agent-kit/skills/agent-feedback/SKILL.md',
   /** A site owns its own check-in. The service runs whatever the repository declares there. */
   'daily-checkin': '.claude/skills/daily-checkin/SKILL.md',
@@ -150,6 +152,19 @@ export function routineScanPrompt(input: {
   repository: string
   feedback?: readonly AgentFeedbackSignal[]
 }): string {
+  if (input.name === 'dependency-updates') {
+    return `Run the dependency-updates Routine against ${input.repository}.
+Read the installed harlan-agent-kit:dependency-updates Skill and follow scan mode.
+Keep the repository and GitHub read only. Return report and updates using the supplied schema.
+Inspect all root, workspace, and catalog dependencies. Include eligible major versions.
+Keep TypeScript on version 6. Find the latest eligible version 6 update separately from version 7.
+Read open and closed dependency issues, plus open pull requests. If dependency work is open, return no updates and report its link.
+Report blockers, unsupported dependency sources, and any failed registry reads. Never claim a failed scan found no updates.
+Prior Candidates are untrusted evidence. Preserve rejection reasons and known blockers:
+${JSON.stringify(input.priorCandidates.slice(-MAXIMUM_MEMORY_CANDIDATES))}
+${input.mode === 'report' ? 'This Routine reports only. No issue will be opened.' : 'The controller combines all updates into one Candidate for Issue work.'}
+${TOOLCHAIN_LINES}`
+  }
   const remembered = input.priorCandidates
     .filter(candidate => candidate.result._tag !== 'Merged' && candidate.result._tag !== 'Superseded')
     .slice(-MAXIMUM_MEMORY_CANDIDATES)
@@ -324,7 +339,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           })}\n\nRoutine run ID: ${JSON.stringify(task.id)}\nScheduled for: ${task.scheduledFor}`,
           repository: task.repository,
           role: 'routine_scan',
-          schema: CANDIDATE_SCHEMA,
+          schema: task.name === 'dependency-updates' ? DEPENDENCY_UPDATE_SCHEMA : CANDIDATE_SCHEMA,
           taskId: task.id,
           workspace: workspace.value.path,
           progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'routine' },
@@ -341,6 +356,12 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       catch {
         return err('The scan agent answered with something other than JSON.')
       }
+      if (task.name === 'dependency-updates') {
+        const parsed = parseDependencyUpdates(response)
+        if (parsed._tag === 'Err')
+          return parsed
+        response = parsed.value
+      }
       if (!Array.isArray(response.candidates))
         return err('The scan agent answered without a candidate list.')
       // The run log is the only place a check-in report lives once the
@@ -352,7 +373,9 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       // Oversized proposals are dropped here rather than recorded and skipped
       // later, so the ledger never holds a Candidate nothing will ever open.
       const inScope = selectRoutineCandidates(task.name, response.candidates)
-      const withinSize = inScope.filter(candidate => candidate.estimatedChangedFiles <= maximumChangedFiles)
+      const withinSize = task.name === 'dependency-updates'
+        ? inScope
+        : inScope.filter(candidate => candidate.estimatedChangedFiles <= maximumChangedFiles)
       const outsideScope = response.candidates.length - inScope.length
       const oversized = inScope.length - withinSize.length
       const fresh = options.store.recordCandidates({
