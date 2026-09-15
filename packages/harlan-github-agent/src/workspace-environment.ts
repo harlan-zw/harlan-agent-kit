@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 
 /**
  * Names a repository file must never set for an Agent process.
@@ -103,8 +103,18 @@ function isDirectory(path: string): boolean {
   }
 }
 
-export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string): NodeJS.ProcessEnv {
+export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string, taskId?: string): NodeJS.ProcessEnv {
   const values = readEnvironmentValues(join(workspace, '.env'))
+  // Routine IDs carry the trusted repository, independent of worktree and run date.
+  const routine = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][\w.-]*):daily-checkin:/i.exec(taskId ?? '')
+  if (routine) {
+    const stateHome = base.XDG_STATE_HOME && isAbsolute(base.XDG_STATE_HOME)
+      ? base.XDG_STATE_HOME
+      : base.HOME && isAbsolute(base.HOME) ? join(base.HOME, '.local', 'state') : undefined
+    if (!stateHome)
+      throw new Error('Daily check-in needs an absolute HOME or XDG_STATE_HOME.')
+    values.DAILY_CHECKIN_DIR = join(stateHome, 'daily-checkin', routine[1]!, routine[2]!)
+  }
   // A repository's own binaries come first, the way a shell inside it would
   // find them. The service unit carries a bare PATH, so a check-in script that
   // shelled out to `wrangler` found nothing and reported every probe as failed.
