@@ -115,6 +115,7 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`adversarial-review`](./harlan-agent-kit/skills/adversarial-review/SKILL.md) | Review one PR adversarially, hand defects to Repair, publish the bot status |
 | [`agent-feedback`](./harlan-agent-kit/skills/agent-feedback/SKILL.md) | Improve one Agent Skill from explicit Review feedback |
 | [`close-off`](./harlan-agent-kit/skills/close-off/SKILL.md) | Finish loose ends, verify delivery, clean task-owned Git state |
+| [`content-refresh`](./harlan-agent-kit/skills/content-refresh/SKILL.md) | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks |
 | [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Triage inbox email with [Himalaya](https://github.com/pimalaya/himalaya) |
 | [`glossary`](./harlan-agent-kit/skills/glossary/SKILL.md) | Create or audit `GLOSSARY.md` and catch vocabulary drift |
 | [`harlan-github-agent`](./harlan-agent-kit/skills/harlan-github-agent/SKILL.md) | Drive or diagnose the local GitHub service |

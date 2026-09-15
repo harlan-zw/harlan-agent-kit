@@ -51,6 +51,15 @@ Not every tell applies everywhere. Weight by genre:
 - **Blog posts / essays:** all of Pass 2 applies. This is where structure shows the most.
 - **Email:** direct address and dropping hedging filler matter most.
 
+## Evidence-backed articles
+
+Follow the article brief and local article voice before applying structural suggestions.
+Keep the common case first. Do not add digressions that obscure instructions.
+Preserve claim scope, uncertainty, dates, units, source attribution, and prerequisites.
+Never invent experience or turn an observation into a guarantee.
+After rewriting, compare material claims and examples with their verified evidence.
+For a collection refresh, use [content-refresh](../content-refresh/SKILL.md) for source and review coordination.
+
 ## Output
 
 1. List the tells you found, grouped by pass, quoting the offending phrase.
