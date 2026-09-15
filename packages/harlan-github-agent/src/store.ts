@@ -116,7 +116,7 @@ import { isIssueTriageState } from './issue-triage.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
-import { routineReportCommand } from './routine-report-controller.ts'
+import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
 import { buildStats } from './stats.ts'
 import { cleanLine } from './text.ts'
 import { parseConflictCleanMergeEvidence } from './worktree.ts'
@@ -14485,6 +14485,11 @@ export function openJournalStore(
       }
       const candidates = (database.prepare('SELECT * FROM candidates WHERE run_id = ? ORDER BY created_at').all(row.run_id) as unknown as CandidateRow[])
         .map(readCandidate)
+      // The heading froze when the report was staged, but a retried run can
+      // record Candidates after that stage. Refolding here keeps the heading,
+      // the issue title derived from it, and the proposal block the comment
+      // lists in agreement.
+      const body = foldCandidatesIntoDailyHeading(row.body, candidates)
       database.exec('COMMIT')
       if (!claimed)
         return null
@@ -14495,7 +14500,7 @@ export function openJournalStore(
         repository: row.repository,
         routineName: row.routine_name as ClaimedRoutineReportCommand['routineName'],
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
-        body: row.body,
+        body,
         trackingIssueNumber: row.tracking_issue_number,
         candidates,
         fence,

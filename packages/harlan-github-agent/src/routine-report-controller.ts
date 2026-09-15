@@ -53,21 +53,38 @@ export function isRoutineTrackingIssue(input: {
 /**
  * One status for both the issue title and the comment heading.
  *
- * The run's recorded Candidates fold into the derivation here, so a clear
- * morning with open proposals reads as ACTION NEEDED everywhere it appears.
- * Deriving it twice, once for the heading and once for the title, is how the
- * two ends of the same report contradicted each other.
+ * Only the run's own report decides it. The run's Candidates fold in later,
+ * when the report is claimed, because a retry can record Candidates after the
+ * report was staged.
  */
-function dailyCheckinStatus(report: RoutineRunReport, candidates: readonly Candidate[]): 'CLEAR' | 'ACTION NEEDED' | 'BLOCKED' {
+function dailyCheckinStatus(report: RoutineRunReport): 'CLEAR' | 'ACTION NEEDED' | 'BLOCKED' {
   if (report._tag !== 'Completed')
     return 'BLOCKED'
   const verdict = (report.detail || report.evidence).trim().split('\n')[0] ?? ''
   if (/\b(?:incomplete|partial|unknown|blocked)\b/i.test(verdict))
     return 'BLOCKED'
   const status = verdict.replace(/^[^a-z]+/i, '').match(/^(GREEN|AMBER|RED|CLEAR|ACTION NEEDED|BLOCKED)\b/i)?.[1]?.toUpperCase()
-  if (status === 'GREEN' || status === 'CLEAR')
-    return candidates.length > 0 ? 'ACTION NEEDED' : 'CLEAR'
-  return status === 'AMBER' || status === 'RED' || status === 'ACTION NEEDED' ? 'ACTION NEEDED' : 'BLOCKED'
+  return status === 'GREEN' || status === 'CLEAR'
+    ? 'CLEAR'
+    : status === 'AMBER' || status === 'RED' || status === 'ACTION NEEDED' ? 'ACTION NEEDED' : 'BLOCKED'
+}
+
+const CLEAR_DAILY_HEADING = /^# \[CLEAR\] (Daily check-in: \d{4}-\d{2}-\d{2})$/m
+
+/**
+ * Refolds the run's current Candidates into the staged daily heading.
+ *
+ * The heading is derived when the report is staged, but a retried run can
+ * record Candidates after that stage, and its re-stage is a no-op on the run's
+ * identity. Claiming refolds the run's Candidates in, so the issue title and
+ * the comment body, which both come from this claimed body, read the same
+ * status as the proposal block the comment lists: a clear morning with open
+ * proposals reads as ACTION NEEDED everywhere.
+ */
+export function foldCandidatesIntoDailyHeading(body: string, candidates: readonly Candidate[]): string {
+  if (candidates.length === 0)
+    return body
+  return body.replace(CLEAR_DAILY_HEADING, '# [ACTION NEEDED] $1')
 }
 
 function dailyCheckinIssueBody(runId: string): string {
@@ -119,19 +136,13 @@ export function routineReportBody(run: Pick<RoutineRun, 'scheduledFor'>, report:
   return `**${run.scheduledFor}** — ${headline}${detail}${candidateDetails(candidates)}`
 }
 
-/**
- * Builds the report command one finished run owes its log.
- *
- * The daily heading folds the run's Candidates in at stage time, so the
- * heading the comment carries and the title derived from it always agree.
- */
+/** Builds the report command one finished run owes its log. */
 export function routineReportCommand(input: {
   repository: string
   routineId: string
   routineName: RoutineName
   run: Pick<RoutineRun, 'id' | 'scheduledFor'>
   report: RoutineRunReport
-  candidates?: readonly Candidate[]
 }): RoutineReportCommand {
   return {
     id: `${input.run.id}:report`,
@@ -140,7 +151,7 @@ export function routineReportCommand(input: {
     repository: input.repository,
     routineName: input.routineName,
     body: `${routineRunMarker(input.run.id)}\n${input.routineName === 'daily-checkin'
-      ? `# [${dailyCheckinStatus(input.report, input.candidates ?? [])}] Daily check-in: ${input.run.scheduledFor.slice(0, 10)}\n\n`
+      ? `# [${dailyCheckinStatus(input.report)}] Daily check-in: ${input.run.scheduledFor.slice(0, 10)}\n\n`
       : ''}${routineReportBody(input.run, input.report)}`,
   }
 }

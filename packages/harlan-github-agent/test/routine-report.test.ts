@@ -441,7 +441,6 @@ describe('daily check-in issues', () => {
           routineName: 'daily-checkin',
           run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
           report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.' },
-          candidates: store.listCandidates(dailyId).filter(candidate => candidate.runId === dailyRun),
         }),
         at: now().toISOString(),
       })
@@ -452,6 +451,64 @@ describe('daily check-in issues', () => {
       const heading = calls.comments[0]?.body.match(/^# \[([^\]]+)\] Daily check-in/m)?.[1] ?? ''
       expect(heading).toBe('ACTION NEEDED')
       expect(calls.issues[0]).toBe(`[${heading}] Daily check-in: 2026-08-27`)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('reads ACTION NEEDED when a retried run records Candidates after its CLEAR stage', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'daily-checkin')
+      const dailyId = 'harlan-zw/example:daily-checkin'
+      const dailyRun = `${dailyId}:2026-08-27T07:00:00.000Z`
+      // The first attempt scans a clear morning, stages its report, and
+      // crashes before the run settles.
+      store.stageRoutineReport({
+        command: routineReportCommand({
+          repository: 'harlan-zw/example',
+          routineId: dailyId,
+          routineName: 'daily-checkin',
+          run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
+          report: { _tag: 'Completed', evidence: '0 found', detail: 'GREEN. All checks passed.' },
+        }),
+        at: now().toISOString(),
+      })
+      // The retry records a Candidate, and its re-stage keeps the report the
+      // first attempt staged, because the run's identity owns the command.
+      store.recordCandidates({
+        routineId: dailyId,
+        runId: dailyRun,
+        candidates: [{
+          fingerprint: 'scripts/check.ts#probe',
+          title: 'Fixture title',
+          target: 'scripts/check.ts',
+          claim: 'The probe reports the wrong status.',
+          verification: 'pnpm vitest run test/routine-report.test.ts',
+          estimatedChangedFiles: 1,
+        }],
+        at: now().toISOString(),
+      })
+      expect(store.stageRoutineReport({
+        command: routineReportCommand({
+          repository: 'harlan-zw/example',
+          routineId: dailyId,
+          routineName: 'daily-checkin',
+          run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
+          report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.' },
+        }),
+        at: now().toISOString(),
+      })).toBe(false)
+
+      const calls: Calls = { issues: [], comments: [] }
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      const heading = calls.comments[0]?.body.match(/^# \[([^\]]+)\] Daily check-in/m)?.[1] ?? ''
+      expect(heading).toBe('ACTION NEEDED')
+      expect(calls.issues[0]).toBe(`[${heading}] Daily check-in: 2026-08-27`)
+      expect(calls.comments[0]?.body).toContain('The probe reports the wrong status.')
     }
     finally {
       store.close()
