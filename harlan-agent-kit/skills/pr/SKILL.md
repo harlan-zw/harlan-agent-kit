@@ -275,6 +275,10 @@ HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
 
 Use `--attach` for images and videos. Repeat the flag for up to 50 files. GitHub hosts the files with the pull request. Never upload pull request media to another service.
 
+Match each Markdown image path exactly to its attachment path, including relative versus absolute spelling.
+After posting, read the published body and check that every image uses its uploaded GitHub URL.
+If uploads succeeded but local links remain, repair the same body using those returned URLs. Do not upload duplicates.
+
 Visually inspect every screenshot before attaching it. Check the full-resolution image and the intended display size.
 
 Look for clipping, overlap, overflow, alignment, contrast, missing content, and broken responsive layouts. Treat every visible defect as task scope.

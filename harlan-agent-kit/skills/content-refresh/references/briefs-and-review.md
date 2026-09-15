@@ -33,6 +33,8 @@ The writer checks examples and renders their article before handoff.
 Choose checks for the behavior the example claims, not only its syntax.
 A sequential loop is not multipart batching; a local counter does not enforce shared daily quota.
 Record what syntax checks, mocked responses, and live calls each establish.
+Keep a sanitized check or complete replay instructions outside published collections. Temporary logs alone cannot reproduce an example check.
+Read examples from the articles when practical, so the check exercises the published code.
 
 The article reviewer checks facts against sources, not against the writer's assertion of accuracy.
 Check progressive complexity, glossary terms, qualifications, attribution, and useful product mentions.
@@ -45,6 +47,8 @@ A corrected paragraph does not repair contradictory metadata or hidden FAQ copy.
 The coordinator inspects the submitted evidence and final revision.
 Approve or return specific findings before the worker closes the assignment.
 A reviewer and writer can exchange feedback directly; the coordinator owns final acceptance.
+Before handoff, reconcile each brief with the collection ledger and the final reviewed revision.
+Replace stale pending decisions, or label them as history. Distinguish commit SHAs from file digests.
 
 ## Rendered and collection checks
 
