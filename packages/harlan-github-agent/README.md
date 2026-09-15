@@ -195,6 +195,21 @@ Use the `Auto` and `Manual` control in the header to set the Selection mode. `Au
 
 The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers read only Review and separate scoped Repair for that head commit.
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
+The desktop tray has separate Agent and GitHub Actions icons.
+The Agent menu groups current Agent tasks under Hogwild and Desktop.
+Tasks without a current provider turn stay outside those groups.
+The menu also shows the desktop's shared memory use and limit.
+
+Set the Actions autostart command in `~/.config/autostart/harlan-github-runner-indicator.desktop`:
+
+```ini
+Exec=/usr/bin/env "HARLAN_GITHUB_RUNNER_HOSTS=Hogwild=ssh://hogwild-admin|system:hogwild-github-runner.service,Desktop=unix:///var/run/docker.sock|user:harlan-desktop-github-runner.service" /home/harlan/.local/bin/harlan-github-runner-indicator
+```
+
+Keep any existing `HARLAN_GITHUB_RUNNER_REPOSITORIES` setting in that command.
+The SSH account needs Docker access and permission to control the runner service.
+Restart the tray process after changing its environment. Running jobs continue.
+
 Use `Watch logs` from the System pane to open a read-only live event stream while automation continues.
 The System chip stays in the header. It opens the System pane, which shows Agent provider limits, Reserves, and unresolved Incidents.
 It separates Harlan GitHub Agent from GitHub Actions. A runner failure never changes the Agent status.

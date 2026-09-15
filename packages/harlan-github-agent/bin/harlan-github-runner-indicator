@@ -186,7 +186,8 @@ def request_runner_host(host):
             result = {
                 '_tag': 'Unavailable',
                 'name': host['name'],
-                'message': str(caught),
+                'message': (caught.stderr.strip() if isinstance(caught, subprocess.CalledProcessError)
+                            and caught.stderr else str(caught)),
             }
         if control is not None:
             result['dockerHost'] = host['dockerHost']
@@ -515,9 +516,7 @@ def build_menu(indicator, source, jobs_source, action_error, refresh, set_accept
         menu.append(menu_item(jobs_source['message'][:100], enabled=False))
     else:
         queued_jobs = [job for job in jobs_source['jobs'] if job['_tag'] == 'Queued']
-        running_jobs = [job for job in jobs_source['jobs'] if job['_tag'] == 'Running']
         menu.append(job_menu('Queued jobs', queued_jobs))
-        menu.append(job_menu('Running jobs', running_jobs))
         for message in jobs_source.get('errors', []):
             menu.append(menu_item(message[:100], enabled=False))
 
