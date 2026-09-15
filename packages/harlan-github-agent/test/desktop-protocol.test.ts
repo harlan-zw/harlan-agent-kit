@@ -8,7 +8,7 @@ describe('desktop boundaries', () => {
       expect(() => parseDesktopMemory(value)).toThrow('Desktop memory must be')
   })
   it('preserves memory committed above a newly lowered limit', () => {
-    expect(parseDesktopReport({ memoryGiB: 8, reservedGiB: 16, agents: 1, actions: 1 })).toEqual({ memoryGiB: 8, reservedGiB: 16, agents: 1, actions: 1 })
+    expect(parseDesktopReport({ memoryGiB: 8, reservedGiB: 16, agents: 1, actions: 1 })).toEqual({ memoryGiB: 8, reservedGiB: 16, agents: 1, actions: 1, jobs: { _tag: 'Unavailable' } })
     expect(() => parseDesktopReport({ memoryGiB: 16, reservedGiB: -1, agents: 0, actions: 0 })).toThrow()
   })
   it('refuses arbitrary provider events and non-GitHub source repositories', () => {

@@ -16,7 +16,9 @@ import {
   formatHogwildServiceMetrics,
   formatHogwildTemperature,
 } from '../utils/hogwild-status.ts'
+import { hostTasks } from '../utils/host-tasks.ts'
 import { batchRow, capacityRow, circuitNotice, nextRoutineInstant, serviceUpdatePresentation } from '../utils/system.ts'
+import HostWork from './system/HostWork.vue'
 
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.
@@ -62,6 +64,14 @@ watch(() => snapshot.value.desktop?.report?.memoryGiB, (value) => {
     desktopMemory.value = value
 }, { immediate: true })
 const desktopReport = computed(() => snapshot.value.desktop?.connected ? snapshot.value.desktop.report : null)
+const hogwildTasks = computed(() => hostTasks(snapshot.value, 'hogwild'))
+const desktopTasks = computed(() => hostTasks(snapshot.value, 'desktop'))
+const hogwildRunningJobs = computed(() => {
+  const runners = hostStatus.value?.runners
+  return runners?._tag === 'Available' && now.value.getTime() - runners.updatedAt < 30_000
+    ? runners.jobs ?? { _tag: 'Unavailable' as const }
+    : { _tag: 'Unavailable' as const }
+})
 const runnerPools = computed(() => hostStatus.value?.runners._tag === 'Available' ? hostStatus.value.runners.pools : undefined)
 const hogwildJobs = computed(() => runnerPools.value?.reduce((total, pool) => total + pool.running, 0))
 const hogwildQueued = computed(() => runnerPools.value?.every(pool => pool.queue._tag === 'Available')
@@ -132,6 +142,7 @@ function activityLine(item: AgentActivityItem): string {
             <p v-if="hogwildQueued !== undefined" class="mt-2 text-xs text-muted">
               {{ hogwildQueued }} GitHub Actions jobs queued
             </p>
+            <HostWork :tasks="hogwildTasks" :tasks-available="snapshot.hostTasks !== undefined" :jobs="hogwildRunningJobs" />
           </div>
           <div class="py-4">
             <div class="flex items-center justify-between gap-3">
@@ -162,6 +173,7 @@ function activityLine(item: AgentActivityItem): string {
                 <span class="font-mono">{{ desktopReport.reservedGiB }} / {{ desktopReport.memoryGiB }} GiB</span>
               </div>
               <UProgress class="mt-2" :model-value="desktopReport.reservedGiB" :max="desktopReport.memoryGiB" aria-label="Desktop memory committed" />
+              <HostWork :tasks="desktopTasks" :tasks-available="snapshot.hostTasks !== undefined" :jobs="desktopReport.jobs ?? { _tag: 'Unavailable' }" />
             </template>
             <p v-else class="mt-3 text-sm text-muted">
               Desktop takes no new work until it reconnects.

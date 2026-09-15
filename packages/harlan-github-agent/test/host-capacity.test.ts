@@ -20,6 +20,18 @@ function provider(name: 'codex' | 'opencode', started: () => void): AgentProvide
 }
 
 describe('host admission', () => {
+  it('removes a host assignment when its provider fails', async () => {
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const failing: AgentProvider = { name: 'codex', async* runTurn() {
+      yield { _tag: 'Message', text: 'started' }
+      throw new Error('Provider stopped')
+    } }
+    const turn = pool.provider(failing, failing).runTurn({ ...request, taskId: 'failed-task' })[Symbol.asyncIterator]()
+    await turn.next()
+    expect(pool.tasks()).toEqual([{ taskId: 'failed-task', host: 'hogwild' }])
+    await expect(turn.next()).rejects.toThrow('Provider stopped')
+    expect(pool.tasks()).toEqual([])
+  })
   it('keeps the desktop idle while Hogwild has capacity', () => {
     expect(agentHost({ localActive: 1, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true })).toBe('hogwild')
   })
@@ -34,14 +46,17 @@ describe('host admission', () => {
   it('shares the local limit across providers and releases it when a turn closes', async () => {
     const starts: string[] = []
     const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
-    const first = pool.provider(provider('codex', () => starts.push('local')), provider('codex', () => starts.push('desktop'))).runTurn(request)[Symbol.asyncIterator]()
-    const second = pool.provider(provider('opencode', () => starts.push('local')), provider('opencode', () => starts.push('desktop'))).runTurn(request)[Symbol.asyncIterator]()
+    const first = pool.provider(provider('codex', () => starts.push('local')), provider('codex', () => starts.push('desktop'))).runTurn({ ...request, taskId: 'first' })[Symbol.asyncIterator]()
+    const second = pool.provider(provider('opencode', () => starts.push('local')), provider('opencode', () => starts.push('desktop'))).runTurn({ ...request, taskId: 'second' })[Symbol.asyncIterator]()
     await first.next()
     await second.next()
     expect(starts).toEqual(['local', 'desktop'])
+    expect(pool.tasks()).toEqual([{ taskId: 'first', host: 'hogwild' }, { taskId: 'second', host: 'desktop' }])
     await first.return?.()
+    expect(pool.tasks()).toEqual([{ taskId: 'second', host: 'desktop' }])
     await second.return?.()
     expect(pool.read()).toMatchObject({ localActive: 0, desktopActive: 0 })
+    expect(pool.tasks()).toEqual([])
   })
 })
 

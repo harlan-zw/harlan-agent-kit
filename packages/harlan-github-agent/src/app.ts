@@ -1,6 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
-import type { HostCapacity } from './host-capacity.ts'
+import type { HostAgentPool, HostCapacity } from './host-capacity.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
@@ -20,6 +20,7 @@ import { parseStatsRange } from './stats.ts'
 export interface AgentAppOptions {
   desktop?: DesktopBroker
   hostCapacity?: () => HostCapacity
+  hostTasks?: HostAgentPool['tasks']
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
@@ -74,8 +75,10 @@ function defaultDashboardRoot(): string {
  * They only meet here, on the way out to the dashboard.
  */
 function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
-  const snapshot = { ...options.store.getDashboardSnapshot(options.now().toISOString()), ...(options.hostCapacity === undefined ? {} : { hostCapacity: options.hostCapacity() }), ...(options.desktop === undefined ? {} : { desktop: options.desktop.read() }) }
+  const snapshot: DashboardSnapshot = { ...options.store.getDashboardSnapshot(options.now().toISOString()), ...(options.hostCapacity === undefined ? {} : { hostCapacity: options.hostCapacity() }), ...(options.desktop === undefined ? {} : { desktop: options.desktop.read() }) }
   const activityLog = options.activityLog
+  if (options.hostTasks !== undefined)
+    snapshot.hostTasks = options.hostTasks()
   if (activityLog === undefined)
     return snapshot
   return {
