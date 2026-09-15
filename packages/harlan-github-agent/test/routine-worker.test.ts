@@ -126,11 +126,11 @@ describe('building the scan prompt', () => {
     expect(prompt).not.toContain('Resolve eligible issues in their verified deployed release during this run.')
   })
 
-  it('points a check-in at the repository skill and lets it write its report files', () => {
+  it('routes a check-in through the shared skill and durable report directory', () => {
     const prompt = routineScanPrompt({ mode: 'propose', name: 'daily-checkin', priorCandidates: [], repository: 'skilld-dev/skilld.dev' })
 
-    expect(prompt).toContain('.claude/skills/daily-checkin/SKILL.md')
-    expect(prompt).toContain('writing its report and ledger files')
+    expect(prompt).toContain('harlan-agent-kit:daily-checkin')
+    expect(prompt).toContain('Preserve DAILY_CHECKIN_DIR and keep evidence, reports, and the ledger there.')
     expect(prompt).not.toContain('This turn is read only')
   })
 
