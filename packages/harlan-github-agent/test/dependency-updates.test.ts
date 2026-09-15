@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { parseDependencyUpdates } from '../src/dependency-updates.ts'
+import { getRoutine } from '../src/routines/index.ts'
+
+const parseDependencyUpdates = getRoutine('dependency-updates').parseResponse
 
 const update = { manifest: 'pnpm-workspace.yaml', name: 'nuxt', current: '4.0.0', latest: '5.0.0' }
 const answer = (updates: unknown[]) => ({ outcome: 'complete', report: 'Registry scan completed.', updates })

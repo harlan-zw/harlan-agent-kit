@@ -1,12 +1,16 @@
 import type { AgentEvent } from '../src/agent-provider.ts'
+import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
-import { createRoutineScanWorker, routineScanPrompt, selectRoutineCandidates } from '../src/routine-worker.ts'
+import { createRoutineScanWorker } from '../src/routine-worker.ts'
+import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
+
+const routineScanPrompt = (input: RoutineScanInput) => getRoutine(input.name).scanPrompt(input)
 
 const now = () => new Date('2026-08-27T07:05:00.000Z')
 
@@ -75,7 +79,7 @@ const candidate = {
 
 describe('building the scan prompt', () => {
   it('keeps Agent feedback proposals inside one skill file', () => {
-    expect(selectRoutineCandidates('agent-feedback', [
+    expect(getRoutine('agent-feedback').selectCandidates([
       { ...candidate, target: 'src/controller.ts' },
       { ...candidate, fingerprint: 'skill-a', target: 'harlan-agent-kit/skills/adversarial-review/SKILL.md' },
       { ...candidate, fingerprint: 'skill-b', target: 'harlan-agent-kit/skills/pr-triage/SKILL.md' },

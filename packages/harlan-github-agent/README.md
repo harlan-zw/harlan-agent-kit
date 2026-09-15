@@ -286,3 +286,22 @@ A version-specific fingerprint prevents repeated proposals. A shared issue marke
 Scans report existing dependency pull requests instead of creating another. Review and Repair continue the existing pull request.
 Registry failures fail the run. Non-registry dependencies appear in the report for follow-up.
 The controller retains its normal Review and merge policies.
+
+## Adding a Routine
+
+Built-in definitions live in `src/routines/`. Each definition owns its scan and downstream issue policy.
+
+1. Add a module implementing `RoutineDefinition` from `src/routines/contract.ts`.
+2. Reuse `candidateRoutine` and `candidateScanPrompt` for ordinary Candidate scans.
+3. Define any custom response parser, preparation, scope limits, or Issue work restrictions in that module.
+4. Add its import and name to the table in `src/routines/index.ts`.
+5. Test its behavior through the definition and shared worker before adding a repository schedule.
+
+`RoutineName` and accepted YAML names derive from that table. Keep runtime registration and YAML-supplied code disabled.
+The scheduler and workers own leases, persistence, report publication, and retries.
+Definitions cannot receive a publisher or worktree mutation client through their preparation interface.
+Issue work checks a definition's changed-path policy before committing.
+
+Agent feedback keeps its repository restriction and exact Skill target.
+Sentry keeps its required report and mode-specific resolution instructions.
+Dependency updates keep one combined Candidate and a shared open-issue fingerprint.

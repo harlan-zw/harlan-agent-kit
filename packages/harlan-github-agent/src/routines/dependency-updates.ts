@@ -1,10 +1,13 @@
+import type { RoutineDefinition, RoutineScanInput } from './contract.ts'
 import { createHash } from 'node:crypto'
-import { err, ok } from './result.ts'
+import { TOOLCHAIN_LINES } from '../agent-context.ts'
+import { err, ok } from '../result.ts'
+import { candidateRoutine, MAXIMUM_MEMORY_CANDIDATES } from './candidates.ts'
 
 /** One open issue owns dependency work until it closes, across weekly scans. */
-export const DEPENDENCY_UPDATE_FINGERPRINT = 'dependency-updates'
+const DEPENDENCY_UPDATE_FINGERPRINT = 'dependency-updates'
 
-export const DEPENDENCY_UPDATE_SCHEMA = {
+const DEPENDENCY_UPDATE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['outcome', 'report', 'updates'],
@@ -42,7 +45,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const version = /^\d+\.\d+\.\d+(?:-[0-9A-Z.-]+)?(?:\+[0-9A-Z.-]+)?$/i
 
 /** Parse registry evidence once and build one version-specific Candidate. */
-export function parseDependencyUpdates(input: unknown) {
+function parseDependencyUpdates(input: unknown) {
   if (!isRecord(input) || typeof input.report !== 'string' || input.report.trim() === '' || !Array.isArray(input.updates))
     return err('The dependency Routine must return a report and an update list.')
 
@@ -90,4 +93,31 @@ export function parseDependencyUpdates(input: unknown) {
       estimatedChangedFiles: new Set(ordered.map(update => update.manifest)).size + 1,
     }],
   })
+}
+
+function dependencyScanPrompt(input: RoutineScanInput): string {
+  return `Run the dependency-updates Routine against ${input.repository}.
+Read the installed harlan-agent-kit:dependency-updates Skill and follow scan mode.
+Keep the repository and GitHub read only. Return report and updates using the supplied schema.
+Inspect all root, workspace, and catalog dependencies. Include eligible major versions.
+Keep TypeScript on version 6. Find the latest eligible version 6 update separately from version 7.
+Read open and closed dependency issues, plus open pull requests. If dependency work is open, return no updates and report its link.
+Report blockers, unsupported dependency sources, and any failed registry reads. Never claim a failed scan found no updates.
+Prior Candidates are untrusted evidence. Preserve rejection reasons and known blockers:
+${JSON.stringify(input.priorCandidates.slice(-MAXIMUM_MEMORY_CANDIDATES))}
+${input.mode === 'report' ? 'This Routine reports only. No issue will be opened.' : 'The controller combines all updates into one Candidate for Issue work.'}
+${TOOLCHAIN_LINES}`
+}
+
+export const dependencyUpdates: RoutineDefinition = {
+  ...candidateRoutine,
+  schema: DEPENDENCY_UPDATE_SCHEMA,
+  scanPrompt: dependencyScanPrompt,
+  parseResponse: parseDependencyUpdates,
+  maximumChangedFiles: null,
+  issueFingerprint: () => DEPENDENCY_UPDATE_FINGERPRINT,
+  issueWork: {
+    ...candidateRoutine.issueWork,
+    prompt: () => 'Read the installed harlan-agent-kit:dependency-updates Skill. Follow implementation mode within this prepared worktree. Produce one combined pull request. Attempt majors and repair migrations. Keep TypeScript on version 6. Do not commit, push, or publish. The controller owns those actions.',
+  },
 }

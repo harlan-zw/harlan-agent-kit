@@ -2,8 +2,8 @@ import type { GitHubIssuePublisher } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { Candidate, CandidateIssueCommand, ClaimedRoutineRun } from './types.ts'
-import { DEPENDENCY_UPDATE_FINGERPRINT } from './dependency-updates.ts'
 import { err, ok } from './result.ts'
+import { getRoutine } from './routines/index.ts'
 
 type CandidateIssueContext = Pick<ClaimedRoutineRun, 'repository' | 'name' | 'scheduledFor'>
 
@@ -72,7 +72,9 @@ Estimated to change ${candidate.estimatedChangedFiles} ${candidate.estimatedChan
 
 <!-- harlan-agent-kit:routine ${routine.name} -->
 ${candidateFingerprintMarker(candidate.fingerprint)}
-${routine.name === 'dependency-updates' ? candidateFingerprintMarker(DEPENDENCY_UPDATE_FINGERPRINT) : ''}
+${getRoutine(routine.name).issueFingerprint(candidate.fingerprint) !== candidate.fingerprint
+  ? candidateFingerprintMarker(getRoutine(routine.name).issueFingerprint(candidate.fingerprint))
+  : ''}
 
 > The ${routine.name} routine opened this issue automatically on its ${routine.scheduledFor} run. It is not Harlan's own report. Close it to reject the proposal, and the reason you give stops it being offered again.`
 }
@@ -138,7 +140,7 @@ export function createCandidateIssueController(options: CandidateIssueController
         // issue, however often the pass before this one crashed mid flight.
         const existing = await options.github.findOpenIssueByFingerprint({
           repository: command.repositoryMapping,
-          fingerprint: command.routineName === 'dependency-updates' ? DEPENDENCY_UPDATE_FINGERPRINT : command.fingerprint,
+          fingerprint: getRoutine(command.routineName).issueFingerprint(command.fingerprint),
         }, signal)
         if (existing._tag === 'Err') {
           if (!signal.aborted) {
