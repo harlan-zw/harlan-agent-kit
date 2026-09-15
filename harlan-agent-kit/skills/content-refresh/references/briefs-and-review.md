@@ -62,6 +62,8 @@ Check navigation groups, hub cards, related-page metadata, redirects, and old fr
 Verify editorial records are absent from content queries, rendered navigation, search, and sitemap output.
 
 Apply repository checks appropriate to the changed behavior.
+Check whether repository lint processes Markdown and fenced examples. Include those paths in the writer's checks.
+Record each command and its scope. Renderer-only lint does not verify article code.
 Do not add tests that count factual claims or mirror prose.
 Test content routing or exclusion behavior when changing those contracts.
 Record failures in the environment separately from article defects.
