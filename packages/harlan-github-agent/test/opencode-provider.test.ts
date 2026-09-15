@@ -213,16 +213,16 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
     await writeFile(join(workspace, '.env'), 'NUXTSEO_TOKEN=from-repo\n')
     let launchedEnvironment: NodeJS.ProcessEnv | undefined
     const provider = createOpencodeProvider({
-      environment: { PATH: '/bin' },
+      environment: { PATH: '/bin', HOME: '/home/agent' },
       spawnOpencode: (args, _workspace, receivedEnvironment) => {
         launchedEnvironment = receivedEnvironment
         return replay([textLine])(args)
       },
     })
 
-    await collect(provider.runTurn(request({ workspace })))
+    await collect(provider.runTurn(request({ workspace, taskId: 'owner/site:daily-checkin:2026-09-15T07:00:00.000Z' })))
 
-    expect(launchedEnvironment).toEqual({ PATH: '/bin', NUXTSEO_TOKEN: 'from-repo' })
+    expect(launchedEnvironment).toEqual({ PATH: '/bin', HOME: '/home/agent', NUXTSEO_TOKEN: 'from-repo', DAILY_CHECKIN_DIR: '/home/agent/.local/state/daily-checkin/owner/site' })
   })
 
   it('reports the session before the events it produced', async () => {

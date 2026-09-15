@@ -110,7 +110,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
       // Codex takes no per-turn instruction file, so it ignores
       // `request.instructionPaths`. The prompt names the memory index path, and
       // the turn opens it as a file instead.
-      const client = factory({ env: definedEntries(workspaceEnvironment(process.env, request.workspace)) })
+      const client = factory({ env: definedEntries(workspaceEnvironment(process.env, request.workspace, request.taskId)) })
       const baseOptions = {
         model: request.model,
         workingDirectory: request.workspace,

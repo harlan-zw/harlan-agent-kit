@@ -189,7 +189,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     // This turn's own instruction files, such as the repository memory index,
     // merge on top of the shared OpenCode configuration.
     const turnEnvironment = opencodeTurnEnvironment({
-      environment: workspaceEnvironment(environment, request.workspace),
+      environment: workspaceEnvironment(environment, request.workspace, request.taskId),
       instructionPaths: request.instructionPaths ?? [],
     })
     if (turnEnvironment._tag === 'Err') {
