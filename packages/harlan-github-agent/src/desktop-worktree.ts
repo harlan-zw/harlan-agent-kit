@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
+import { parseWtWorktrees } from './worktree.ts'
 
 const exec = promisify(execFile)
 export async function desktopCommand(command: string, args: string[], cwd: string, signal?: AbortSignal, raw = false): Promise<string> {
@@ -143,12 +144,19 @@ export async function prepareDesktopWorktree(snapshot: DesktopWorktree, director
   }
   await desktopCommand('git', ['fetch', bundle, 'HEAD'], control, signal)
   const branch = 'desktop-turn'
-  const listing = JSON.parse(await desktopCommand('wt', ['list', '--format=json'], control, signal))
-  const existing = listing.items.find((item: { branch: string }) => item.branch === branch)
+  const list = async () => {
+    const parsed = parseWtWorktrees(await desktopCommand('wt', ['--config-set', 'list.json-schema=2', 'list', '--format=json'], control, signal))
+    if (parsed._tag === 'Err')
+      throw new Error(parsed.error)
+    return parsed.value
+  }
+  const existing = (await list()).find(item => item.branch === branch)
   if (existing === undefined)
     await desktopCommand('wt', ['switch', '--create', branch, '--base', snapshot.head], control, signal)
-  const current = JSON.parse(await desktopCommand('wt', ['list', '--format=json'], control, signal))
-  const workspace: string = current.items.find((item: { branch: string }) => item.branch === branch).worktree.path
+  const current = (await list()).find(item => item.branch === branch)
+  if (current === undefined)
+    throw new Error('Worktrunk did not create the desktop Worktree.')
+  const workspace = current.path
   for (const file of await desktopFiles(workspace, signal))
     await rm(await regularDesktopFile(workspace, file.path), { force: true })
   await desktopCommand('git', ['reset', '--hard', snapshot.head], workspace, signal)
