@@ -93,6 +93,12 @@ harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config
 
 A `daily-checkin` Routine runs the repository's own `.claude/skills/daily-checkin/SKILL.md`. Its data script reads Cloudflare, Sentry, and the `nuxtseo` CLI with tokens from the environment. Put `CLOUDFLARE_API_TOKEN` and `NUXTSEO_TOKEN` in that repository's `.env`, list the file in `scripts/repository-env-files`, and run `pnpm service:hogwild:sync-env`. Worktrunk seeds the file into every agent worktree, and the Agent turn loads it. The `nuxtseo` CLI is installed at `~/.local/bin/nuxtseo` on Hogwild.
 
+Each `daily-checkin` run opens a separate issue, including clear, failed, and skipped runs.
+Use `[CLEAR]`, `[ACTION NEEDED]`, or `[BLOCKED]` before `Daily check-in: YYYY-MM-DD`, using the scheduled UTC date.
+Retries find the same run by its marker, including closed issues. Other Routines keep their shared tracking issue.
+Link existing issues for ongoing actions. Update the title status when findings change.
+Close the daily issue when its actions are resolved or tracked in linked issues.
+
 Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
 Every command prints one JSON value. A tagged JSON error exits with status 1.
 

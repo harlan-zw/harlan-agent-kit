@@ -34,6 +34,11 @@ export function isRoutineTrackingIssue(input: {
   body: string | null | undefined
   labels: readonly string[]
 }): boolean {
+  if (input.labels.includes('routine:daily-checkin')) {
+    const runId = input.body?.match(/^<!-- routine-run: (.+) -->\n/)?.[1]
+    if (runId?.startsWith(`${input.repository}:daily-checkin:`) && input.body === dailyCheckinIssueBody(runId))
+      return true
+  }
   const prefix = 'routine:'
   return input.labels.some((label) => {
     if (!label.toLowerCase().startsWith(prefix))
@@ -43,6 +48,28 @@ export function isRoutineTrackingIssue(input: {
       && input.title.toLowerCase() === `${routineName}: run log for ${input.repository}`.toLowerCase()
       && input.body === trackingIssueBodyText(routineName)
   })
+}
+
+function dailyCheckinStatus(report: RoutineRunReport): 'CLEAR' | 'ACTION NEEDED' | 'BLOCKED' {
+  if (report._tag !== 'Completed')
+    return 'BLOCKED'
+  const verdict = (report.detail || report.evidence).trim().split('\n')[0] ?? ''
+  if (/\b(?:incomplete|partial|unknown|blocked)\b/i.test(verdict))
+    return 'BLOCKED'
+  const status = verdict.replace(/^[^a-z]+/i, '').match(/^(GREEN|AMBER|RED|CLEAR|ACTION NEEDED|BLOCKED)\b/i)?.[1]?.toUpperCase()
+  if (status === 'GREEN' || status === 'CLEAR')
+    return 'CLEAR'
+  return status === 'AMBER' || status === 'RED' || status === 'ACTION NEEDED' ? 'ACTION NEEDED' : 'BLOCKED'
+}
+
+function dailyCheckinIssueBody(runId: string): string {
+  return `${routineRunMarker(runId)}
+One daily check-in. The report follows in a comment.
+
+Link existing issues for ongoing work. Update the title status when the findings change.
+Close this issue when its actions are resolved or tracked in linked issues.
+
+> Harlan Agent Kit wrote this automated report.`
 }
 
 const MAXIMUM_REPORT_DETAIL_LENGTH = 20_000
@@ -98,7 +125,9 @@ export function routineReportCommand(input: {
     runId: input.run.id,
     repository: input.repository,
     routineName: input.routineName,
-    body: `${routineRunMarker(input.run.id)}\n${routineReportBody(input.run, input.report)}`,
+    body: `${routineRunMarker(input.run.id)}\n${input.routineName === 'daily-checkin'
+      ? `# [${dailyCheckinStatus(input.report)}] Daily check-in: ${input.run.scheduledFor.slice(0, 10)}\n\n`
+      : ''}${routineReportBody(input.run, input.report)}`,
   }
 }
 
@@ -155,11 +184,13 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           results.push(err(`${command.repository}: ${message}`))
         }
 
-        let issueNumber = command.trackingIssueNumber
+        const daily = command.routineName === 'daily-checkin'
+        let issueNumber = daily ? null : command.trackingIssueNumber
         if (issueNumber === null) {
           const existing = await options.github.findRoutineTrackingIssue({
             repository: command.repositoryMapping,
             routineName: command.routineName,
+            ...(daily ? { runId: command.runId } : {}),
           }, signal)
           if (existing._tag === 'Err') {
             fail(existing.error.message)
@@ -171,8 +202,12 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           else {
             const created = await options.github.createIssue({
               repository: command.repositoryMapping,
-              title: trackingIssueTitle(command.routineName, command.repository),
-              body: trackingIssueBody(command.routineName),
+              title: daily
+                ? (command.body.match(/^# (\[(?:CLEAR|ACTION NEEDED|BLOCKED)\] Daily check-in: \d{4}-\d{2}-\d{2})$/m)?.[1]
+                  ?? `[BLOCKED] Daily check-in: ${command.runId.slice(-24, -14)}`)
+                    .replace('[CLEAR]', command.candidates.length > 0 ? '[ACTION NEEDED]' : '[CLEAR]')
+                : trackingIssueTitle(command.routineName, command.repository),
+              body: daily ? dailyCheckinIssueBody(command.runId) : trackingIssueBody(command.routineName),
               labels: [routineIssueLabel(command.routineName)],
             }, signal)
             if (created._tag === 'Err') {

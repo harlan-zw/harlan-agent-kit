@@ -568,10 +568,11 @@ export interface GitHubIssuePublisher {
     repository: RepositoryMapping
     fingerprint: string
   }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string } | null, GitHubReadError>>
-  /** Finds the canonical Routine log, including a closed one. */
+  /** Finds a Routine log or one exact daily check-in, including closed issues. */
   findRoutineTrackingIssue: (input: {
     repository: RepositoryMapping
     routineName: RoutineName
+    runId?: string
   }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string } | null, GitHubReadError>>
   /** Finds one prior report comment after an unknown write result. */
   findIssueCommentByMarker: (input: {
@@ -699,7 +700,10 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
             title: row.title,
             body: row.body,
             labels: labelNames(row.labels),
-          }) && row.labels.some(label => (typeof label === 'string' ? label : label.name) === `routine:${input.routineName}`))
+          }) && row.labels.some(label => (typeof label === 'string' ? label : label.name) === `routine:${input.routineName}`)
+          && (input.runId === undefined
+            ? !row.body?.startsWith('<!-- routine-run:')
+            : row.body?.startsWith(`<!-- routine-run: ${input.runId} -->\n`)))
           return ok(row === undefined ? null : { number: row.number, url: row.html_url })
         })
         .catch((error: unknown): Result<{ number: number, url: string } | null, GitHubReadError> => {

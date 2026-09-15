@@ -1,6 +1,8 @@
+import type { Octokit } from 'octokit'
 import type { GitHubIssuePublisher } from '../src/github.ts'
-import type { Candidate } from '../src/types.ts'
+import type { Candidate, RoutineName } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
+import { createGitHubIssuePublisher } from '../src/github.ts'
 import { ok } from '../src/result.ts'
 import { createRoutineReportController, isRoutineTrackingIssue, routineReportBody, routineReportCommand, trackingIssueBody, trackingIssueTitle } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -10,17 +12,17 @@ const now = () => new Date('2026-08-27T07:10:00.000Z')
 const routineId = 'harlan-zw/example:pr-triage'
 const runId = `${routineId}:2026-08-27T07:00:00.000Z`
 
-function seed(store: ReturnType<typeof openJournalStore>): void {
+function seed(store: ReturnType<typeof openJournalStore>, name: RoutineName = 'pr-triage'): void {
   store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
   store.setRepositoryWritesEnabled('harlan-zw/example', true)
   store.syncRoutines({
     repository: 'harlan-zw/example',
     specSha: 'abc123',
-    entries: [{ name: 'pr-triage', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+    entries: [{ name, crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
     at: '2026-08-27T00:00:00.000Z',
   })
   store.openRoutineRun({
-    routineId,
+    routineId: `harlan-zw/example:${name}`,
     scheduledFor: '2026-08-27T07:00:00.000Z',
     specSha: 'abc123',
     at: '2026-08-27T07:00:05.000Z',
@@ -370,4 +372,135 @@ describe('publishing the run log', () => {
       store.close()
     }
   })
+})
+
+describe('daily check-in issues', () => {
+  it.each([
+    ['GREEN. All checks passed.', 'CLEAR'],
+    ['**AMBER**. Deployment drift.', 'ACTION NEEDED'],
+    ['RED. Homepage failed.', 'ACTION NEEDED'],
+    ['Coverage is incomplete.', 'BLOCKED'],
+    ['🟢 GREEN. Full coverage.', 'CLEAR'],
+    ['GREEN. Coverage is incomplete.', 'BLOCKED'],
+  ])('publishes %s with status %s', async (detail, status) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'daily-checkin')
+      const dailyId = 'harlan-zw/example:daily-checkin'
+      const calls: Calls = { issues: [], comments: [] }
+      const controller = createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      for (const scheduledFor of ['2026-08-27T07:00:00.000Z', '2026-08-27T08:00:00.000Z', '2026-08-28T07:00:00.000Z']) {
+        store.openRoutineRun({ routineId: dailyId, scheduledFor, specSha: 'abc123', at: scheduledFor })
+        store.stageRoutineReport({
+          command: routineReportCommand({
+            repository: 'harlan-zw/example',
+            routineId: dailyId,
+            routineName: 'daily-checkin',
+            run: { id: `${dailyId}:${scheduledFor}`, scheduledFor },
+            report: { _tag: 'Completed', evidence: '0 new Candidates', detail },
+          }),
+          at: now().toISOString(),
+        })
+        await controller.publishPending(new AbortController().signal)
+      }
+      expect(calls.issues).toEqual([
+        `[${status}] Daily check-in: 2026-08-27`,
+        `[${status}] Daily check-in: 2026-08-27`,
+        `[${status}] Daily check-in: 2026-08-28`,
+      ])
+      expect(calls.comments[0]?.body).toContain(detail)
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
+it('recovers a closed daily issue after a lost response and ignores older runs', async () => {
+  const store = openJournalStore(':memory:')
+  try {
+    seed(store, 'daily-checkin')
+    const dailyId = 'harlan-zw/example:daily-checkin'
+    const dailyRun = `${dailyId}:2026-08-27T07:00:00.000Z`
+    store.stageRoutineReport({
+      command: routineReportCommand({
+        repository: 'harlan-zw/example',
+        routineId: dailyId,
+        routineName: 'daily-checkin',
+        run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
+        report: { _tag: 'Failed', reason: 'Credentials expired.' },
+      }),
+      at: now().toISOString(),
+    })
+    const issues = [{
+      number: 12,
+      html_url: 'https://github.com/harlan-zw/example/issues/12',
+      title: trackingIssueTitle('daily-checkin', 'harlan-zw/example'),
+      body: trackingIssueBody('daily-checkin'),
+      labels: ['routine:daily-checkin'],
+    }]
+    const comments: Array<{ id: number, body: string }> = []
+    const requests: Array<{ state: string }> = []
+    const client = {
+      paginate: (_method: unknown, input: { state?: string }) => {
+        if (input.state) {
+          requests.push({ state: input.state })
+          return Promise.resolve(issues)
+        }
+        return Promise.resolve(comments)
+      },
+      rest: { issues: {
+        listForRepo: () => undefined,
+        listComments: () => undefined,
+        create: async (input: { title: string, body: string, labels: string[] }) => {
+          issues.push({ ...input, number: 42, html_url: 'https://github.com/harlan-zw/example/issues/42' })
+          throw new Error('The issue response was lost.')
+        },
+        createComment: async (input: { issue_number: number, body: string }) => {
+          expect(input.issue_number).toBe(42)
+          comments.push({ id: 900, body: input.body })
+          throw new Error('The comment response was lost.')
+        },
+      } },
+    } as unknown as Octokit
+    const github = createGitHubIssuePublisher({
+      createClient: () => client,
+      tokens: {
+        getToken: async () => ok({ token: 'fixture', expiresAt: '2026-08-28T00:00:00.000Z' }),
+        invalidate: () => undefined,
+      },
+    })
+    const controller = createRoutineReportController({ github, now, store, workerId: 'reporter' })
+    await controller.publishPending(new AbortController().signal)
+    await controller.publishPending(new AbortController().signal)
+    expect(await controller.publishPending(new AbortController().signal))
+      .toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 42 })])
+    expect(issues.map(issue => issue.title)).toEqual([
+      trackingIssueTitle('daily-checkin', 'harlan-zw/example'),
+      '[BLOCKED] Daily check-in: 2026-08-27',
+    ])
+    expect(comments).toHaveLength(1)
+    expect(requests.every(request => request.state === 'all')).toBe(true)
+    expect(isRoutineTrackingIssue({ repository: 'harlan-zw/example', ...issues[1]! })).toBe(true)
+    expect(await github.findRoutineTrackingIssue({
+      repository: repositoryMapping(),
+      routineName: 'daily-checkin',
+      runId: `${dailyId}:2026-08-28T07:00:00.000Z`,
+    })).toEqual(ok(null))
+  }
+  finally {
+    store.close()
+  }
+})
+
+it('marks a skipped daily run as blocked', () => {
+  const command = routineReportCommand({
+    repository: 'harlan-zw/example',
+    routineId: 'harlan-zw/example:daily-checkin',
+    routineName: 'daily-checkin',
+    run: { id: 'harlan-zw/example:daily-checkin:2026-08-27T07:00:00.000Z', scheduledFor: '2026-08-27T07:00:00.000Z' },
+    report: { _tag: 'Skipped', reason: 'The scheduled run expired.' },
+  })
+  expect(command.body).toContain('[BLOCKED] Daily check-in: 2026-08-27')
+  expect(command.body).toContain('The scheduled run expired.')
 })
