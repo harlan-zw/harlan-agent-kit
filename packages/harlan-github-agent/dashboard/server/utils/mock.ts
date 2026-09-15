@@ -49,6 +49,8 @@ function fixture(): DashboardSnapshot {
     mergeState: 'clean',
   })
   return dashboardSnapshot({
+    hostCapacity: { localActive: 2, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopConnected: true },
+    desktop: { connected: true, report: { memoryGiB: 16, reservedGiB: 12, agents: 1, actions: 1 }, requestedMemoryGiB: null },
     status: 'degraded',
     mutationsEnabled: true,
     serviceUpdate: {

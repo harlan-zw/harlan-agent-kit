@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ejectRecoveryFromError } from '../dashboard/app/utils/eject.ts'
+import { ejectRecoveryFromError, ejectSessionCommand } from '../dashboard/app/utils/eject.ts'
 
 describe('delayed Eject recovery', () => {
   it('keeps the saved session and next action from a tagged 503 response', () => {
@@ -22,4 +22,8 @@ describe('delayed Eject recovery', () => {
       nextAction: 'Stop Harlan GitHub Agent. Then resume this saved session.',
     })
   })
+})
+
+it('resumes a desktop session on the desktop', () => {
+  expect(ejectSessionCommand('codex', 'desktop:abc', 'hogwild')).toBe('# Run on Desktop\n\'/home/harlan/.local/bin/codex\' \'resume\' \'abc\' \'-c\' \'tui.resume_cwd="session"\'')
 })

@@ -54,6 +54,33 @@ const routines = computed(() => {
 })
 
 const hostStatus = computed(() => host.value._tag === 'Connected' ? host.value.status : undefined)
+const desktopMemory = ref(16)
+const capacityPending = ref(false)
+const capacityMessage = ref('')
+watch(() => snapshot.value.desktop?.report?.memoryGiB, (value) => {
+  if (value !== undefined && !capacityPending.value)
+    desktopMemory.value = value
+}, { immediate: true })
+const desktopReport = computed(() => snapshot.value.desktop?.connected ? snapshot.value.desktop.report : null)
+const runnerPools = computed(() => hostStatus.value?.runners._tag === 'Available' ? hostStatus.value.runners.pools : undefined)
+const hogwildJobs = computed(() => runnerPools.value?.reduce((total, pool) => total + pool.running, 0))
+const hogwildQueued = computed(() => runnerPools.value?.every(pool => pool.queue._tag === 'Available')
+  ? runnerPools.value.reduce((total, pool) => total + (pool.queue._tag === 'Available' ? pool.queue.jobs : 0), 0)
+  : undefined)
+
+async function saveDesktopMemory(): Promise<void> {
+  if (!Number.isInteger(desktopMemory.value) || desktopMemory.value < 1 || desktopMemory.value > 256) {
+    capacityMessage.value = 'Enter a whole number from 1 to 256 GiB.'
+    return
+  }
+  capacityPending.value = true
+  capacityMessage.value = ''
+  await $fetch('/api/desktop/capacity', { method: 'POST', body: { memoryGiB: desktopMemory.value } })
+    .then(() => { capacityMessage.value = 'Saved. Current work finishes within its existing limits.' })
+    .catch(() => { capacityMessage.value = 'Could not save desktop memory. Try again.' })
+    .finally(() => { capacityPending.value = false })
+}
+
 const batches = computed(() => snapshot.value.batches.map(batchRow))
 
 function activityLine(item: AgentActivityItem): string {
@@ -70,6 +97,98 @@ function activityLine(item: AgentActivityItem): string {
 <template>
   <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10' }">
     <template #body>
+      <section aria-labelledby="system-execution">
+        <h3 id="system-execution" class="field-label flex items-center gap-2">
+          Hosts
+          <span class="h-px flex-1 bg-border" aria-hidden="true" />
+        </h3>
+        <p class="mt-2 text-sm text-muted">
+          Hogwild takes work first. Desktop helps only when Hogwild has no capacity for queued work.
+        </p>
+        <div class="mt-4 divide-y divide-default border-y border-default">
+          <div class="py-4">
+            <div class="flex items-center justify-between gap-3">
+              <h4 class="font-medium">
+                Hogwild
+              </h4>
+              <StateBadge tone="neutral" label="Primary" />
+            </div>
+            <dl class="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <dt class="text-muted">
+                  Agents
+                </dt><dd class="mt-1 font-mono">
+                  {{ snapshot.hostCapacity ? `${snapshot.hostCapacity.localActive} / ${snapshot.hostCapacity.localMaximum}` : 'Unavailable' }}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-muted">
+                  GitHub Actions
+                </dt><dd class="mt-1 font-mono">
+                  {{ hogwildJobs === undefined ? 'Unavailable' : `${hogwildJobs} running` }}
+                </dd>
+              </div>
+            </dl>
+            <p v-if="hogwildQueued !== undefined" class="mt-2 text-xs text-muted">
+              {{ hogwildQueued }} GitHub Actions jobs queued
+            </p>
+          </div>
+          <div class="py-4">
+            <div class="flex items-center justify-between gap-3">
+              <h4 class="font-medium">
+                Desktop
+              </h4>
+              <StateBadge :tone="desktopReport ? 'neutral' : 'warning'" :label="!desktopReport ? 'Disconnected' : desktopReport.agents + desktopReport.actions > 0 ? 'Helping Hogwild' : 'Idle'" />
+            </div>
+            <template v-if="desktopReport">
+              <dl class="mt-3 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <dt class="text-muted">
+                    Agents
+                  </dt><dd class="mt-1 font-mono">
+                    {{ desktopReport.agents }} running
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-muted">
+                    GitHub Actions
+                  </dt><dd class="mt-1 font-mono">
+                    {{ desktopReport.actions }} running
+                  </dd>
+                </div>
+              </dl>
+              <div class="mt-4 flex items-center justify-between gap-2 text-sm">
+                <span class="text-muted">Memory committed</span>
+                <span class="font-mono">{{ desktopReport.reservedGiB }} / {{ desktopReport.memoryGiB }} GiB</span>
+              </div>
+              <UProgress class="mt-2" :model-value="desktopReport.reservedGiB" :max="desktopReport.memoryGiB" aria-label="Desktop memory committed" />
+            </template>
+            <p v-else class="mt-3 text-sm text-muted">
+              Desktop takes no new work until it reconnects.
+            </p>
+            <form class="mt-4" @submit.prevent="saveDesktopMemory">
+              <label for="desktop-memory" class="field-label">Desktop memory, shared by both queues</label>
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <UInput id="desktop-memory" v-model.number="desktopMemory" type="number" :min="1" :max="256" :step="1" class="w-24" aria-describedby="desktop-memory-help" />
+                <span class="text-sm text-muted">GiB</span>
+                <UButton type="submit" color="neutral" variant="outline" :loading="capacityPending">
+                  Save
+                </UButton>
+              </div>
+              <p id="desktop-memory-help" class="mt-2 text-xs text-muted">
+                Each desktop Agent needs 8 GiB. GitHub Actions jobs use their container limits.
+              </p>
+              <p v-if="capacityMessage" role="status" class="mt-2 text-sm">
+                {{ capacityMessage }}
+              </p>
+              <p v-if="snapshot.desktop?.requestedMemoryGiB" class="mt-2 text-xs text-muted">
+                {{ snapshot.desktop.requestedMemoryGiB }} GiB will apply when the desktop next connects.
+              </p>
+            </form>
+          </div>
+        </div>
+      </section>
+
       <section aria-labelledby="system-service">
         <h3 id="system-service" class="field-label flex items-center gap-2">
           Service

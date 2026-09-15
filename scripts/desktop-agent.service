@@ -1,0 +1,20 @@
+[Unit]
+Description=Harlan desktop Agents for Hogwild congestion
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/harlan-github-agent/service
+Environment=PATH=%h/.local/share/pnpm:%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HARLAN_GITHUB_AGENT=1
+Environment=HARLAN_GITHUB_AGENT_CONTROLLER_URL=https://hogwild.tailcad325.ts.net
+EnvironmentFile=-%h/.config/harlan-github-agent/desktop.env
+ExecStart=%h/.local/share/pnpm/node --experimental-strip-types packages/harlan-github-agent/src/desktop-client.ts
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

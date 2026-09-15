@@ -31,11 +31,13 @@ function shellQuote(value: string): string {
 }
 
 export function ejectSessionCommand(provider: AgentProvider, sessionId: string, host: string): string {
+  const desktop = sessionId.startsWith('desktop:')
+  const actualSessionId = desktop ? sessionId.slice('desktop:'.length) : sessionId
   const agent = provider === 'codex'
-    ? ['/home/harlan/.local/bin/codex', 'resume', sessionId, '-c', 'tui.resume_cwd="session"']
-    : ['/home/harlan/.local/bin/opencode', '--session', sessionId]
+    ? ['/home/harlan/.local/bin/codex', 'resume', actualSessionId, '-c', 'tui.resume_cwd="session"']
+    : ['/home/harlan/.local/bin/opencode', '--session', actualSessionId]
   const remoteCommand = agent.map(shellQuote).join(' ')
-  return `ssh -t ${shellQuote(host)} ${shellQuote(remoteCommand)}`
+  return desktop ? `# Run on Desktop\n${remoteCommand}` : `ssh -t ${shellQuote(host)} ${shellQuote(remoteCommand)}`
 }
 
 export function ejectRecoveryFromError(error: unknown, host: string): EjectedSessionNotice | undefined {

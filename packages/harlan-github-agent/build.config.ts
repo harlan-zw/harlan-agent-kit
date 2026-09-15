@@ -7,6 +7,8 @@ export default defineBuildConfig({
       input: [
         './src/index.ts',
         './src/cli.ts',
+        './src/desktop-client.ts',
+        './src/desktop-execute.ts',
       ],
     },
   ],
