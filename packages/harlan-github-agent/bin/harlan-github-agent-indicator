@@ -676,6 +676,26 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
         selection_label = selection_mode_label(dashboard)
         if selection_label is not None:
             menu.append(menu_item(selection_label, enabled=False))
+        assignments = {turn['taskId']: turn['host'] for turn in dashboard.get('hostTasks', [])
+                       if turn.get('taskId') is not None}
+        host_menus = {}
+        for host, name in (('hogwild', 'Hogwild'), ('desktop', 'Desktop')):
+            turns = [turn for turn in dashboard.get('hostTasks', []) if turn['host'] == host]
+            host_item = submenu_item(f'{name} · {len(turns)} running', [])
+            host_menus[host] = host_item.get_submenu()
+            if not turns:
+                host_menus[host].append(menu_item('No Agent tasks running', enabled=False))
+            for turn in turns:
+                if not any(item.get('id') == turn.get('taskId') for item in [*agents, *routine_runs]):
+                    host_menus[host].append(menu_item('Agent task · Running', enabled=False))
+            menu.append(host_item)
+        desktop = dashboard.get('desktop', {})
+        report = desktop.get('report')
+        if desktop.get('connected') and report is not None:
+            menu.append(menu_item(
+                f"Desktop memory · {report['reservedGiB']} / {report['memoryGiB']} GiB", enabled=False))
+        else:
+            menu.append(menu_item('Desktop · disconnected', enabled=False))
         for agent in agents:
             kind = 'issue' if agent.get('subjectKind') == 'issue' else 'pull request'
             links = [
@@ -693,7 +713,8 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
             eject_item = menu_item('Eject into terminal…', enabled=agent.get('session', {}).get('_tag') == 'Connected')
             eject_item.connect('activate', lambda *_args, current=agent: confirm_agent_eject(current, eject_agent))
             links.append(eject_item)
-            menu.append(submenu_item(active_agent_label(agent), links))
+            target_menu = host_menus.get(assignments.get(agent.get('id')), menu)
+            target_menu.append(submenu_item(active_agent_label(agent), links))
 
         for run in routine_runs:
             links = [menu_item(agent_progress_label(run), enabled=False)]
@@ -701,7 +722,8 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
             if activity_label is not None:
                 links.append(menu_item(activity_label, enabled=False))
             links.append(menu_item('Open repository', f"https://github.com/{run['repository']}"))
-            menu.append(submenu_item(active_routine_label(run), links))
+            target_menu = host_menus.get(assignments.get(run.get('id')), menu)
+            target_menu.append(submenu_item(active_routine_label(run), links))
 
         incidents = dashboard.get('incidents', [])
         if incidents:

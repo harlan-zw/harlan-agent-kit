@@ -186,7 +186,8 @@ def request_runner_host(host):
             result = {
                 '_tag': 'Unavailable',
                 'name': host['name'],
-                'message': str(caught),
+                'message': (caught.stderr.strip() if isinstance(caught, subprocess.CalledProcessError)
+                            and caught.stderr else str(caught)),
             }
         if control is not None:
             result['dockerHost'] = host['dockerHost']

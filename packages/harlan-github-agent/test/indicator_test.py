@@ -1296,5 +1296,35 @@ class WatchLogTest(unittest.TestCase):
         self.assertEqual(output.getvalue().count('message 099'), 1)
 
 
+class TrayHostTest(unittest.TestCase):
+    def test_assigns_live_tasks_to_hosts_and_keeps_waiting_tasks_visible(self):
+        def agent(task_id):
+            return {'_tag': 'ActiveAgent', 'id': task_id, 'role': 'issue_triage',
+                    'repository': 'harlan-zw/example', 'itemNumber': 12,
+                    'subjectUrl': 'https://github.com/harlan-zw/example/issues/12',
+                    'progress': {'label': task_id}, 'session': {'_tag': 'Disconnected'}}
+        dashboard = {'status': 'ready', 'agents': [agent('remote'), agent('local'), agent('waiting')],
+                     'hostTasks': [{'host': 'hogwild', 'taskId': 'remote'}, {'host': 'desktop', 'taskId': 'local'}],
+                     'desktop': {'connected': True, 'report': {'reservedGiB': 12, 'memoryGiB': 16}}}
+        stub = StubIndicator()
+        indicator.build_menu(stub, {'harlanGithubAgent': {'_tag': 'Available', 'dashboard': dashboard}},
+                             None, lambda: None, lambda *_: None, lambda *_: None, lambda *_: None)
+        menu = stub.menus[0]
+        for host, task_id in [('Hogwild', 'remote'), ('Desktop', 'local')]:
+            section = next(item for item in menu.get_children() if item.get_label().startswith(host + ' ·'))
+            task = next(item for item in section.get_submenu().get_children() if item.get_submenu())
+            self.assertEqual(menu_labels(task.get_submenu())[0], task_id)
+        self.assertTrue(any(item.get_submenu() and 'waiting' in menu_labels(item.get_submenu())
+                            for item in menu.get_children()))
+        self.assertIn('Desktop memory · 12 / 16 GiB', menu_labels(menu))
+
+    def test_surfaces_docker_permission_error(self):
+        def denied(host):
+            raise subprocess.CalledProcessError(1, ['docker', 'ps'], stderr='permission denied on Docker socket')
+        with patch.object(runner_indicator, 'request_runners', denied):
+            result = runner_indicator.request_runner_host({'name': 'Hogwild', 'dockerHost': 'ssh://hogwild'})
+        self.assertIn('permission denied on Docker socket', result['message'])
+
+
 if __name__ == '__main__':
     unittest.main()
