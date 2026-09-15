@@ -14,7 +14,8 @@ Do not advance a state from a worker's completion message alone.
 - Progressive outline: common case, concrete example, next decision, later edge cases.
 - Shot list: reader question, required UI state, figure type, capture owner, caption, and alt text.
 - Natural related articles, intended navigation group, and any redirect dependency.
-- Executable examples, required checks, and authenticated paths that remain untested.
+- Exact example artifact, runtime/client version, invocation, expected result, and checks.
+- Authenticated paths that remain untested; offline fixtures must not imply a live result.
 - Brief review findings, writer response, article review findings, and coordinator decision.
 
 A source-only candidate needs the question, sources, and missing evidence. Do not fabricate an approved brief.
