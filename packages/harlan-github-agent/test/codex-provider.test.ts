@@ -83,8 +83,9 @@ describe('createCodexProvider', () => {
       },
     })
 
-    await collect(provider.runTurn(request({ workspace })))
+    await collect(provider.runTurn(request({ workspace, taskId: 'owner/site:daily-checkin:2026-09-15T07:00:00.000Z' })))
 
+    expect(codexOptions?.env?.DAILY_CHECKIN_DIR).toMatch(/\/daily-checkin\/owner\/site$/)
     expect(codexOptions?.env?.CLOUDFLARE_API_TOKEN).toBe('from-repo')
     expect(codexOptions?.env?.PATH).toBe(process.env.PATH)
   })

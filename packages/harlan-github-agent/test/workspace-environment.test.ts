@@ -83,3 +83,31 @@ describe('the environment one turn runs with', () => {
       .toEqual({ PATH: `${join(workspace, 'node_modules', '.bin')}:/usr/bin:/bin` })
   })
 })
+
+describe('daily check-in evidence directories', () => {
+  it('keeps evidence across disposable worktrees and scheduled dates', () => {
+    const first = mkdtempSync(join(tmpdir(), 'routine-env-'))
+    const next = mkdtempSync(join(tmpdir(), 'routine-env-'))
+    const base = { HOME: '/home/agent', XDG_STATE_HOME: '/state' }
+    const one = workspaceEnvironment(base, first, 'owner/site:daily-checkin:2026-09-14T22:00:00.000Z')
+    const two = workspaceEnvironment(base, next, 'owner/site:daily-checkin:2026-09-15T22:00:00.000Z')
+
+    expect(one.DAILY_CHECKIN_DIR).toBe('/state/daily-checkin/owner/site')
+    expect(two.DAILY_CHECKIN_DIR).toBe(one.DAILY_CHECKIN_DIR)
+    expect(workspaceEnvironment(base, next, 'other/site:daily-checkin:2026-09-15T22:00:00.000Z').DAILY_CHECKIN_DIR)
+      .toBe('/state/daily-checkin/other/site')
+  })
+
+  it('uses the service home and refuses repository overrides for Routine archives', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'routine-env-'))
+    writeFileSync(join(workspace, '.env'), 'DAILY_CHECKIN_DIR=./lost\nXDG_STATE_HOME=./lost\n')
+    expect(workspaceEnvironment({ HOME: '/home/agent' }, workspace, 'owner/site:daily-checkin:2026-09-15T22:00:00.000Z').DAILY_CHECKIN_DIR)
+      .toBe('/home/agent/.local/state/daily-checkin/owner/site')
+  })
+
+  it('does not assign a Routine archive to unrelated tasks', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'routine-env-'))
+    const base = { HOME: '/home/agent' }
+    expect(workspaceEnvironment(base, workspace, 'review-task')).toBe(base)
+  })
+})

@@ -265,6 +265,22 @@ describe('running one scan', () => {
     }
   })
 
+  it.each([undefined, '', '  '])('refuses a daily check-in without its report: %s', async (report) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'daily-checkin')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const result = await workerFor(store, scanning({ report, candidates: [candidate] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(result).toEqual({ _tag: 'Err', error: 'The daily check-in Routine answered without its report.' })
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('refuses the global Agent feedback Routine in another repository', async () => {
     const store = openJournalStore(':memory:')
     try {
