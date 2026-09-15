@@ -292,7 +292,7 @@ The controller retains its normal Review and merge policies.
 The `ci-review` Routine reviews seven days of GitHub Actions logs, including successful runs.
 This repository enables it each Monday at 10:00 Melbourne time in `propose` mode.
 It reviews default-branch runs and runs for open pull requests, up to 100 runs per scan.
-Missing logs and limits appear as incomplete coverage. Warnings receive a reasoned disposition even when no fix is needed.
+Missing logs and limits appear as incomplete coverage. The report explains each warning, including warnings that need no fix.
 Current repository defects become Candidates for Issue triage and Issue work.
 Existing issues, pull request Repair, and Baseline repair retain work they already own.
 Issue work reproduces findings and verifies repairs without weakening checks or hiding diagnostics.

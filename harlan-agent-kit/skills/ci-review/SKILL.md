@@ -55,7 +55,7 @@ Keep pull-request-only defects with their existing pull request's Review and Rep
 If the defect also affects the default branch, explain that evidence before proposing a separate repair.
 
 Create a Candidate only for a current, actionable repository change within the controller's file limit.
-Group repeated diagnostics by cause, such as one deprecated API across several jobs.
+Group repeated diagnostics by cause, such as one deprecated API across two jobs.
 Use a stable fingerprint containing the workflow or source path and the underlying defect.
 Never include run IDs, dates, line numbers, counters, or head SHAs in that fingerprint.
 Include those changing details in the claim's evidence and verification instead.
@@ -75,6 +75,15 @@ Report warnings even when they need no repository change. Explain the dispositio
 Partial coverage may produce Candidates only where the available evidence independently proves a current defect.
 Return an empty Candidate list when no actionable defect is established.
 Do not create issues, comments, or pull requests yourself. The controller handles Issue triage and publication.
+
+Example with unavailable logs:
+
+```json
+{
+  "report": "Incomplete coverage for 1-7 September. Run 42 logs expired. No actionable finding has sufficient evidence.",
+  "candidates": []
+}
+```
 
 ## Implementation mode
 
