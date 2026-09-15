@@ -1,3 +1,4 @@
+import type { GitHubResponseCache } from './github-response-cache.ts'
 import type { Result } from './result.ts'
 import type { GitHubRepositoryAccess, GitHubRepositoryToken } from './types.ts'
 import { App, Octokit } from 'octokit'
@@ -298,6 +299,9 @@ export function isAuthenticationRejection(status: number | undefined): boolean {
 }
 
 export interface AuthenticatedClientOptions {
+  /** Optional observation cache. Every reuse is revalidated with GitHub. */
+  responseCache?: GitHubResponseCache
+
   tokens: GitHubTokenProvider
   repository: string
   access: GitHubRepositoryAccess
@@ -346,8 +350,21 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
   let retried = false
 
   octokit.hook.wrap('request', async (request, requestOptions) => {
+    const read = () => options.access === 'read' && options.responseCache !== undefined
+      ? options.responseCache.request(async (endpoint) => {
+          // Octokit's inner hooks bind the original options object.
+          const headers = requestOptions.headers
+          requestOptions.headers = { ...headers, ...endpoint.headers }
+          try {
+            return await request(requestOptions)
+          }
+          finally {
+            requestOptions.headers = headers
+          }
+        }, octokit.request.endpoint(requestOptions), credential.token)
+      : request(requestOptions)
     try {
-      return await request(requestOptions)
+      return await read()
     }
     catch (error) {
       if (retried || !isAuthenticationRejection(errorStatus(error)))
@@ -358,7 +375,7 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
       if (refreshed._tag === 'Err')
         throw error
       credential.token = refreshed.value.token
-      return await request(requestOptions)
+      return await read()
     }
   })
   return octokit
