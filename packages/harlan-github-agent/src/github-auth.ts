@@ -1,7 +1,7 @@
 import type { GitHubResponseCache } from './github-response-cache.ts'
 import type { Result } from './result.ts'
 import type { GitHubRepositoryAccess, GitHubRepositoryToken } from './types.ts'
-import { App, Octokit } from 'octokit'
+import { App, Octokit, RequestError } from 'octokit'
 import { err, ok } from './result.ts'
 
 export interface GitHubTokenError {
@@ -298,6 +298,16 @@ export function isAuthenticationRejection(status: number | undefined): boolean {
   return status === 401 || status === 403
 }
 
+/** Rate limits reject valid credentials. Refreshing them spends more requests. */
+function isRateLimitRejection(error: unknown): boolean {
+  if (!(error instanceof RequestError) || error.status !== 403)
+    return false
+  const headers = error.response?.headers
+  return headers?.['x-ratelimit-remaining'] === '0'
+    || headers?.['retry-after'] !== undefined
+    || /\b(?:rate limits?|abuse detection)\b/i.test(error.message)
+}
+
 export interface AuthenticatedClientOptions {
   /** Optional observation cache. Every reuse is revalidated with GitHub. */
   responseCache?: GitHubResponseCache
@@ -367,7 +377,7 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
       return await read()
     }
     catch (error) {
-      if (retried || !isAuthenticationRejection(errorStatus(error)))
+      if (retried || !isAuthenticationRejection(errorStatus(error)) || isRateLimitRejection(error))
         throw error
       retried = true
       options.tokens.invalidate(options.repository, options.access)
