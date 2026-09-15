@@ -100,6 +100,8 @@ Keep comparisons and original research under their stronger evidence rules in fo
 Use the [pr Skill](../pr/SKILL.md) for all changes, including editorial records.
 Stack only dependent changes using its stack contract. Independent article groups need not form a long chain.
 Propagate shared corrections through dependent branches before reviewing their final revisions.
+Record new article evidence with the article change, including its updates to shared records.
+Change a reviewed parent for a foundation correction, not merely to append downstream test evidence.
 Do not add automatic merge labels to Skills or Agent instructions.
 
 Use [adversarial-review](../adversarial-review/SKILL.md) for final PR review.
