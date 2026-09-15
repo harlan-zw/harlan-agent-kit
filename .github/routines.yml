@@ -7,6 +7,13 @@ routines:
     timezone: Australia/Melbourne
     mode: propose
     enabled: true
+  - name: ci-review
+    on:
+      schedule:
+        - cron: '0 10 * * 1'
+    timezone: Australia/Melbourne
+    mode: propose
+    enabled: true
   - name: dependency-updates
     on:
       schedule:

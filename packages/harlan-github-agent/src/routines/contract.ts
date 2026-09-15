@@ -35,3 +35,4 @@ export interface RoutineDefinition {
     verifyChanges: (target: string, changedPaths: readonly string[]) => Result<void, string>
   }
 }
+export const MAXIMUM_REPORT_DETAIL_LENGTH = 20_000

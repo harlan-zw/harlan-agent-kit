@@ -287,6 +287,21 @@ Scans report existing dependency pull requests instead of creating another. Revi
 Registry failures fail the run. Non-registry dependencies appear in the report for follow-up.
 The controller retains its normal Review and merge policies.
 
+## Weekly CI review
+
+The `ci-review` Routine reviews seven days of GitHub Actions logs, including successful runs.
+This repository enables it each Monday at 10:00 Melbourne time in `propose` mode.
+It reviews default-branch runs and runs for open pull requests, up to 100 runs per scan.
+Missing logs and limits appear as incomplete coverage. The report explains each warning, including warnings that need no fix.
+Reports allow 20,000 characters. If diagnostic dispositions cannot fit, the report marks coverage incomplete and identifies the omitted scope.
+Oversized responses fail before the controller stores Candidates or queues the report.
+Current repository defects become Candidates for Issue triage and Issue work.
+Existing issues, pull request Repair, and Baseline repair retain work they already own.
+Issue work reproduces findings and verifies repairs without weakening checks or hiding diagnostics.
+Runner operations and GitHub settings appear in the report for their next actor.
+The usual Review and merge policies apply. Other repositories enable `ci-review` through their own Routine spec.
+Deploy the supporting service and Skill before enabling that schedule.
+
 ## Adding a Routine
 
 Built-in definitions live in `src/routines/`. Each definition owns its scan and downstream issue policy.
