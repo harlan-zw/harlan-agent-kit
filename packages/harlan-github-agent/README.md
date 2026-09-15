@@ -260,3 +260,63 @@ Conventional Commits classify the full range. Missing classification, truncated 
 These checks cannot prove semantic compatibility for every possible source change.
 If the branch or release policy changes after authorization, the controller stops instead of expanding the approved release.
 A failed publishing workflow can be rerun in GitHub for the same tag.
+
+## Weekly dependency updates
+
+Add this entry to `.github/routines.yml` in each opted-in repository:
+
+```yaml
+version: 1
+routines:
+  - name: dependency-updates
+    on:
+      schedule:
+        - cron: '0 8 * * 1'
+    timezone: Australia/Melbourne
+    mode: propose
+    enabled: true
+```
+
+Keep other Routine entries when adding this one. This repository enables Monday at 08:00 Melbourne time.
+Deploy a service version that supports `dependency-updates` before enabling it in other repositories.
+The Routine scans npm dependencies across root manifests, workspaces, and pnpm catalogs.
+One Candidate becomes one issue. Issue work attempts all updates, including majors, in one pull request.
+Blocked upgrades remain unchanged and appear in the result. TypeScript stays on version 6 until Harlan clears its exception.
+A version-specific fingerprint prevents repeated proposals. A shared issue marker reuses any open dependency issue.
+Scans report existing dependency pull requests instead of creating another. Review and Repair continue the existing pull request.
+Registry failures fail the run. Non-registry dependencies appear in the report for follow-up.
+The controller retains its normal Review and merge policies.
+
+## Weekly CI review
+
+The `ci-review` Routine reviews seven days of GitHub Actions logs, including successful runs.
+This repository enables it each Monday at 10:00 Melbourne time in `propose` mode.
+It reviews default-branch runs and runs for open pull requests, up to 100 runs per scan.
+Missing logs and limits appear as incomplete coverage. The report explains each warning, including warnings that need no fix.
+Reports allow 20,000 characters. If diagnostic dispositions cannot fit, the report marks coverage incomplete and identifies the omitted scope.
+Oversized responses fail before the controller stores Candidates or queues the report.
+Current repository defects become Candidates for Issue triage and Issue work.
+Existing issues, pull request Repair, and Baseline repair retain work they already own.
+Issue work reproduces findings and verifies repairs without weakening checks or hiding diagnostics.
+Runner operations and GitHub settings appear in the report for their next actor.
+The usual Review and merge policies apply. Other repositories enable `ci-review` through their own Routine spec.
+Deploy the supporting service and Skill before enabling that schedule.
+
+## Adding a Routine
+
+Built-in definitions live in `src/routines/`. Each definition owns its scan and downstream issue policy.
+
+1. Add a module implementing `RoutineDefinition` from `src/routines/contract.ts`.
+2. Reuse `candidateRoutine` and `candidateScanPrompt` for ordinary Candidate scans.
+3. Define any custom response parser, preparation, scope limits, or Issue work restrictions in that module.
+4. Add its import and name to the table in `src/routines/index.ts`.
+5. Test its behavior through the definition and shared worker before adding a repository schedule.
+
+`RoutineName` and accepted YAML names derive from that table. Keep runtime registration and YAML-supplied code disabled.
+The scheduler and workers own leases, persistence, report publication, and retries.
+Definitions cannot receive a publisher or worktree mutation client through their preparation interface.
+Issue work checks a definition's changed-path policy before committing.
+
+Agent feedback keeps its repository restriction and exact Skill target.
+Sentry keeps its required report and mode-specific resolution instructions.
+Dependency updates keep one combined Candidate and a shared open-issue fingerprint.

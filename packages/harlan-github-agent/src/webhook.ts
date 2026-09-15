@@ -71,7 +71,7 @@ export function webhookHint(event: string, payload: unknown, allowedOwners: read
 }
 
 export interface ReconcileHint {
-  hint: () => void
+  hint: (repository: string) => void
   stop: () => Promise<void>
 }
 
@@ -79,7 +79,7 @@ export interface ReconcileHintOptions {
   /** How long to gather deliveries before reconciling, so a burst costs one pass. */
   delayMilliseconds?: number
   onError: (error: unknown) => void
-  run: () => Promise<void>
+  run: (repositories: readonly string[]) => Promise<void>
 }
 
 /**
@@ -89,28 +89,29 @@ export interface ReconcileHintOptions {
  * per delivery would spend the GitHub rate limit this feature exists to save,
  * so the first hint schedules a pass and every hint until it fires joins it.
  *
- * Nothing here needs to know which repository moved. The pass reads every
- * enabled repository, which is what the poller already does, so a hint can
- * never leave the journal in a state a poll would not have reached anyway.
+ * Keep the repository names so a delivery never refreshes unrelated repositories.
+ * Deliveries received during a pass belong to the next pass.
  */
 export function createReconcileHint(options: ReconcileHintOptions): ReconcileHint {
   const delayMilliseconds = options.delayMilliseconds ?? 3_000
   let state:
     | { _tag: 'Idle' }
     | { _tag: 'Scheduled', timer: NodeJS.Timeout }
-    | { _tag: 'Running', pending: boolean }
+    | { _tag: 'Running' }
     | { _tag: 'Stopped' } = { _tag: 'Idle' }
   let active: Promise<void> = Promise.resolve()
+  const pending = new Set<string>()
 
   const schedule = (): void => {
     const timer = setTimeout(() => {
-      state = { _tag: 'Running', pending: false }
-      active = Promise.resolve().then(options.run).catch(options.onError).finally(() => {
+      state = { _tag: 'Running' }
+      const repositories = [...pending]
+      pending.clear()
+      active = Promise.resolve().then(() => options.run(repositories)).catch(options.onError).finally(() => {
         if (state._tag !== 'Running')
           return
-        const pending = state.pending
         state = { _tag: 'Idle' }
-        if (pending)
+        if (pending.size > 0)
           schedule()
       })
     }, delayMilliseconds)
@@ -119,16 +120,18 @@ export function createReconcileHint(options: ReconcileHintOptions): ReconcileHin
   }
 
   return {
-    hint: () => {
+    hint: (repository) => {
+      if (state._tag === 'Stopped')
+        return
+      pending.add(repository)
       if (state._tag === 'Idle')
         schedule()
-      else if (state._tag === 'Running')
-        state.pending = true
     },
     stop: async () => {
       if (state._tag === 'Scheduled')
         clearTimeout(state.timer)
       state = { _tag: 'Stopped' }
+      pending.clear()
       await active
     },
   }

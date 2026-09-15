@@ -6,7 +6,7 @@
 
 <h1>harlan-agent-kit</h1>
 
-> 🤖 My agent kit for Nuxt and TypeScript work. 25 Skills, 8 hooks, and a service that works my [GitHub](https://github.com) repos on its own.
+> 🤖 My agent kit for Nuxt and TypeScript work. 27 Skills, 8 hooks, and a service that works my [GitHub](https://github.com) repos on its own.
 
 It installs as a [Claude Code](https://claude.com/code) plugin. Codex reads the
 same directory and picks up the Skills.
@@ -132,6 +132,8 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`release-notes`](./harlan-agent-kit/skills/release-notes/SKILL.md) | Draft changelogs, release notes, and upgrade guides |
 | [`ripast`](./harlan-agent-kit/skills/ripast/SKILL.md) | Run AST-aware refactors with [Ripast](https://github.com/harlan-zw/ripast) |
 | [`daily-checkin`](./harlan-agent-kit/skills/daily-checkin/SKILL.md) | Run nuxt-checkin and interpret site prompt items |
+| [`dependency-updates`](./harlan-agent-kit/skills/dependency-updates/SKILL.md) | Attempt weekly dependency updates, including majors, in one pull request |
+| [`ci-review`](./harlan-agent-kit/skills/ci-review/SKILL.md) | Review CI warnings and errors, then propose verified repairs |
 | [`sentry-checkin`](./harlan-agent-kit/skills/sentry-checkin/SKILL.md) | Triage open Sentry issues and repair them with verified PRs |
 | [`social-presence`](./harlan-agent-kit/skills/social-presence/SKILL.md) | Plan social content and launch posts |
 | [`take-ownership`](./harlan-agent-kit/skills/take-ownership/SKILL.md) | Own current work through merge, CI, deploy, and smoke checks |

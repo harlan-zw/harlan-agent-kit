@@ -7,7 +7,7 @@ import { batchPlanPrompt } from '../src/batch-worker.ts'
 import { conflictResolutionPrompt } from '../src/conflict-worker.ts'
 import { issuePrompt, reviewPrompt } from '../src/item-agent.ts'
 import { pullRequestTriagePrompt } from '../src/pull-request-triage.ts'
-import { routineScanPrompt } from '../src/routine-worker.ts'
+import { getRoutine } from '../src/routines/index.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const memory: RepositoryMemory = {
@@ -147,7 +147,7 @@ describe('project memory in Agent prompts', () => {
   })
 
   it('withholds memory from a Routine scan, which proposes new work', () => {
-    const prompt = routineScanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' })
+    const prompt = getRoutine('pr-triage').scanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' })
 
     expect(prompt).not.toContain('MEMORY.md')
     expect(prompt).toContain('These proposals were rejected before.')

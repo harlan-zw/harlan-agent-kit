@@ -1,12 +1,16 @@
 import type { AgentEvent } from '../src/agent-provider.ts'
+import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
-import { createRoutineScanWorker, routineScanPrompt, selectRoutineCandidates } from '../src/routine-worker.ts'
+import { createRoutineScanWorker } from '../src/routine-worker.ts'
+import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
+
+const routineScanPrompt = (input: RoutineScanInput) => getRoutine(input.name).scanPrompt(input)
 
 const now = () => new Date('2026-08-27T07:05:00.000Z')
 
@@ -75,7 +79,7 @@ const candidate = {
 
 describe('building the scan prompt', () => {
   it('keeps Agent feedback proposals inside one skill file', () => {
-    expect(selectRoutineCandidates('agent-feedback', [
+    expect(getRoutine('agent-feedback').selectCandidates([
       { ...candidate, target: 'src/controller.ts' },
       { ...candidate, fingerprint: 'skill-a', target: 'harlan-agent-kit/skills/adversarial-review/SKILL.md' },
       { ...candidate, fingerprint: 'skill-b', target: 'harlan-agent-kit/skills/pr-triage/SKILL.md' },
@@ -226,6 +230,85 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it('rejects oversized CI reports before persisting findings', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const report = `${'x'.repeat(20_000)}Final warning requires repair.`
+      const result = await workerFor(store, scanning({ report, candidates: [candidate] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+
+      expect(result).toEqual({ _tag: 'Err', error: 'The CI review report exceeds 20000 characters. Shorten it and mark coverage incomplete if diagnostic dispositions cannot fit.' })
+      expect(store.listCandidates('harlan-zw/example:ci-review')).toEqual([])
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)).toBeNull()
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('preserves the last diagnostic in a CI report at the detail limit', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const diagnostic = 'Final warning: deprecated API. Existing issue #42 owns its repair.'
+      const report = `${'x'.repeat(20_000 - diagnostic.length)}${diagnostic}`
+      const result = await workerFor(store, scanning({ report, candidates: [] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+
+      expect(result._tag).toBe('Ok')
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain(report)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('records CI evidence and queues a repair for triage', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const report = 'Run 42 succeeded but emitted a deprecated API warning in the build step.'
+      const result = await workerFor(store, scanning({ report, candidates: [candidate] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(result._tag).toBe('Ok')
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000))
+        .toMatchObject({ routineName: 'ci-review', fingerprint: candidate.fingerprint })
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain(report)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('publishes one dependency proposal across more than five manifests', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'dependency-updates')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const updates = Array.from({ length: 8 }, (_, index) => ({
+        manifest: `packages/app${index}/package.json`,
+        name: 'nuxt',
+        current: '4.0.0',
+        latest: '5.0.0',
+      }))
+      const result = await workerFor(store, scanning({ outcome: 'complete', report: 'Eight manifests scanned.', updates }))
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(result._tag).toBe('Ok')
+      const issue = store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)
+      expect(issue).toMatchObject({ routineName: 'dependency-updates', body: expect.stringContaining('packages/app7/package.json') })
+      expect(store.claimNextCandidateIssue('controller-2', now().toISOString(), 60_000)).toBeNull()
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain('Eight manifests scanned.')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('reports zero code proposals without hiding the Sentry issue ledger', async () => {
     const store = openJournalStore(':memory:')
     try {
