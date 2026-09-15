@@ -11,6 +11,7 @@ Sites supply checks, required IDs, credentials, thresholds, and prompt items. Th
 ## Collect
 
 1. Read the site's `checkin.external` configuration and package scripts. Follow imports to its external options.
+   Require `nuxt-checkin` 0.3.0 or newer. If older, report the missing shared contract and propose a dependency update.
 2. Preserve the controller's environment. If a private `~/.config/harlan-checkin/<repository-name>.env` exists, load it without printing credentials.
    Preserve an existing `DAILY_CHECKIN_DIR` across credential loading.
 3. For scheduled runs, use the controller's `DAILY_CHECKIN_DIR` outside the disposable worktree.
