@@ -154,6 +154,90 @@ describe('the webhook listener', () => {
   })
 })
 
+describe('repository-scoped reconciliation', () => {
+  it('refreshes only distinct repositories named by a burst', async () => {
+    vi.useFakeTimers()
+    try {
+      const reads: string[][] = []
+      const hint = createReconcileHint({
+        onError: (error) => { throw error },
+        run: async (repositories) => { reads.push([...repositories]) },
+      })
+      hint.hint('harlan-zw/first')
+      hint.hint('harlan-zw/first')
+      hint.hint('harlan-zw/second')
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(reads).toEqual([['harlan-zw/first', 'harlan-zw/second']])
+      await hint.stop()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps deliveries received during a read for the next pass', async () => {
+    vi.useFakeTimers()
+    try {
+      const reads: string[][] = []
+      let finish!: () => void
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const hint = createReconcileHint({
+        onError: (error) => { throw error },
+        run: async (repositories) => {
+          reads.push([...repositories])
+          if (reads.length === 1)
+            await pending
+        },
+      })
+      hint.hint('harlan-zw/first')
+      await vi.advanceTimersByTimeAsync(3_000)
+      hint.hint('harlan-zw/second')
+      hint.hint('harlan-zw/first')
+      finish()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(reads).toEqual([['harlan-zw/first'], ['harlan-zw/second', 'harlan-zw/first']])
+      await hint.stop()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('stopping repository reads', () => {
+  it('discards pending repositories while waiting for an active read to finish', async () => {
+    vi.useFakeTimers()
+    try {
+      const reads: string[][] = []
+      let finish!: () => void
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const hint = createReconcileHint({
+        onError: () => undefined,
+        run: async (repositories) => {
+          reads.push([...repositories])
+          await pending
+        },
+      })
+      hint.hint('harlan-zw/first')
+      await vi.advanceTimersByTimeAsync(3_000)
+      hint.hint('harlan-zw/second')
+      const stopped = hint.stop()
+      finish()
+      await stopped
+      hint.hint('harlan-zw/third')
+      await vi.advanceTimersByTimeAsync(6_000)
+      expect(reads).toEqual([['harlan-zw/first']])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('coalescing a burst of deliveries', () => {
   it('runs one reconciliation for many hints', async () => {
     vi.useFakeTimers()
@@ -168,7 +252,7 @@ describe('coalescing a burst of deliveries', () => {
       })
 
       for (let index = 0; index < 12; index += 1)
-        coalescer.hint()
+        coalescer.hint('harlan-zw/example')
       await vi.advanceTimersByTimeAsync(3_000)
 
       expect(runs).toBe(1)
@@ -190,9 +274,9 @@ describe('coalescing a burst of deliveries', () => {
         },
       })
 
-      coalescer.hint()
+      coalescer.hint('harlan-zw/example')
       await vi.advanceTimersByTimeAsync(1_000)
-      coalescer.hint()
+      coalescer.hint('harlan-zw/example')
       await vi.advanceTimersByTimeAsync(1_000)
 
       expect(runs).toBe(2)
@@ -215,7 +299,7 @@ describe('coalescing a burst of deliveries', () => {
       })
 
       await coalescer.stop()
-      coalescer.hint()
+      coalescer.hint('harlan-zw/example')
       await vi.advanceTimersByTimeAsync(5_000)
 
       expect(runs).toBe(0)
@@ -288,10 +372,10 @@ describe('delivery recovery', () => {
             await blocked
         },
       })
-      coalescer.hint()
+      coalescer.hint('harlan-zw/example')
       await vi.advanceTimersByTimeAsync(100)
       for (let n = 0; n < 10; n += 1) {
-        coalescer.hint()
+        coalescer.hint('harlan-zw/example')
         await vi.advanceTimersByTimeAsync(100)
       }
       expect(runs).toBe(1)
