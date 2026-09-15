@@ -1318,6 +1318,18 @@ class TrayHostTest(unittest.TestCase):
                             for item in menu.get_children()))
         self.assertIn('Desktop memory · 12 / 16 GiB', menu_labels(menu))
 
+    def test_running_jobs_use_host_status_when_github_lags(self):
+        runner = {'Activity': {'_tag': 'Running', 'job': 'unit'}, 'Names': 'runner-1',
+                  'RunnerLabels': {'com.harlanzw.desktop-runner.repository': 'harlan-zw/example'}}
+        stub = StubIndicator()
+        runner_indicator.build_menu(stub, {'_tag': 'Available', 'hosts': [
+            {'_tag': 'Available', 'name': 'Desktop', 'runners': [runner]}]},
+            {'_tag': 'Available', 'jobs': []}, None, lambda: None, lambda *_: None)
+        labels = menu_labels(stub.menus[0])
+        self.assertNotIn('Running jobs · 0', labels)
+        host = next(item for item in stub.menus[0].get_children() if 'Desktop' in item.get_label())
+        self.assertTrue(any('Running · unit' in label for label in menu_labels(host.get_submenu())))
+
     def test_surfaces_docker_permission_error(self):
         def denied(host):
             raise subprocess.CalledProcessError(1, ['docker', 'ps'], stderr='permission denied on Docker socket')
