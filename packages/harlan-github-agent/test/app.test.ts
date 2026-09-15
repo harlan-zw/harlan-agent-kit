@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
+import { readDesktopResponse } from '../src/desktop-protocol.ts'
 import { dashboardSnapshot } from './fixtures.ts'
 
 const allowedOrigin = 'https://harlan-github-agent.localhost'
@@ -1200,6 +1201,16 @@ describe('dashboard HTTP app', () => {
 })
 
 describe('desktop capacity HTTP boundary', () => {
+  it('decodes an idle claim from the controller as an empty Queue', async () => {
+    const app = createApp(dashboardSnapshot(), createDesktopBroker({ now: () => now().getTime() }))
+    const response = await app.request(`http://${allowedHost}/api/desktop/claim`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin },
+    })
+    expect(response.ok).toBe(true)
+    await expect(readDesktopResponse(response)).resolves.toBeNull()
+  })
+
   it('saves a valid memory setting and refuses malformed input', async () => {
     const desktop = createDesktopBroker({ now: () => now().getTime() })
     const app = createApp(dashboardSnapshot(), desktop)

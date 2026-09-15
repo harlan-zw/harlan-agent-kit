@@ -79,5 +79,6 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
 
 /** Decode controller responses before consumers handle an empty Queue. */
 export async function readDesktopResponse(response: Response): Promise<unknown> {
-  return response.status === 204 ? null : await response.json()
+  const body = await response.text()
+  return body === '' ? null : JSON.parse(body)
 }
