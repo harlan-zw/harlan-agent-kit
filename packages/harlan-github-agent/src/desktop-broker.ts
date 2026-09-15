@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentProvider, AgentTurnRequest } from './agent-provider.ts'
 import type { DesktopWorktree } from './desktop-worktree.ts'
+import type { RunnerJobs } from './runner-jobs.ts'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -28,6 +29,7 @@ export interface DesktopReport {
   reservedGiB: number
   agents: number
   actions: number
+  jobs?: RunnerJobs
 }
 
 export function createDesktopBroker(options: { now: () => number, settingsPath?: string }) {

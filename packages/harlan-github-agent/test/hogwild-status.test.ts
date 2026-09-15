@@ -24,6 +24,7 @@ const details: HogwildStatus = {
   load: [0.2, 0.4, 1.02],
   runners: {
     _tag: 'Available',
+    jobs: { _tag: 'Unavailable' },
     budgets: {
       cpu: 20,
       memoryBytes: 24 * 1024 ** 3,

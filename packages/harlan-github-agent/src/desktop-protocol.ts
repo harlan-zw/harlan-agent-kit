@@ -1,6 +1,7 @@
 import type { AgentEvent } from './agent-provider.ts'
 import type { DesktopReport } from './desktop-broker.ts'
 import type { DesktopWorktree } from './desktop-worktree.ts'
+import { parseRunnerJobs } from './runner-jobs.ts'
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -11,7 +12,10 @@ export function parseDesktopReport(value: unknown): DesktopReport {
     || Number(value.memoryGiB) < 1 || Number(value.memoryGiB) > 256) {
     throw new Error('Desktop memory and activity must be whole numbers.')
   }
-  return { memoryGiB: Number(value.memoryGiB), reservedGiB: Number(value.reservedGiB), agents: Number(value.agents), actions: Number(value.actions) }
+  const jobs = record(value.jobs) && value.jobs._tag === 'Available' && Array.isArray(value.jobs.jobs)
+    ? parseRunnerJobs({ updatedAt: 0, runners: value.jobs.jobs.map(job => record(job) ? { activity: 'Running', name: job.runner, repository: job.repository, job } : job) }, 0)
+    : { _tag: 'Unavailable' as const }
+  return { memoryGiB: Number(value.memoryGiB), reservedGiB: Number(value.reservedGiB), agents: Number(value.agents), actions: Number(value.actions), jobs }
 }
 
 export function parseDesktopMemory(value: unknown): number {

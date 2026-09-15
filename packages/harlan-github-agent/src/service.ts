@@ -1213,6 +1213,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const app = createAgentApp({
     desktop,
     hostCapacity: hosts.read,
+    hostTasks: hosts.tasks,
     activityLog,
     store: {
       approveIssue: store.approveIssue,

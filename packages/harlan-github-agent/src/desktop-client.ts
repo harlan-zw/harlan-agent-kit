@@ -11,6 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { readDesktopResponse } from './desktop-protocol.ts'
 import { desktopCommand } from './desktop-worktree.ts'
+import { parseRunnerJobs } from './runner-jobs.ts'
 
 async function main(): Promise<void> {
   const origin = process.env.HARLAN_GITHUB_AGENT_CONTROLLER_URL
@@ -39,11 +40,21 @@ async function main(): Promise<void> {
   async function report(): Promise<boolean> {
     const state = JSON.parse(await desktopCommand(capacity, ['status'], root))
     const entries = Object.values(state.reservations) as Array<{ kind: string }>
+    const statusPath = process.env.HARLAN_DESKTOP_RUNNER_STATUS_FILE ?? join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid!()}`, 'harlan-desktop-github-runner/status.json')
+    const jobs = await readFile(statusPath, 'utf8')
+      .then(text => parseRunnerJobs(JSON.parse(text), Date.now()))
+      .catch((error: unknown) => {
+        // Runner telemetry can disappear during a restart. Report it as unavailable without stopping Agent work.
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+          console.error('GitHub Actions status is unavailable.', error)
+        return { _tag: 'Unavailable' as const }
+      })
     const requested = await api<{ memoryGiB: number | null }>('/api/desktop/report', {
       memoryGiB: state.memoryGiB,
       reservedGiB: state.reservedGiB,
       agents: entries.filter(entry => entry.kind === 'agent').length,
       actions: entries.filter(entry => entry.kind === 'actions').length,
+      jobs,
     })
     if (requested === null)
       throw new Error('Controller returned no desktop memory status.')

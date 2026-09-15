@@ -1469,6 +1469,7 @@ export interface Incident {
 }
 
 export interface DashboardSnapshot {
+  hostTasks?: Array<{ taskId: string | null, host: 'hogwild' | 'desktop' }>
   hostCapacity?: HostCapacity
   desktop?: ReturnType<DesktopBroker['read']>
   generatedAt: string

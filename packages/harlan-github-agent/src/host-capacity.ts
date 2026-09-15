@@ -19,6 +19,7 @@ export function agentHost(capacity: HostCapacity): 'hogwild' | 'desktop' | null 
 
 export interface HostAgentPool {
   read: () => HostCapacity
+  tasks: () => Array<{ taskId: string | null, host: 'hogwild' | 'desktop' }>
   provider: (local: AgentProvider, desktop: AgentProvider) => AgentProvider
 }
 
@@ -35,6 +36,7 @@ export function createHostAgentPool(options: {
   }
   let localActive = 0
   let desktopActive = 0
+  const tasks = new Map<symbol, { taskId: string | null, host: 'hogwild' | 'desktop' }>()
   const read = (): HostCapacity => ({
     localActive,
     localMaximum: options.localMaximum,
@@ -44,6 +46,7 @@ export function createHostAgentPool(options: {
   })
   return {
     read,
+    tasks: () => [...tasks.values()],
     provider: (local, desktop) => ({
       name: local.name,
       runTurn: (request: AgentTurnRequest) => (async function* () {
@@ -69,6 +72,8 @@ export function createHostAgentPool(options: {
           localActive += 1
         else
           desktopActive += 1
+        const turn = Symbol('turn')
+        tasks.set(turn, { taskId: request.taskId ?? null, host })
         try {
           const target = host === 'hogwild' ? local : desktop
           const sessionId = host === 'desktop' ? request.sessionId?.replace(/^desktop:/, '') ?? null : request.sessionId
@@ -79,6 +84,7 @@ export function createHostAgentPool(options: {
           }
         }
         finally {
+          tasks.delete(turn)
           if (host === 'hogwild')
             localActive -= 1
           else

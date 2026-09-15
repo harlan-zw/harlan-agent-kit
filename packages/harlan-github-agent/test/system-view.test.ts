@@ -1,5 +1,6 @@
 import type { ActiveAgent, AgentStartState, Incident, QueueEntry } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
+import { hostTasks } from '../dashboard/app/utils/host-tasks.ts'
 import {
   capacityRow,
   circuitNotice,
@@ -34,6 +35,16 @@ function activeAgent(overrides: Partial<ActiveAgent> = {}): ActiveAgent {
     ...overrides,
   }
 }
+
+it('shows only current host assignments with their Item and progress', () => {
+  const snapshot = dashboardSnapshot({
+    agents: [activeAgent(), activeAgent({ id: 'desktop-task', title: 'Desktop work' })],
+    hostTasks: [{ taskId: 'agent-1', host: 'hogwild' }, { taskId: 'desktop-task', host: 'desktop' }],
+  })
+  expect(hostTasks(snapshot, 'desktop')).toMatchObject([{ title: 'Desktop work', url: 'https://github.com/harlan-zw/nuxt-seo/pull/412', progress: 'Working' }])
+  expect(hostTasks(snapshot, 'hogwild')).toMatchObject([{ title: 'A pull request' }])
+  expect(hostTasks({ ...snapshot, hostTasks: [] }, 'desktop')).toEqual([])
+})
 
 function incident(overrides: Partial<Incident> = {}): Incident {
   return {

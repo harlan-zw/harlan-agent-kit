@@ -49,8 +49,9 @@ function fixture(): DashboardSnapshot {
     mergeState: 'clean',
   })
   return dashboardSnapshot({
-    hostCapacity: { localActive: 2, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopConnected: true },
-    desktop: { connected: true, report: { memoryGiB: 16, reservedGiB: 12, agents: 1, actions: 1 }, requestedMemoryGiB: null },
+    hostCapacity: { localActive: 1, localMaximum: 1, desktopActive: 1, desktopMaximum: 1, desktopConnected: true },
+    hostTasks: [{ taskId: hex('1'), host: 'desktop' }, { taskId: 'run-1', host: 'hogwild' }],
+    desktop: { connected: true, report: { memoryGiB: 16, reservedGiB: 12, agents: 1, actions: 1, jobs: { _tag: 'Available', jobs: [{ runner: 'desktop-1', repository: nuxtSeo, name: 'Build and test sitemap fixtures across supported Nuxt versions', startedAt: Date.now() - 120_000 }] } }, requestedMemoryGiB: null },
     status: 'degraded',
     mutationsEnabled: true,
     serviceUpdate: {
@@ -131,7 +132,7 @@ function fixture(): DashboardSnapshot {
       { id: `${nuxtSeo}:pr-triage`, repository: nuxtSeo, name: 'pr-triage', crons: ['0 9 * * 1-5'], timeZone: 'Australia/Sydney', mode: 'report', enabled: true, specSha: hex('7'), lastRunAt: minutesAgo(600), trackingIssueNumber: 380, updatedAt: minutesAgo(600) },
     ],
     routineRuns: [
-      { id: 'run-1', routineId: `${nuxtSeo}:pr-triage`, repository: nuxtSeo, name: 'pr-triage', scheduledFor: minutesAgo(600), specSha: hex('7'), mode: 'report', state: { _tag: 'Completed', evidence: 'Ranked 6 open pull requests.' }, fence: 1, attempts: 1, progress: { percent: 100, label: 'Done' }, usage: { _tag: 'Unavailable' }, createdAt: minutesAgo(600), updatedAt: minutesAgo(590), candidates: [], activity: [{ _tag: 'Command', at: minutesAgo(598), command: 'gh pr list --state open', output: '6 pull requests', exitCode: 0 }], reportState: 'Published' },
+      { id: 'run-1', routineId: `${nuxtSeo}:pr-triage`, repository: nuxtSeo, name: 'pr-triage', scheduledFor: minutesAgo(600), specSha: hex('7'), mode: 'report', state: { _tag: 'Running', workerId: 'routine-agent', leaseExpiresAt: daysAhead(0.01) }, fence: 1, attempts: 1, progress: { percent: 55, label: 'Reviewing pull requests' }, usage: { _tag: 'Unavailable' }, createdAt: minutesAgo(600), updatedAt: minutesAgo(590), candidates: [], activity: [{ _tag: 'Command', at: minutesAgo(598), command: 'gh pr list --state open', output: '6 pull requests', exitCode: 0 }], reportState: 'Published' },
     ],
     batches: [
       {
