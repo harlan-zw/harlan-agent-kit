@@ -78,7 +78,7 @@ function parseCandidates(input: unknown): Result<RoutineScanResponse, string> {
 }
 
 /** Shared Candidate rules; each built-in definition supplies its own scan instructions. */
-export const candidateRoutine: Omit<RoutineDefinition, 'scanPrompt'> = {
+export const candidateRoutine = {
   schema: CANDIDATE_SCHEMA,
   prepare: () => ok({ _tag: 'Run', feedback: [] }),
   parseResponse: parseCandidates,
@@ -87,7 +87,7 @@ export const candidateRoutine: Omit<RoutineDefinition, 'scanPrompt'> = {
   findingsLabel: 'found',
   issueFingerprint: fingerprint => fingerprint,
   issueWork: { prompt: () => '', verifyChanges: () => ok(undefined) },
-}
+} satisfies Omit<RoutineDefinition, 'scanPrompt'>
 
 export function candidateScanPrompt(input: RoutineScanInput, turn: string, extra = ''): string {
   const remembered = input.priorCandidates

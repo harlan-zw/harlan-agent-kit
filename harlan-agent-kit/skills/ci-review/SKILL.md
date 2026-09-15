@@ -70,6 +70,9 @@ Never fabricate a file edit for an operational action or unavailable evidence.
 
 Return the controller's JSON response with `report` and `candidates`.
 The Markdown report starts with coverage: complete or incomplete for the stated window and scope.
+Keep the report within 20,000 characters, including Markdown. Group repeated diagnostics and keep each disposition concise.
+If every diagnostic disposition cannot fit, mark coverage incomplete and identify the omitted scope.
+Never claim complete coverage after omitting diagnostic dispositions.
 List reviewed run URLs and attempts, unavailable evidence, actionable findings, existing work, and accepted noise.
 Report warnings even when they need no repository change. Explain the disposition of every distinct diagnostic.
 Partial coverage may produce Candidates only where the available evidence independently proves a current defect.
@@ -92,11 +95,14 @@ If existing work owns the fix, return its link and a blocked outcome instead of 
 
 1. Read the failing or warning-producing step and its exact command, environment, and tool versions.
 2. Reproduce the diagnostic locally when possible. Establish whether the baseline already fails.
-3. For a defect, write a failing regression test before the fix, following the unit-tests Skill.
+3. For a defect, write a failing regression test before the fix, following the controller's inlined unit test rules.
 4. Repair the cause in source, dependencies, scripts, or workflow configuration.
-5. Run the affected command and inspect its full output. Confirm the original diagnostic is gone.
-6. Run the repository Check and build, plus focused checks for changed workflow behavior.
+5. Within the controller's check budget, reproduce the diagnostic and inspect the full output.
+6. Run only the scoped checks permitted by the controller. CI owns the full suite, typecheck, and build.
 7. Report the original evidence, changed behavior, verification, and anything only GitHub Actions can prove.
+
+If reproduction needs a command outside the check budget, report that limitation and leave verification to CI.
+Do not load workflow Skills. Use the controller's inlined rules.
 
 Do not suppress warnings broadly, weaken assertions, skip tests, or add `continue-on-error` to obtain green checks.
 Preserve command exit codes when capturing output. Never use a successful formatting command as proof of success.
