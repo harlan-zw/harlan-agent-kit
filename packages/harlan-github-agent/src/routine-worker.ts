@@ -394,7 +394,9 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         `${requested} issues requested`,
       ].join(' | ')
       // Every run writes its line, including the ones that found nothing. A
-      // quiet morning and a stopped scheduler must not read the same.
+      // quiet morning and a stopped scheduler must not read the same. The run's
+      // recorded Candidates travel with the command, so the daily heading and
+      // the issue title derived from it fold them in before publication.
       options.store.stageRoutineReport({
         command: routineReportCommand({
           repository: task.repository,
@@ -402,6 +404,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           routineName: task.name,
           run: { id: task.id, scheduledFor: task.scheduledFor },
           report: { _tag: 'Completed', evidence, ...(detail === '' ? {} : { detail }) },
+          candidates: runCandidates,
         }),
         at: options.now().toISOString(),
       })

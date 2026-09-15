@@ -1,9 +1,11 @@
 import type { AgentEvent } from '../src/agent-provider.ts'
+import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
+import { createRoutineReportController } from '../src/routine-report-controller.ts'
 import { createRoutineScanWorker, routineScanPrompt, selectRoutineCandidates } from '../src/routine-worker.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
@@ -560,6 +562,74 @@ describe('running one scan', () => {
       const result = await workerFor(store, provider).run(claimStoredRun(store), new AbortController().signal)
 
       expect(result._tag).toBe('Err')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('opens a blocked dated issue for a daily run that failed every attempt', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      store.syncRoutines({
+        repository: 'harlan-zw/example',
+        specSha: 'abc123',
+        entries: [{ name: 'daily-checkin', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+        at: '2026-08-27T00:00:00.000Z',
+      })
+      store.openRoutineRun({
+        routineId: 'harlan-zw/example:daily-checkin',
+        scheduledFor: '2026-08-27T07:00:00.000Z',
+        specSha: 'abc123',
+        at: '2026-08-27T07:00:05.000Z',
+      })
+      const task = claimStoredRun(store)
+      const provider = {
+        name: 'codex' as const,
+        runTurn: () => (async function* (): AsyncIterable<AgentEvent> {
+          yield { _tag: 'Message', text: 'I had a look and everything seems fine.' }
+          yield { _tag: 'TurnCompleted' }
+        })(),
+      }
+      const result = await workerFor(store, provider).run(task, new AbortController().signal)
+      expect(result._tag).toBe('Err')
+
+      const outcomes: string[] = []
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const claimed = attempt === 0 ? task : claimStoredRun(store, `2026-08-27T0${7 + attempt}:05:00.000Z`)
+        if (claimed === null)
+          break
+        outcomes.push(store.failRoutineRun({
+          taskId: claimed.id,
+          workerId: claimed.state.workerId,
+          fence: claimed.state.fence,
+          at: `2026-08-27T0${7 + attempt}:06:00.000Z`,
+          reason: 'The scan agent answered with something other than JSON.',
+        }))
+      }
+      expect(outcomes).toEqual(['Retrying', 'Retrying', 'Failed'])
+
+      const calls: { issues: string[], comments: string[] } = { issues: [], comments: [] }
+      const github: GitHubIssuePublisher = {
+        createIssue: async (input) => {
+          calls.issues.push(input.title)
+          return ok({ number: 42, url: 'https://github.com/harlan-zw/example/issues/42' })
+        },
+        createComment: async (input) => {
+          calls.comments.push(input.body)
+          return ok({ id: 900 })
+        },
+        findOpenIssueByFingerprint: async () => ok(null),
+        findRoutineTrackingIssue: async () => ok(null),
+        findIssueCommentByMarker: async () => ok(null),
+      }
+      await createRoutineReportController({ github, now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.issues).toEqual(['[BLOCKED] Daily check-in: 2026-08-27'])
+      expect(calls.comments[0]).toContain('Failed. The scan agent answered with something other than JSON.')
     }
     finally {
       store.close()

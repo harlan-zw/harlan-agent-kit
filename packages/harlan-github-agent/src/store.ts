@@ -116,6 +116,7 @@ import { isIssueTriageState } from './issue-triage.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
+import { routineReportCommand } from './routine-report-controller.ts'
 import { buildStats } from './stats.ts'
 import { cleanLine } from './text.ts'
 import { parseConflictCleanMergeEvidence } from './worktree.ts'
@@ -14006,6 +14007,33 @@ export function openJournalStore(
   }
 
   /**
+   * Stages the failure report a daily check-in owes its dated issue.
+   *
+   * A failed run is exactly when the heartbeat matters most: without a report,
+   * a broken morning reads like a quiet one. The insert rides the settle
+   * transaction, so a crash cannot lose the report once the run is gone, and a
+   * run that staged its own report keeps it. A retrying run stages nothing,
+   * because a later attempt may still report Completed.
+   */
+  const stageRoutineRunFailureReport = (taskId: string, reason: string, at: string): void => {
+    const run = database.prepare(`
+      SELECT routine_runs.scheduled_for, routines.id AS routine_id, routines.repository AS repository, routines.name AS name
+      FROM routine_runs
+      JOIN routines ON routines.id = routine_runs.routine_id
+      WHERE routine_runs.id = ?
+    `).get(taskId) as unknown as { scheduled_for: string, routine_id: string, repository: string, name: string } | undefined
+    if (run === undefined || run.name !== 'daily-checkin')
+      return
+    insertRoutineReportCommand(routineReportCommand({
+      repository: run.repository,
+      routineId: run.routine_id,
+      routineName: 'daily-checkin',
+      run: { id: taskId, scheduledFor: run.scheduled_for },
+      report: { _tag: 'Failed', reason },
+    }), at)
+  }
+
+  /**
    * Records one failed Routine run, retrying it until its attempts run out.
    *
    * A retry returns the run to the queue at the same instant. The unique
@@ -14041,6 +14069,8 @@ export function openJournalStore(
           fence: input.fence,
           at: input.at,
         })
+        if (!retrying)
+          stageRoutineRunFailureReport(input.taskId, input.reason, input.at)
       }
       database.exec('COMMIT')
       if (!changed)
@@ -14318,35 +14348,46 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * Writes one pending report command, once per run.
+   *
+   * The run's identity owns the command, so restaging a report a retry already
+   * staged changes nothing.
+   */
+  const insertRoutineReportCommand = (command: RoutineReportCommand, at: string): boolean => {
+    const inserted = database.prepare(`
+      INSERT INTO routine_report_commands (
+        id, routine_id, run_id, repository, routine_name, body, state_tag, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+      ON CONFLICT (run_id) DO NOTHING
+    `).run(
+      command.id,
+      command.routineId,
+      command.runId,
+      command.repository,
+      command.routineName,
+      command.body,
+      at,
+      at,
+    ).changes === 1
+    if (inserted) {
+      recordDurableCommandEvent(database, {
+        stream: 'routine_report',
+        commandId: command.id,
+        event: 'Staged',
+        from: null,
+        to: 'Pending',
+        at,
+      })
+    }
+    return inserted
+  }
+
   const stageRoutineReport: JournalStore['stageRoutineReport'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
-      const inserted = database.prepare(`
-        INSERT INTO routine_report_commands (
-          id, routine_id, run_id, repository, routine_name, body, state_tag, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
-        ON CONFLICT (run_id) DO NOTHING
-      `).run(
-        input.command.id,
-        input.command.routineId,
-        input.command.runId,
-        input.command.repository,
-        input.command.routineName,
-        input.command.body,
-        input.at,
-        input.at,
-      ).changes === 1
-      if (inserted) {
-        recordDurableCommandEvent(database, {
-          stream: 'routine_report',
-          commandId: input.command.id,
-          event: 'Staged',
-          from: null,
-          to: 'Pending',
-          at: input.at,
-        })
-      }
+      const inserted = insertRoutineReportCommand(input.command, input.at)
       database.exec('COMMIT')
       return inserted
     }
