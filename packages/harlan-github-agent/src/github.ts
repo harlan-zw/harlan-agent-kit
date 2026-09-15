@@ -661,14 +661,14 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
       return octokit.value.paginate(octokit.value.rest.issues.listForRepo, {
         owner,
         repo,
-        state: 'all',
+        state: 'open',
         per_page: 100,
         ...requestOptions,
       })
         .then((rows): Result<{ number: number, url: string } | null, GitHubReadError> => {
           const marker = candidateFingerprintMarker(input.fingerprint)
           const row = rows.find(row =>
-            row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(marker))
+            row.state === 'open' && row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(marker))
           return ok(row === undefined ? null : { number: row.number, url: row.html_url })
         })
         .catch((error: unknown): Result<{ number: number, url: string } | null, GitHubReadError> => {

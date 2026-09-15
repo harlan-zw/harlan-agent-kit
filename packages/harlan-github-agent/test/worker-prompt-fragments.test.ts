@@ -7,7 +7,7 @@ import { batchPlanPrompt } from '../src/batch-worker.ts'
 import { conflictResolutionPrompt } from '../src/conflict-worker.ts'
 import { issueWorkPrompt } from '../src/issue-work-worker.ts'
 import { reviewFixPrompt } from '../src/review-fix-worker.ts'
-import { routineScanPrompt } from '../src/routine-worker.ts'
+import { getRoutine } from '../src/routines/index.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 function issueWorkTask(): ClaimedIssueWorkTask {
@@ -120,7 +120,7 @@ const prompts = {
     writesTests: false,
   },
   routineScan: {
-    build: () => routineScanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' }),
+    build: () => getRoutine('pr-triage').scanPrompt({ mode: 'propose', name: 'pr-triage', priorCandidates: [], repository: 'harlan-zw/example' }),
     checkBudget: null,
     writesTests: false,
   },

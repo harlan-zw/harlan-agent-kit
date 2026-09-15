@@ -2,7 +2,8 @@ import type { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
 import { approvalLabels } from '../src/approval-labels.ts'
 import { BASELINE_REPAIR_MARKER, pullRequestPurpose } from '../src/baseline-repair-state.ts'
-import { createGitHubSource, isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from '../src/github.ts'
+import { candidateFingerprintMarker } from '../src/candidate-issue-controller.ts'
+import { createGitHubIssuePublisher, createGitHubSource, isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from '../src/github.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { ok } from '../src/result.ts'
 import { trackingIssueBody } from '../src/routine-report-controller.ts'
@@ -276,5 +277,27 @@ describe('gitHub subjects', () => {
       labels: ['harlan-agent-baseline-repair'],
       repository: 'harlan-zw/example',
     })).toEqual({ _tag: 'Change' })
+  })
+})
+
+describe('open Candidate issue lookup', () => {
+  it.each([false, true])('ignores closed updates and reuses only an open issue: %s', async (includeOpen) => {
+    const body = candidateFingerprintMarker('dependency-updates')
+    const client = {
+      rest: { issues: { listForRepo: () => undefined } },
+      paginate: async () => [
+        { number: 1, html_url: 'https://github.com/example/issues/1', state: 'closed', body },
+        ...(includeOpen ? [{ number: 2, html_url: 'https://github.com/example/issues/2', state: 'open', body }] : []),
+      ],
+    } as unknown as Octokit
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => client,
+      tokens: {
+        getToken: async () => ok({ token: 'token', expiresAt: '2026-09-16T00:00:00.000Z' }),
+        invalidate: () => undefined,
+      },
+    })
+    expect(await publisher.findOpenIssueByFingerprint({ repository: repositoryMapping(), fingerprint: 'dependency-updates' }))
+      .toEqual(ok(includeOpen ? { number: 2, url: 'https://github.com/example/issues/2' } : null))
   })
 })

@@ -131,6 +131,7 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`pr-triage`](./harlan-agent-kit/skills/pr-triage/SKILL.md) | Repair, rank, and order the owned PR backlog |
 | [`release-notes`](./harlan-agent-kit/skills/release-notes/SKILL.md) | Draft changelogs, release notes, and upgrade guides |
 | [`ripast`](./harlan-agent-kit/skills/ripast/SKILL.md) | Run AST-aware refactors with [Ripast](https://github.com/harlan-zw/ripast) |
+| [`dependency-updates`](./harlan-agent-kit/skills/dependency-updates/SKILL.md) | Attempt weekly dependency updates, including majors, in one pull request |
 | [`sentry-checkin`](./harlan-agent-kit/skills/sentry-checkin/SKILL.md) | Triage open Sentry issues and repair them with verified PRs |
 | [`social-presence`](./harlan-agent-kit/skills/social-presence/SKILL.md) | Plan social content and launch posts |
 | [`take-ownership`](./harlan-agent-kit/skills/take-ownership/SKILL.md) | Own current work through merge, CI, deploy, and smoke checks |

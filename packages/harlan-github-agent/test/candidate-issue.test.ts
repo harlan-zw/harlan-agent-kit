@@ -267,6 +267,54 @@ describe('filing the issues Candidates propose', () => {
     }
   })
 
+  it('reuses one open dependency issue when a different version batch arrives', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const dependencyRoutine = { ...routine, name: 'dependency-updates' as const }
+      store.recordCandidates({
+        routineId: routine.routineId,
+        runId: routine.id,
+        candidates: [{ ...candidate, fingerprint: 'dependency-updates:new-version' }],
+        at: now().toISOString(),
+      })
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), dependencyRoutine),
+        at: now().toISOString(),
+      })
+      let open: { number: number, url: string } | null = null
+      const created: string[] = []
+      const searched: string[] = []
+      const controller = createCandidateIssueController({
+        now,
+        store,
+        workerId: 'controller-1',
+        github: {
+          findOpenIssueByFingerprint: async ({ fingerprint }) => {
+            searched.push(fingerprint)
+            return ok(open)
+          },
+          createIssue: async ({ body }) => {
+            created.push(body)
+            open = { number: 7, url: 'https://github.com/harlan-zw/example/issues/7' }
+            return ok(open)
+          },
+        },
+      })
+      const results = await controller.publishPending(new AbortController().signal)
+      expect(results).toEqual([
+        { _tag: 'Ok', value: { repository: routine.repository, issueNumber: 7 } },
+        { _tag: 'Ok', value: { repository: routine.repository, issueNumber: 7 } },
+      ])
+      expect(created).toHaveLength(1)
+      expect(created[0]).toContain('<!-- candidate-fingerprint: dependency-updates -->')
+      expect(searched).toEqual(['dependency-updates', 'dependency-updates'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('adopts the issue an ambiguous create already filed', async () => {
     const store = openJournalStore(':memory:')
     try {
