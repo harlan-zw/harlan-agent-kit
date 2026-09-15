@@ -57,3 +57,15 @@ describe('built-in Routine contracts', () => {
     expect(getRoutine('pr-triage').issueFingerprint('src/one.ts')).toBe('src/one.ts')
   })
 })
+
+describe('cI review reports', () => {
+  it.each([undefined, '', '  '])('requires evidence even with no findings: %s', (report) => {
+    expect(getRoutine('ci-review').parseResponse({ report, candidates: [] }))
+      .toEqual({ _tag: 'Err', error: 'The CI review Routine answered without its report.' })
+  })
+
+  it('keeps unavailable logs visible without inventing a repair', () => {
+    expect(getRoutine('ci-review').parseResponse({ report: 'Incomplete: logs expired for run 42.', candidates: [] }))
+      .toEqual({ _tag: 'Ok', value: { report: 'Incomplete: logs expired for run 42.', candidates: [] } })
+  })
+})

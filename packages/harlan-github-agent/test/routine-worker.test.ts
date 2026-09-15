@@ -230,6 +230,24 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it('records CI evidence and queues a repair for triage', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const report = 'Run 42 succeeded but emitted a deprecated API warning in the build step.'
+      const result = await workerFor(store, scanning({ report, candidates: [candidate] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(result._tag).toBe('Ok')
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000))
+        .toMatchObject({ routineName: 'ci-review', fingerprint: candidate.fingerprint })
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain(report)
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('publishes one dependency proposal across more than five manifests', async () => {
     const store = openJournalStore(':memory:')
     try {
