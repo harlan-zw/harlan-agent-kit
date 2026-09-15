@@ -1,10 +1,12 @@
 import type { AgentEvent } from '../src/agent-provider.ts'
+import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
+import { createRoutineReportController } from '../src/routine-report-controller.ts'
 import { createRoutineScanWorker } from '../src/routine-worker.ts'
 import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -256,10 +258,18 @@ describe('running one scan', () => {
       store.setRepositoryWritesEnabled('harlan-zw/example', true)
       const diagnostic = 'Final warning: deprecated API. Existing issue #42 owns its repair.'
       const report = `${'x'.repeat(20_000 - diagnostic.length)}${diagnostic}`
+      const task = claimStoredRun(store)
       const result = await workerFor(store, scanning({ report, candidates: [] }))
-        .run(claimStoredRun(store), new AbortController().signal)
+        .run(task, new AbortController().signal)
 
       expect(result._tag).toBe('Ok')
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: now().toISOString(),
+        evidence: result._tag === 'Ok' ? result.value.evidence : '',
+      })
       expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain(report)
     }
     finally {
@@ -273,9 +283,17 @@ describe('running one scan', () => {
       seed(store, 'ci-review')
       store.setRepositoryWritesEnabled('harlan-zw/example', true)
       const report = 'Run 42 succeeded but emitted a deprecated API warning in the build step.'
+      const task = claimStoredRun(store)
       const result = await workerFor(store, scanning({ report, candidates: [candidate] }))
-        .run(claimStoredRun(store), new AbortController().signal)
+        .run(task, new AbortController().signal)
       expect(result._tag).toBe('Ok')
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: now().toISOString(),
+        evidence: result._tag === 'Ok' ? result.value.evidence : '',
+      })
       expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000))
         .toMatchObject({ routineName: 'ci-review', fingerprint: candidate.fingerprint })
       expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain(report)
@@ -296,9 +314,17 @@ describe('running one scan', () => {
         current: '4.0.0',
         latest: '5.0.0',
       }))
+      const task = claimStoredRun(store)
       const result = await workerFor(store, scanning({ outcome: 'complete', report: 'Eight manifests scanned.', updates }))
-        .run(claimStoredRun(store), new AbortController().signal)
+        .run(task, new AbortController().signal)
       expect(result._tag).toBe('Ok')
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: now().toISOString(),
+        evidence: result._tag === 'Ok' ? result.value.evidence : '',
+      })
       const issue = store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)
       expect(issue).toMatchObject({ routineName: 'dependency-updates', body: expect.stringContaining('packages/app7/package.json') })
       expect(store.claimNextCandidateIssue('controller-2', now().toISOString(), 60_000)).toBeNull()
@@ -316,10 +342,18 @@ describe('running one scan', () => {
       store.setRepositoryWritesEnabled('harlan-zw/example', true)
       const detail = '12 Sentry issues. 12 ledger rows. 12 resolved in release abc123. History recorded.'
 
+      const task = claimStoredRun(store)
       const result = await workerFor(store, scanning({ report: detail, candidates: [] }))
-        .run(claimStoredRun(store), new AbortController().signal)
+        .run(task, new AbortController().signal)
 
       expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('0 code proposals') } })
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: now().toISOString(),
+        evidence: result._tag === 'Ok' ? result.value.evidence : '',
+      })
       const report = store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)
       expect(report?.body).toContain('0 code proposals')
       expect(report?.body).toContain(detail)
@@ -464,6 +498,15 @@ describe('running one scan', () => {
       const result = await worker.run(task, new AbortController().signal)
 
       expect(result._tag).toBe('Ok')
+      if (result._tag === 'Ok') {
+        store.completeRoutineRun({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at: now().toISOString(),
+          evidence: result.value.evidence,
+        })
+      }
       const report = store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)
       expect(report?.body).toContain('1 found | 1 new')
       expect(report?.body).toContain('AMBER. One probe failed.')
@@ -659,6 +702,74 @@ describe('running one scan', () => {
       const result = await workerFor(store, provider).run(claimStoredRun(store), new AbortController().signal)
 
       expect(result._tag).toBe('Err')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('opens a blocked dated issue for a daily run that failed every attempt', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      store.syncRoutines({
+        repository: 'harlan-zw/example',
+        specSha: 'abc123',
+        entries: [{ name: 'daily-checkin', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+        at: '2026-08-27T00:00:00.000Z',
+      })
+      store.openRoutineRun({
+        routineId: 'harlan-zw/example:daily-checkin',
+        scheduledFor: '2026-08-27T07:00:00.000Z',
+        specSha: 'abc123',
+        at: '2026-08-27T07:00:05.000Z',
+      })
+      const task = claimStoredRun(store)
+      const provider = {
+        name: 'codex' as const,
+        runTurn: () => (async function* (): AsyncIterable<AgentEvent> {
+          yield { _tag: 'Message', text: 'I had a look and everything seems fine.' }
+          yield { _tag: 'TurnCompleted' }
+        })(),
+      }
+      const result = await workerFor(store, provider).run(task, new AbortController().signal)
+      expect(result._tag).toBe('Err')
+
+      const outcomes: string[] = []
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const claimed = attempt === 0 ? task : claimStoredRun(store, `2026-08-27T0${7 + attempt}:05:00.000Z`)
+        if (claimed === null)
+          break
+        outcomes.push(store.failRoutineRun({
+          taskId: claimed.id,
+          workerId: claimed.state.workerId,
+          fence: claimed.state.fence,
+          at: `2026-08-27T0${7 + attempt}:06:00.000Z`,
+          reason: 'The scan agent answered with something other than JSON.',
+        }))
+      }
+      expect(outcomes).toEqual(['Retrying', 'Retrying', 'Failed'])
+
+      const calls: { issues: string[], comments: string[] } = { issues: [], comments: [] }
+      const github: GitHubIssuePublisher = {
+        createIssue: async (input) => {
+          calls.issues.push(input.title)
+          return ok({ number: 42, url: 'https://github.com/harlan-zw/example/issues/42' })
+        },
+        createComment: async (input) => {
+          calls.comments.push(input.body)
+          return ok({ id: 900 })
+        },
+        findOpenIssueByFingerprint: async () => ok(null),
+        findRoutineTrackingIssue: async () => ok(null),
+        findIssueCommentByMarker: async () => ok(null),
+      }
+      await createRoutineReportController({ github, now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.issues).toEqual(['[BLOCKED] Daily check-in: 2026-08-27'])
+      expect(calls.comments[0]).toContain('Failed. The scan agent answered with something other than JSON.')
     }
     finally {
       store.close()

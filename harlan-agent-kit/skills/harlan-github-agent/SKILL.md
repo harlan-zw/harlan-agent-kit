@@ -95,6 +95,12 @@ For daily check-ins, apply [daily-checkin](../daily-checkin/SKILL.md). It owns c
 
 A `daily-checkin` Routine runs the central daily-checkin Skill against the site's `@harlan-zw/nuxt-checkin` module. Sites declare checks and prompt items in module configuration. They do not need `.claude/skills/daily-checkin/SKILL.md`. Credentials remain in the repository environment or private credential files.
 
+Each `daily-checkin` run opens a separate issue, including clear, failed, and skipped runs.
+Use `[CLEAR]`, `[ACTION NEEDED]`, or `[BLOCKED]` before `Daily check-in: YYYY-MM-DD`, using the scheduled UTC date.
+Retries find the same run by its marker, including closed issues. Other Routines keep their shared tracking issue.
+Link existing issues for ongoing actions. Update the title status when findings change.
+Close the daily issue when its actions are resolved or tracked in linked issues.
+
 Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
 Every command prints one JSON value. A tagged JSON error exits with status 1.
 

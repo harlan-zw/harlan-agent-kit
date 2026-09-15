@@ -273,6 +273,18 @@ describe('journal store', () => {
     })
     if (run === null)
       throw new Error('Expected a Routine run.')
+    {
+      const task = store.claimNextRoutineRun('scanner', '2026-08-28T21:00:00.500Z', 45 * 60_000)
+      if (task === null || task.id !== run.id)
+        throw new Error('Expected a queued Routine run.')
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: '2026-08-28T21:00:01.000Z',
+        evidence: 'No open Sentry issues.',
+      })
+    }
 
     expect(store.getDashboardSnapshot('2026-08-28T21:00:01.000Z').routineRuns[0]?.reportState).toBeNull()
 
@@ -357,6 +369,18 @@ describe('journal store', () => {
     })
     if (run === null)
       throw new Error('Expected a Routine run.')
+    {
+      const task = store.claimNextRoutineRun('scanner', '2026-08-28T07:00:00.500Z', 45 * 60_000)
+      if (task === null || task.id !== run.id)
+        throw new Error('Expected a queued Routine run.')
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: '2026-08-28T07:00:01.000Z',
+        evidence: 'No open Sentry issues.',
+      })
+    }
     store.stageRoutineReport({
       command: routineReportCommand({
         repository: routine.repository,

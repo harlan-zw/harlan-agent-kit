@@ -35,6 +35,11 @@ export function isRoutineTrackingIssue(input: {
   body: string | null | undefined
   labels: readonly string[]
 }): boolean {
+  if (input.labels.includes('routine:daily-checkin')) {
+    const runId = input.body?.match(/^<!-- routine-run: (.+) -->\n/)?.[1]
+    if (runId?.startsWith(`${input.repository}:daily-checkin:`) && input.body === dailyCheckinIssueBody(runId))
+      return true
+  }
   const prefix = 'routine:'
   return input.labels.some((label) => {
     if (!label.toLowerCase().startsWith(prefix))
@@ -44,6 +49,53 @@ export function isRoutineTrackingIssue(input: {
       && input.title.toLowerCase() === `${routineName}: run log for ${input.repository}`.toLowerCase()
       && input.body === trackingIssueBodyText(routineName)
   })
+}
+
+/**
+ * One status for both the issue title and the comment heading.
+ *
+ * Only the run's own report decides it. The run's Candidates fold in later,
+ * when the report is claimed, because a retry can record Candidates after the
+ * report was staged.
+ */
+function dailyCheckinStatus(report: RoutineRunReport): 'CLEAR' | 'ACTION NEEDED' | 'BLOCKED' {
+  if (report._tag !== 'Completed')
+    return 'BLOCKED'
+  const verdict = (report.detail || report.evidence).trim().split('\n')[0] ?? ''
+  if (/\b(?:incomplete|partial|unknown|blocked)\b/i.test(verdict))
+    return 'BLOCKED'
+  const status = verdict.replace(/^[^a-z]+/i, '').match(/^(GREEN|AMBER|RED|CLEAR|ACTION NEEDED|BLOCKED)\b/i)?.[1]?.toUpperCase()
+  return status === 'GREEN' || status === 'CLEAR'
+    ? 'CLEAR'
+    : status === 'AMBER' || status === 'RED' || status === 'ACTION NEEDED' ? 'ACTION NEEDED' : 'BLOCKED'
+}
+
+const CLEAR_DAILY_HEADING = /^# \[CLEAR\] (Daily check-in: \d{4}-\d{2}-\d{2})$/m
+
+/**
+ * Refolds the run's current Candidates into the staged daily heading.
+ *
+ * The heading is derived when the report is staged, but a retried run can
+ * record Candidates after that stage, and its re-stage is a no-op on the run's
+ * identity. Claiming refolds the run's Candidates in, so the issue title and
+ * the comment body, which both come from this claimed body, read the same
+ * status as the proposal block the comment lists: a clear morning with open
+ * proposals reads as ACTION NEEDED everywhere.
+ */
+export function foldCandidatesIntoDailyHeading(body: string, candidates: readonly Candidate[]): string {
+  if (candidates.length === 0)
+    return body
+  return body.replace(CLEAR_DAILY_HEADING, '# [ACTION NEEDED] $1')
+}
+
+function dailyCheckinIssueBody(runId: string): string {
+  return `${routineRunMarker(runId)}
+One daily check-in. The report follows in a comment.
+
+Link existing issues for ongoing work. Update the title status when the findings change.
+Close this issue when its actions are resolved or tracked in linked issues.
+
+> Harlan Agent Kit wrote this automated report.`
 }
 
 /** What one finished run did, in the words the log records. */
@@ -83,7 +135,7 @@ export function routineReportBody(run: Pick<RoutineRun, 'scheduledFor'>, report:
   return `**${run.scheduledFor}** — ${headline}${detail}${candidateDetails(candidates)}`
 }
 
-/** One report request for one finished run. */
+/** Builds the report command one finished run owes its log. */
 export function routineReportCommand(input: {
   repository: string
   routineId: string
@@ -97,7 +149,9 @@ export function routineReportCommand(input: {
     runId: input.run.id,
     repository: input.repository,
     routineName: input.routineName,
-    body: `${routineRunMarker(input.run.id)}\n${routineReportBody(input.run, input.report)}`,
+    body: `${routineRunMarker(input.run.id)}\n${input.routineName === 'daily-checkin'
+      ? `# [${dailyCheckinStatus(input.report)}] Daily check-in: ${input.run.scheduledFor.slice(0, 10)}\n\n`
+      : ''}${routineReportBody(input.run, input.report)}`,
   }
 }
 
@@ -154,11 +208,13 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           results.push(err(`${command.repository}: ${message}`))
         }
 
-        let issueNumber = command.trackingIssueNumber
+        const daily = command.routineName === 'daily-checkin'
+        let issueNumber = daily ? null : command.trackingIssueNumber
         if (issueNumber === null) {
           const existing = await options.github.findRoutineTrackingIssue({
             repository: command.repositoryMapping,
             routineName: command.routineName,
+            ...(daily ? { runId: command.runId } : {}),
           }, signal)
           if (existing._tag === 'Err') {
             fail(existing.error.message)
@@ -170,8 +226,13 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           else {
             const created = await options.github.createIssue({
               repository: command.repositoryMapping,
-              title: trackingIssueTitle(command.routineName, command.repository),
-              body: trackingIssueBody(command.routineName),
+              // The staged heading already folds the run's Candidates in, so
+              // the title reads the very status the comment heading carries.
+              title: daily
+                ? (command.body.match(/^# (\[(?:CLEAR|ACTION NEEDED|BLOCKED)\] Daily check-in: \d{4}-\d{2}-\d{2})$/m)?.[1]
+                  ?? `[BLOCKED] Daily check-in: ${command.runId.slice(-24, -14)}`)
+                : trackingIssueTitle(command.routineName, command.repository),
+              body: daily ? dailyCheckinIssueBody(command.runId) : trackingIssueBody(command.routineName),
               labels: [routineIssueLabel(command.routineName)],
             }, signal)
             if (created._tag === 'Err') {
