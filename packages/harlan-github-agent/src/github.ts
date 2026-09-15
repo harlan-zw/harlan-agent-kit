@@ -12,6 +12,7 @@ import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.t
 import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
+import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
@@ -280,12 +281,14 @@ async function mapConcurrent<Input, Output>(
 }
 
 export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
+  const responseCache = createGitHubResponseCache()
   const client = async (repository: string, signal?: AbortSignal): Promise<Result<Octokit, GitHubReadError>> => {
     const token = await options.tokens.getToken(repository, 'read', signal)
     if (token._tag === 'Err')
       return err(token.error)
     return ok(options.createClient?.(token.value.token) ?? createAuthenticatedClient({
       access: 'read',
+      responseCache,
       repository,
       signal,
       token: token.value.token,
@@ -662,14 +665,14 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
       return octokit.value.paginate(octokit.value.rest.issues.listForRepo, {
         owner,
         repo,
-        state: 'all',
+        state: 'open',
         per_page: 100,
         ...requestOptions,
       })
         .then((rows): Result<{ number: number, url: string } | null, GitHubReadError> => {
           const marker = candidateFingerprintMarker(input.fingerprint)
           const row = rows.find(row =>
-            row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(marker))
+            row.state === 'open' && row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(marker))
           return ok(row === undefined ? null : { number: row.number, url: row.html_url })
         })
         .catch((error: unknown): Result<{ number: number, url: string } | null, GitHubReadError> => {

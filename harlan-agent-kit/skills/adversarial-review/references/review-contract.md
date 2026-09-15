@@ -174,6 +174,33 @@ gh api --method PATCH "repos/$repo/issues/comments/$comment_id" --input payload.
 
 Build `payload.json` from the final body with `jq`; do not interpolate JSON manually. Never modify another author's marked comment.
 
+## Review outcome labels
+
+A terminal status needs both its confirmed comment and one matching Review outcome label.
+Apply this contract during standalone reviews and when reusing a trusted terminal comment.
+For controller-dispatched Review, the controller owns publication. Its Agents must never write GitHub comments or labels.
+The controller requires stored Review evidence for the current Revision before publishing. A trusted comment alone cannot replace that evidence.
+
+| Outcome | Label | Color |
+| --- | --- | --- |
+| `READY` | `harlan-agent-ready` | `0e8a16` |
+| `PENDING` | `harlan-agent-pending` | `fbca04` |
+| `BLOCKED` | `harlan-agent-blocked` | `d73a4a` |
+
+1. Establish mutation authority before writing labels. If authority is missing, report incomplete publication.
+2. Refetch the pull request before writing. Require an open pull request whose head matches the comment's reviewed SHA.
+3. If the head changed, restart Review. Never apply the previous outcome to the new head.
+4. If the repository lacks the matching label, create it with the listed color. Surface creation failures.
+5. Add the matching label. Remove the other Review outcome labels, `harlan-agent-running`, `harlan-agent-review-required`, and `harlan-agent-review-skipped`.
+6. Preserve all other labels, including `harlan-agent-review` and `harlan-agent-auto-merge`. Review publication never grants merge authority.
+7. Refetch the pull request and comment. Confirm the head, open state, comment outcome, and matching label. Confirm the conflicting labels are absent.
+
+If confirmation finds a changed head or closed pull request, remove the outcome label this publication added. Report any cleanup failure.
+If the head changed, restart from Snapshot. If the pull request closed, stop Review.
+If a write fails on the same head, retain the confirmed comment and retry label publication alone.
+Do not rerun Review or create another comment to repair a missing label.
+Return completion only after both the comment and labels pass confirmation.
+
 ## Local journal
 
 When `harlan-github-agent` dispatches Review, record one immutable Review run against the exact Revision.

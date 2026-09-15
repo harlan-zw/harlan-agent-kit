@@ -91,7 +91,9 @@ harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config
 
 `routine-run` opens one Routine run for the current minute, ahead of its cron.
 
-A `daily-checkin` Routine runs the repository's own `.claude/skills/daily-checkin/SKILL.md`. Its data script reads Cloudflare, Sentry, and the `nuxtseo` CLI with tokens from the environment. Put `CLOUDFLARE_API_TOKEN` and `NUXTSEO_TOKEN` in that repository's `.env`, list the file in `scripts/repository-env-files`, and run `pnpm service:hogwild:sync-env`. Worktrunk seeds the file into every agent worktree, and the Agent turn loads it. The `nuxtseo` CLI is installed at `~/.local/bin/nuxtseo` on Hogwild.
+For daily check-ins, apply [daily-checkin](../daily-checkin/SKILL.md). It owns collection, interpretation, storage, and reporting.
+
+A `daily-checkin` Routine runs the central daily-checkin Skill against the site's `@harlan-zw/nuxt-checkin` module. Sites declare checks and prompt items in module configuration. They do not need `.claude/skills/daily-checkin/SKILL.md`. Credentials remain in the repository environment or private credential files.
 
 Each `daily-checkin` run opens a separate issue, including clear, failed, and skipped runs.
 Use `[CLEAR]`, `[ACTION NEEDED]`, or `[BLOCKED]` before `Daily check-in: YYYY-MM-DD`, using the scheduled UTC date.

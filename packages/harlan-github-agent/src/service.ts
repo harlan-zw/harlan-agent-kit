@@ -899,25 +899,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             recordPassIncidents('poll_pass', passDefects)
           },
         })
-      const results = !config.triggers.includes('github')
-        ? []
-        : await guarded('Repository reconciliation', () => reconcileAllRepositories(config.repositories.filter(repository => repository.pollIntervalSeconds === undefined), {
-            ...(mutationSchedulers === undefined
-              ? {}
-              : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge, refreshReviewGates: refreshRepositoryReviewGates }),
-            github,
-            store,
-            now,
-            signal,
-          }), [])
-      if (signal.aborted)
-        return
-      results.forEach((result) => {
-        if (result._tag === 'Ok')
-          options.logger.info(`${result.value.repository}: observed ${result.value.subjects} open pull requests and issues.`)
-        else
-          options.logger.error(`${result.error.repository}: ${result.error.message}`)
-      })
       // A Failed Task recovers on every pass, not only at start. Waiting for a
       // restart is what kept a transient GitHub reject holding a review down
       // for a whole day.
@@ -1126,22 +1107,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         })
         recordPassIncidents('queue_position_comment', positions.flatMap(result => result._tag === 'Err' ? [result.error] : []))
       }
-      // Only a pass where nothing succeeded describes an outage. Throwing for a
-      // partial failure backed the poller off to its 15 minute ceiling and held
-      // every healthy repository there, because one repository always failed.
-      const failed = results.filter(result => result._tag === 'Err').length
-      if (failed > 0 && failed === results.length)
-        throw new Error(`Every repository reconciliation failed (${failed}).`)
-      if (failed > 0)
-        options.logger.info(`${failed} of ${results.length} repositories failed this pass. The rest reconciled.`)
     },
     onError: error => options.logger.error(error),
   })
-  const repositoryPollers = config.repositories
-    .filter(repository => repository.enabled && repository.pollIntervalSeconds !== undefined)
-    .map(repository => createPoller({
-      intervalMilliseconds: repository.pollIntervalSeconds! * 1_000,
-      timeoutMilliseconds: 60_000,
+  // Timer and webhook reads share one poller per repository, so they cannot overlap.
+  // Each repository backs off independently when its reads fail.
+  const repositoryPollers = new Map(config.repositories
+    .filter(repository => repository.enabled && config.triggers.includes('github'))
+    .map(repository => [repository.github.toLowerCase(), createPoller({
+      intervalMilliseconds: (repository.pollIntervalSeconds ?? config.pollIntervalSeconds) * 1_000,
+      timeoutMilliseconds: repository.pollIntervalSeconds === undefined
+        ? Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000)
+        : 60_000,
       poll: async (signal) => {
         const results = await reconcileAllRepositories([repository], {
           ...(mutationSchedulers === undefined
@@ -1159,7 +1136,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }
       },
       onError: error => options.logger.error(error),
-    }))
+    })] as const))
   const externalPoller = createPoller({
     intervalMilliseconds: 5 * 60_000,
     poll: async (signal) => {
@@ -1284,13 +1261,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   restartController.start()
   options.serviceUpdate.start()
   capacity.start()
-  // A delivery says "read GitHub again", never what changed. Reconciliation
-  // stays the only writer, so a missed, duplicated, or forged delivery can at
-  // worst ask for a pass the poller would have run anyway.
+  // Webhooks refresh only their repository. Timers still recover missed deliveries.
+  // Global maintenance and Routine reads keep their own timer.
   const reconcileHint = createReconcileHint({
     onError: error => options.logger.error(error),
-    run: async () => {
-      await Promise.all([poller.runNow(), ...repositoryPollers.map(repositoryPoller => repositoryPoller.runNow())])
+    run: async (repositories) => {
+      await Promise.all(repositories.map(repository => repositoryPollers.get(repository)?.runNow()))
     },
   })
   const webhookServer = config.webhook._tag === 'Disabled' || options.webhookSecret === undefined
@@ -1299,7 +1275,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         app: createWebhookApp({
           allowedOwners: config.github.allowedOwners,
           logger: { info: message => options.logger.info(message) },
-          onHint: () => reconcileHint.hint(),
+          onHint: (repository) => {
+            const name = repository.toLowerCase()
+            if (repositoryPollers.has(name))
+              reconcileHint.hint(name)
+          },
           packageRelease: {
             allowedAuthor: userLogin,
             actorLogin: (name) => {
@@ -1393,7 +1373,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         reconcileHint.stop(),
         poller.stop(),
         externalPoller.stop(),
-        ...repositoryPollers.map(repositoryPoller => repositoryPoller.stop()),
+        ...[...repositoryPollers.values()].map(repositoryPoller => repositoryPoller.stop()),
         worktreeSweeper.stop(),
         ...(mutationSchedulers?.tasks.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.baselineRepairs.map(scheduler => scheduler.stop()) ?? []),

@@ -3,6 +3,7 @@ import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { PackageReleaseConfig } from './package-release.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
+import type { RoutineName } from './routines/index.ts'
 
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
 
@@ -651,7 +652,7 @@ export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair'
  * A repository spec selects from this list and never extends it, so a pull
  * request can change a schedule and can never name new work.
  */
-export type RoutineName = 'sentry-checkin' | 'pr-triage' | 'agent-feedback' | 'daily-checkin'
+export type { RoutineName } from './routines/index.ts'
 
 /**
  * What a Routine run does with what it finds.

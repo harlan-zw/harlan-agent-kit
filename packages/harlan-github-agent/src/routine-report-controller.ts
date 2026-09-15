@@ -4,6 +4,7 @@ import type { JournalStore } from './store.ts'
 import type { Candidate, RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
 import { routineIssueLabel } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
+import { MAXIMUM_REPORT_DETAIL_LENGTH } from './routines/contract.ts'
 
 /** The issue every run of one Routine reports to. */
 export function trackingIssueTitle(name: RoutineName, repository: string): string {
@@ -96,8 +97,6 @@ Close this issue when its actions are resolved or tracked in linked issues.
 
 > Harlan Agent Kit wrote this automated report.`
 }
-
-const MAXIMUM_REPORT_DETAIL_LENGTH = 20_000
 
 /** What one finished run did, in the words the log records. */
 export type RoutineRunReport

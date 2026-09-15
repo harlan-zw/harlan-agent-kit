@@ -1,19 +1,11 @@
 import type { Result } from './result.ts'
-import type { RoutineMode, RoutineName, RoutineSpec, RoutineSpecEntry } from './types.ts'
+import type { RoutineMode, RoutineSpec, RoutineSpecEntry } from './types.ts'
 import { parse as parseYaml } from 'yaml'
 import { err, ok } from './result.ts'
+import { ROUTINE_NAMES } from './routines/index.ts'
 
 /** Where every repository declares its own Routine schedule. */
 export const ROUTINE_SPEC_PATH = '.github/routines.yml'
-
-/**
- * Every Routine the service knows how to run.
- *
- * A repository spec selects from this list and never extends it. The spec is
- * source code, so a pull request can change it, and a name it could invent
- * would be a name it could point at anything.
- */
-export const ROUTINE_NAMES = ['sentry-checkin', 'pr-triage', 'agent-feedback', 'daily-checkin'] as const satisfies readonly RoutineName[]
 
 export const ROUTINE_MODES = ['report', 'propose'] as const satisfies readonly RoutineMode[]
 
