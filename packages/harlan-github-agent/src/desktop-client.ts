@@ -9,6 +9,7 @@ import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { readDesktopResponse } from './desktop-protocol.ts'
 import { desktopCommand } from './desktop-worktree.ts'
 
 async function main(): Promise<void> {
@@ -23,7 +24,7 @@ async function main(): Promise<void> {
   process.once('SIGTERM', () => shutdown.abort())
   process.once('SIGINT', () => shutdown.abort())
 
-  async function api<T>(path: string, body: unknown): Promise<T> {
+  async function api<T>(path: string, body: unknown): Promise<T | null> {
     const response = await fetch(`${origin}${path}`, {
       method: 'POST',
       headers: { 'authorization': `Basic ${Buffer.from(`agent:${password}`).toString('base64')}`, 'origin': origin!, 'content-type': 'application/json' },
@@ -32,7 +33,7 @@ async function main(): Promise<void> {
     })
     if (!response.ok)
       throw new Error(`Controller request failed with status ${response.status}.`)
-    return await response.json() as T
+    return await readDesktopResponse(response) as T | null
   }
 
   async function report(): Promise<boolean> {
@@ -44,6 +45,8 @@ async function main(): Promise<void> {
       agents: entries.filter(entry => entry.kind === 'agent').length,
       actions: entries.filter(entry => entry.kind === 'actions').length,
     })
+    if (requested === null)
+      throw new Error('Controller returned no desktop memory status.')
     if (requested.memoryGiB !== null)
       await desktopCommand(capacity, ['set', String(requested.memoryGiB)], root)
     return state.memoryGiB - state.reservedGiB >= 8
@@ -80,7 +83,7 @@ async function main(): Promise<void> {
         try {
           await report()
           const state = await api<{ active: boolean }>('/api/desktop/heartbeat', { id: turn.id })
-          if (!state.active) {
+          if (!state?.active) {
             stop()
             return
           }
@@ -103,7 +106,7 @@ async function main(): Promise<void> {
         if (typeof event === 'object' && event !== null && '_tag' in event && event._tag === 'AtCapacity')
           continue
         const answer = await api<{ accepted: boolean }>('/api/desktop/events', { id: turn.id, events: [event] })
-        if (!answer.accepted)
+        if (!answer?.accepted)
           stop()
       }
       const code = await completion

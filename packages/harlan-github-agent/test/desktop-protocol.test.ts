@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from '../src/desktop-protocol.ts'
+import { parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree, readDesktopResponse } from '../src/desktop-protocol.ts'
 
 describe('desktop boundaries', () => {
   it('accepts a whole memory limit and refuses malformed settings', () => {
@@ -16,4 +16,10 @@ describe('desktop boundaries', () => {
     expect(() => parseDesktopEvents([{ _tag: 'Progress', text: 'bad', percent: 999 }])).toThrow()
     expect(() => parseDesktopWorktree({ head: 'a'.repeat(40), origin: '/tmp/repo', bundle: '', patch: '', files: [] })).toThrow()
   })
+})
+
+it('treats a no-content desktop claim as an empty Queue', async () => {
+  await expect(readDesktopResponse(new Response(null, { status: 204 }))).resolves.toBeNull()
+  await expect(readDesktopResponse(Response.json({ id: 'next-turn' }))).resolves.toEqual({ id: 'next-turn' })
+  await expect(readDesktopResponse(new Response('invalid JSON'))).rejects.toThrow()
 })

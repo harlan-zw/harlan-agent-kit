@@ -76,3 +76,8 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
     throw new Error('Desktop event is unsupported.')
   })
 }
+
+/** Decode controller responses before consumers handle an empty Queue. */
+export async function readDesktopResponse(response: Response): Promise<unknown> {
+  return response.status === 204 ? null : await response.json()
+}
