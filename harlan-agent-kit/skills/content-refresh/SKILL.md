@@ -53,6 +53,9 @@ Discover its current name and interface; older projects may call it nuxt-seo-pro
 Record the exact Site, locale, evidence dates, and missing data.
 Do not invent keyword volume, competition, or demand when access is missing.
 Respect the user's allowance for paid research. Continue source verification without it.
+If research tooling fails, record the command, version, error, and unavailable evidence.
+Try a documented fallback once when it preserves authorization and cost boundaries.
+If it still fails, continue primary-source work. Do not turn the refresh into an unrelated platform repair.
 
 Map each article to definitive sources and its reader question.
 Flag fresh features from dated primary announcements, then check current documentation and availability.
@@ -67,7 +70,8 @@ Prepare its brief, independently review it, write it, then review the rendered a
 Use the accepted pilot's reasoning and progressive complexity, without imposing identical headings on every article.
 If the user already accepted a pilot, reuse it. Ask only for unresolved editorial choices.
 
-Delegate with at most four active agents, including the coordinator, or the user's lower limit.
+Delegate with at most four active agents across the entire task tree, or the user's lower limit.
+Count ancestors, the coordinator, and every nested child. Allocate remaining slots before a child delegates.
 Use a brief reviewer, a writer, and an independent article reviewer when slots permit.
 Reuse idle agents. Never let a writer approve their own article.
 With fewer slots, serialize these roles. If delegation is unavailable, report the missing independent review.
@@ -107,6 +111,16 @@ Check representative desktop/mobile pages, native figures, image loading, and re
 Confirm unpublished records remain absent from public outputs.
 A successful build or merge does not prove publication. Verify the deployed revision and live pages.
 Record untested authenticated paths without implying they passed.
+
+## Dogfood feedback
+
+When asked to exercise or improve this Skill, keep a small papercut log alongside the task report.
+Record the Skill revision and section, triggering task, observed friction, workaround, and proposed smallest correction.
+Separate a missing instruction from repository defects, tool outages, and missing account access.
+Send issues to the supervising agent as they occur. Do not silently change instructions during a worker's assignment.
+The supervisor reviews fixes and tells workers which revised instruction applies.
+Continue independent content work while a Skill correction is reviewed.
+Do not expand into unrelated service repairs or invent friction to justify more instructions.
 
 ## Handoff
 

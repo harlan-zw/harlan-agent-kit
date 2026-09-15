@@ -29,12 +29,17 @@ Return concrete changes with a reason and the evidence needed to resolve them.
 The writer follows the reviewed brief and updates evidence when new questions arise.
 If a claim cannot be supported, narrow it or return it to review.
 The writer checks examples and renders their article before handoff.
+Choose checks for the behavior the example claims, not only its syntax.
+A sequential loop is not multipart batching; a local counter does not enforce shared daily quota.
+Record what syntax checks, mocked responses, and live calls each establish.
 
 The article reviewer checks facts against sources, not against the writer's assertion of accuracy.
 Check progressive complexity, glossary terms, qualifications, attribution, and useful product mentions.
 Confirm humanization did not add certainty, personal experience, or remove a material caveat.
 Read captions and numbered steps against actual images.
 Verify every factual table cell, code example, route, and fragment introduced by the article.
+Include claims repeated in descriptions, FAQs, related-page labels, and structured data.
+A corrected paragraph does not repair contradictory metadata or hidden FAQ copy.
 
 The coordinator inspects the submitted evidence and final revision.
 Approve or return specific findings before the worker closes the assignment.

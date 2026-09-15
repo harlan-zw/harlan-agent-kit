@@ -22,6 +22,7 @@ Open full sources. Search snippets, existing copy, domain reputation, and a high
 Cite the final supporting page beside the claim, not a homepage or discovery query.
 Respect quotation limits; prefer precise paraphrases.
 When sources conflict, record both dates and scopes. Narrow or defer the claim if conflict remains.
+Check protocol literals against the applicable reference or schema; examples can contain stale names.
 
 ## VERIFIED-CLAIMS.md
 
@@ -34,7 +35,8 @@ Use one row per reusable claim:
 Statuses: Documented, Observed, Unresolved, Withdrawn.
 Retain equivalent statuses already used by the project; do not flatten their distinctions.
 Record evidence kind separately: official documentation, external study, implementation inspection, live observation, or synthetic example.
-Implementation inspection establishes what code says. Mocked tests do not establish a live integration result.
+Trace executable behavior and its callers. A code comment does not establish upstream behavior or a product guarantee.
+Implementation inspection establishes what code does within that scope. Mocked tests do not establish a live integration result.
 External studies establish their authors' measured findings within their sample, not our own observations.
 Keep withdrawn claims with their reason, date, replacement, and affected articles so they cannot silently return.
 Documented requires an inspected primary source. Observed requires saved inspection evidence.
@@ -84,8 +86,12 @@ Preserve historical observations with their dates. New evidence gets a new check
 
 ## Comparisons
 
+First check whether the vendor still operates the service being compared.
+If it has closed, preserve useful existing URLs and explain the supported replacement task without inventing closure details.
 Check each vendor's current official feature and pricing pages.
+Compare the actual mechanism before assigning Yes/No labels; opening another tool differs from performing its action.
 Record plan, currency, billing interval, trial conditions, and check date when mentioning price.
+If terms remain ambiguous, omit the number and link current pricing. Do not guess currency from a dollar sign.
 Verify the target product against its implementation and observed behavior.
 Distinguish shipped, planned, unavailable, and unverified capabilities.
 Do not turn a missing vendor page into a claim that a feature does not exist.
