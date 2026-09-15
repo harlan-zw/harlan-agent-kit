@@ -61,6 +61,22 @@ Read expected deployment identity independently from deployment metadata or comp
 Never use the endpoint under test as its own expected identity or assume local HEAD was deployed.
 If that independent evidence is unavailable, preserve incomplete coverage.
 
+## Sentry
+
+When the site configures Sentry checks, use the shared `nuxt-sentry` integration's results.
+The module owns collection, pagination, and coverage. Sites need no prompt for generic Sentry triage.
+
+- Read every unresolved issue ID. Incomplete coverage cannot establish an empty or healthy backlog.
+- Compare issue IDs with prior complete reports. Keep persistent issues visible.
+- Read and privately archive issue details needed to identify the culprit, impact, recurrence, and permalink.
+- Inspect release, URL, browser, affected users, and event times before classifying a finding.
+- Use the shared `sentry-checkin` Skill's triage and repair criteria. Preserve the site's configured expected-error policy.
+- Give every unresolved issue a disposition. Link existing work before proposing a repair.
+- Require fresh evidence after a verified deployment before reporting recovery. Counts alone never prove resolution.
+- Keep this check-in read only. Return repository repairs as Candidates and Sentry mutations as proposed operator actions.
+
+Site prompts add only specific policies, quotas, monitors, and correlations with other site evidence.
+
 ## Report
 
 Write a private Markdown report beside this run's JSON archive, using the same filename stem.
