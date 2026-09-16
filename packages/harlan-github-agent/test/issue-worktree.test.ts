@@ -276,4 +276,23 @@ describe('issue worktree diagram input', () => {
     expect(verified).toEqual({ _tag: 'Ok', value: expect.objectContaining({ changedPaths: ['file.ts'] }) })
     expect(readFileSync(join(prepared.value.path, '.pr-lens', 'graph.json'), 'utf8')).toBe('{}')
   })
+
+  it('stages the change when the repository ignores the graph document', async () => {
+    const { checkout, manager, task } = fixture()
+    writeFileSync(join(checkout, '.gitignore'), '.pr-lens\n')
+    git(checkout, 'add', '.gitignore')
+    git(checkout, 'commit', '-m', 'chore: ignore the graph document')
+    git(checkout, 'push', 'origin', 'main')
+    const prepared = await manager.prepare(task, defaultBranch, new AbortController().signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    writeFileSync(join(prepared.value.path, 'file.ts'), 'export const value = 2\n')
+    mkdirSync(join(prepared.value.path, '.pr-lens'))
+    writeFileSync(join(prepared.value.path, '.pr-lens', 'graph.json'), '{}')
+
+    const verified = await manager.verify(task, prepared.value, new AbortController().signal)
+
+    expect(verified).toEqual({ _tag: 'Ok', value: expect.objectContaining({ changedPaths: ['file.ts'] }) })
+    expect(readFileSync(join(prepared.value.path, '.pr-lens', 'graph.json'), 'utf8')).toBe('{}')
+  })
 })
