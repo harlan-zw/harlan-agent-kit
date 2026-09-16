@@ -1,6 +1,7 @@
 import type { AgentEvent } from './agent-provider.ts'
 import type { DesktopReport } from './desktop-broker.ts'
 import type { DesktopWorktree } from './desktop-worktree.ts'
+import { DESKTOP_WORKTREE_LIMITS, desktopWorktreeRefusal } from './desktop-worktree.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -24,19 +25,30 @@ export function parseDesktopMemory(value: unknown): number {
   return Number(value.memoryGiB)
 }
 
+/**
+ * Reads one Worktree the other host sent.
+ *
+ * Every refusal names the part that failed. One message covered eight
+ * conditions before, so a repository too large to offload and a corrupt
+ * payload read the same, and the cause took a bundle measurement to find.
+ */
 export function parseDesktopWorktree(value: unknown): DesktopWorktree {
-  if (!record(value) || typeof value.head !== 'string' || !/^[a-f0-9]{40,64}$/.test(value.head)
-    || typeof value.origin !== 'string' || !/^(?:https:\/\/github.com\/|git@github.com:)[\w.-]+\/[\w.-]+$/.test(value.origin)
-    || typeof value.bundle !== 'string' || typeof value.patch !== 'string' || !Array.isArray(value.files)
-    || value.files.length > 50_000 || value.bundle.length > 256 * 1024 ** 2 || value.patch.length > 64 * 1024 ** 2) {
+  if (!record(value) || typeof value.head !== 'string' || !/^[a-f0-9]{40,64}$/.test(value.head))
+    throw new Error('The desktop Worktree head commit is invalid.')
+  if (typeof value.origin !== 'string' || !/^(?:https:\/\/github.com\/|git@github.com:)[\w.-]+\/[\w.-]+$/.test(value.origin))
+    throw new Error('The desktop Worktree origin is not a GitHub repository.')
+  if (typeof value.bundle !== 'string' || typeof value.patch !== 'string' || !Array.isArray(value.files))
     throw new Error('Desktop Worktree data is invalid.')
-  }
   const files = value.files.map((file) => {
-    if (!record(file) || typeof file.path !== 'string' || typeof file.data !== 'string' || file.data.length > 64 * 1024 ** 2 || !Number.isInteger(file.mode) || Number(file.mode) < 0 || Number(file.mode) > 0o777)
+    if (!record(file) || typeof file.path !== 'string' || typeof file.data !== 'string' || file.data.length > DESKTOP_WORKTREE_LIMITS.file || !Number.isInteger(file.mode) || Number(file.mode) < 0 || Number(file.mode) > 0o777)
       throw new Error('Desktop file data is invalid.')
     return { path: file.path, data: file.data, mode: Number(file.mode) }
   })
-  return { head: value.head, origin: value.origin, bundle: value.bundle, patch: value.patch, files }
+  const worktree = { head: value.head, origin: value.origin, bundle: value.bundle, patch: value.patch, files }
+  const refusal = desktopWorktreeRefusal(worktree)
+  if (refusal !== null)
+    throw new Error(`The desktop cannot run a turn for ${worktree.origin}. ${refusal}`, { cause: 'desktop-unsupported' })
+  return worktree
 }
 
 /** The desktop forwards only provider messages and session identity across the boundary. */
