@@ -360,8 +360,14 @@ export async function prepareDesktopWorktree(snapshot: DesktopWorktree, director
     return parsed.value
   }
   for (const item of await list()) {
-    if (item.branch !== undefined && item.branch !== branch && isDesktopBranch(item.branch))
-      await worktrunk(['remove', item.branch], control, signal)
+    if (item.branch === undefined || item.branch === branch || !isDesktopBranch(item.branch))
+      continue
+    // The Worktree still holds the last Task's uncommitted work, and Worktrunk
+    // refuses to remove a dirty one. Nothing is lost: Hogwild sends the whole
+    // Worktree again for every turn, so this side is derived, never the record.
+    await desktopCommand('git', ['reset', '--hard'], item.path, signal)
+    await desktopCommand('git', ['clean', '-ffd'], item.path, signal)
+    await worktrunk(['remove', item.branch], control, signal)
   }
   const existing = (await list()).find(item => item.branch === branch)
   if (existing === undefined)

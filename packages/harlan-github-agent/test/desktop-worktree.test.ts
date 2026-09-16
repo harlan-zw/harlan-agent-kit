@@ -366,6 +366,10 @@ it('gives each Task its own Worktree, so Worktrunk sets it up again', async () =
   const first = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
 
   const one = await prepareDesktopWorktree(first, cache, join(f.root, 'transfer-one'), 'task-one')
+  // A turn leaves its work in the tree, and Worktrunk will not remove a dirty
+  // Worktree. The sweep has to clear it before asking.
+  await writeFile(join(one, 'file.txt'), 'the last Task was mid-edit\n')
+  await writeFile(join(one, 'scratch.txt'), 'untracked leftovers\n')
   const two = await prepareDesktopWorktree(first, cache, join(f.root, 'transfer-two'), 'task-two')
 
   expect(two).not.toBe(one)
