@@ -161,6 +161,26 @@ it('executes desktop work and maps returned paths back to the controller', async
   expect(events).toContainEqual({ _tag: 'Message', text: JSON.stringify({ path: join(f.repository, 'result.txt') }) })
 })
 
+it('reports the real failure when recovery of oversized edits is refused', async () => {
+  const f = await fixture()
+  const initial = await exportDesktopWorktree(f.repository, f.transfer)
+  const capture = vi.fn()
+  await expect(executeDesktopTurn({
+    turn: { id: 'test', provider: 'codex', request: { model: 'test', outputSchema: {}, prompt: `Work in ${f.repository}`, workspace: f.repository, sessionId: null }, worktree: initial },
+    directory: join(f.root, 'execution'),
+    repositories: join(f.root, 'repositories'),
+    signal: new AbortController().signal,
+    emit: () => {},
+    capture,
+    provider: { name: 'codex', async* runTurn(request) {
+      await writeFile(join(request.workspace, 'dump.bin'), Buffer.alloc(65 * 1024 * 1024, 1))
+      yield { _tag: 'Message', text: 'partial progress' }
+      throw new Error('provider died')
+    } },
+  })).rejects.toThrow('provider died')
+  expect(capture).not.toHaveBeenCalled()
+})
+
 it('refuses a result after an untracked controller file changes', async () => {
   const f = await fixture()
   await writeFile(join(f.repository, 'notes.txt'), 'first\n')
