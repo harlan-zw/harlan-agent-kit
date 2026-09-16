@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
 import { DESKTOP_PROTOCOL } from '../src/desktop-protocol.ts'
-import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopTaskKey, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree, worktrunkFailure } from '../src/desktop-worktree.ts'
+import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopTaskKey, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, isDesktopBranch, prepareDesktopWorktree, worktrunkFailure } from '../src/desktop-worktree.ts'
 
 const directories: string[] = []
 afterEach(async () => {
@@ -392,4 +392,11 @@ it('refuses a Task identity that cannot name a branch', () => {
   expect(desktopTaskKey('a'.repeat(64))).toHaveLength(24)
   expect(desktopTaskKey('../../escape')).toBe('escape')
   expect(() => desktopTaskKey('///')).toThrow('no usable Task identity')
+})
+
+it('sweeps a Worktree left by the cache that named them all the same', () => {
+  expect(isDesktopBranch('desktop-turn')).toBe(true)
+  expect(isDesktopBranch('desktop-turn-abc123')).toBe(true)
+  expect(isDesktopBranch('main')).toBe(false)
+  expect(isDesktopBranch('desktop-turnip')).toBe(false)
 })
