@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
 import { DESKTOP_PROTOCOL } from '../src/desktop-protocol.ts'
-import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree, worktrunkFailure } from '../src/desktop-worktree.ts'
+import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopTaskKey, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree, worktrunkFailure } from '../src/desktop-worktree.ts'
 
 const directories: string[] = []
 afterEach(async () => {
@@ -84,7 +84,7 @@ it('refuses file paths outside the Worktree or inside Git metadata', async () =>
 it('prepares a real Worktrunk checkout from the transferred commit', async () => {
   const f = await fixture()
   const initial = await exportDesktopWorktree(f.repository, f.transfer)
-  const workspace = await prepareDesktopWorktree(initial, join(f.root, 'desktop'), join(f.root, 'desktop-transfer'))
+  const workspace = await prepareDesktopWorktree(initial, join(f.root, 'desktop'), join(f.root, 'desktop-transfer'), 'task-one')
   expect(await desktopCommand('git', ['rev-parse', 'HEAD'], workspace)).toBe(initial.head)
   expect(await readFile(join(workspace, 'file.txt'), 'utf8')).toBe('original\n')
 })
@@ -263,7 +263,7 @@ it('builds the desktop checkout from origin and unbundles only the local work', 
   await f.git(['commit', '-qam', 'feat: local work'])
   const exported = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
 
-  const workspace = await prepareDesktopWorktree(exported, join(f.root, 'desktop'), join(f.root, 'desktop-transfer'))
+  const workspace = await prepareDesktopWorktree(exported, join(f.root, 'desktop'), join(f.root, 'desktop-transfer'), 'task-one')
 
   expect(await desktopCommand('git', ['rev-parse', 'HEAD'], workspace)).toBe(exported.head)
   expect(await readFile(join(workspace, 'file.txt'), 'utf8')).toBe('local work\n')
@@ -273,13 +273,13 @@ it('reuses one control checkout across turns on the same repository', async () =
   const f = await sharedFixture()
   const cache = join(f.root, 'desktop')
   const first = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
-  await prepareDesktopWorktree(first, cache, join(f.root, 'transfer-one'))
+  await prepareDesktopWorktree(first, cache, join(f.root, 'transfer-one'), 'task-one')
   const cloned = await desktopCommand('git', ['rev-parse', '--git-dir'], join(cache, 'control'))
   await writeFile(join(f.repository, 'file.txt'), 'second turn\n')
   await f.git(['commit', '-qam', 'feat: second turn'])
   const second = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
 
-  const workspace = await prepareDesktopWorktree(second, cache, join(f.root, 'transfer-two'))
+  const workspace = await prepareDesktopWorktree(second, cache, join(f.root, 'transfer-two'), 'task-one')
 
   expect(await desktopCommand('git', ['rev-parse', '--git-dir'], join(cache, 'control'))).toBe(cloned)
   expect(await desktopCommand('git', ['rev-parse', 'HEAD'], workspace)).toBe(second.head)
@@ -358,4 +358,38 @@ it('reports the line Worktrunk failed on, not the hooks that passed', () => {
   // decided how the failure was classified.
   expect(worktrunkFailure(stderr)).not.toContain('fetch failed')
   expect(worktrunkFailure('nothing marked here')).toBeNull()
+})
+
+it('gives each Task its own Worktree, so Worktrunk sets it up again', async () => {
+  const f = await sharedFixture()
+  const cache = join(f.root, 'desktop')
+  const first = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
+
+  const one = await prepareDesktopWorktree(first, cache, join(f.root, 'transfer-one'), 'task-one')
+  const two = await prepareDesktopWorktree(first, cache, join(f.root, 'transfer-two'), 'task-two')
+
+  expect(two).not.toBe(one)
+  // The first Task's Worktree is gone, so they cannot accumulate across a
+  // cache that now outlives every Task using it.
+  await expect(readFile(join(one, 'file.txt'), 'utf8')).rejects.toThrow()
+  expect(await readFile(join(two, 'file.txt'), 'utf8')).toBe('original\n')
+  expect(await desktopCommand('git', ['rev-parse', 'HEAD'], two)).toBe(first.head)
+})
+
+it('reuses one Worktree across the turns of a single Task', async () => {
+  const f = await sharedFixture()
+  const cache = join(f.root, 'desktop')
+  const snapshot = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
+
+  const one = await prepareDesktopWorktree(snapshot, cache, join(f.root, 'transfer-one'), 'task-one')
+  const two = await prepareDesktopWorktree(snapshot, cache, join(f.root, 'transfer-two'), 'task-one')
+
+  expect(two).toBe(one)
+})
+
+it('refuses a Task identity that cannot name a branch', () => {
+  expect(desktopTaskKey('abc123')).toBe('abc123')
+  expect(desktopTaskKey('a'.repeat(64))).toHaveLength(24)
+  expect(desktopTaskKey('../../escape')).toBe('escape')
+  expect(() => desktopTaskKey('///')).toThrow('no usable Task identity')
 })

@@ -277,6 +277,17 @@ async function seedRepositoryEnvironment(origin: string, control: string, signal
  * both hosts can fetch from GitHub is the whole cost this design removes. The
  * first turn clones. Every later turn fetches.
  */
+/** Every desktop Worktree branch starts with this, so a stale one is findable. */
+export const DESKTOP_BRANCH_PREFIX = 'desktop-turn-'
+
+/** A Task identity reduced to something safe to name a Git branch after. */
+export function desktopTaskKey(task: string): string {
+  const safe = task.replace(/[^\w-]/g, '').slice(0, 24)
+  if (safe === '')
+    throw new Error('The desktop turn has no usable Task identity.')
+  return safe
+}
+
 /**
  * The line a failed Worktrunk command actually failed on.
  *
@@ -304,7 +315,7 @@ async function worktrunk(args: string[], cwd: string, signal?: AbortSignal): Pro
   }
 }
 
-export async function prepareDesktopWorktree(snapshot: DesktopWorktree, directory: string, temporary: string, signal?: AbortSignal): Promise<string> {
+export async function prepareDesktopWorktree(snapshot: DesktopWorktree, directory: string, temporary: string, task: string, signal?: AbortSignal): Promise<string> {
   await mkdir(directory, { recursive: true })
   await mkdir(temporary, { recursive: true })
   const carried = desktopHistoryBundle(snapshot.history)
@@ -325,12 +336,21 @@ export async function prepareDesktopWorktree(snapshot: DesktopWorktree, director
   }
   if (carried !== '')
     await desktopCommand('git', ['fetch', '--no-tags', bundle, 'HEAD'], control, signal)
-  const branch = 'desktop-turn'
+  // One Worktree per Task, not per repository. Worktrunk runs its pre-start
+  // hooks only when it creates one, and those hooks install dependencies and
+  // seed the repository state files. A single shared `desktop-turn` ran them
+  // once for the life of the cache, and every later Task inherited whatever
+  // the previous one left behind.
+  const branch = `${DESKTOP_BRANCH_PREFIX}${desktopTaskKey(task)}`
   const list = async () => {
     const parsed = parseWtWorktrees(await worktrunk(['--config-set', 'list.json-schema=2', 'list', '--format=json'], control, signal))
     if (parsed._tag === 'Err')
       throw new Error(parsed.error)
     return parsed.value
+  }
+  for (const item of await list()) {
+    if (item.branch !== undefined && item.branch !== branch && item.branch.startsWith(DESKTOP_BRANCH_PREFIX))
+      await worktrunk(['remove', item.branch], control, signal)
   }
   const existing = (await list()).find(item => item.branch === branch)
   if (existing === undefined)
