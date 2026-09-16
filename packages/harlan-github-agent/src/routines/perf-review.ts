@@ -35,6 +35,8 @@ Read the stored Measurements on the repository's notes ref and decide which Benc
 Return a Markdown report within ${MAXIMUM_REPORT_DETAIL_LENGTH} characters, even when the series is too short to judge or no Measurement exists.
 Name every Benchmark you judged, every Benchmark you refused to judge, and why.
 Return one Candidate for each confirmed Regression, and none for a Suspect.
+Also return a Candidate for each Opportunity the stored series supports: a Benchmark that drifted without any single commit clearing its Threshold, one whose count keeps growing, or the one that costs the most.
+Never propose an Opportunity the series does not point at. A pull request proves it later; the series is what earns the attempt.
 Keep repository files and GitHub read only.
 Do not duplicate work already owned by an open issue or pull request.`),
   parseResponse: (input) => {
@@ -47,7 +49,10 @@ Do not duplicate work already owned by an open issue or pull request.`),
   },
   issueWork: {
     ...candidateRoutine.issueWork,
-    prompt: () => 'Read the installed harlan-agent-kit:perf-review Skill. Follow implementation mode within this prepared worktree. Reproduce the paired delta locally with the harness, find what causes it, and fix that. Prove the repair with the same harness command. Never change the Benchmark, its case files, or the harness. Do not commit, push, publish, or change GitHub settings. The controller owns publication.',
+    prompt: target => `Read the installed harlan-agent-kit:perf-review Skill. Follow implementation mode within this prepared worktree for ${target}.
+Change the code so the number moves. The pull request's own automated performance comment is the evidence, so never state a result the comment does not show.
+Write the pull request body to be finished by that comment, and say plainly that the change should not merge if the comment reports no improvement past the noise.
+Never change the Benchmark, its case files, or the measurement scripts. Do not commit, push, publish, or change GitHub settings. The controller owns publication.`,
     verifyChanges: (_target, changedPaths) => refusesMeasurementChange(changedPaths),
   },
 }

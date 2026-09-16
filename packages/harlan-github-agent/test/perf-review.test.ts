@@ -41,6 +41,34 @@ describe('perf review Routine', () => {
     expect(refusesMeasurementChange(['scripts/perfect.ts'])._tag).toBe('Ok')
   })
 
+  it('tells Issue work that the pull request comment carries the result, not its own claim', () => {
+    const prompt = perfReview.issueWork.prompt('packages/engine/src/hyparquet/decode.ts')
+    expect(prompt).toContain('performance comment is the evidence')
+    expect(prompt).toContain('never state a result the comment does not show')
+    expect(prompt).toContain('no improvement past the noise')
+  })
+
+  it('names the target it was given, so the agent starts where the Benchmark points', () => {
+    expect(perfReview.issueWork.prompt('packages/engine/src/decode.ts')).toContain('packages/engine/src/decode.ts')
+  })
+
+  it('refuses a measurement change for Opportunity work as well as for a Regression', () => {
+    // Both kinds reach the same verifier, so neither can quietly retune the
+    // Benchmark to manufacture a win.
+    expect(refusesMeasurementChange(['perf/benchmarks.json', 'src/fast.ts'])._tag).toBe('Err')
+  })
+
+  it('asks the scan for Opportunities the stored series supports', () => {
+    const prompt = perfReview.scanPrompt({
+      mode: 'propose',
+      name: 'perf-review',
+      priorCandidates: [],
+      repository: 'harlan-zw/gscdump',
+    })
+    expect(prompt).toContain('Opportunity')
+    expect(prompt).toContain('Never propose an Opportunity the series does not point at')
+  })
+
   it('refuses a report that arrives empty, because a run must always say what it judged', () => {
     const parsed = perfReview.parseResponse({ candidates: [], report: '' })
     expect(parsed._tag).toBe('Err')

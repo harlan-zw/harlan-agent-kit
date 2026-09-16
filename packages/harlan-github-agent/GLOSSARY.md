@@ -615,6 +615,12 @@ A Regression is not an Incident, because an Incident is a failure of the control
 
 A delta that cleared its Threshold but has not persisted across three later Measurements. A Suspect appears in the Routine report and files nothing.
 
+### Opportunity
+
+A Benchmark the stored series says is worth attacking, with no Regression behind it: one that drifted without any single commit clearing its Threshold, one whose count keeps climbing, or the one that costs the most.
+
+An Opportunity is proven by the pull request that answers it. Its automated performance comment reports the result, and a pull request whose comment shows no improvement is closed rather than merged.
+
 ### Threshold
 
 What a delta must clear before it counts as a Regression: a relative floor, and a multiple of the noise the same Measurement recorded.

@@ -328,7 +328,13 @@ Then it must persist across three later Measurements.
 Below ten usable Measurements for a Benchmark, the Routine judges nothing and says so.
 So a repository that has only just started storing Measurements reports its coverage and nothing else for several weeks, which is the correct answer rather than a fault.
 
-Issue work reproduces the delta, repairs its cause, and proves the repair with the same command.
+The Routine also names at most one Opportunity per scan: a Benchmark that drifted while no single commit ever cleared its Threshold, one whose count keeps climbing, or the one that costs the most.
+Drift is the valuable case, because the per-commit rule is blind to it by design. Twenty commits at under one percent each never trip a Threshold and still add up.
+An Opportunity must come from the stored series. A hunch about the code is not evidence.
+
+Issue work reproduces the delta and repairs its cause.
+The pull request's own automated performance comment is the evidence.
+It measures the change against its base and reports the result, so the agent never certifies its own work, and a pull request whose comment shows no improvement is closed rather than merged.
 The controller refuses any change under `perf/` or `scripts/perf/`, because the cheapest way to remove a Regression is to weaken the Benchmark that found it.
 The usual Review and merge policies apply. Other repositories enable `perf-review` through their own Routine spec.
 Deploy the supporting service and Skill before enabling that schedule.
