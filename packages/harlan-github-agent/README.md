@@ -347,6 +347,19 @@ The controller refuses any change under `perf/` or `scripts/perf/`, because the 
 The usual Review and merge policies apply. Other repositories enable `perf-review` through their own Routine spec.
 Deploy the supporting service and Skill before enabling that schedule.
 
+## Weekly SEO review
+
+The `seo-review` Routine reads one Site's ranked actions from [NuxtSEO](https://nuxtseo.com) and files one issue per fix this repository owns.
+It matches the repository to its Site through the production origin in tracked configuration, never by name.
+The scan reads only. It never resolves, dismisses, scans, annotates, or starts live research, so it spends no Lighthouse or research limit.
+The agent reads the `nuxtseo-cli` skill that ships inside the installed CLI, so the skill always matches the binary.
+
+The turn needs `nuxtseo` on the service `PATH` and `NUXTSEO_TOKEN` in the repository `.env`.
+Without either, the run reports a blocker and proposes nothing.
+Actions that need an operational change or a person's decision stay in the report with their next actor.
+Issue work repairs the cause and names the action IDs to resolve after deploy. It never resolves an action itself.
+The usual Review and merge policies apply. Repositories enable `seo-review` through their own Routine spec.
+
 ## Adding a Routine
 
 Built-in definitions live in `src/routines/`. Each definition owns its scan and downstream issue policy.
