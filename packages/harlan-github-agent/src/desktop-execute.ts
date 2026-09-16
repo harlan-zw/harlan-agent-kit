@@ -9,13 +9,15 @@ import { fileURLToPath } from 'node:url'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { parseDesktopWorktree } from './desktop-protocol.ts'
-import { exportDesktopWorktree, prepareDesktopWorktree } from './desktop-worktree.ts'
+import { desktopRepositoryPath, exportDesktopWorktree, prepareDesktopWorktree } from './desktop-worktree.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 
 /** Run a provider in an isolated desktop Worktree and return its exact changes. */
 export async function executeDesktopTurn(options: {
   turn: DesktopTurn
   directory: string
+  /** Where cached control checkouts live, one per repository, across every task. */
+  repositories: string
   provider: AgentProvider
   signal: AbortSignal
   emit: (event: AgentEvent) => void
@@ -23,7 +25,8 @@ export async function executeDesktopTurn(options: {
 }): Promise<DesktopWorktree> {
   const { turn, directory, provider, signal } = options
   const snapshot = parseDesktopWorktree(turn.worktree)
-  const workspace = await prepareDesktopWorktree(snapshot, join(directory, 'worktree'), signal)
+  const cache = desktopRepositoryPath(options.repositories, snapshot.origin)
+  const workspace = await prepareDesktopWorktree(snapshot, cache, join(directory, 'worktree'), signal)
   const request = {
     ...turn.request,
     workspace,
@@ -41,11 +44,11 @@ export async function executeDesktopTurn(options: {
   }
   catch (error) {
     // Keep edits from a failed or interrupted turn available for recovery.
-    const result = await exportDesktopWorktree(workspace, output, AbortSignal.timeout(30_000))
+    const result = await exportDesktopWorktree(workspace, output, { signal: AbortSignal.timeout(30_000), against: snapshot.head })
     await options.capture?.(result)
     throw error
   }
-  const result = await exportDesktopWorktree(workspace, output, signal)
+  const result = await exportDesktopWorktree(workspace, output, { signal, against: snapshot.head })
   await options.capture?.(result)
   return result
 }
@@ -68,6 +71,9 @@ async function main(): Promise<void> {
   await executeDesktopTurn({
     turn,
     directory: dirname(input),
+    // One level above the task directory, so every task on a repository reuses
+    // the same checkout.
+    repositories: join(dirname(dirname(input)), 'repositories'),
     provider,
     signal: controller.signal,
     emit: event => process.stdout.write(`${JSON.stringify(event)}\n`),

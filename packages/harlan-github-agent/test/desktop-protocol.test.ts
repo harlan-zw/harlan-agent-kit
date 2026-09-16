@@ -15,15 +15,24 @@ describe('desktop boundaries', () => {
   it('refuses arbitrary provider events and non-GitHub source repositories', () => {
     expect(parseDesktopEvents([{ _tag: 'SessionStarted', sessionId: 'abc' }])).toEqual([{ _tag: 'SessionStarted', sessionId: 'abc' }])
     expect(() => parseDesktopEvents([{ _tag: 'Progress', text: 'bad', percent: 999 }])).toThrow()
-    expect(() => parseDesktopWorktree({ head: 'a'.repeat(40), origin: '/tmp/repo', bundle: '', patch: '', files: [] })).toThrow('origin is not a GitHub repository')
+    expect(() => parseDesktopWorktree({ head: 'a'.repeat(40), origin: '/tmp/repo', history: { _tag: 'Held' }, patch: '', files: [] })).toThrow('origin is not a GitHub repository')
   })
 
   it('names the part of a Worktree it refuses', () => {
-    const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/nuxtseo.com', bundle: '', patch: '', files: [] }
+    const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/nuxtseo.com', history: { _tag: 'Held' as const }, patch: '', files: [] }
     expect(parseDesktopWorktree(worktree)).toEqual(worktree)
     expect(() => parseDesktopWorktree({ ...worktree, head: 'nope' })).toThrow('head commit is invalid')
-    expect(() => parseDesktopWorktree({ ...worktree, bundle: 'a'.repeat(DESKTOP_WORKTREE_LIMITS.bundle + 1) }))
+    expect(() => parseDesktopWorktree({ ...worktree, history: { _tag: 'Whole', bundle: 'a'.repeat(DESKTOP_WORKTREE_LIMITS.bundle + 1) } }))
       .toThrow('The desktop cannot run a turn for https://github.com/harlan-zw/nuxtseo.com. Its history is 257 MiB, and the limit is 256 MiB.')
+  })
+
+  it('refuses a history whose shape it does not know', () => {
+    const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/nuxtseo.com', history: { _tag: 'Held' as const }, patch: '', files: [] }
+    expect(parseDesktopWorktree({ ...worktree, history: { _tag: 'Incremental', bundle: 'AAAA' } }).history).toEqual({ _tag: 'Incremental', bundle: 'AAAA' })
+    // A bundle alongside Held is dropped, so no reader can act on both.
+    expect(parseDesktopWorktree({ ...worktree, history: { _tag: 'Held', bundle: 'AAAA' } }).history).toEqual({ _tag: 'Held' })
+    for (const history of [undefined, {}, { _tag: 'Incremental' }, { _tag: 'Everything', bundle: 'AAAA' }])
+      expect(() => parseDesktopWorktree({ ...worktree, history })).toThrow('history is invalid')
   })
 })
 

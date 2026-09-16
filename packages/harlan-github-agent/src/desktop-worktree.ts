@@ -10,12 +10,32 @@ export async function desktopCommand(command: string, args: string[], cwd: strin
   return raw ? result.stdout : result.stdout.trim()
 }
 
+/**
+ * How the receiving host obtains the commits behind one turn.
+ *
+ * Both hosts fetch the same GitHub repository, so the history itself does not
+ * have to travel. Only work the receiver cannot reach does. `Whole` is the last
+ * resort, for a checkout with no commit in common with its origin.
+ */
+export type DesktopHistory
+  /** The receiver holds every commit already. Nothing travels. */
+  = | { _tag: 'Held' }
+  /** The receiver holds the bundle's prerequisites. Only newer commits travel. */
+    | { _tag: 'Incremental', bundle: string }
+  /** Nothing in common, so the entire history travels. */
+    | { _tag: 'Whole', bundle: string }
+
 export interface DesktopWorktree {
   head: string
   origin: string
-  bundle: string
+  history: DesktopHistory
   patch: string
   files: Array<{ path: string, data: string, mode: number }>
+}
+
+/** The carried bundle, as base64, or an empty string when none travels. */
+export function desktopHistoryBundle(history: DesktopHistory): string {
+  return history._tag === 'Held' ? '' : history.bundle
 }
 
 export interface DesktopWorktreeLimits {
@@ -51,8 +71,9 @@ function size(bytes: number): string {
  * every offloaded turn on a large repository died reading `invalid`.
  */
 export function desktopWorktreeRefusal(worktree: DesktopWorktree, limits: DesktopWorktreeLimits = DESKTOP_WORKTREE_LIMITS): string | null {
-  if (worktree.bundle.length > limits.bundle)
-    return `Its history is ${size(worktree.bundle.length)}, and the limit is ${size(limits.bundle)}.`
+  const bundle = desktopHistoryBundle(worktree.history)
+  if (bundle.length > limits.bundle)
+    return `Its history is ${size(bundle.length)}, and the limit is ${size(limits.bundle)}.`
   if (worktree.patch.length > limits.patch)
     return `Its uncommitted change is ${size(worktree.patch.length)}, and the limit is ${size(limits.patch)}.`
   if (worktree.files.length > limits.files)
@@ -63,15 +84,57 @@ export function desktopWorktreeRefusal(worktree: DesktopWorktree, limits: Deskto
   return null
 }
 
+export interface DesktopExportOptions {
+  /**
+   * A commit the receiving host already holds.
+   *
+   * The result of a turn names the commit the turn started from, so the bundle
+   * back carries one turn's work. Leave it out on the way to the desktop, where
+   * the shared origin decides what has to travel.
+   */
+  against?: string
+  limits?: DesktopWorktreeLimits
+  signal?: AbortSignal
+}
+
+type Git = (args: string[]) => Promise<string>
+
+/**
+ * Packs the commits the receiving host cannot already reach.
+ *
+ * Git answers this itself: the boundary of `HEAD --not --remotes=origin` is the
+ * set of commits origin holds, and those become the bundle's prerequisites. No
+ * boundary at all means the two repositories share nothing.
+ */
+async function exportDesktopHistory(git: Git, path: string, against: string | undefined): Promise<DesktopHistory> {
+  const exclude = against === undefined ? ['--not', '--remotes=origin'] : [`^${against}`]
+  const walked = (await git(['rev-list', '--boundary', 'HEAD', ...exclude])).split('\n').filter(Boolean)
+  if (walked.length === 0)
+    return { _tag: 'Held' }
+  const shared = walked.some(line => line.startsWith('-'))
+  // A bundle against an explicit commit always has that commit as its
+  // prerequisite, because the caller promised the receiver holds it.
+  if (shared || against !== undefined) {
+    await git(['bundle', 'create', path, 'HEAD', ...exclude])
+    return { _tag: 'Incremental', bundle: (await readFile(path)).toString('base64') }
+  }
+  // Only the refs this checkout actually has. A repository mid-clone, or one
+  // that never tracked origin, still has to produce a bundle the desktop can
+  // clone `main` from.
+  const refs = (await git(['for-each-ref', '--format=%(refname)', 'refs/heads/main', 'refs/remotes/origin/main'])).split('\n').filter(Boolean)
+  await git(['bundle', 'create', path, 'HEAD', ...refs])
+  return { _tag: 'Whole', bundle: (await readFile(path)).toString('base64') }
+}
+
 /** Only repository files cross hosts. Credentials and dependency directories stay local. */
-export async function exportDesktopWorktree(workspace: string, temporary: string, signal?: AbortSignal, limits: DesktopWorktreeLimits = DESKTOP_WORKTREE_LIMITS): Promise<DesktopWorktree> {
-  const git = (args: string[]) => desktopCommand('git', args, workspace, signal, args[0] === 'diff' || args[0] === 'ls-files')
+export async function exportDesktopWorktree(workspace: string, temporary: string, options: DesktopExportOptions = {}): Promise<DesktopWorktree> {
+  const { signal, against, limits = DESKTOP_WORKTREE_LIMITS } = options
+  const git: Git = args => desktopCommand('git', args, workspace, signal, args[0] === 'diff' || args[0] === 'ls-files' || args[0] === 'rev-list')
   const head = await git(['rev-parse', 'HEAD'])
   const origin = await git(['remote', 'get-url', 'origin'])
-  const bundle = join(temporary, 'repository.bundle')
-  await git(['bundle', 'create', bundle, 'HEAD', 'refs/heads/main', 'refs/remotes/origin/main'])
+  const history = await exportDesktopHistory(git, join(temporary, 'repository.bundle'), against)
   const files = await desktopFiles(workspace, signal)
-  const worktree = { head, origin, bundle: (await readFile(bundle)).toString('base64'), patch: await git(['diff', '--binary', 'HEAD']), files }
+  const worktree = { head, origin, history, patch: await git(['diff', '--binary', 'HEAD']), files }
   const refusal = desktopWorktreeRefusal(worktree, limits)
   if (refusal !== null)
     throw new Error(`The desktop cannot run a turn for ${origin}. ${refusal}`, { cause: 'desktop-unsupported' })
@@ -152,11 +215,19 @@ export async function importDesktopWorktree(workspace: string, initial: DesktopW
     || JSON.stringify(await desktopFiles(workspace, signal)) !== JSON.stringify(initial.files)) {
     throw new Error('The Hogwild Worktree changed during desktop execution.')
   }
-  const bundle = join(temporary, 'result.bundle')
-  await writeFile(bundle, Buffer.from(result.bundle, 'base64'))
-  await git(['fetch', '--no-tags', bundle, 'HEAD'])
-  if (await git(['rev-parse', 'FETCH_HEAD']) !== result.head)
-    throw new Error('The desktop result does not match its commit.')
+  if (result.history._tag === 'Held') {
+    // Nothing travelled, so the desktop committed nothing. Any other head here
+    // names a commit this host was never given.
+    if (result.head !== initial.head)
+      throw new Error('The desktop result names a commit it did not send.')
+  }
+  else {
+    const bundle = join(temporary, 'result.bundle')
+    await writeFile(bundle, Buffer.from(result.history.bundle, 'base64'))
+    await git(['fetch', '--no-tags', bundle, 'HEAD'])
+    if (await git(['rev-parse', 'FETCH_HEAD']) !== result.head)
+      throw new Error('The desktop result does not match its commit.')
+  }
   await git(['merge-base', '--is-ancestor', initial.head, result.head])
   for (const file of initial.files)
     await rm(await regularDesktopFile(workspace, file.path), { force: true })
@@ -164,34 +235,69 @@ export async function importDesktopWorktree(workspace: string, initial: DesktopW
   await applyDesktopFiles(workspace, result, temporary, signal)
 }
 
-/** Desktop tasks get isolated control checkouts and Worktrunk-owned Worktrees. */
-export async function prepareDesktopWorktree(snapshot: DesktopWorktree, directory: string, signal?: AbortSignal): Promise<string> {
-  await mkdir(directory, { recursive: true })
-  const bundle = join(directory, 'input.bundle')
-  await writeFile(bundle, Buffer.from(snapshot.bundle, 'base64'))
-  const control = join(directory, 'control')
-  if (!(await readdir(directory)).includes('control')) {
-    await desktopCommand('git', ['clone', '--branch', 'main', bundle, control], directory, signal)
-    await desktopCommand('git', ['remote', 'set-url', 'origin', snapshot.origin], control, signal)
-    const repository = snapshot.origin.replace(/\.git$/, '').split(/[/:]/).slice(-1)[0]!
-    for (const root of ['pkg', 'sites']) {
-      const local = join(process.env.HOME!, root, repository)
-      const exists = await lstat(local).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT')
-          return null
-        throw error
-      })
-      if (exists?.isDirectory() !== true)
-        continue
-      const origin = await desktopCommand('git', ['remote', 'get-url', 'origin'], local, signal)
-      const normalized = (value: string) => value.replace('git@github.com:', 'https://github.com/').replace(/\.git$/, '')
-      if (normalized(origin) === normalized(snapshot.origin)) {
-        await desktopCommand(join(process.env.HOME!, '.local/bin/harlan-repository-env'), ['seed', local, control], control, signal)
-        break
-      }
+/**
+ * Where one repository's cached control checkout lives on the receiving host.
+ *
+ * Two repositories may share a name across owners, so the owner is part of the
+ * path. A remote this cannot read has no cache and no turn.
+ */
+export function desktopRepositoryPath(root: string, origin: string): string {
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?$/.exec(origin)
+  if (match === null || match[1] === '..' || match[2] === '..')
+    throw new Error('The desktop Worktree origin is not a GitHub repository.')
+  return join(root, match[1]!, match[2]!)
+}
+
+/** Copies the ignored state files a repository needs, from a matching local checkout. */
+async function seedRepositoryEnvironment(origin: string, control: string, signal?: AbortSignal): Promise<void> {
+  const repository = origin.replace(/\.git$/, '').split(/[/:]/).slice(-1)[0]!
+  for (const root of ['pkg', 'sites']) {
+    const local = join(process.env.HOME!, root, repository)
+    const exists = await lstat(local).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT')
+        return null
+      throw error
+    })
+    if (exists?.isDirectory() !== true)
+      continue
+    const localOrigin = await desktopCommand('git', ['remote', 'get-url', 'origin'], local, signal)
+    const normalized = (value: string) => value.replace('git@github.com:', 'https://github.com/').replace(/\.git$/, '')
+    if (normalized(localOrigin) === normalized(origin)) {
+      await desktopCommand(join(process.env.HOME!, '.local/bin/harlan-repository-env'), ['seed', local, control], control, signal)
+      return
     }
   }
-  await desktopCommand('git', ['fetch', bundle, 'HEAD'], control, signal)
+}
+
+/**
+ * Desktop turns get one cached control checkout per repository, and
+ * Worktrunk-owned Worktrees inside it.
+ *
+ * The checkout is keyed by repository, not by task, because cloning a history
+ * both hosts can fetch from GitHub is the whole cost this design removes. The
+ * first turn clones. Every later turn fetches.
+ */
+export async function prepareDesktopWorktree(snapshot: DesktopWorktree, directory: string, temporary: string, signal?: AbortSignal): Promise<string> {
+  await mkdir(directory, { recursive: true })
+  await mkdir(temporary, { recursive: true })
+  const carried = desktopHistoryBundle(snapshot.history)
+  const bundle = join(temporary, 'input.bundle')
+  if (carried !== '')
+    await writeFile(bundle, Buffer.from(carried, 'base64'))
+  const control = join(directory, 'control')
+  if (!(await readdir(directory)).includes('control')) {
+    // A checkout with nothing in common with its origin is the only one that
+    // has to be built from the payload.
+    const source = snapshot.history._tag === 'Whole' ? bundle : snapshot.origin
+    await desktopCommand('git', ['clone', '--branch', 'main', source, control], directory, signal)
+    await desktopCommand('git', ['remote', 'set-url', 'origin', snapshot.origin], control, signal)
+    await seedRepositoryEnvironment(snapshot.origin, control, signal)
+  }
+  else if (snapshot.history._tag !== 'Whole') {
+    await desktopCommand('git', ['fetch', '--prune', '--no-tags', 'origin'], control, signal)
+  }
+  if (carried !== '')
+    await desktopCommand('git', ['fetch', '--no-tags', bundle, 'HEAD'], control, signal)
   const branch = 'desktop-turn'
   const list = async () => {
     const parsed = parseWtWorktrees(await desktopCommand('wt', ['--config-set', 'list.json-schema=2', 'list', '--format=json'], control, signal))
@@ -209,6 +315,6 @@ export async function prepareDesktopWorktree(snapshot: DesktopWorktree, director
   for (const file of await desktopFiles(workspace, signal))
     await rm(await regularDesktopFile(workspace, file.path), { force: true })
   await desktopCommand('git', ['reset', '--hard', snapshot.head], workspace, signal)
-  await applyDesktopFiles(workspace, snapshot, directory, signal)
+  await applyDesktopFiles(workspace, snapshot, temporary, signal)
   return workspace
 }

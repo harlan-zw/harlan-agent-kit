@@ -1,6 +1,6 @@
 import type { AgentEvent } from './agent-provider.ts'
 import type { DesktopReport } from './desktop-broker.ts'
-import type { DesktopWorktree } from './desktop-worktree.ts'
+import type { DesktopHistory, DesktopWorktree } from './desktop-worktree.ts'
 import { DESKTOP_WORKTREE_LIMITS, desktopWorktreeRefusal } from './desktop-worktree.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
@@ -25,6 +25,15 @@ export function parseDesktopMemory(value: unknown): number {
   return Number(value.memoryGiB)
 }
 
+/** A turn carries only what the receiver cannot reach, so the shape says which. */
+function parseDesktopHistory(value: unknown): DesktopHistory {
+  if (record(value) && value._tag === 'Held')
+    return { _tag: 'Held' }
+  if (record(value) && (value._tag === 'Incremental' || value._tag === 'Whole') && typeof value.bundle === 'string')
+    return { _tag: value._tag, bundle: value.bundle }
+  throw new Error('The desktop Worktree history is invalid.')
+}
+
 /**
  * Reads one Worktree the other host sent.
  *
@@ -37,14 +46,15 @@ export function parseDesktopWorktree(value: unknown): DesktopWorktree {
     throw new Error('The desktop Worktree head commit is invalid.')
   if (typeof value.origin !== 'string' || !/^(?:https:\/\/github.com\/|git@github.com:)[\w.-]+\/[\w.-]+$/.test(value.origin))
     throw new Error('The desktop Worktree origin is not a GitHub repository.')
-  if (typeof value.bundle !== 'string' || typeof value.patch !== 'string' || !Array.isArray(value.files))
+  if (typeof value.patch !== 'string' || !Array.isArray(value.files))
     throw new Error('Desktop Worktree data is invalid.')
+  const history = parseDesktopHistory(value.history)
   const files = value.files.map((file) => {
     if (!record(file) || typeof file.path !== 'string' || typeof file.data !== 'string' || file.data.length > DESKTOP_WORKTREE_LIMITS.file || !Number.isInteger(file.mode) || Number(file.mode) < 0 || Number(file.mode) > 0o777)
       throw new Error('Desktop file data is invalid.')
     return { path: file.path, data: file.data, mode: Number(file.mode) }
   })
-  const worktree = { head: value.head, origin: value.origin, bundle: value.bundle, patch: value.patch, files }
+  const worktree = { head: value.head, origin: value.origin, history, patch: value.patch, files }
   const refusal = desktopWorktreeRefusal(worktree)
   if (refusal !== null)
     throw new Error(`The desktop cannot run a turn for ${worktree.origin}. ${refusal}`, { cause: 'desktop-unsupported' })
