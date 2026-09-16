@@ -70,6 +70,8 @@ Archive: `<path>`
 8. Sentry gets one table row, plus a line for each new issue. Full dispositions go in the ledger.
 9. Number each action. Give it one line. Name the issue it becomes.
 10. Write `**Needs you**` followed by `Nothing.` when no action needs a person.
+11. Never state a check result you did not read. Call a pull request green only after you read its checks.
+    A pull request with no checks is not green. Say it has no CI, and say why.
 
 ## Worked example
 
