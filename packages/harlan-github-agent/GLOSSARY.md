@@ -593,6 +593,40 @@ What the controller will do about one Incident without being asked.
 
 One of `Retrying`, `Retries exhausted`, or `Action required`.
 
+### Benchmark
+
+One named, repeatable measurement a repository declares in its Benchmark manifest, at `perf/benchmarks.json`.
+
+Use Benchmark. Do not use test, check, or metric for this.
+
+### Measurement
+
+One commit's Benchmark numbers, stored as a git note by the repository's own CI.
+
+Use Measurement. Never use baseline for a stored number: Baseline means default branch health, as in Baseline repair.
+
+### Regression
+
+One confirmed, persistent slowdown of one Benchmark, attributed to one commit.
+
+A Regression is not an Incident, because an Incident is a failure of the controller itself. It is not a Review finding either, because that belongs to adversarial Review.
+
+### Suspect
+
+A delta that cleared its Threshold but has not persisted across three later Measurements. A Suspect appears in the Routine report and files nothing.
+
+### Opportunity
+
+A Benchmark the stored series says is worth attacking, with no Regression behind it: one that drifted without any single commit clearing its Threshold, one whose count keeps climbing, or the one that costs the most.
+
+An Opportunity is proven by the pull request that answers it. Its automated performance comment reports the result, and a pull request whose comment shows no improvement is closed rather than merged.
+
+### Threshold
+
+What a delta must clear before it counts as a Regression: a relative floor, and a multiple of the noise the same Measurement recorded.
+
+Use Threshold. Do not use budget, which is a banned synonym for Reserve.
+
 ### Process finding
 
 Evidence that a skill, policy, or workflow should change.

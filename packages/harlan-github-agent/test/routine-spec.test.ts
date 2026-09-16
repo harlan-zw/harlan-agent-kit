@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseRoutineSpec } from '../src/routine-spec.ts'
+import { ROUTINE_NAMES } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -94,7 +95,16 @@ routines:
         - cron: "* * * * *"
 `)
 
-    expect(parsed).toEqual({ _tag: 'Err', error: 'Name one Routine the service runs: sentry-checkin or pr-triage or agent-feedback or daily-checkin or dependency-updates or ci-review.' })
+    // The message lists every Routine the service runs, so pinning the whole
+    // list here breaks on each new one. What matters is that the spec is
+    // refused and the reader is pointed at the legal names.
+    expect(parsed._tag).toBe('Err')
+    if (parsed._tag === 'Err') {
+      expect(parsed.error).toContain('Name one Routine the service runs:')
+      expect(parsed.error).not.toContain('rm-rf')
+      for (const name of ROUTINE_NAMES)
+        expect(parsed.error).toContain(name)
+    }
   })
 
   it('refuses a key the repository may not set', () => {
