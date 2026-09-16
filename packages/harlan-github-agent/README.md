@@ -207,7 +207,7 @@ Exec=/usr/bin/env "HARLAN_GITHUB_RUNNER_HOSTS=Hogwild=ssh://hogwild-admin|system
 ```
 
 Keep any existing `HARLAN_GITHUB_RUNNER_REPOSITORIES` setting in that command.
-The SSH account needs Docker access and permission to control the runner service.
+The SSH account needs [Docker](https://docker.com) access and permission to control the runner service.
 Restart the tray process after changing its environment. Running jobs continue.
 
 Use `Watch logs` from the System pane to open a read-only live event stream while automation continues.
@@ -261,7 +261,7 @@ After merge, it checks the full unreleased range again and pins the default bran
 It never promotes an approved patch to minor. A changed release needs a new selection.
 It prepares configured JSON version files, then merges their verified pull request and creates the release tag.
 If version changes already merged, it uses that checked commit directly.
-The existing tag workflow builds and publishes. The controller verifies the workflow, npm versions, and GitHub release.
+The existing tag workflow builds and publishes. The controller verifies the workflow, [npm](https://npmjs.com) versions, and GitHub release.
 Progress and failures stay in the release comment. Retries retain the original version.
 
 The first adapter supports one jointly versioned npm package group per repository.
@@ -294,7 +294,7 @@ routines:
 
 Keep other Routine entries when adding this one. This repository enables Monday at 08:00 Melbourne time.
 Deploy a service version that supports `dependency-updates` before enabling it in other repositories.
-The Routine scans npm dependencies across root manifests, workspaces, and pnpm catalogs.
+The Routine scans npm dependencies across root manifests, workspaces, and [pnpm](https://pnpm.io) catalogs.
 One Candidate becomes one issue. Issue work attempts all updates, including majors, in one pull request.
 Blocked upgrades remain unchanged and appear in the result. TypeScript stays on version 6 until Harlan clears its exception.
 A version-specific fingerprint prevents repeated proposals. A shared issue marker reuses any open dependency issue.
@@ -315,6 +315,22 @@ Existing issues, pull request Repair, and Baseline repair retain work they alrea
 Issue work reproduces findings and verifies repairs without weakening checks or hiding diagnostics.
 Runner operations and GitHub settings appear in the report for their next actor.
 The usual Review and merge policies apply. Other repositories enable `ci-review` through their own Routine spec.
+
+## Weekly performance review
+
+The `perf-review` Routine reads a repository's stored Measurements and files one issue per confirmed Regression.
+It reads only. The numbers come from the repository's own CI, which measures each merged commit against its parent and stores the result as a git note.
+A repository takes part only once it stores Measurements. `harlan-zw/gscdump` is the reference implementation.
+
+A delta becomes a Regression only after it clears two bars.
+First it must beat the noise that same measurement recorded, which is the head build compared against itself in the same job.
+Then it must persist across three later Measurements.
+Below ten usable Measurements for a Benchmark, the Routine judges nothing and says so.
+So a repository that has only just started storing Measurements reports its coverage and nothing else for several weeks, which is the correct answer rather than a fault.
+
+Issue work reproduces the delta, repairs its cause, and proves the repair with the same command.
+The controller refuses any change under `perf/` or `scripts/perf/`, because the cheapest way to remove a Regression is to weaken the Benchmark that found it.
+The usual Review and merge policies apply. Other repositories enable `perf-review` through their own Routine spec.
 Deploy the supporting service and Skill before enabling that schedule.
 
 ## Adding a Routine
@@ -333,5 +349,5 @@ Definitions cannot receive a publisher or worktree mutation client through their
 Issue work checks a definition's changed-path policy before committing.
 
 Agent feedback keeps its repository restriction and exact Skill target.
-Sentry keeps its required report and mode-specific resolution instructions.
+[Sentry](https://sentry.io) keeps its required report and mode-specific resolution instructions.
 Dependency updates keep one combined Candidate and a shared open-issue fingerprint.

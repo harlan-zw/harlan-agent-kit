@@ -2,6 +2,7 @@ import { agentFeedback } from './agent-feedback.ts'
 import { ciReview } from './ci-review.ts'
 import { dailyCheckin } from './daily-checkin.ts'
 import { dependencyUpdates } from './dependency-updates.ts'
+import { perfReview } from './perf-review.ts'
 import { prTriage } from './pr-triage.ts'
 import { sentryCheckin } from './sentry-checkin.ts'
 
@@ -13,6 +14,7 @@ const routines = {
   'daily-checkin': dailyCheckin,
   'dependency-updates': dependencyUpdates,
   'ci-review': ciReview,
+  'perf-review': perfReview,
 }
 
 export type RoutineName = keyof typeof routines
