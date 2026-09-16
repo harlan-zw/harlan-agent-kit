@@ -122,7 +122,7 @@ if [[ "$*" == *"sha256sum "* && "$*" == *harlan-hooks.ts.next* ]]; then
     case "$token" in
       *.next*)
         path=${token//\'/}
-        name=$(basename "${path%.next}")
+        name=$(basename "${path%%.next*}")
         if [ "$name" = "$HARLAN_AGENT_CONTEXT_TEST_OPENCODE_BAD" ]; then
           printf 'different  %s\n' "$path"
         else
@@ -145,20 +145,20 @@ PATH="$test_root/bin:/usr/bin:/bin" \
   HARLAN_AGENT_CONTEXT_HOGWILD_HOME=/home/harlan \
   bash "$script_dir/sync-agent-context.sh" hogwild >/dev/null
 
-grep -F 'hogwild:/home/harlan/.claude/CLAUDE.md.next' "$calls" >/dev/null
-grep -F 'hogwild:/home/harlan/.codex/AGENTS.md.next' "$calls" >/dev/null
-grep -F "mv '/home/harlan/.claude/CLAUDE.md.next' '/home/harlan/.claude/CLAUDE.md'" "$calls" >/dev/null
-grep -F "mv '/home/harlan/.codex/AGENTS.md.next' '/home/harlan/.codex/AGENTS.md'" "$calls" >/dev/null
-grep -F 'hogwild:/home/harlan/.config/git/hooks/commit-msg.next' "$calls" >/dev/null
-grep -F 'hogwild:/home/harlan/sites/SITES.md.next' "$calls" >/dev/null
-grep -F "mv '/home/harlan/sites/SITES.md.next' '/home/harlan/sites/SITES.md'" "$calls" >/dev/null
-grep -F "mv '/home/harlan/.config/git/hooks/commit-msg.next' '/home/harlan/.config/git/hooks/commit-msg'" "$calls" >/dev/null
+grep -E 'hogwild:/home/harlan/.claude/CLAUDE.md.next\.[0-9.]+' "$calls" >/dev/null
+grep -E 'hogwild:/home/harlan/.codex/AGENTS.md.next\.[0-9.]+' "$calls" >/dev/null
+grep -E "mv '/home/harlan/.claude/CLAUDE.md.next\.[0-9.]+' '/home/harlan/.claude/CLAUDE.md'" "$calls" >/dev/null
+grep -E "mv '/home/harlan/.codex/AGENTS.md.next\.[0-9.]+' '/home/harlan/.codex/AGENTS.md'" "$calls" >/dev/null
+grep -E 'hogwild:/home/harlan/.config/git/hooks/commit-msg.next\.[0-9.]+' "$calls" >/dev/null
+grep -E 'hogwild:/home/harlan/sites/SITES.md.next\.[0-9.]+' "$calls" >/dev/null
+grep -E "mv '/home/harlan/sites/SITES.md.next\.[0-9.]+' '/home/harlan/sites/SITES.md'" "$calls" >/dev/null
+grep -E "mv '/home/harlan/.config/git/hooks/commit-msg.next\.[0-9.]+' '/home/harlan/.config/git/hooks/commit-msg'" "$calls" >/dev/null
 grep -F "core.hooksPath '/home/harlan/.config/git/hooks'" "$calls" >/dev/null
 for hook_file in "${opencode_hooks[@]}"; do
   grep -F "hogwild:/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file.next" "$calls" >/dev/null
-  grep -F "mv '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file.next' '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file'" "$calls" >/dev/null
+  grep -E "mv '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file.next\.[0-9.]+' '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file'" "$calls" >/dev/null
 done
-grep -F 'hogwild:/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next' "$calls" >/dev/null
+grep -E 'hogwild:/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next\.[0-9.]+' "$calls" >/dev/null
 
 # Memory reaches Hogwild for the primary checkout only, over the tar fallback
 # because the fake ssh reports no remote rsync.
@@ -188,12 +188,12 @@ if grep -F '/home/harlan/.claude/projects/-unrelated' "$calls" >/dev/null; then
   printf '%s\n' 'Hogwild received memory for a project with no checkout.' >&2
   exit 1
 fi
-grep -F "mv '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next' '/home/harlan/.config/opencode/plugins/harlan-hooks.ts'" "$calls" >/dev/null
-grep -F "chmod 644 '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next'" "$calls" >/dev/null
+grep -E "mv '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next\.[0-9.]+' '/home/harlan/.config/opencode/plugins/harlan-hooks.ts'" "$calls" >/dev/null
+grep -E "chmod 644 '/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next\.[0-9.]+'" "$calls" >/dev/null
 manifest_target=/home/harlan/.local/share/harlan-agent-kit/.claude-plugin/plugin.json
 grep -F "hogwild:$manifest_target.next" "$calls" >/dev/null
-grep -F "mv '$manifest_target.next' '$manifest_target'" "$calls" >/dev/null
-grep -F "chmod 644 '$manifest_target.next'" "$calls" >/dev/null
+grep -E "mv '$manifest_target.next\.[0-9.]+' '$manifest_target'" "$calls" >/dev/null
+grep -E "chmod 644 '$manifest_target.next\.[0-9.]+'" "$calls" >/dev/null
 
 # A hook added to plugin.json must reach both installs with no other edit.
 fixture="$test_root/fixture"
@@ -246,7 +246,7 @@ PATH="$test_root/bin:/usr/bin:/bin" \
   bash "$fixture/scripts/sync-agent-context.sh" hogwild >/dev/null
 proof_target=/home/harlan/.local/share/harlan-agent-kit/hooks/proof-hook.sh
 grep -F "hogwild:$proof_target.next" "$calls" >/dev/null
-grep -F "mv '$proof_target.next' '$proof_target'" "$calls" >/dev/null
+grep -E "mv '$proof_target.next\.[0-9.]+' '$proof_target'" "$calls" >/dev/null
 : > "$calls"
 
 # An opencode hook that arrives changed must stop the whole install.
@@ -329,6 +329,50 @@ if [ "$activation_calls" -ne 1 ]; then
 fi
 if grep -F 'Synced Hogwild Agent instructions.' "$activation_log" >/dev/null; then
   printf '%s\n' 'Hogwild reported success on a failed remote activation.' >&2
+  exit 1
+fi
+
+# Two syncs can reach Hogwild at once: the service updates itself on merge,
+# and a person can deploy by hand in the same minute. Each run stages, checks
+# the digest, then moves. If both runs stage to one path, one can move the
+# file the other staged, and install content it never checked. So no two runs
+# may ever share a staging path.
+: > "$calls"
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >/dev/null
+first_stage=$(grep -oE "hogwild:/home/harlan/\.claude/CLAUDE\.md\.next[^ ']*" "$calls" | head -1)
+: > "$calls"
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >/dev/null
+second_stage=$(grep -oE "hogwild:/home/harlan/\.claude/CLAUDE\.md\.next[^ ']*" "$calls" | head -1)
+if [ -z "$first_stage" ] || [ -z "$second_stage" ]; then
+  printf '%s\n' 'The staging test never saw a staged Claude file.' >&2
+  exit 1
+fi
+if [ "$first_stage" = "$second_stage" ]; then
+  printf '%s\n' "Two syncs staged to the same path, $first_stage, so one can install what the other staged." >&2
+  exit 1
+fi
+
+# A run may only clean up what it staged. Removing another run's staged files
+# is what failed a hand deploy on 2026-09-16 while the service updated itself.
+# Cleanup only runs when a digest check fails, so force that path.
+: > "$calls"
+saved_codex_hash="$HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH"
+export HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH=different
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >/dev/null 2>&1 || true
+export HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH="$saved_codex_hash"
+failed_stage=$(grep -oE "hogwild:/home/harlan/\.claude/CLAUDE\.md\.next[^ ']*" "$calls" | head -1)
+failed_token=${failed_stage##*CLAUDE.md.}
+cleanup_call=$(grep -F 'rm -f' "$calls" || true)
+if [ -z "$cleanup_call" ]; then
+  printf '%s\n' 'The cleanup test never reached cleanup.' >&2
+  exit 1
+fi
+if printf '%s' "$cleanup_call" | grep -E "\.next'" >/dev/null; then
+  printf '%s\n' 'A run cleaned up a bare .next path that any concurrent run could own.' >&2
+  exit 1
+fi
+if ! printf '%s' "$cleanup_call" | grep -F "CLAUDE.md.$failed_token'" >/dev/null; then
+  printf '%s\n' "Cleanup did not remove this run's own staged file, $failed_token." >&2
   exit 1
 fi
 

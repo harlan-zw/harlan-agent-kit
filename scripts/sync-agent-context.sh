@@ -29,6 +29,12 @@ sites_install_suffix='sites/SITES.md'
 target_home="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 hogwild_host="${HARLAN_AGENT_CONTEXT_HOGWILD_HOST:-hogwild}"
 hogwild_home="${HARLAN_AGENT_CONTEXT_HOGWILD_HOME:-/home/harlan}"
+# Every file reaches Hogwild the same way: stage it, check its digest, then move
+# it into place, so nothing unchecked is ever installed. That only holds while
+# no other run can touch the staged file. The service updates itself on merge
+# and a person can deploy by hand in the same minute, so each run stages under
+# its own name. A shared name let one run move the file another run staged.
+stage_token="next.$(date +%s%N).$$.$RANDOM"
 local_staging=''
 
 cleanup() {
@@ -149,10 +155,10 @@ cleanup_hogwild() {
   local staged target
   staged=''
   while read -r target; do
-    staged="$staged '$target.next'"
+    staged="$staged '$target.$stage_token'"
   done < <(opencode_remote_targets)
   ssh -o BatchMode=yes "$hogwild_host" \
-    "rm -f '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.codex/AGENTS.md.next' '$hogwild_home/.config/git/hooks/commit-msg.next'$staged" \
+    "rm -f '$hogwild_home/.claude/CLAUDE.md.$stage_token' '$hogwild_home/.codex/AGENTS.md.$stage_token' '$hogwild_home/.config/git/hooks/commit-msg.$stage_token'$staged" \
     >/dev/null 2>&1 || true
 }
 
@@ -168,15 +174,15 @@ sync_hogwild() {
 
   ssh -o BatchMode=yes "$hogwild_host" \
     "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$manifest_install_suffix")' '$hogwild_home/$(dirname "$plugin_install_suffix")'"
-  if ! scp "$local_staging/CLAUDE.md" "$hogwild_host:$hogwild_home/.claude/CLAUDE.md.next"; then
+  if ! scp "$local_staging/CLAUDE.md" "$hogwild_host:$hogwild_home/.claude/CLAUDE.md.$stage_token"; then
     cleanup_hogwild
     fail 'Hogwild did not receive Claude instructions.'
   fi
-  if ! scp "$local_staging/AGENTS.md" "$hogwild_host:$hogwild_home/.codex/AGENTS.md.next"; then
+  if ! scp "$local_staging/AGENTS.md" "$hogwild_host:$hogwild_home/.codex/AGENTS.md.$stage_token"; then
     cleanup_hogwild
     fail 'Hogwild did not receive Codex instructions.'
   fi
-  if ! scp "$commit_hook" "$hogwild_host:$hogwild_home/.config/git/hooks/commit-msg.next"; then
+  if ! scp "$commit_hook" "$hogwild_host:$hogwild_home/.config/git/hooks/commit-msg.$stage_token"; then
     cleanup_hogwild
     fail 'Hogwild did not receive the commit-msg hook.'
   fi
@@ -184,7 +190,7 @@ sync_hogwild() {
   staged_list=''
   activation=''
   while read -r source && read -r target <&3; do
-    if ! scp "$source" "$hogwild_host:$target.next"; then
+    if ! scp "$source" "$hogwild_host:$target.$stage_token"; then
       cleanup_hogwild
       fail "Hogwild did not receive $(basename "$source")."
     fi
@@ -192,8 +198,8 @@ sync_hogwild() {
       "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$plugin_install_suffix") mode=644 ;;
       *) mode=755 ;;
     esac
-    staged_list="$staged_list '$target.next'"
-    activation="$activation && chmod $mode '$target.next' && mv '$target.next' '$target'"
+    staged_list="$staged_list '$target.$stage_token'"
+    activation="$activation && chmod $mode '$target.$stage_token' && mv '$target.$stage_token' '$target'"
   done < <(opencode_local_sources) 3< <(opencode_remote_targets)
 
   opencode_hashes=$(while read -r source; do
@@ -202,11 +208,11 @@ sync_hogwild() {
   remote_opencode_hashes=$(ssh -o BatchMode=yes "$hogwild_host" "sha256sum$staged_list" | cut -d' ' -f1)
 
   remote_claude_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
-    "sha256sum '$hogwild_home/.claude/CLAUDE.md.next'" | cut -d' ' -f1)
+    "sha256sum '$hogwild_home/.claude/CLAUDE.md.$stage_token'" | cut -d' ' -f1)
   remote_codex_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
-    "sha256sum '$hogwild_home/.codex/AGENTS.md.next'" | cut -d' ' -f1)
+    "sha256sum '$hogwild_home/.codex/AGENTS.md.$stage_token'" | cut -d' ' -f1)
   remote_hook_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
-    "sha256sum '$hogwild_home/.config/git/hooks/commit-msg.next'" | cut -d' ' -f1)
+    "sha256sum '$hogwild_home/.config/git/hooks/commit-msg.$stage_token'" | cut -d' ' -f1)
   if [ "$claude_hash" != "$remote_claude_hash" ] || [ "$codex_hash" != "$remote_codex_hash" ] \
     || [ "$hook_hash" != "$remote_hook_hash" ]; then
     cleanup_hogwild
@@ -218,7 +224,7 @@ sync_hogwild() {
   fi
 
   ssh -o BatchMode=yes "$hogwild_host" \
-    "chmod 644 '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.codex/AGENTS.md.next' && mv '$hogwild_home/.claude/CLAUDE.md.next' '$hogwild_home/.claude/CLAUDE.md' && mv '$hogwild_home/.codex/AGENTS.md.next' '$hogwild_home/.codex/AGENTS.md' && chmod 755 '$hogwild_home/.config/git/hooks/commit-msg.next' && mv '$hogwild_home/.config/git/hooks/commit-msg.next' '$hogwild_home/.config/git/hooks/commit-msg'$activation && git config --global core.hooksPath '$hogwild_home/.config/git/hooks'"
+    "chmod 644 '$hogwild_home/.claude/CLAUDE.md.$stage_token' '$hogwild_home/.codex/AGENTS.md.$stage_token' && mv '$hogwild_home/.claude/CLAUDE.md.$stage_token' '$hogwild_home/.claude/CLAUDE.md' && mv '$hogwild_home/.codex/AGENTS.md.$stage_token' '$hogwild_home/.codex/AGENTS.md' && chmod 755 '$hogwild_home/.config/git/hooks/commit-msg.$stage_token' && mv '$hogwild_home/.config/git/hooks/commit-msg.$stage_token' '$hogwild_home/.config/git/hooks/commit-msg'$activation && git config --global core.hooksPath '$hogwild_home/.config/git/hooks'"
   printf '%s\n' 'Synced Hogwild Agent instructions.'
 }
 
@@ -235,16 +241,16 @@ sync_hogwild_sites() {
   local_hash=$(sha256sum "$sites_inventory" | cut -d' ' -f1)
   ssh -n -o BatchMode=yes "$hogwild_host" "mkdir -p '$(dirname "$target")'" \
     || fail 'Hogwild did not accept the site inventory directory.'
-  if ! scp "$sites_inventory" "$hogwild_host:$target.next"; then
-    ssh -n -o BatchMode=yes "$hogwild_host" "rm -f '$target.next'" >/dev/null 2>&1 || true
+  if ! scp "$sites_inventory" "$hogwild_host:$target.$stage_token"; then
+    ssh -n -o BatchMode=yes "$hogwild_host" "rm -f '$target.$stage_token'" >/dev/null 2>&1 || true
     fail 'Hogwild did not receive the site inventory.'
   fi
-  remote_hash=$(ssh -n -o BatchMode=yes "$hogwild_host" "sha256sum '$target.next'" | cut -d' ' -f1)
+  remote_hash=$(ssh -n -o BatchMode=yes "$hogwild_host" "sha256sum '$target.$stage_token'" | cut -d' ' -f1)
   if [ "$local_hash" != "$remote_hash" ]; then
-    ssh -n -o BatchMode=yes "$hogwild_host" "rm -f '$target.next'" >/dev/null 2>&1 || true
+    ssh -n -o BatchMode=yes "$hogwild_host" "rm -f '$target.$stage_token'" >/dev/null 2>&1 || true
     fail 'Hogwild received a different site inventory.'
   fi
-  ssh -n -o BatchMode=yes "$hogwild_host" "chmod 644 '$target.next' && mv '$target.next' '$target'" \
+  ssh -n -o BatchMode=yes "$hogwild_host" "chmod 644 '$target.$stage_token' && mv '$target.$stage_token' '$target'" \
     || fail 'Hogwild did not activate the site inventory.'
   printf '%s\n' 'Synced Hogwild site inventory.'
 }

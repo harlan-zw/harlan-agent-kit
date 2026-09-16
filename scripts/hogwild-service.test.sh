@@ -78,7 +78,7 @@ if [[ "$*" == *sha256sum* && ( "$*" == *commit-msg.next* || "$*" == *harlan-hook
     if [[ "$token" == *.next* ]]; then
       remote_path=${token//\'/}
       local_path="$HOGWILD_SERVICE_TEST_RENDERED_HOME${remote_path#/home/harlan}"
-      /usr/bin/sha256sum "${local_path%.next}"
+      /usr/bin/sha256sum "${local_path%%.next*}"
     fi
   done
 fi
@@ -135,19 +135,29 @@ chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
 
-claude_copy_line=$(grep -n '^scp .*CLAUDE.md hogwild:/home/harlan/.claude/CLAUDE.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-codex_copy_line=$(grep -n '^scp .*AGENTS.md hogwild:/home/harlan/.codex/AGENTS.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-install_line=$(grep -nF "mv '/home/harlan/.codex/AGENTS.md.next' '/home/harlan/.codex/AGENTS.md'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-limits_copy_line=$(grep -n '^scp .*hogwild-service.conf .*hogwild:/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-limits_install_line=$(grep -nF "mv '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next' '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-env_tool_install_line=$(grep -nF "mv '/home/harlan/.local/bin/harlan-repository-env.next' '/home/harlan/.local/bin/harlan-repository-env'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-env_manifest_install_line=$(grep -nF "mv '/home/harlan/.config/harlan-agent-kit/repository-env-files.next' '/home/harlan/.config/harlan-agent-kit/repository-env-files'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-worktrunk_install_line=$(grep -nF "mv '/home/harlan/.config/worktrunk/config.toml.next' '/home/harlan/.config/worktrunk/config.toml'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+claude_copy_line=$(grep -n '^scp .*CLAUDE.md hogwild:/home/harlan/.claude/CLAUDE.md.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+codex_copy_line=$(grep -n '^scp .*AGENTS.md hogwild:/home/harlan/.codex/AGENTS.md.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+install_line=$(grep -nE "mv '/home/harlan/.codex/AGENTS.md.next\.[0-9.]+' '/home/harlan/.codex/AGENTS.md'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+limits_copy_line=$(grep -n '^scp .*hogwild-service.conf .*hogwild:/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+limits_install_line=$(grep -nE "mv '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next\.[0-9.]+' '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+env_tool_install_line=$(grep -nE "mv '/home/harlan/.local/bin/harlan-repository-env.next\.[0-9.]+' '/home/harlan/.local/bin/harlan-repository-env'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+env_manifest_install_line=$(grep -nE "mv '/home/harlan/.config/harlan-agent-kit/repository-env-files.next\.[0-9.]+' '/home/harlan/.config/harlan-agent-kit/repository-env-files'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+worktrunk_install_line=$(grep -nE "mv '/home/harlan/.config/worktrunk/config.toml.next\.[0-9.]+' '/home/harlan/.config/worktrunk/config.toml'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_copy_line=$(grep -n '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_install_line=$(grep -nF "install-staged '/home/harlan/.cache/harlan-repository-env.fixture'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 prepare_line=$(grep -nF "bash -s -- 'prepare-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 restart_line=$(grep -n '/api/service/restart' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 
+# An empty capture reads as 0 inside (( )), so a pattern that matched nothing
+# would still satisfy the ordering below. Refuse that before comparing.
+for step in claude_copy_line codex_copy_line install_line limits_copy_line limits_install_line \
+  env_tool_install_line env_manifest_install_line worktrunk_install_line env_copy_line \
+  env_install_line prepare_line restart_line; do
+  if [ -z "${!step}" ]; then
+    printf '%s\n' "Hogwild update never logged the step this test orders: $step." >&2
+    exit 1
+  fi
+done
 if ! ((claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line && prepare_line < restart_line)); then
   printf '%s\n' 'Hogwild update did not prepare files before its Restart request.' >&2
   exit 1

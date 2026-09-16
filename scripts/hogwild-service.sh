@@ -2,6 +2,12 @@
 # Updates the Hogwild service from desktop while keeping its Agent context equal.
 set -euo pipefail
 
+# Each file is staged, digest checked, then moved into place. The service
+# updates itself on merge and a person can deploy by hand in the same minute, so
+# every run stages under its own name. A shared name let one run move a file
+# another run staged, installing content it never checked.
+stage_token="next.$(date +%s%N).$$.$RANDOM"
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 HOGWILD_HOST="${HARLAN_GITHUB_AGENT_HOGWILD_HOST:-hogwild}"
 HOGWILD_ORIGIN="${HARLAN_GITHUB_AGENT_HOGWILD_ORIGIN:-https://hogwild.tailcad325.ts.net}"
@@ -208,7 +214,7 @@ sync_verified_file() {
   local mode=$3
   local label=$4
   local next local_hash remote_hash
-  next="$target.next"
+  next="$target.$stage_token"
   local_hash=$(sha256sum "$source" | cut -d' ' -f1)
   ssh -o BatchMode=yes "$HOGWILD_HOST" "mkdir -p '$(dirname "$target")'"
   scp -q "$source" "$HOGWILD_HOST:$next"
