@@ -491,6 +491,30 @@ describe('dashboard HTTP app', () => {
     expect(response.status).toBe(421)
   })
 
+  it('accepts its own loopback address, so the control CLI works on the service host', async () => {
+    // Hogwild cannot resolve its own tailnet name, so `control routine-run`
+    // from that host failed with fetch failed, then 421 through 127.0.0.1.
+    const listenOrigin = 'http://127.0.0.1:3210'
+    const app = createAgentApp({ allowedOrigin, listenOrigin, dashboardPassword, dashboardRoot, now, store: { ...agentControls } as never })
+    const response = await app.request(`${listenOrigin}/api/agents/pause`, {
+      method: 'POST',
+      headers: { authorization, host: '127.0.0.1:3210', origin: listenOrigin },
+    })
+
+    expect(response.status).toBe(200)
+  })
+
+  it('refuses a loopback host carrying the public origin, so each address keeps its own origin', async () => {
+    const listenOrigin = 'http://127.0.0.1:3210'
+    const app = createAgentApp({ allowedOrigin, listenOrigin, dashboardPassword, dashboardRoot, now, store: { ...agentControls } as never })
+    const response = await app.request(`${listenOrigin}/api/agents/pause`, {
+      method: 'POST',
+      headers: { authorization, host: '127.0.0.1:3210', origin: allowedOrigin },
+    })
+
+    expect(response.status).toBe(403)
+  })
+
   it('requires dashboard credentials', async () => {
     const response = await createApp().request(`http://${allowedHost}/health`, { headers: { host: allowedHost } })
 
