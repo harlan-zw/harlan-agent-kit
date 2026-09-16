@@ -2,6 +2,7 @@ import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
+import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type { IssueTriageState } from './issue-triage.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageStatsOutcome, RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
@@ -933,6 +934,10 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   getAgentSelection: () => AgentSelection
   /** Pins the Agent provider, model, and reasoning effort, or follows the configuration. */
   selectAgent: (selection: AgentSelection, at: string) => AgentSelection
+  /** The Agent slot count set for each host. A null host follows its default. */
+  getAgentSlots: () => AgentSlotSetting
+  /** Sets the Agent slot count for one host. The next turn reads it. */
+  setAgentSlots: (input: { host: AgentHost, slots: number | null, at: string }) => AgentSlotSetting
   getWorkerSession: (repository: string, itemNumber: number, role: AgentRole, scopeDigest?: string) => string | null
   heartbeatTask: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   heartbeatWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
@@ -4975,6 +4980,26 @@ const automaticAgentSelectionMigration = `
 `
 
 /**
+ * Adds the Agent slot count Harlan sets for each host.
+ *
+ * `agent.maximum_active_agents` is a ceiling, and host memory is advice. The
+ * count in force is a control, so it belongs beside the other durable controls
+ * rather than in the configuration file.
+ *
+ * A NULL column means the host follows its default. Storing the default instead
+ * would freeze today's memory reading into the Journal.
+ */
+const agentSlotsMigration = `
+  CREATE TABLE IF NOT EXISTS agent_slots (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    hogwild INTEGER CHECK (hogwild IS NULL OR hogwild >= 0),
+    desktop INTEGER CHECK (desktop IS NULL OR desktop >= 0),
+    updated_at TEXT NOT NULL
+  );
+  PRAGMA user_version = 73;
+`
+
+/**
  * Adds Routines, their runs, and the Candidate ledger.
  *
  * A Routine answers a clock, so it has no Item and no Revision. `worker_tasks`
@@ -6324,6 +6349,10 @@ function installSchema(database: DatabaseSync): void {
     version = 72
   }
   if (version === 72) {
+    applyMigration(database, agentSlotsMigration)
+    version = 73
+  }
+  if (version === 73) {
     // A rewind replays this against a journal that already carries the column,
     // and SQLite has no ADD COLUMN IF NOT EXISTS, so ask before adding.
     const present = database.prepare(`SELECT 1 AS found FROM pragma_table_info('review_runs') WHERE name = 'merge_risk'`).get() !== undefined
@@ -6333,11 +6362,11 @@ function installSchema(database: DatabaseSync): void {
         CHECK (merge_risk IS NULL OR json_valid(merge_risk));`
     applyMigration(database, `
       ${addColumn}
-      PRAGMA user_version = 73;
+      PRAGMA user_version = 74;
     `)
-    version = 73
+    version = 74
   }
-  if (version === 73)
+  if (version === 74)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -6741,6 +6770,30 @@ export function openJournalStore(
     // A build that drops a model leaves a stored selection nothing can answer.
     // The configuration is the safe answer, and the dashboard shows what it names.
     return parsed._tag === 'Ok' ? parsed.value : { _tag: 'FollowsConfiguration' }
+  }
+
+  const getAgentSlots = (): AgentSlotSetting => {
+    const row = database.prepare('SELECT hogwild, desktop FROM agent_slots WHERE singleton = 1').get() as {
+      hogwild: number | null
+      desktop: number | null
+    } | undefined
+    return { hogwild: row?.hogwild ?? null, desktop: row?.desktop ?? null }
+  }
+
+  const setAgentSlots = (input: { host: AgentHost, slots: number | null, at: string }): AgentSlotSetting => {
+    if (input.slots !== null && (!Number.isSafeInteger(input.slots) || input.slots < 0))
+      throw new Error('Agent slots must be a nonnegative integer.')
+    const current = getAgentSlots()
+    const next = { ...current, [input.host]: input.slots }
+    database.prepare(`
+      INSERT INTO agent_slots (singleton, hogwild, desktop, updated_at)
+      VALUES (1, ?, ?, ?)
+      ON CONFLICT (singleton) DO UPDATE SET
+        hogwild = excluded.hogwild,
+        desktop = excluded.desktop,
+        updated_at = excluded.updated_at
+    `).run(next.hogwild, next.desktop, input.at)
+    return getAgentSlots()
   }
 
   /** The Agent provider, model, and reasoning effort in force right now. */
@@ -14734,6 +14787,8 @@ export function openJournalStore(
     failWorkerTask,
     getAgentControl,
     getAgentSelection,
+    getAgentSlots,
+    setAgentSlots,
     getDashboardSnapshot,
     getStats,
     listWorkflowEvents,

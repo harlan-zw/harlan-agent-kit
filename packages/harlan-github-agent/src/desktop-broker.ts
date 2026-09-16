@@ -7,7 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { DESKTOP_PROTOCOL } from './desktop-protocol.ts'
+import { DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL } from './desktop-protocol.ts'
 import { exportDesktopWorktree, importDesktopWorktree } from './desktop-worktree.ts'
 
 export interface DesktopTurn {
@@ -56,7 +56,7 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
   // and failed the Task on the far side.
   const current = () => report !== null && report.protocol === DESKTOP_PROTOCOL
   return {
-    available: () => connected() && current() && report !== null && report.memoryGiB - report.reservedGiB >= 8,
+    available: () => connected() && current() && report !== null && report.memoryGiB - report.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB,
     read: () => ({ connected: connected(), current: current(), protocol: DESKTOP_PROTOCOL, report, requestedMemoryGiB }),
     setMemory: persistMemory,
     report: (value: DesktopReport) => {

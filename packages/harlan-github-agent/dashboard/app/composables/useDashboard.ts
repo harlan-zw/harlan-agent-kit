@@ -179,6 +179,10 @@ function createDashboard() {
   const selectAgent = (selection: AgentSelection): Promise<void> =>
     control(() => $fetch('/api/agents/select', { method: 'POST', body: selection }))
 
+  /** Agent slots apply to the next turn. Running Agents finish. */
+  const setAgentSlots = (host: 'hogwild' | 'desktop', slots: number): Promise<void> =>
+    control(() => $fetch('/api/agents/slots', { method: 'POST', body: { host, slots } }))
+
   async function setRepositoryPaused(repository: string, paused: boolean): Promise<void> {
     repositoryPending.value = repository
     controlError.value = undefined
@@ -463,6 +467,7 @@ function createDashboard() {
     requestUpdate,
     setSelectionMode,
     selectAgent,
+    setAgentSlots,
     setRepositoryPaused,
     setRepositoryWritesEnabled,
     rerunReview,

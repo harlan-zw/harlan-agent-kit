@@ -1,7 +1,7 @@
 import type { AgentEvent, AgentProvider, AgentTurnRequest } from '../src/agent-provider.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
-import { agentHost, createHostAgentPool } from '../src/host-capacity.ts'
+import { agentHost, createHostAgentPool, parseAgentSlots } from '../src/host-capacity.ts'
 
 const request: AgentTurnRequest = {
   model: 'test',
@@ -121,5 +121,47 @@ describe('a Worktree the desktop cannot carry', () => {
     const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
     expect(agentHost(capacity)).toBe('desktop')
     expect(agentHost(capacity, new Set(['desktop']))).toBeNull()
+  })
+})
+
+describe('agent slots', () => {
+  const limits = { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 }
+
+  it('admits a turn against the slot count in force, not the one the pool started with', async () => {
+    let hogwild = 0
+    const pool = createHostAgentPool({ localMaximum: () => hogwild, desktopMaximum: 0, desktopConnected: () => false, wait: async () => {} })
+    const local = provider('codex', () => {})
+    const turn = pool.provider(local, local).runTurn({ ...request, taskId: 'raised' })[Symbol.asyncIterator]()
+    const started = turn.next()
+    expect(pool.read().localMaximum).toBe(0)
+    hogwild = 1
+    await started
+    expect(pool.tasks()).toEqual([{ taskId: 'raised', host: 'hogwild' }])
+    await turn.return?.()
+  })
+
+  it('runs two desktop turns when the desktop holds two slots', async () => {
+    const hosts: string[] = []
+    const pool = createHostAgentPool({ localMaximum: 0, desktopMaximum: () => 2, desktopConnected: () => true, wait: async () => {} })
+    const first = pool.provider(provider('codex', () => hosts.push('local')), provider('codex', () => hosts.push('desktop'))).runTurn({ ...request, taskId: 'first' })[Symbol.asyncIterator]()
+    const second = pool.provider(provider('codex', () => hosts.push('local')), provider('codex', () => hosts.push('desktop'))).runTurn({ ...request, taskId: 'second' })[Symbol.asyncIterator]()
+    await first.next()
+    await second.next()
+    expect(hosts).toEqual(['desktop', 'desktop'])
+    await first.return?.()
+    await second.return?.()
+  })
+
+  it('refuses a slot count the configuration does not allow', () => {
+    expect(() => parseAgentSlots({ host: 'hogwild', slots: 5 }, limits)).toThrow('from 0 to 4')
+    expect(() => parseAgentSlots({ host: 'desktop', slots: 3 }, limits)).toThrow('from 0 to 2')
+    expect(() => parseAgentSlots({ host: 'laptop', slots: 1 }, limits)).toThrow('hogwild or desktop')
+    expect(() => parseAgentSlots({ host: 'hogwild', slots: 1.5 }, limits)).toThrow('whole number')
+    expect(() => parseAgentSlots('hogwild', limits)).toThrow('JSON object')
+  })
+
+  it('accepts a slot count above what host memory suggests, because memory is advice', () => {
+    expect(parseAgentSlots({ host: 'hogwild', slots: 4 }, limits)).toEqual({ host: 'hogwild', slots: 4 })
+    expect(parseAgentSlots({ host: 'desktop', slots: 0 }, limits)).toEqual({ host: 'desktop', slots: 0 })
   })
 })

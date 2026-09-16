@@ -2,36 +2,42 @@ import { readFile } from 'node:fs/promises'
 import { totalmem } from 'node:os'
 import { dirname, join } from 'node:path'
 
-/** How many Agents the host memory grants, against what the configuration asked for. */
+/** How many Agents the host memory suggests, against the configured ceiling. */
 export interface AgentSlotSizing {
-  /** The slot count the configuration file asked for. */
-  configured: number
-  /** The slot count the host memory allows. Never above `configured`. */
-  granted: number
+  /** The most Agent slots the configuration allows. */
+  ceiling: number
+  /** The slot count host memory suggests. Never above `ceiling`. */
+  suggested: number
   /** Memory the service may spend on Agents, after the host reserve. */
   agentMemoryBytes: number
   /** Memory one Agent is assumed to need. */
   perAgentGiB: number
 }
 
-export function agentSlotSizing(configured: number, memoryBytes: number, perAgentGiB: number): AgentSlotSizing {
-  const granted = Math.max(0, Math.min(configured, Math.floor(memoryBytes / (perAgentGiB * 1024 ** 3))))
-  return { configured, granted, agentMemoryBytes: memoryBytes, perAgentGiB }
+/** The live Agent slot count for each host. */
+export interface AgentSlotCounts {
+  hogwild: number
+  desktop: number
+}
+
+export function agentSlotSizing(ceiling: number, memoryBytes: number, perAgentGiB: number): AgentSlotSizing {
+  const suggested = Math.max(0, Math.min(ceiling, Math.floor(memoryBytes / (perAgentGiB * 1024 ** 3))))
+  return { ceiling, suggested, agentMemoryBytes: memoryBytes, perAgentGiB }
 }
 
 /**
- * One line naming the Agent capacity the host really grants.
+ * One line naming the Agent slots each host runs, and what memory suggests.
  *
- * The memory clamp used to be silent. A configuration asking for four Agents
- * ran two, and nothing said so. Every start now reports the granted count.
+ * Harlan sets the slot count from the dashboard or the tray, so the memory
+ * figure is advice. A count above it still starts, and this line says so.
  */
-export function agentSlotSizingLine(sizing: AgentSlotSizing): string {
+export function agentSlotLine(slots: AgentSlotCounts, sizing: AgentSlotSizing): string {
   const available = (sizing.agentMemoryBytes / 1024 ** 3).toFixed(1)
-  const capacity = `Agent slots: ${sizing.granted} of ${sizing.configured} requested.`
-  const budget = `Host memory grants ${available} GiB at ${sizing.perAgentGiB} GiB for each Agent.`
-  if (sizing.granted >= sizing.configured)
-    return `${capacity} ${budget}`
-  return `${capacity} ${budget} To grant more, lower agent.memory_per_agent_gib or agent.host_reserve_gib.`
+  const capacity = `Agent slots: ${slots.hogwild} on Hogwild, ${slots.desktop} on the desktop.`
+  const budget = `Host memory suggests ${sizing.suggested} at ${sizing.perAgentGiB} GiB for each Agent, from ${available} GiB available.`
+  if (slots.hogwild > sizing.suggested)
+    return `${capacity} ${budget} Hogwild may run out of memory.`
+  return `${capacity} ${budget}`
 }
 
 /**

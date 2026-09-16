@@ -28,6 +28,7 @@ did not cover it.
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
 | Control API | authenticated HTTP routes | Controller | One per service, used by the dashboard and CLI | Control API |
+| Agent slots | `agent_slots` | Controller | One count per host, 1 to N Agents | Agent slots |
 | Pause | `agent_control` | Controller | Stops new agent Tasks from starting | Pause |
 | Restart request | `restart_requests` | Controller | N per service, one active | Restart after current work |
 | Service update | `origin/main`, `restart_requests.operation_tag` | Controller | One check, optional Restart request | Update available; Update after current work |
@@ -270,6 +271,22 @@ The authenticated HTTP interface for reading service state and requesting durabl
 The dashboard and `harlan-github-agent control` use the same routes. A Control API request never edits the Journal directly.
 
 Use Control API. Do not use dashboard API, admin API, management API, or runner API.
+
+### Agent slots
+
+How many Agents one host may run at once.
+
+Hogwild and the desktop hold their own count. Harlan sets each one from the
+System pane or the tray. A count is durable, and it survives a restart.
+
+`agent.maximum_active_agents` is the ceiling, not the count in force. Host
+memory decides the count on a host nobody has set, and after that it is advice:
+the System pane names the suggestion, and a count above it still runs.
+
+A new count applies to the next Agent turn. Running Agents finish.
+
+Use Agent slots. Do not use concurrency, parallelism, workers, or capacity.
+Capacity means the Agent provider window that the Reserve protects.
 
 ### Pause
 

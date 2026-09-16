@@ -25,7 +25,7 @@ import HostWork from './system/HostWork.vue'
  *
  * Nothing here acts on a Task. Watch logs and Eject live on the running card.
  */
-const { snapshot, incidents, relativeTime, now, requestUpdate, controlPending } = useDashboard()
+const { snapshot, incidents, relativeTime, now, requestUpdate, controlPending, setAgentSlots } = useDashboard()
 const { open } = useSystemPane()
 const { connection: host, history: hostHistory } = useHogwildStatus()
 
@@ -54,6 +54,23 @@ const routines = computed(() => {
     }
   })
 })
+
+/**
+ * Agent slots are Harlan's number, and host memory is advice under it.
+ *
+ * The count applies to the next turn, so nothing here stops a running Agent.
+ */
+const slotLimits = computed(() => snapshot.value.agentSlots)
+const hogwildSlots = computed(() => snapshot.value.hostCapacity?.localMaximum)
+const desktopSlots = computed(() => snapshot.value.hostCapacity?.desktopMaximum)
+const slotChoices = (ceiling: number): number[] => Array.from({ length: ceiling + 1 }, (_value, count) => count)
+const memoryAdvice = computed(() => {
+  const limits = slotLimits.value
+  if (limits === undefined)
+    return null
+  return `Host memory suggests ${limits.hogwildMemoryMaximum} at ${limits.memoryPerAgentGiB} GiB for each Agent.`
+})
+const overMemory = computed(() => slotLimits.value !== undefined && hogwildSlots.value !== undefined && hogwildSlots.value > slotLimits.value.hogwildMemoryMaximum)
 
 const hostStatus = computed(() => host.value._tag === 'Connected' ? host.value.status : undefined)
 const desktopMemory = ref(16)
@@ -142,6 +159,30 @@ function activityLine(item: AgentActivityItem): string {
             <p v-if="hogwildQueued !== undefined" class="mt-2 text-xs text-muted">
               {{ hogwildQueued }} GitHub Actions jobs queued
             </p>
+            <div v-if="slotLimits && hogwildSlots !== undefined" class="mt-4">
+              <span id="hogwild-slots-label" class="field-label">Agent slots</span>
+              <div class="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-labelledby="hogwild-slots-label">
+                <UButton
+                  v-for="count in slotChoices(slotLimits.hogwildCeiling)"
+                  :key="count"
+                  size="sm"
+                  class="font-mono"
+                  :color="count === hogwildSlots ? 'primary' : 'neutral'"
+                  :variant="count === hogwildSlots ? 'solid' : 'outline'"
+                  :aria-pressed="count === hogwildSlots"
+                  :aria-label="`${count} Agent slots on Hogwild`"
+                  :disabled="controlPending"
+                  @click="setAgentSlots('hogwild', count)"
+                >
+                  {{ count }}
+                </UButton>
+              </div>
+              <p class="mt-2 text-xs" :class="overMemory ? 'status-warning' : 'text-muted'">
+                {{ memoryAdvice }}<template v-if="overMemory">
+                  Hogwild may run out of memory.
+                </template>
+              </p>
+            </div>
             <HostWork :tasks="hogwildTasks" :tasks-available="snapshot.hostTasks !== undefined" :jobs="hogwildRunningJobs" />
           </div>
           <div class="py-4">
@@ -157,7 +198,7 @@ function activityLine(item: AgentActivityItem): string {
                   <dt class="text-muted">
                     Agents
                   </dt><dd class="mt-1 font-mono">
-                    {{ desktopReport.agents }} running
+                    {{ desktopSlots === undefined ? `${desktopReport.agents} running` : `${desktopReport.agents} / ${desktopSlots}` }}
                   </dd>
                 </div>
                 <div>
@@ -178,6 +219,28 @@ function activityLine(item: AgentActivityItem): string {
             <p v-else class="mt-3 text-sm text-muted">
               Desktop takes no new work until it reconnects.
             </p>
+            <div v-if="slotLimits && desktopSlots !== undefined" class="mt-4">
+              <span id="desktop-slots-label" class="field-label">Agent slots</span>
+              <div class="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-labelledby="desktop-slots-label">
+                <UButton
+                  v-for="count in slotChoices(slotLimits.desktopCeiling)"
+                  :key="count"
+                  size="sm"
+                  class="font-mono"
+                  :color="count === desktopSlots ? 'primary' : 'neutral'"
+                  :variant="count === desktopSlots ? 'solid' : 'outline'"
+                  :aria-pressed="count === desktopSlots"
+                  :aria-label="`${count} Agent slots on the desktop`"
+                  :disabled="controlPending"
+                  @click="setAgentSlots('desktop', count)"
+                >
+                  {{ count }}
+                </UButton>
+              </div>
+              <p class="mt-2 text-xs text-muted">
+                Zero keeps every Agent on Hogwild. Each desktop Agent needs {{ slotLimits.memoryPerAgentGiB }} GiB.
+              </p>
+            </div>
             <form class="mt-4" @submit.prevent="saveDesktopMemory">
               <label for="desktop-memory" class="field-label">Desktop memory, shared by both queues</label>
               <div class="mt-2 flex flex-wrap items-center gap-2">

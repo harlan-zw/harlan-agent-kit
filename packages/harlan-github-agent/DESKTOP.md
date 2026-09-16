@@ -4,8 +4,12 @@ Hogwild owns observation, the Queue, and every GitHub write.
 Desktop runs Agent turns only after Hogwild fills its local Agent capacity.
 A saved desktop session stays on desktop until its work ends.
 
-Each Agent accounts for 8 GiB. Hogwild's effective Agent limit also respects its service memory limit.
+Each Agent accounts for 8 GiB.
 The desktop shares a configurable 16 GiB with GitHub Actions through `harlan-desktop-capacity`.
+
+Each host holds its own Agent slot count. Set both from the System pane or the tray.
+The desktop takes up to two, and it runs claimed turns together.
+A turn the desktop has no memory for is deferred, and the controller queues it again.
 
 ## Install
 
@@ -30,7 +34,7 @@ That file can also override `HARLAN_GITHUB_AGENT_CONTROLLER_URL`.
 Keep the password file private.
 
 Desktop makes outbound HTTPS requests. It needs no inbound SSH service.
-The System pane shows desktop connection, activity, and shared memory.
+The System pane shows desktop connection, activity, Agent slots, and shared memory.
 Memory changes persist. An offline desktop receives a saved change when it reconnects.
 
 ## Work and cancellation

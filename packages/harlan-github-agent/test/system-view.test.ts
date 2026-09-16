@@ -102,6 +102,15 @@ describe('systemChipState', () => {
     expect(busy).toMatchObject({ _tag: 'Normal', active: 1, live: true })
   })
 
+  it('counts the Agent slots each host holds, so the chip follows the control', () => {
+    const capacity = { localActive: 1, localMaximum: 3, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+    const connected = systemChipState(dashboardSnapshot({ agentStart: { _tag: 'Available' }, hostCapacity: capacity }))
+    expect(connected).toMatchObject({ maximum: 4 })
+
+    const alone = systemChipState(dashboardSnapshot({ agentStart: { _tag: 'Available' }, hostCapacity: { ...capacity, desktopConnected: false } }))
+    expect(alone).toMatchObject({ maximum: 3 })
+  })
+
   it('names the one reason work cannot start', () => {
     const reasons: Array<[AgentStartState, string]> = [
       [{ _tag: 'Paused' }, 'Paused'],
