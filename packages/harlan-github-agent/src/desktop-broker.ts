@@ -121,7 +121,10 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
             throw new Error('Desktop returned no Worktree.')
         }
         catch (error) {
-          throw new Error(error instanceof Error ? error.message : 'Desktop execution failed.', { cause: 'desktop-execution' })
+          // A Worktree the desktop cannot carry keeps its own cause, so the
+          // host pool runs the turn on Hogwild instead of failing the Task.
+          const cause = error instanceof Error && error.cause === 'desktop-unsupported' ? 'desktop-unsupported' : 'desktop-execution'
+          throw new Error(error instanceof Error ? error.message : 'Desktop execution failed.', { cause })
         }
         finally {
           if (entry !== undefined)
