@@ -382,12 +382,27 @@ describe('running one scan', () => {
     }
   })
 
+  it('refuses a daily check-in that states no verdict', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'daily-checkin')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const result = await workerFor(store, scanning({ report: 'GREEN. Everything passed.', candidates: [candidate] }))
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(result).toEqual({ _tag: 'Err', error: 'The daily check-in Routine answered without its verdict.' })
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it.each([undefined, '', '  '])('refuses a daily check-in without its report: %s', async (report) => {
     const store = openJournalStore(':memory:')
     try {
       seed(store, 'daily-checkin')
       store.setRepositoryWritesEnabled('harlan-zw/example', true)
-      const result = await workerFor(store, scanning({ report, candidates: [candidate] }))
+      const result = await workerFor(store, scanning({ report, candidates: [candidate], verdict: { severity: 'GREEN', coverage: 'complete' } }))
         .run(claimStoredRun(store), new AbortController().signal)
       expect(result).toEqual({ _tag: 'Err', error: 'The daily check-in Routine answered without its report.' })
       expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
@@ -493,6 +508,7 @@ describe('running one scan', () => {
       const worker = workerFor(store, scanning({
         report: 'AMBER. One probe failed.\n\n## Broken\n\n- d1 unreachable',
         candidates: [candidate],
+        verdict: { severity: 'AMBER', coverage: 'complete' },
       }))
 
       const result = await worker.run(task, new AbortController().signal)

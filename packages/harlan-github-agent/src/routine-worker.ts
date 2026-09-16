@@ -183,7 +183,12 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           routineId: task.routineId,
           routineName: task.name,
           run: { id: task.id, scheduledFor: task.scheduledFor },
-          report: { _tag: 'Completed', evidence, ...(detail === '' ? {} : { detail }) },
+          report: {
+            _tag: 'Completed',
+            evidence,
+            ...(detail === '' ? {} : { detail }),
+            ...(response.verdict === undefined ? {} : { verdict: response.verdict }),
+          },
         }),
         at: options.now().toISOString(),
       })
