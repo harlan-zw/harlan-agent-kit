@@ -8042,9 +8042,11 @@ export function openJournalStore(
       }
       // Only a run nothing else settles yet can gain a settlement. The parent
       // may itself be a settlement, because CI and mergeability can move more
-      // than once without a new head commit.
+      // than once without a new head commit. The settlement refreshes the
+      // controller gates and never re-judges the diff, so it inherits the
+      // parent's Merge risk verdict verbatim.
       const parent = database.prepare(`
-        SELECT 1 FROM review_runs
+        SELECT merge_risk FROM review_runs
         WHERE id = ? AND subject_id = ? AND revision_id = ? AND head_sha = ?
           AND base_ref = ?
           AND NOT EXISTS (
@@ -8057,7 +8059,7 @@ export function openJournalStore(
         revisionId,
         input.headSha,
         pullRequest.baseRef ?? null,
-      )
+      ) as { merge_risk: string | null } | undefined
       if (parent === undefined) {
         const orphaned = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.supersedesReviewRunId)
         database.exec('COMMIT')
@@ -8069,8 +8071,9 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref,
+          merge_risk
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -8091,6 +8094,7 @@ export function openJournalStore(
         usage,
         input.supersedesReviewRunId,
         pullRequest.baseRef ?? null,
+        parent.merge_risk,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
