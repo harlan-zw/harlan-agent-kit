@@ -306,6 +306,17 @@ export function isTransientFailure(signal: FailureSignal): boolean {
 }
 
 /**
+ * Whether a refused Publication says its subject moved on.
+ *
+ * The controller retires that Publication on purpose and queues fresh work for
+ * the new head commit. Nothing broke and nobody has to act, so an Incident
+ * names a healthy path as a fault. One sat open for twelve days doing that.
+ */
+export function isSubjectMovedReason(message: string): boolean {
+  return classifyFailure({ message }).kind === 'subject_changed'
+}
+
+/**
  * Whether another attempt at the same work can change the result.
  *
  * A Task the controller refused by policy reads the same policy on every

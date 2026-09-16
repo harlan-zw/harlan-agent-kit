@@ -31,7 +31,7 @@ import { validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
 import { createDesktopBroker } from './desktop-broker.ts'
 import { createExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
-import { classifyFailure } from './failure.ts'
+import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
@@ -548,6 +548,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       github: workerGithub,
       now,
       onProgressPublishFailure: (task: ClaimedAgentTask, reason: string) => {
+        // A subject that moved on is the ordinary end of a status comment, so
+        // it is logged and never raised. A fresh Review already covers the new
+        // head commit, and there is nothing for a person to do.
+        if (isSubjectMovedReason(reason)) {
+          options.logger.info(`${task.repository}: the pull request moved on before its status update, the review continues`)
+          return
+        }
         options.logger.error(`${task.repository}: status update failed, the review continues: ${reason}`)
         if (!store.mayWriteRepository(task.repository))
           return
@@ -710,6 +717,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         now,
         onError: error => options.logger.error(error),
         onFailure: (repository, pullRequestNumber, reason) => {
+          if (isSubjectMovedReason(reason)) {
+            options.logger.info(`${repository}#${pullRequestNumber}: the pull request moved on before its terminal Review comment`)
+            return
+          }
           options.logger.error(`${repository}#${pullRequestNumber}: terminal Review Publication failed: ${reason}`)
           recordServiceIncident(store, now().toISOString(), 'review_status_publication', reason, { _tag: 'Repository', repository })
         },
