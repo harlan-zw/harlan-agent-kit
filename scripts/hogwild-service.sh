@@ -55,6 +55,10 @@ require_inputs() {
     echo "The repository environment manifest does not exist: $REPOSITORY_ENV_MANIFEST_FILE" >&2
     exit 1
   fi
+  if [ ! -f "$SCRIPT_DIR/desktop-agent.service" ]; then
+    echo "The desktop Agent unit does not exist: $SCRIPT_DIR/desktop-agent.service" >&2
+    exit 1
+  fi
 }
 
 controller_request() {
@@ -299,6 +303,11 @@ update_desktop_client() {
   fi
   echo "Updating the desktop client"
   bash "$SCRIPT_DIR/service.sh" prepare-update "$ref"
+  # The unit carries the PATH the Worktrunk hooks run under, so a checkout that
+  # moves without it runs new code in the old environment. That gap put every
+  # desktop turn into `pnpm: exit status: 127` until PR #289.
+  install -Dm644 "$SCRIPT_DIR/desktop-agent.service" "$HOME/.config/systemd/user/$DESKTOP_UNIT.service"
+  systemctl --user daemon-reload
   systemctl --user restart "$DESKTOP_UNIT"
   echo "Desktop client: $(git -C "${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}" log --oneline -1)"
 }
