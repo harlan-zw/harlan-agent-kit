@@ -21,6 +21,9 @@ systemctl --user daemon-reload
 systemctl --user enable --now harlan-desktop-agent.service
 ```
 
+That is a first install only. `pnpm service:hogwild:update` reinstalls the unit,
+moves the desktop checkout, and restarts the client on every later deploy.
+
 The client reads `~/.config/harlan-github-agent/dashboard-password` for the Hogwild controller.
 If it differs, set `HARLAN_GITHUB_AGENT_PASSWORD_FILE` in `~/.config/harlan-github-agent/desktop.env`.
 That file can also override `HARLAN_GITHUB_AGENT_CONTROLLER_URL`.
