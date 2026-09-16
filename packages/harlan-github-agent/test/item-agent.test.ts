@@ -218,7 +218,7 @@ describe('subject Workers', () => {
       getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
-      listPullRequestFiles: () => Promise.resolve(input.triageFailure === undefined ? ok(input.changedFiles) : err(input.triageFailure)),
+      listPullRequestFiles: () => Promise.resolve(input.triageFailure === undefined ? ok(input.changedFiles.map(path => ({ additions: 1, deletions: 0, path, previousFilename: null, status: 'modified' as const }))) : err(input.triageFailure)),
       getPullRequestReviewSnapshot: () => {
         snapshotReads += 1
         if (snapshotReads === 2 && input.rereadFailure !== undefined)

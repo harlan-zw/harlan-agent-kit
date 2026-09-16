@@ -527,7 +527,7 @@ Closes #12.`,
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
-        listPullRequestFiles: (_repository, number) => Promise.resolve(ok(input.pullRequestFiles?.[number] ?? [])),
+        listPullRequestFiles: (_repository, number) => Promise.resolve(ok((input.pullRequestFiles?.[number] ?? []).map(path => ({ additions: 1, deletions: 0, path, previousFilename: null, status: 'modified' as const })))),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {

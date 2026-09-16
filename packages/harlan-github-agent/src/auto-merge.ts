@@ -20,7 +20,7 @@ export function hasAutoMergeLabel(labels: string[]): boolean {
  * the label is the instruction.
  */
 export function autoMergeCandidate(repository: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
-  return pullRequest.autoMerge || repository.autoMerge._tag === 'Every'
+  return pullRequest.autoMerge || repository.autoMerge._tag === 'Every' || repository.autoMerge._tag === 'Contained'
 }
 
 export type AutoMergeMethod = 'merge' | 'rebase' | 'squash'
@@ -85,7 +85,31 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   }
   if (attempt.findings.some(finding => finding._tag === 'Open'))
     return { _tag: 'Hold', reason: 'The review left an open finding.' }
-  const minimumConfidence = repository.autoMerge._tag === 'Every' ? repository.autoMerge.minimumConfidence : policy.minimumConfidence
+  const scope = repository.autoMerge
+  // A pull request qualifies through Merge risk or through the label. Which one
+  // it used decides which confidence bar it must clear, because the repository's
+  // Contained bar may sit below the service-wide one a label has always needed.
+  let qualifiedByRisk = false
+  if (scope._tag === 'Contained') {
+    // The verdict is read off this exact Review run, so a stale one from an
+    // earlier head can never merge a pull request that has since grown.
+    const risk = attempt.mergeRisk?.combined
+    if (risk === undefined)
+      return { _tag: 'Hold', reason: 'The current review recorded no Merge risk.' }
+    if (risk._tag === 'Sensitive' && !scope.labelOverridesRisk)
+      return { _tag: 'Hold', reason: `Merge risk is Sensitive: ${risk.reason}` }
+    if (risk._tag !== 'Contained' && !pullRequest.autoMerge)
+      return { _tag: 'Hold', reason: `Merge risk is ${risk._tag}: ${risk.reason}` }
+    // The label is the qualification whenever it is present, so only an
+    // unlabelled pull request ever clears the repository's Merge risk bar.
+    qualifiedByRisk = risk._tag === 'Contained' && !pullRequest.autoMerge
+  }
+
+  const minimumConfidence = scope._tag === 'Every'
+    ? scope.minimumConfidence
+    : scope._tag === 'Contained' && qualifiedByRisk
+      ? scope.minimumConfidence
+      : policy.minimumConfidence
   const confidence = attempt.outcome.confidence
   if (confidence === undefined || confidence < minimumConfidence)
     return { _tag: 'Hold', reason: `Review confidence is below ${minimumConfidence}.` }

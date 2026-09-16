@@ -74,6 +74,14 @@ Every tracked pull request authored by `harlan-zw` enters review without approva
 
 Every tracked pull request is reviewed. The `harlan-agent-auto-merge` label decides who merges the result. With the label, the service merges the pull request itself after a `READY` review at or above `auto_merge.minimum_confidence`. Without it, the pull request waits for Harlan. The agent that opens a pull request adds the label only when the change carries no judgement, for example a dependency bump. Auto merge stays off until `auto_merge.enabled` is true, and it covers owned repositories and trusted authors only. A repository block can set `auto_merge.pull_requests: every` with its own `minimum_confidence` to merge every trusted pull request without the label, for a demo site where a wrong merge costs little.
 
+A repository can instead set `auto_merge.pull_requests: contained`, which lets a low risk code change merge on evidence rather than on a label. Every Review returns a Merge risk: `Contained` when a mistake costs one revert commit, `Reviewable` when a person should read it, `Sensitive` when a mistake is expensive or hard to undo.
+
+Two independent answers produce it. The controller computes a floor from the changed paths and their counts, refusing to contain a pull request that is too large, that deletes or renames a file, or that touches a file an agent reads as instructions. The Review Agent returns its own claim from the diff, which is the only part that sees blast radius: three lines changing a shared default reach every consumer while every path looks small. The more dangerous of the two wins, so `Contained` needs both to agree and a wrong low needs two independent mistakes.
+
+The label keeps working alongside it. `merge_risk.label_overrides_risk: false` makes a `Sensitive` verdict beat a label somebody left on a pull request that has since grown. A labelled pull request still clears the service-wide `auto_merge.minimum_confidence`, never the lower bar a repository sets for Merge risk.
+
+Merge risk routes the merge and never the Review. Every tracked pull request is still reviewed, whatever it says.
+
 No new issue work starts above `max_open_pull_requests` open pull requests. Review, repair, and conflict fixes continue, because they shorten that queue.
 
 Owned repositories selected in the GitHub App enable Issue triage by default. A maintained repository needs an explicit mapping with `issue_work: true`. Without an installation, the controller uses Harlan's authenticated GitHub account. Harlan's issues, and the issues the service files for Routines, go through Issue triage and into Issue work on their own. An outside contributor's issue waits for `harlan-agent-review` or `Approve` before any agent reads it. One Approval names that exact issue state and covers Issue triage and the Issue work that follows when triage says ready. The service removes the label before saving the Approval. Edited issue text is a new state and waits again.
@@ -326,7 +334,7 @@ A delta becomes a Regression only after it clears two bars.
 First it must beat the noise that same measurement recorded, which is the head build compared against itself in the same job.
 Then it must persist across three later Measurements.
 Below ten usable Measurements for a Benchmark, the Routine judges nothing and says so.
-So a repository that has only just started storing Measurements reports its coverage and nothing else for several weeks, which is the correct answer rather than a fault.
+So a repository that has only started storing Measurements reports its coverage and nothing else for several weeks, which is the correct answer rather than a fault.
 
 The Routine also names at most one Opportunity per scan: a Benchmark that drifted while no single commit ever cleared its Threshold, one whose count keeps climbing, or the one that costs the most.
 Drift is the valuable case, because the per-commit rule is blind to it by design. Twenty commits at under one percent each never trip a Threshold and still add up.

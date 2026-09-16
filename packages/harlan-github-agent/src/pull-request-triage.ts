@@ -54,8 +54,18 @@ const PROSE_DIRECTORY_PATTERN = /^docs\//
 /** Agent instructions are behaviour, so they leave the prose set even when they end in `.md`. */
 const BEHAVIOUR_PATTERN = /(?:^|\/)(?:SKILL\.md|AGENTS\.md|CLAUDE\.md)$|(?:^|\/)(?:\.github|\.claude|\.codex[^/]*)\//
 
+/**
+ * Whether an agent reads this file as instructions.
+ *
+ * One definition, two readers: the path rule that decides whether Review runs,
+ * and Merge risk, which never lets one of these merge unread.
+ */
+export function isInstructionPath(path: string): boolean {
+  return BEHAVIOUR_PATTERN.test(path)
+}
+
 export function isProsePath(path: string): boolean {
-  if (BEHAVIOUR_PATTERN.test(path))
+  if (isInstructionPath(path))
     return false
   return PROSE_FILE_PATTERN.test(path) || PROSE_DIRECTORY_PATTERN.test(path)
 }

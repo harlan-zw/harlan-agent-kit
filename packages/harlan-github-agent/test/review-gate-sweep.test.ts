@@ -55,6 +55,7 @@ function gateRefresh(overrides: Partial<ReviewGateRefresh> = {}): ReviewGateRefr
     gates: pendingControllerGates(),
     findings: [],
     confidence: 88,
+    mergeRisk: null,
     gatesUpdatedAt: '2026-08-27T08:20:00.000Z',
     commentId: 42,
     publishedBody: '### 🤖 PENDING',

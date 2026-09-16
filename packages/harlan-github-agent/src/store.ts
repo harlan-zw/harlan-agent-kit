@@ -47,6 +47,7 @@ import type {
   IssueWorkTask,
   ItemDismissalResult,
   ItemSummary,
+  MergeRiskRecord,
   OpenAgentPullRequest,
   PinnedAgentSelection,
   PreparedPublication,
@@ -549,6 +550,11 @@ export interface ReviewGateRefresh {
   findings: ReviewFinding[]
   /** The agent's own score, kept whatever the gates said. */
   confidence: number | undefined
+  /**
+   * The verdict this run recorded, so a restated comment keeps its Merge risk
+   * line. Null covers every run recorded before this existed.
+   */
+  mergeRisk: MergeRiskRecord | null
   commentId: number
   /** What the canonical comment holds now, so the edit can compare and swap. */
   publishedBody: string
@@ -574,6 +580,7 @@ interface ReviewGateRefreshRow {
   gates_updated_at: string
   findings: string
   confidence: number | null
+  merge_risk: string | null
   github_comment_id: number
   published_body: string
 }
@@ -1250,6 +1257,7 @@ interface ReviewRunRow {
   feedback_tag: AgentFeedback['_tag'] | null
   feedback_reason: string | null
   feedback_updated_at: string | null
+  merge_risk: string | null
 }
 
 interface DashboardReviewRunRow extends ReviewRunRow {
@@ -2521,9 +2529,12 @@ function digest(value: string): string {
  * The repository policy a stored Review verdict depends on.
  *
  * A change here starts a fresh Review of every open pull request, so this
- * names only the fields the Review gates and Repair authority read. Digesting
- * the whole mapping sent the fleet back through Review whenever a field was
- * added for something else, as Auto merge scope did.
+ * names only the fields the Review gates, Repair authority, and the stored
+ * Merge risk verdict read. The Contained policy decides the stored verdict,
+ * so tightening it must invalidate every verdict recorded under the old one;
+ * a fresh Review then records the verdict the current policy calls for.
+ * Digesting the whole mapping went further than that and sent the fleet back
+ * through Review whenever a field was added for something else.
  */
 export function reviewPolicyDigest(mapping: RepositoryMapping): string {
   return digest(JSON.stringify({
@@ -2533,6 +2544,10 @@ export function reviewPolicyDigest(mapping: RepositoryMapping): string {
     defaultBranch: mapping.defaultBranch,
     writablePullRequestAuthors: mapping.writablePullRequestAuthors,
     writablePullRequestHeadPrefixes: mapping.writablePullRequestHeadPrefixes,
+    // Absent, not null: JSON.stringify drops undefined keys, so a repository
+    // that never opted in keeps its pre-upgrade digest and no fleet-wide
+    // re-review starts on first deploy. A Contained policy still adds the key.
+    mergeRiskPolicy: mapping.autoMerge._tag === 'Contained' ? mapping.autoMerge.policy : undefined,
   }))
 }
 
@@ -2656,6 +2671,10 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
         : { _tag: row.feedback_tag, reason: row.feedback_reason ?? '', updatedAt: row.feedback_updated_at },
     gatePublication: row.gate_publication_id === null ? { _tag: 'Unpublished' } : { _tag: 'Published', publicationId: row.gate_publication_id },
     publications,
+    // Null covers every run recorded before Merge risk existed, and every
+    // repository that never asked for it. Both must read as "no verdict",
+    // never as a Contained one.
+    mergeRisk: row.merge_risk === null || row.merge_risk === undefined ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
   }
 }
 
@@ -6346,7 +6365,21 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, agentSlotsMigration)
     version = 73
   }
-  if (version === 73)
+  if (version === 73) {
+    // A rewind replays this against a journal that already carries the column,
+    // and SQLite has no ADD COLUMN IF NOT EXISTS, so ask before adding.
+    const present = database.prepare(`SELECT 1 AS found FROM pragma_table_info('review_runs') WHERE name = 'merge_risk'`).get() !== undefined
+    const addColumn = present
+      ? ''
+      : `ALTER TABLE review_runs ADD COLUMN merge_risk TEXT NULL
+        CHECK (merge_risk IS NULL OR json_valid(merge_risk));`
+    applyMigration(database, `
+      ${addColumn}
+      PRAGMA user_version = 74;
+    `)
+    version = 74
+  }
+  if (version === 74)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -6556,6 +6589,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
       COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
       review_runs.findings,
+      review_runs.merge_risk,
       agent_feedback.kind AS feedback_tag,
       agent_feedback.reason AS feedback_reason,
       agent_feedback.updated_at AS feedback_updated_at,
@@ -7941,8 +7975,8 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, base_ref
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, base_ref, merge_risk
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -7962,6 +7996,7 @@ export function openJournalStore(
         contentDigest,
         usage,
         pullRequest.baseRef ?? null,
+        input.mergeRisk === undefined || input.mergeRisk === null ? null : JSON.stringify(input.mergeRisk),
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -8074,9 +8109,11 @@ export function openJournalStore(
       }
       // Only a run nothing else settles yet can gain a settlement. The parent
       // may itself be a settlement, because CI and mergeability can move more
-      // than once without a new head commit.
+      // than once without a new head commit. The settlement refreshes the
+      // controller gates and never re-judges the diff, so it inherits the
+      // parent's Merge risk verdict verbatim.
       const parent = database.prepare(`
-        SELECT 1 FROM review_runs
+        SELECT merge_risk FROM review_runs
         WHERE id = ? AND subject_id = ? AND revision_id = ? AND head_sha = ?
           AND base_ref = ?
           AND NOT EXISTS (
@@ -8089,7 +8126,7 @@ export function openJournalStore(
         revisionId,
         input.headSha,
         pullRequest.baseRef ?? null,
-      )
+      ) as { merge_risk: string | null } | undefined
       if (parent === undefined) {
         const orphaned = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.supersedesReviewRunId)
         database.exec('COMMIT')
@@ -8101,8 +8138,9 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref,
+          merge_risk
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -8123,6 +8161,7 @@ export function openJournalStore(
         usage,
         input.supersedesReviewRunId,
         pullRequest.baseRef ?? null,
+        parent.merge_risk,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -8389,7 +8428,8 @@ export function openJournalStore(
         review_runs.findings,
         agent_feedback.kind AS feedback_tag,
         agent_feedback.reason AS feedback_reason,
-        agent_feedback.updated_at AS feedback_updated_at
+        agent_feedback.updated_at AS feedback_updated_at,
+        review_runs.merge_risk
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN revisions ON revisions.id = review_runs.revision_id
@@ -12930,6 +12970,7 @@ export function openJournalStore(
       COALESCE(projection.updated_at, ranked.completed_at) AS gates_updated_at,
       ranked.findings,
       COALESCE(projection.confidence, ranked.confidence) AS confidence,
+      ranked.merge_risk,
       published.github_comment_id,
       published.body AS published_body
     FROM ranked
@@ -13032,6 +13073,7 @@ export function openJournalStore(
     gatesUpdatedAt: row.gates_updated_at,
     findings: JSON.parse(row.findings) as ReviewFinding[],
     confidence: row.confidence ?? undefined,
+    mergeRisk: row.merge_risk === null ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
   }))

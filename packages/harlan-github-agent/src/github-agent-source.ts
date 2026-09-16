@@ -1,6 +1,7 @@
 import type { Octokit } from 'octokit'
 import type { AgentLabelState } from './agent-label.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
+import type { PullRequestFile } from './merge-risk.ts'
 import type { Result } from './result.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
@@ -310,7 +311,7 @@ export interface GitHubAgentSource {
   getPullRequestTemplate: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<PullRequestTemplate, string>>
   getPullRequestReviewSnapshot: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<PullRequestReviewSnapshot, string>>
   /** Every file one open pull request changes, which decides whether new work stacks on it. */
-  listPullRequestFiles: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<string[], string>>
+  listPullRequestFiles: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<PullRequestFile[], string>>
   upsertIssueTriageComment: (repository: RepositoryMapping, issueNumber: number, commentId: number | null, body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
   /**
    * Rewrites one comment this service already posted, and only that.
@@ -521,8 +522,16 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         per_page: 100,
         request: { signal },
       })
-        .then(files => ok(files.map(file => file.filename)))
-        .catch((error: unknown): Result<string[], string> => err(message(error)))
+        // Merge risk reads the counts and the status beside the name, so this
+        // keeps what GitHub already returned instead of fetching it twice.
+        .then(files => ok(files.map((file): PullRequestFile => ({
+          additions: file.additions,
+          deletions: file.deletions,
+          path: file.filename,
+          previousFilename: file.previous_filename ?? null,
+          status: file.status,
+        }))))
+        .catch((error: unknown): Result<PullRequestFile[], string> => err(message(error)))
     },
 
     async consumeApprovalLabel(repository, _subjectKind, itemNumber, label, signal) {
