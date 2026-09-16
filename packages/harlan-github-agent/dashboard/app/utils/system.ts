@@ -71,7 +71,13 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
   if (snapshot.generatedAt.length === 0)
     return { _tag: 'Loading' }
   const active = snapshot.agents.filter(agent => agent._tag === 'ActiveAgent').length
-  const counts: SystemChipCounts = { active, maximum: snapshot.agentProfile.maximumActiveAgents, live: active > 0 }
+  // Agent slots are a control, so the chip counts the hosts rather than the
+  // configured ceiling the schedulers are sized for.
+  const capacity = snapshot.hostCapacity
+  const maximum = capacity === undefined
+    ? snapshot.agentProfile.maximumActiveAgents
+    : capacity.localMaximum + (capacity.desktopConnected ? capacity.desktopMaximum : 0)
+  const counts: SystemChipCounts = { active, maximum, live: active > 0 }
   if (snapshot.incidents.length > 0)
     return { _tag: 'Incident', incidents: snapshot.incidents.length, ...counts }
   if (snapshot.agentStart._tag !== 'Available') {

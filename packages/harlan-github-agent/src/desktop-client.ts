@@ -9,7 +9,7 @@ import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
+import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
 import { desktopCommand } from './desktop-worktree.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
       throw new Error('Controller returned no desktop memory status.')
     if (requested.memoryGiB !== null)
       await desktopCommand(capacity, ['set', String(requested.memoryGiB)], root)
-    return state.memoryGiB - state.reservedGiB >= 8
+    return state.memoryGiB - state.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB
   }
 
   async function run(turn: DesktopTurn): Promise<void> {
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
     await rm(join(directory, 'result.json'), { force: true })
     const extension = fileURLToPath(import.meta.url).endsWith('.ts') ? 'ts' : 'mjs'
     const executable = join(dirname(fileURLToPath(import.meta.url)), `desktop-execute.${extension}`)
-    const child = spawn(capacity, ['run', turn.id, '8', process.execPath, '--experimental-strip-types', executable, input], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(capacity, ['run', turn.id, String(DESKTOP_MEMORY_PER_AGENT_GIB), process.execPath, '--experimental-strip-types', executable, input], { stdio: ['ignore', 'pipe', 'pipe'] })
     let stderr = ''
     child.stderr.on('data', (chunk) => {
       stderr = (stderr + String(chunk)).slice(-8000)
@@ -144,12 +144,26 @@ async function main(): Promise<void> {
     }
   }
 
+  // The controller decides how many Agents the desktop runs, and it only ever
+  // queues that many turns. This loop claims each one and runs them together,
+  // so an Agent slot count above one is real work rather than a queue.
+  const running = new Set<Promise<void>>()
   while (!shutdown.signal.aborted) {
     try {
-      if (await report()) {
+      if (running.size < DESKTOP_AGENT_SLOT_CEILING && await report()) {
         const turn = await api<DesktopTurn | null>('/api/desktop/claim', {})
-        if (turn !== null)
-          await run(turn)
+        if (turn !== null) {
+          // `harlan-desktop-capacity` refuses a turn memory cannot hold, and
+          // the controller queues it again, so claiming never overcommits.
+          const work = run(turn)
+            .catch((error: unknown) => {
+              console.error(error)
+            })
+            .finally(() => {
+              running.delete(work)
+            })
+          running.add(work)
+        }
       }
     }
     catch (error) {
@@ -160,6 +174,7 @@ async function main(): Promise<void> {
         throw error
     })
   }
+  await Promise.all(running)
 }
 
 void main().catch((error: unknown) => {

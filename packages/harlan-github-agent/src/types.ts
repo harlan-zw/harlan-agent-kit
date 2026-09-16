@@ -2,7 +2,7 @@ import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
-import type { HostCapacity } from './host-capacity.ts'
+import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { PackageReleaseConfig } from './package-release.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { RoutineName } from './routines/index.ts'
@@ -1480,6 +1480,7 @@ export interface Incident {
 export interface DashboardSnapshot {
   hostTasks?: Array<{ taskId: string | null, host: 'hogwild' | 'desktop' }>
   hostCapacity?: HostCapacity
+  agentSlots?: AgentSlotLimits
   desktop?: ReturnType<DesktopBroker['read']>
   generatedAt: string
   status: 'starting' | 'ready' | 'degraded'

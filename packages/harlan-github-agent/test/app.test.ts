@@ -1200,6 +1200,73 @@ describe('dashboard HTTP app', () => {
   })
 })
 
+describe('agent slot HTTP boundary', () => {
+  const limits = { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 }
+  const capacity = { localActive: 0, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+
+  function createSlotApp() {
+    const written: Array<{ host: string, slots: number }> = []
+    const app = createAgentApp({
+      agentSlots: limits,
+      setAgentSlots: (host, slots) => {
+        written.push({ host, slots })
+        return { ...capacity, localMaximum: host === 'hogwild' ? slots : capacity.localMaximum }
+      },
+      hostCapacity: () => capacity,
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => dashboardSnapshot(), listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    })
+    const send = (body: unknown) => app.request(`http://${allowedHost}/api/agents/slots`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return { app, send, written }
+  }
+
+  it('sets the slot count and answers with the capacity in force', async () => {
+    const { send, written } = createSlotApp()
+
+    const response = await send({ host: 'hogwild', slots: 4 })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ localMaximum: 4 })
+    expect(written).toEqual([{ host: 'hogwild', slots: 4 }])
+  })
+
+  it('refuses a count above the ceiling and writes nothing', async () => {
+    const { send, written } = createSlotApp()
+
+    expect((await send({ host: 'hogwild', slots: 5 })).status).toBe(400)
+    expect((await send({ host: 'desktop', slots: 3 })).status).toBe(400)
+    expect((await send({ slots: 1 })).status).toBe(400)
+    expect(written).toEqual([])
+  })
+
+  it('reports the control as unavailable while the service exposes no hosts', async () => {
+    const app = createApp()
+
+    const response = await app.request(`http://${allowedHost}/api/agents/slots`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ host: 'hogwild', slots: 1 }),
+    })
+
+    expect(response.status).toBe(503)
+  })
+
+  it('carries the slot bounds in the snapshot, so the tray offers the counts the controller allows', async () => {
+    const { app } = createSlotApp()
+
+    const response = await app.request(`http://${allowedHost}/api/state`, { headers: { authorization, host: allowedHost } })
+
+    await expect(response.json()).resolves.toMatchObject({ agentSlots: limits, hostCapacity: capacity })
+  })
+})
+
 describe('desktop capacity HTTP boundary', () => {
   it('decodes an idle claim from the controller as an empty Queue', async () => {
     const app = createApp(dashboardSnapshot(), createDesktopBroker({ now: () => now().getTime() }))

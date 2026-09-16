@@ -6486,3 +6486,40 @@ describe('agent selection', () => {
     expect(afterSwitch).toBeNull()
   })
 })
+
+describe('agent slots', () => {
+  it('follows the host default until a count is set', () => {
+    const store = createStore()
+
+    expect(store.getAgentSlots()).toEqual({ hogwild: null, desktop: null })
+  })
+
+  it('keeps each host count independent and reads back the last one set', () => {
+    const store = createStore()
+
+    store.setAgentSlots({ host: 'hogwild', slots: 4, at: '2026-09-16T01:00:00.000Z' })
+    expect(store.getAgentSlots()).toEqual({ hogwild: 4, desktop: null })
+
+    store.setAgentSlots({ host: 'desktop', slots: 2, at: '2026-09-16T01:01:00.000Z' })
+    expect(store.getAgentSlots()).toEqual({ hogwild: 4, desktop: 2 })
+
+    store.setAgentSlots({ host: 'hogwild', slots: 0, at: '2026-09-16T01:02:00.000Z' })
+    expect(store.getAgentSlots()).toEqual({ hogwild: 0, desktop: 2 })
+  })
+
+  it('gives a host back its default when the count is cleared', () => {
+    const store = createStore()
+
+    store.setAgentSlots({ host: 'desktop', slots: 2, at: '2026-09-16T01:00:00.000Z' })
+    store.setAgentSlots({ host: 'desktop', slots: null, at: '2026-09-16T01:01:00.000Z' })
+
+    expect(store.getAgentSlots().desktop).toBeNull()
+  })
+
+  it('refuses a count that is not a whole number of Agents', () => {
+    const store = createStore()
+
+    expect(() => store.setAgentSlots({ host: 'hogwild', slots: -1, at: '2026-09-16T01:00:00.000Z' })).toThrow('nonnegative integer')
+    expect(() => store.setAgentSlots({ host: 'hogwild', slots: 1.5, at: '2026-09-16T01:00:00.000Z' })).toThrow('nonnegative integer')
+  })
+})

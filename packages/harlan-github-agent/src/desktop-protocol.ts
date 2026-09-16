@@ -21,6 +21,23 @@ function record(value: unknown): value is Record<string, unknown> {
  */
 export const DESKTOP_PROTOCOL = 2
 
+/**
+ * Memory one desktop Agent reserves through `harlan-desktop-capacity`.
+ *
+ * The controller and the desktop client both count in this unit, so a turn the
+ * controller sends always has memory waiting for it.
+ */
+export const DESKTOP_MEMORY_PER_AGENT_GIB = 8
+
+/**
+ * The most Agent slots the desktop may be set to.
+ *
+ * The desktop shares its memory with GitHub Actions and with Harlan. Two
+ * Agents already commit 16 GiB, so a higher ceiling would promise memory the
+ * desktop cannot hold.
+ */
+export const DESKTOP_AGENT_SLOT_CEILING = 2
+
 export function parseDesktopReport(value: unknown): DesktopReport {
   if (!record(value) || !['memoryGiB', 'reservedGiB', 'agents', 'actions'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0)
     || Number(value.memoryGiB) < 1 || Number(value.memoryGiB) > 256) {

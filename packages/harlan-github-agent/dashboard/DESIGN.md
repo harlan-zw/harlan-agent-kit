@@ -122,11 +122,12 @@ One header, one row, 48px, on every page.
 
 The System pane is a slideover, not a section above the board. It holds, in order:
 
-1. **Service**: Service update state, deployed and latest commits, last check time. The update control appears only when available.
-2. **Capacity**: each Agent provider, percent left, Reserve, reset countdown. Circuit state when open or half open.
-3. **Incidents**: kind, scope link, message, Recovery, occurrence count, age. No dismiss control.
-4. **Routines**: name, schedule, latest run state. Candidates and terminal behind disclosures. Only when the host answers the Routine trigger.
-5. **Host**: temperatures, load, services, only on the Tailscale host.
+1. **Hosts**: Hogwild and the desktop, each with its running Agents, its Agent slot control, and the memory it holds. The slot buttons run from zero to the ceiling the controller allows. Host memory sits under them as advice, in amber when the count passes it.
+2. **Service**: Service update state, deployed and latest commits, last check time. The update control appears only when available.
+3. **Capacity**: each Agent provider, percent left, Reserve, reset countdown. Circuit state when open or half open.
+4. **Incidents**: kind, scope link, message, Recovery, occurrence count, age. No dismiss control.
+5. **Routines**: name, schedule, latest run state. Candidates and terminal behind disclosures. Only when the host answers the Routine trigger.
+6. **Host**: temperatures, load, services, only on the Tailscale host.
 
 An unresolved Incident also renders as one compact error row above the board columns. It is the one System item that must be seen now.
 
