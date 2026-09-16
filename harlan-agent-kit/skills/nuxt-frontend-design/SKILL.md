@@ -89,7 +89,7 @@ Hard rejections unless the user explicitly asked for them:
 - Emoji in UI copy unless the brand system registers emoji as a token
 - Generic stat blocks ("10M+ users, 99.9% uptime, 24/7 support")
 - Overused sans stacks: Inter, Roboto, Open Sans, Lato, Montserrat, Arial, any bare `system-ui` / `sans-serif` fallback as the only font
-- SaaS-landing cliché serifs (Fraunces, Playfair, DM Serif) used *without commitment*, i.e. paired with a generic sans for body copy as decoration only. A theme that genuinely commits to an editorial, paper-craft, or literary aesthetic (kinetic-paper, flow) is right to use an editorial serif. The ban targets "add a serif heading for personality" tokenism.
+- SaaS-landing cliché serifs (Fraunces, Playfair, DM Serif) used *without commitment*, i.e. paired with a generic sans for body copy as decoration only. A theme that genuinely commits to an editorial, paper-craft, or literary aesthetic (kinetic-paper, flow, monograph) is right to use an editorial serif. The ban targets "add a serif heading for personality" tokenism.
 
 ### Placeholder Over Fake
 
@@ -141,7 +141,7 @@ Theme signature tokens are the exception: when a theme's voice depends on an eff
 - [design-system.md](references/design-system.md): full setup guide (colors, fonts, tokens, component theming)
 - [themes/{name}.md](references/themes/): complete theme implementation files
 
-Available themes: frost, clay, blueprint, nebula, zen, neon, teenage-engineering, kinetic-paper, flow, devtool (the live list is injected above).
+Available themes: frost, clay, blueprint, nebula, zen, neon, teenage-engineering, kinetic-paper, flow, devtool, monograph (the live list is injected above).
 
 Read exactly one theme file: `${CLAUDE_SKILL_DIR}/references/themes/{chosen-theme}.md`. Reading several for comparison burns context without improving the choice. With no theme specified, default to `frost` for dark mode projects and `zen` for light mode; ask only when the choice is genuinely ambiguous.
 
