@@ -280,6 +280,17 @@ async function seedRepositoryEnvironment(origin: string, control: string, signal
 /** Every desktop Worktree branch starts with this, so a stale one is findable. */
 export const DESKTOP_BRANCH_PREFIX = 'desktop-turn-'
 
+/**
+ * Whether this branch is a desktop Worktree the controller owns.
+ *
+ * Every cache built before the Worktree was named after its Task holds one
+ * called exactly `desktop-turn`. The prefix alone never matches it, so it would
+ * have sat on disk for the life of the machine.
+ */
+export function isDesktopBranch(branch: string): boolean {
+  return branch === DESKTOP_BRANCH_PREFIX.slice(0, -1) || branch.startsWith(DESKTOP_BRANCH_PREFIX)
+}
+
 /** A Task identity reduced to something safe to name a Git branch after. */
 export function desktopTaskKey(task: string): string {
   const safe = task.replace(/[^\w-]/g, '').slice(0, 24)
@@ -349,7 +360,7 @@ export async function prepareDesktopWorktree(snapshot: DesktopWorktree, director
     return parsed.value
   }
   for (const item of await list()) {
-    if (item.branch !== undefined && item.branch !== branch && item.branch.startsWith(DESKTOP_BRANCH_PREFIX))
+    if (item.branch !== undefined && item.branch !== branch && isDesktopBranch(item.branch))
       await worktrunk(['remove', item.branch], control, signal)
   }
   const existing = (await list()).find(item => item.branch === branch)
