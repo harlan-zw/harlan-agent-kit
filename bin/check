@@ -57,13 +57,23 @@ else
   skipped+=("typecheck")
 fi
 
-# test — prefer vitest direct > pnpm script
+# test — prefer vitest direct, but only where its configuration is
+# Running the binary from a workspace root with no configuration of its own
+# globs every package's tests and applies none of their settings. One package
+# here raises the five second timeout because its tests drive real git and wt
+# binaries, and running it this way silently put that back to five seconds, so
+# the gate failed under load on tests that pass in CI.
+has_vitest_config() {
+  compgen -G "vitest.config.*" >/dev/null || compgen -G "vitest.workspace.*" >/dev/null
+}
 if should_skip test; then
   skipped+=("test")
-elif [ -f "node_modules/.bin/vitest" ]; then
+elif [ -f "node_modules/.bin/vitest" ] && has_vitest_config; then
   run_check test ./node_modules/.bin/vitest run
 elif has_script test; then
   run_check test pnpm test
+elif [ -f "node_modules/.bin/vitest" ]; then
+  run_check test ./node_modules/.bin/vitest run
 else
   skipped+=("test")
 fi

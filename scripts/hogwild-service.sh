@@ -292,7 +292,13 @@ sync_repository_environment() {
 # The desktop runs the other half of every offloaded turn, from its own checkout
 # on this machine. Left behind, it reads a turn shape it was never taught, so it
 # moves with Hogwild or not at all.
-DESKTOP_UNIT=harlan-desktop-agent
+DESKTOP_UNIT="${HARLAN_GITHUB_AGENT_DESKTOP_UNIT:-harlan-desktop-agent}"
+# This step moves a checkout and restarts a unit on the machine running the
+# deploy, so both are named here rather than hardcoded. Without that the script
+# reached past its own boundaries, and running its tests updated the real
+# desktop client.
+DESKTOP_SERVICE_SCRIPT="${HARLAN_GITHUB_AGENT_SERVICE_SCRIPT:-$SCRIPT_DIR/service.sh}"
+DESKTOP_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 update_desktop_client() {
   local ref=$1
@@ -302,11 +308,11 @@ update_desktop_client() {
     return 0
   fi
   echo "Updating the desktop client"
-  bash "$SCRIPT_DIR/service.sh" prepare-update "$ref"
+  bash "$DESKTOP_SERVICE_SCRIPT" prepare-update "$ref"
   # The unit carries the PATH the Worktrunk hooks run under, so a checkout that
   # moves without it runs new code in the old environment. That gap put every
   # desktop turn into `pnpm: exit status: 127` until PR #289.
-  install -Dm644 "$SCRIPT_DIR/desktop-agent.service" "$HOME/.config/systemd/user/$DESKTOP_UNIT.service"
+  install -Dm644 "$SCRIPT_DIR/desktop-agent.service" "$DESKTOP_UNIT_DIR/$DESKTOP_UNIT.service"
   systemctl --user daemon-reload
   systemctl --user restart "$DESKTOP_UNIT"
   echo "Desktop client: $(git -C "${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}" log --oneline -1)"

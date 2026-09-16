@@ -27,6 +27,15 @@ export HOGWILD_SERVICE_TEST_LEGACY_SAFE_AFTER=1
 export HOGWILD_SERVICE_TEST_LEGACY_STATE="$test_root/legacy-state"
 export HARLAN_REPOSITORY_ENV_HOME="$test_home"
 export HARLAN_REPOSITORY_ENV_MANIFEST="$test_root/repository-env-files"
+# Without this the script reads the real ~/sites/SITES.md. A machine that has
+# one failed, and CI passed only because it has none, so the sites sync was
+# never covered anywhere.
+export HARLAN_AGENT_CONTEXT_SITES_FILE="$test_root/SITES.md"
+# The desktop step moves a checkout and restarts a unit on the machine running
+# the deploy. Point all three at fixtures, or the tests update the real client.
+export HARLAN_GITHUB_AGENT_DESKTOP_UNIT=harlan-desktop-agent-fixture
+export HARLAN_GITHUB_AGENT_SERVICE_SCRIPT="$test_root/bin/service-fixture.sh"
+export XDG_CONFIG_HOME="$test_home/.config"
 
 mkdir -p "$test_home/.config/harlan-github-agent" "$test_home/sites/example" "$test_root/bin"
 printf '%s\n' 'password' > "$HARLAN_GITHUB_AGENT_PASSWORD_FILE"
@@ -37,6 +46,7 @@ git -C "$test_home/sites/example" add .gitignore
 git -C "$test_home/sites/example" -c user.name=Fixture -c user.email=fixture@example.com commit --quiet -m fixture
 git -C "$test_home/sites/example" remote add origin git@github.com:fixture/example.git
 printf '%s\n' 'fixture/example sites/example/.env' > "$HARLAN_REPOSITORY_ENV_MANIFEST"
+printf '%s\n' '# Sites' 'fixture/example' > "$HARLAN_AGENT_CONTEXT_SITES_FILE"
 HARLAN_AGENT_CONTEXT_HOME="$rendered_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
 expected_claude_hash=$(/usr/bin/sha256sum "$rendered_home/.claude/CLAUDE.md" | cut -d' ' -f1)
 expected_codex_hash=$(/usr/bin/sha256sum "$rendered_home/.codex/AGENTS.md" | cut -d' ' -f1)
@@ -44,12 +54,14 @@ expected_override_hash=$(/usr/bin/sha256sum "$script_dir/hogwild-service.conf" |
 expected_worktrunk_hash=$(/usr/bin/sha256sum "$script_dir/worktrunk.toml" | cut -d' ' -f1)
 expected_env_tool_hash=$(/usr/bin/sha256sum "$script_dir/repository-env.sh" | cut -d' ' -f1)
 expected_env_manifest_hash=$(/usr/bin/sha256sum "$HARLAN_REPOSITORY_ENV_MANIFEST" | cut -d' ' -f1)
+expected_sites_hash=$(/usr/bin/sha256sum "$HARLAN_AGENT_CONTEXT_SITES_FILE" | cut -d' ' -f1)
 export HOGWILD_SERVICE_TEST_CLAUDE_HASH="$expected_claude_hash"
 export HOGWILD_SERVICE_TEST_CODEX_HASH="$expected_codex_hash"
 export HOGWILD_SERVICE_TEST_OVERRIDE_HASH="$expected_override_hash"
 export HOGWILD_SERVICE_TEST_WORKTRUNK_HASH="$expected_worktrunk_hash"
 export HOGWILD_SERVICE_TEST_ENV_TOOL_HASH="$expected_env_tool_hash"
 export HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH="$expected_env_manifest_hash"
+export HOGWILD_SERVICE_TEST_SITES_HASH="$expected_sites_hash"
 printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
 printf '%s\n' 'Running' > "$HOGWILD_SERVICE_TEST_LEGACY_STATE"
 
@@ -57,7 +69,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''ssh %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
   'if [[ "$*" == *mktemp*-d* ]]; then printf '\''%s\n'\'' "$HOGWILD_SERVICE_TEST_ENV_STAGE"; exit; fi' \
-  'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; fi' \
+  'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; elif [[ "$*" == *sha256sum*SITES.md.next* ]]; then printf '\''%s  SITES.md.next\n'\'' "$HOGWILD_SERVICE_TEST_SITES_HASH"; fi' \
   > "$test_root/bin/ssh"
 cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
 # Context sync also verifies the commit hook and the installed opencode files.
@@ -107,6 +119,18 @@ printf '%s\n' \
   'fi' \
   > "$test_root/bin/curl"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$test_root/bin/sleep"
+cat > "$test_root/bin/systemctl" <<'FAKE_SYSTEMCTL'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"
+if [[ "$*" == *list-unit-files* ]]; then
+  printf '%s.service enabled enabled\n' "$HARLAN_GITHUB_AGENT_DESKTOP_UNIT"
+fi
+FAKE_SYSTEMCTL
+cat > "$test_root/bin/service-fixture.sh" <<'FAKE_SERVICE'
+#!/usr/bin/env bash
+printf 'service %s\n' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"
+FAKE_SERVICE
+chmod +x "$test_root/bin/systemctl" "$test_root/bin/service-fixture.sh"
 chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test_root/bin/curl" "$test_root/bin/sleep"
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
@@ -134,6 +158,23 @@ if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null
 fi
 if grep -F "bash -s -- 'restart'" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'Hogwild update used a client-owned restart.' >&2
+  exit 1
+fi
+
+if ! grep -q "sites/SITES.md" "$HOGWILD_SERVICE_TEST_CALLS"; then
+  printf '%s\n' 'The site inventory never reached Hogwild.' >&2
+  exit 1
+fi
+
+# The desktop client moves with Hogwild, and its unit moves with the client, or
+# the new code runs in the old environment.
+if ! grep -q "^service prepare-update" "$HOGWILD_SERVICE_TEST_CALLS" \
+  || ! grep -q "^systemctl --user restart" "$HOGWILD_SERVICE_TEST_CALLS"; then
+  printf '%s\n' 'The deploy did not update the desktop client.' >&2
+  exit 1
+fi
+if [ ! -f "$XDG_CONFIG_HOME/systemd/user/$HARLAN_GITHUB_AGENT_DESKTOP_UNIT.service" ]; then
+  printf '%s\n' 'The deploy did not install the desktop unit.' >&2
   exit 1
 fi
 
