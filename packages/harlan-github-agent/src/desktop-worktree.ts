@@ -277,6 +277,33 @@ async function seedRepositoryEnvironment(origin: string, control: string, signal
  * both hosts can fetch from GitHub is the whole cost this design removes. The
  * first turn clones. Every later turn fetches.
  */
+/**
+ * The line a failed Worktrunk command actually failed on.
+ *
+ * Worktrunk echoes the body of every hook it ran, so its stderr carries the
+ * text of checks that passed. That whole body reached the controller as the
+ * failure reason, and a hook echoing `origin fetch failed` had a missing pnpm
+ * read as a network fault for days. Only the marked line says what went wrong.
+ */
+export function worktrunkFailure(stderr: string): string | null {
+  const marked = stderr.split('\n').map(line => line.trim()).filter(line => line.startsWith('\u2717') || line.startsWith('\u2718'))
+  return marked.at(-1) ?? null
+}
+
+/** Runs one Worktrunk command and reports the line it failed on, not its hooks. */
+async function worktrunk(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
+  try {
+    return await desktopCommand('wt', args, cwd, signal)
+  }
+  catch (error) {
+    const stderr = error !== null && typeof error === 'object' && 'stderr' in error ? String(error.stderr) : ''
+    const failure = worktrunkFailure(stderr)
+    if (failure === null)
+      throw error
+    throw new Error(`Worktrunk stopped: ${failure}`, { cause: error })
+  }
+}
+
 export async function prepareDesktopWorktree(snapshot: DesktopWorktree, directory: string, temporary: string, signal?: AbortSignal): Promise<string> {
   await mkdir(directory, { recursive: true })
   await mkdir(temporary, { recursive: true })
@@ -300,14 +327,14 @@ export async function prepareDesktopWorktree(snapshot: DesktopWorktree, director
     await desktopCommand('git', ['fetch', '--no-tags', bundle, 'HEAD'], control, signal)
   const branch = 'desktop-turn'
   const list = async () => {
-    const parsed = parseWtWorktrees(await desktopCommand('wt', ['--config-set', 'list.json-schema=2', 'list', '--format=json'], control, signal))
+    const parsed = parseWtWorktrees(await worktrunk(['--config-set', 'list.json-schema=2', 'list', '--format=json'], control, signal))
     if (parsed._tag === 'Err')
       throw new Error(parsed.error)
     return parsed.value
   }
   const existing = (await list()).find(item => item.branch === branch)
   if (existing === undefined)
-    await desktopCommand('wt', ['switch', '--create', branch, '--base', snapshot.head], control, signal)
+    await worktrunk(['switch', '--create', branch, '--base', snapshot.head], control, signal)
   const current = (await list()).find(item => item.branch === branch)
   if (current === undefined)
     throw new Error('Worktrunk did not create the desktop Worktree.')

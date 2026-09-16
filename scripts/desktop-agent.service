@@ -6,7 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/.local/share/harlan-github-agent/service
-Environment=PATH=%h/.local/share/pnpm:%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# pnpm installs its shim in bin/ and its managed node beside it, and the
+# Worktrunk pre-start hook runs pnpm. Both directories belong here.
+Environment=PATH=%h/.local/share/pnpm/bin:%h/.local/share/pnpm:%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HARLAN_GITHUB_AGENT=1
 Environment=HARLAN_GITHUB_AGENT_CONTROLLER_URL=https://hogwild.tailcad325.ts.net
 EnvironmentFile=-%h/.config/harlan-github-agent/desktop.env
