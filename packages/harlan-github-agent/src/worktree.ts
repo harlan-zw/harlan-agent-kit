@@ -1093,10 +1093,16 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       if (diffCheck.exitCode !== 0)
         return err(`The change failed git diff check: ${diffCheck.stdout || diffCheck.stderr}`)
       // The graph document the Agent may leave for the description is the
-      // controller's input, never part of the change.
-      const add = await runGit(worktree.path, ['add', '--all', '--', '.', ':(exclude).pr-lens'], signal)
+      // controller's input, never part of the change. An exclude pathspec
+      // cannot drop it: `git add` refuses a named path that a `.gitignore`
+      // covers, so a repository that ignores `.pr-lens` failed every Issue
+      // work Task. Stage everything, then drop the document from the index.
+      const add = await runGit(worktree.path, ['add', '--all', '--', '.'], signal)
       if (add.exitCode !== 0)
         return err(`Could not stage the verified change: ${add.stderr}`)
+      const dropped = await runGit(worktree.path, ['reset', '--quiet', 'HEAD', '--', '.pr-lens'], signal)
+      if (dropped.exitCode !== 0)
+        return err(`Could not drop the graph document from the verified change: ${dropped.stderr}`)
       const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
       if (patch.exitCode !== 0)
         return err(`Could not read the verified change: ${patch.stderr}`)
