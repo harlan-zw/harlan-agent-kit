@@ -79,14 +79,22 @@ Site prompts add only specific policies, quotas, monitors, and correlations with
 
 ## Report
 
-Write a private Markdown report beside this run's JSON archive, using the same filename stem.
-Include:
+One check-in writes two reports. Read [references/report-template.md](references/report-template.md) before writing either.
+
+**Archive report.** Write it beside this run's JSON archive, using the same filename stem.
+It proves the work, so it has no length limit. Include:
 
 - GREEN, AMBER, or RED, followed by one sentence and any incomplete coverage.
 - Collector exit code, coverage, comparison window, and archive path.
 - Findings from every prompt item, including its requested site-specific metrics and sections.
+- Every check result, its reason, and its evidence.
 - New and regressed problems, persistent unresolved problems, deployment drift, and missing evidence.
 - Ordered actions with evidence, next actor, and links to existing issues.
+- Credential handling, deployment-match proofs, and the reads that established them.
+
+**Published report.** Write it to the template's shape and budget.
+It reports the news, so it carries only what changed and what needs a person.
+Proof of work belongs in the archive report. Never publish the archive report.
 
 Update `triage-ledger.md` in the durable archive directory with stable site, check, and cause identities.
 Do not duplicate existing issue work. Keep raw customer feedback and credentials out of public reports and issues.
@@ -96,8 +104,10 @@ Retain the last 30 days of paired archives and reports. Never delete `state.json
 ## Scheduled response
 
 Keep production access read only. Do not commit, push, deploy, mutate databases, or change Sentry state.
-The controller owns issue publication. Return the full Markdown report in `report`.
+The controller owns issue publication. Return the published report in `report`.
+State the run's conclusion in `verdict`, as `severity` and `coverage`.
+The issue title reads that field. Never leave the title to the report prose.
 Return only concrete code or repository repairs as Candidates.
 Keep release operations, credentials, customer replies, and human decisions in the report with their next actor.
 Use stable ledger fingerprints. Each Candidate needs a title, target, claim, verification, and estimated changed-file count.
-For manual use, print the verdict, actions, and report path.
+For manual use, print the verdict, actions, and both report paths.
