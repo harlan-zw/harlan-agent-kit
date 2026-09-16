@@ -9,7 +9,7 @@ import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { readDesktopResponse } from './desktop-protocol.ts'
+import { DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
 import { desktopCommand } from './desktop-worktree.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
@@ -50,6 +50,7 @@ async function main(): Promise<void> {
         return { _tag: 'Unavailable' as const }
       })
     const requested = await api<{ memoryGiB: number | null }>('/api/desktop/report', {
+      protocol: DESKTOP_PROTOCOL,
       memoryGiB: state.memoryGiB,
       reservedGiB: state.reservedGiB,
       agents: entries.filter(entry => entry.kind === 'agent').length,

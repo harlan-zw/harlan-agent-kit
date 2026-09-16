@@ -285,6 +285,24 @@ sync_repository_environment() {
   cleanup_repository_environment_stage
 }
 
+# The desktop runs the other half of every offloaded turn, from its own checkout
+# on this machine. Left behind, it reads a turn shape it was never taught, so it
+# moves with Hogwild or not at all.
+DESKTOP_UNIT=harlan-desktop-agent
+
+update_desktop_client() {
+  local ref=$1
+  if ! systemctl --user list-unit-files "$DESKTOP_UNIT.service" >/dev/null 2>&1 \
+    || [ -z "$(systemctl --user list-unit-files --no-legend "$DESKTOP_UNIT.service" 2>/dev/null)" ]; then
+    echo "No $DESKTOP_UNIT on this machine. Skipping the desktop client."
+    return 0
+  fi
+  echo "Updating the desktop client"
+  bash "$SCRIPT_DIR/service.sh" prepare-update "$ref"
+  systemctl --user restart "$DESKTOP_UNIT"
+  echo "Desktop client: $(git -C "${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}" log --oneline -1)"
+}
+
 remote_service() {
   local command=$1
   local ref=${2:-}
@@ -310,6 +328,9 @@ case "$command" in
     remote_service prepare-update "$ref"
     safe_restart
     remote_service status
+    # After Hogwild, because a desktop ahead of the controller stands itself
+    # down and the work simply stays on Hogwild until this finishes.
+    update_desktop_client "$ref"
     ;;
   restart)
     sync_context

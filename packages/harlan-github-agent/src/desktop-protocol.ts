@@ -8,15 +8,31 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * The shape of one desktop turn, as both hosts must agree on it.
+ *
+ * Hogwild and the desktop deploy from their own checkouts, so one can move
+ * without the other. Raise this whenever the turn or report shape changes, and
+ * a desktop on the older revision is stood down instead of being sent a turn it
+ * cannot read.
+ *
+ * 1: the original whole-history payload.
+ * 2: tagged `DesktopHistory`, which carries only what the receiver lacks.
+ */
+export const DESKTOP_PROTOCOL = 2
+
 export function parseDesktopReport(value: unknown): DesktopReport {
   if (!record(value) || !['memoryGiB', 'reservedGiB', 'agents', 'actions'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0)
     || Number(value.memoryGiB) < 1 || Number(value.memoryGiB) > 256) {
     throw new Error('Desktop memory and activity must be whole numbers.')
   }
+  // A desktop that names no protocol predates this field, so it cannot be one
+  // this controller may send a turn to.
+  const protocol = Number.isSafeInteger(value.protocol) ? Number(value.protocol) : 1
   const jobs = record(value.jobs) && value.jobs._tag === 'Available' && Array.isArray(value.jobs.jobs)
     ? parseRunnerJobs({ updatedAt: 0, runners: value.jobs.jobs.map(job => record(job) ? { activity: 'Running', name: job.runner, repository: job.repository, job } : job) }, 0)
     : { _tag: 'Unavailable' as const }
-  return { memoryGiB: Number(value.memoryGiB), reservedGiB: Number(value.reservedGiB), agents: Number(value.agents), actions: Number(value.actions), jobs }
+  return { protocol, memoryGiB: Number(value.memoryGiB), reservedGiB: Number(value.reservedGiB), agents: Number(value.agents), actions: Number(value.actions), jobs }
 }
 
 export function parseDesktopMemory(value: unknown): number {

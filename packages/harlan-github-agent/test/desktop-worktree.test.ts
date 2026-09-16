@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
+import { DESKTOP_PROTOCOL } from '../src/desktop-protocol.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
 import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree } from '../src/desktop-worktree.ts'
 
@@ -91,7 +92,7 @@ it('prepares a real Worktrunk checkout from the transferred commit', async () =>
 it('imports one desktop result and rejects late duplicate completion', async () => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
-  broker.report({ memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, signal: new AbortController().signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
   let turn: ReturnType<typeof broker.claim> = null
@@ -111,7 +112,7 @@ it('imports one desktop result and rejects late duplicate completion', async () 
 it('revokes cancelled desktop work before accepting another result', async () => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
-  broker.report({ memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
   const signal = new AbortController()
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, signal: signal.signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
@@ -133,8 +134,8 @@ it('keeps pending memory settings across controller restarts', async () => {
   const settingsPath = join(f.root, 'capacity.json')
   createDesktopBroker({ now: () => 0, settingsPath }).setMemory(20)
   const next = createDesktopBroker({ now: () => 0, settingsPath })
-  expect(next.report({ memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })).toEqual({ memoryGiB: 20 })
-  next.report({ memoryGiB: 20, reservedGiB: 0, agents: 0, actions: 0 })
+  expect(next.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })).toEqual({ memoryGiB: 20 })
+  next.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 20, reservedGiB: 0, agents: 0, actions: 0 })
   expect(createDesktopBroker({ now: () => 0, settingsPath }).read().requestedMemoryGiB).toBeNull()
 })
 
@@ -293,4 +294,32 @@ it('separates repositories that share a name across owners', () => {
   expect(desktopRepositoryPath('/cache', 'https://github.com/harlan-zw/example.git')).toBe('/cache/harlan-zw/example')
   expect(desktopRepositoryPath('/cache', 'git@github.com:skilld-dev/example')).toBe('/cache/skilld-dev/example')
   expect(() => desktopRepositoryPath('/cache', '/tmp/repo')).toThrow('not a GitHub repository')
+})
+
+it('stands down a desktop running another revision', async () => {
+  const f = await fixture()
+  const broker = createDesktopBroker({ now: () => 1 })
+  broker.report({ protocol: DESKTOP_PROTOCOL - 1, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+
+  expect(broker.read().connected).toBe(true)
+  expect(broker.read().current).toBe(false)
+  expect(broker.available()).toBe(false)
+
+  const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, signal: new AbortController().signal, workspace: f.repository })[Symbol.asyncIterator]()
+  const response = iterator.next()
+  await vi.waitFor(() => expect(broker.read().report?.protocol).toBe(DESKTOP_PROTOCOL - 1))
+  expect(broker.claim()).toBeNull()
+
+  // The same desktop, once it catches up, takes the turn already waiting.
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  let turn: ReturnType<typeof broker.claim> = null
+  await vi.waitFor(() => {
+    turn = broker.claim()
+    expect(turn).not.toBeNull()
+  })
+  const claimed = turn as unknown as DesktopTurn
+  broker.events(claimed.id, [{ _tag: 'Message', text: 'finished' }])
+  broker.complete(claimed.id, claimed.worktree, null)
+  expect(await response).toEqual({ done: false, value: { _tag: 'Message', text: 'finished' } })
+  await iterator.next()
 })

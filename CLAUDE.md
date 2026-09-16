@@ -36,6 +36,8 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Workflow** (`.github/workflows/test.yml`): four jobs on GitHub hosted runners, lint, typecheck, build, and test. The test job installs a pinned `wt`, because several suites drive the real binary. Every event ignores `**/*.md`, so a Markdown only push to `main` runs nothing.
 
+**Two service checkouts**: Hogwild runs the controller from its own clone, and the desktop runs `harlan-desktop-agent` from a clone of the same path on the desktop. Both halves of an offloaded turn must speak the same shape, so `pnpm service:hogwild:update` moves both and `DESKTOP_PROTOCOL` in `desktop-protocol.ts` guards the gap. A desktop reporting an older protocol is stood down, and the work stays on Hogwild. Raise that constant whenever the turn or report shape changes.
+
 **Worktrees**: `wt` (worktrunk) owns every worktree, at `<parent>/<repo>.<branch-slug>`. Full rules in `harlan-agent-kit/references/worktree-isolation.md`.
 
 ## Adding Components

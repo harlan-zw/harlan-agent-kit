@@ -7,6 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { DESKTOP_PROTOCOL } from './desktop-protocol.ts'
 import { exportDesktopWorktree, importDesktopWorktree } from './desktop-worktree.ts'
 
 export interface DesktopTurn {
@@ -25,6 +26,8 @@ interface PendingTurn {
 }
 
 export interface DesktopReport {
+  /** The turn shape this desktop speaks. See `DESKTOP_PROTOCOL`. */
+  protocol: number
   memoryGiB: number
   reservedGiB: number
   agents: number
@@ -48,9 +51,13 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
     requestedMemoryGiB = value
   }
   const connected = () => report !== null && options.now() - seenAt < 15_000
+  // A desktop on another revision reads a turn it was never taught. Standing it
+  // down keeps the work on Hogwild, where the old design instead sent the turn
+  // and failed the Task on the far side.
+  const current = () => report !== null && report.protocol === DESKTOP_PROTOCOL
   return {
-    available: () => connected() && report !== null && report.memoryGiB - report.reservedGiB >= 8,
-    read: () => ({ connected: connected(), report, requestedMemoryGiB }),
+    available: () => connected() && current() && report !== null && report.memoryGiB - report.reservedGiB >= 8,
+    read: () => ({ connected: connected(), current: current(), protocol: DESKTOP_PROTOCOL, report, requestedMemoryGiB }),
     setMemory: persistMemory,
     report: (value: DesktopReport) => {
       report = value
@@ -60,7 +67,7 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
       return { memoryGiB: requestedMemoryGiB }
     },
     claim: (): DesktopTurn | null => {
-      if (!connected())
+      if (!connected() || !current())
         return null
       const entry = [...pending.values()].find(entry => entry.state === 'queued')
       if (entry === undefined)
