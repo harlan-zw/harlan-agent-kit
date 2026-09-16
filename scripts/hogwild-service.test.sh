@@ -83,6 +83,11 @@ if [[ "$*" == *sha256sum* && ( "$*" == *commit-msg.next* || "$*" == *harlan-hook
   done
 fi
 FAKE_SSH
+cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
+# A dropped connection dies on the verification call after staging, on a path
+# with no explicit cleanup branch.
+if [[ -n "$HOGWILD_SERVICE_TEST_SSH_DIE" && "$*" == *sha256sum*config.toml.next* ]]; then exit 42; fi
+FAKE_SSH
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''scp %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
@@ -270,6 +275,35 @@ if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null
 fi
 if [ "$(cat "$HOGWILD_SERVICE_TEST_LEGACY_STATE")" != Paused ]; then
   printf '%s\n' 'The compatibility restart did not preserve manual Pause.' >&2
+  exit 1
+fi
+
+# A sync_verified_file run that dies between staging and activation must not
+# strand its staged file on Hogwild. The fake ssh dies on the verification
+# call, so set -e ends the run with no explicit cleanup branch reached.
+: > "$HOGWILD_SERVICE_TEST_CALLS"
+export HOGWILD_SERVICE_TEST_SSH_DIE=1
+if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" sync-worktrunk >/dev/null 2>&1; then
+  printf '%s\n' 'Hogwild worktrunk sync reported success on a dying verification ssh.' >&2
+  exit 1
+fi
+unset HOGWILD_SERVICE_TEST_SSH_DIE
+stranded_stage=$(grep -oE 'hogwild:/home/harlan/\.config/worktrunk/config\.toml\.next[^ ]*' "$HOGWILD_SERVICE_TEST_CALLS" | tail -n 1 || true)
+if [ -z "$stranded_stage" ]; then
+  printf '%s\n' 'The stranded-stage test never staged the Worktrunk configuration.' >&2
+  exit 1
+fi
+reclaim_call=$(grep -F 'rm -f' "$HOGWILD_SERVICE_TEST_CALLS" | tail -n 1 || true)
+if [ -z "$reclaim_call" ]; then
+  printf '%s\n' 'A sync_verified_file run that died after staging left no cleanup behind.' >&2
+  exit 1
+fi
+if [ "$reclaim_call" != "$(tail -n 1 "$HOGWILD_SERVICE_TEST_CALLS")" ]; then
+  printf '%s\n' 'The interrupted update recorded a call after its cleanup.' >&2
+  exit 1
+fi
+if ! printf '%s' "$reclaim_call" | grep -F "'${stranded_stage#hogwild:}'" >/dev/null; then
+  printf '%s\n' "An interrupted update left ${stranded_stage#hogwild:} on Hogwild." >&2
   exit 1
 fi
 

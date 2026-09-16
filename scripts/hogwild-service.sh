@@ -208,6 +208,19 @@ safe_restart() {
   legacy_safe_restart
 }
 
+# The file sync_verified_file has staged on Hogwild but not yet moved into
+# place. Recorded before the scp, so the EXIT trap reclaims it on every exit
+# path, including the ones set -e takes with no cleanup branch in sight.
+staged_file=''
+
+cleanup_staged_file() {
+  if [ -n "$staged_file" ]; then
+    ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$staged_file'" >/dev/null 2>&1 || true
+    staged_file=''
+  fi
+}
+trap cleanup_staged_file EXIT
+
 sync_verified_file() {
   local source=$1
   local target=$2
@@ -215,16 +228,19 @@ sync_verified_file() {
   local label=$4
   local next local_hash remote_hash
   next="$target.$stage_token"
+  staged_file="$next"
   local_hash=$(sha256sum "$source" | cut -d' ' -f1)
   ssh -o BatchMode=yes "$HOGWILD_HOST" "mkdir -p '$(dirname "$target")'"
   scp -q "$source" "$HOGWILD_HOST:$next"
   remote_hash=$(ssh -o BatchMode=yes "$HOGWILD_HOST" "sha256sum '$next'" | cut -d' ' -f1)
   if [ "$local_hash" != "$remote_hash" ]; then
-    ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$next'"
     echo "Hogwild received a different $label." >&2
     exit 1
   fi
   ssh -o BatchMode=yes "$HOGWILD_HOST" "chmod '$mode' '$next' && mv '$next' '$target'"
+  # Activation moved the staged file to its final name, so there is nothing
+  # left for the EXIT trap to reclaim.
+  staged_file=''
 }
 
 sync_context() {

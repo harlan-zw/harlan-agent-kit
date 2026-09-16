@@ -132,6 +132,7 @@ if [[ "$*" == *"sha256sum "* && "$*" == *harlan-hooks.ts.next* ]]; then
     esac
   done
 fi
+if [[ -n "$HARLAN_AGENT_CONTEXT_TEST_SSH_VERIFY_FAIL" && "$*" == *sha256sum* ]]; then exit 42; fi
 if [[ -n "$HARLAN_AGENT_CONTEXT_TEST_SSH_FAIL" && "$*" == *core.hooksPath* ]]; then exit 42; fi
 FAKE_SSH
 cat > "$test_root/bin/scp" <<'FAKE_SCP'
@@ -375,5 +376,40 @@ if ! printf '%s' "$cleanup_call" | grep -F "CLAUDE.md.$failed_token'" >/dev/null
   printf '%s\n' "Cleanup did not remove this run's own staged file, $failed_token." >&2
   exit 1
 fi
+
+# An interrupted run must not strand its staged files on Hogwild. The shared
+# .next name used to self-heal: the next deploy overwrote the orphan. A unique
+# token ends that reclamation, so the run itself must reclaim what it staged,
+# on every exit path. Every scp succeeds, then the verification ssh dies, so
+# set -e ends the run between staging and activation, where no explicit
+# cleanup branch runs.
+: > "$calls"
+export HARLAN_AGENT_CONTEXT_TEST_SSH_VERIFY_FAIL=1
+interrupted_log="$test_root/interrupted.log"
+if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >"$interrupted_log" 2>&1; then
+  printf '%s\n' 'Hogwild sync reported success on a dying verification ssh.' >&2
+  exit 1
+fi
+unset HARLAN_AGENT_CONTEXT_TEST_SSH_VERIFY_FAIL
+reclaim_call=$(grep -F 'rm -f' "$calls" | tail -n 1 || true)
+if [ -z "$reclaim_call" ]; then
+  printf '%s\n' 'An interrupted sync left its staged files on Hogwild with no cleanup.' >&2
+  exit 1
+fi
+if [ "$reclaim_call" != "$(tail -n 1 "$calls")" ]; then
+  printf '%s\n' 'The interrupted run recorded a call after its cleanup.' >&2
+  exit 1
+fi
+if printf '%s' "$reclaim_call" | grep -E "\.next'" >/dev/null; then
+  printf '%s\n' 'An interrupted sync cleaned up a bare .next path any concurrent run could own.' >&2
+  exit 1
+fi
+while IFS= read -r staged_call; do
+  staged_path=${staged_call##* }
+  if ! printf '%s' "$reclaim_call" | grep -F "'${staged_path#hogwild:}'" >/dev/null; then
+    printf '%s\n' "An interrupted sync left $staged_path on Hogwild." >&2
+    exit 1
+  fi
+done < <(grep '^scp ' "$calls")
 
 printf '%s\n' 'Agent context sync tests passed'
