@@ -417,13 +417,13 @@ describe('publishing the run log', () => {
 
 describe('daily check-in issues', () => {
   it.each([
-    ['GREEN. All checks passed.', 'CLEAR'],
-    ['**AMBER**. Deployment drift.', 'ACTION NEEDED'],
-    ['RED. Homepage failed.', 'ACTION NEEDED'],
-    ['Coverage is incomplete.', 'BLOCKED'],
-    ['🟢 GREEN. Full coverage.', 'CLEAR'],
-    ['GREEN. Coverage is incomplete.', 'BLOCKED'],
-  ])('publishes %s with status %s', async (detail, status) => {
+    [{ severity: 'GREEN', coverage: 'complete' }, 'CLEAR'],
+    [{ severity: 'AMBER', coverage: 'complete' }, 'ACTION NEEDED'],
+    [{ severity: 'RED', coverage: 'complete' }, 'ACTION NEEDED'],
+    [{ severity: 'GREEN', coverage: 'incomplete' }, 'BLOCKED'],
+    [{ severity: 'RED', coverage: 'incomplete' }, 'BLOCKED'],
+  ] as const)('publishes %o with status %s', async (verdict, status) => {
+    const detail = `# Daily check-in: example.com\n\n${verdict.severity}. Coverage ${verdict.coverage}.`
     const store = openJournalStore(':memory:')
     try {
       seed(store, 'daily-checkin')
@@ -438,7 +438,7 @@ describe('daily check-in issues', () => {
             routineId: dailyId,
             routineName: 'daily-checkin',
             run: { id: `${dailyId}:${scheduledFor}`, scheduledFor },
-            report: { _tag: 'Completed', evidence: '0 new Candidates', detail },
+            report: { _tag: 'Completed', evidence: '0 new Candidates', detail, verdict },
           }),
           at: now().toISOString(),
         })
@@ -451,6 +451,65 @@ describe('daily check-in issues', () => {
         `[${status}] Daily check-in: 2026-08-28`,
       ])
       expect(calls.comments[0]?.body).toContain(detail)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it.each([
+    ['a heading before the verdict', '# Daily Check-in: unhead.unjs.io\n\nVerdict: GREEN. Both external checks pass.'],
+    ['a verdict line that denies incomplete coverage', 'Verdict: GREEN. All three required checks passed. No incomplete coverage.'],
+  ])('reads CLEAR from the stated verdict when the report prose has %s', async (_case, detail) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'daily-checkin')
+      const dailyId = 'harlan-zw/example:daily-checkin'
+      const scheduledFor = '2026-08-27T07:00:00.000Z'
+      const calls: Calls = { issues: [], comments: [] }
+      const controller = createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      store.stageRoutineReport({
+        command: routineReportCommand({
+          repository: 'harlan-zw/example',
+          routineId: dailyId,
+          routineName: 'daily-checkin',
+          run: { id: `${dailyId}:${scheduledFor}`, scheduledFor },
+          report: { _tag: 'Completed', evidence: '0 new Candidates', detail, verdict: { severity: 'GREEN', coverage: 'complete' } },
+        }),
+        at: now().toISOString(),
+      })
+      settleRun(store, `${dailyId}:${scheduledFor}`)
+      await controller.publishPending(new AbortController().signal)
+
+      expect(calls.issues).toEqual(['[CLEAR] Daily check-in: 2026-08-27'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('blocks the daily issue when the run states no verdict', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'daily-checkin')
+      const dailyId = 'harlan-zw/example:daily-checkin'
+      const scheduledFor = '2026-08-27T07:00:00.000Z'
+      const calls: Calls = { issues: [], comments: [] }
+      const controller = createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      store.stageRoutineReport({
+        command: routineReportCommand({
+          repository: 'harlan-zw/example',
+          routineId: dailyId,
+          routineName: 'daily-checkin',
+          run: { id: `${dailyId}:${scheduledFor}`, scheduledFor },
+          report: { _tag: 'Completed', evidence: '0 new Candidates', detail: 'GREEN. Everything passed.' },
+        }),
+        at: now().toISOString(),
+      })
+      settleRun(store, `${dailyId}:${scheduledFor}`)
+      await controller.publishPending(new AbortController().signal)
+
+      expect(calls.issues).toEqual(['[BLOCKED] Daily check-in: 2026-08-27'])
     }
     finally {
       store.close()
@@ -482,7 +541,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
-          report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.' },
+          report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } },
         }),
         at: now().toISOString(),
       })
@@ -514,7 +573,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
-          report: { _tag: 'Completed', evidence: '0 found', detail: 'GREEN. All checks passed.' },
+          report: { _tag: 'Completed', evidence: '0 found', detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } },
         }),
         at: now().toISOString(),
       })
@@ -544,7 +603,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
-          report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.' },
+          report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } },
         }),
         at: now().toISOString(),
       })).toBe(false)

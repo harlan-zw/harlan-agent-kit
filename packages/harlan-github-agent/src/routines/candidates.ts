@@ -1,5 +1,5 @@
 import type { Result } from '../result.ts'
-import type { RoutineDefinition, RoutineScanInput, RoutineScanResponse } from './contract.ts'
+import type { CheckinVerdict, RoutineDefinition, RoutineScanInput, RoutineScanResponse } from './contract.ts'
 import { TOOLCHAIN_LINES } from '../agent-context.ts'
 import { err, ok } from '../result.ts'
 
@@ -17,7 +17,25 @@ const CANDIDATE_SCHEMA = {
   properties: {
     report: {
       type: 'string',
-      description: 'The full Markdown report a check-in Routine wrote, from its verdict line through its proposed actions. Leave it out for other Routines.',
+      description: 'The published Markdown report a check-in Routine wrote. Leave it out for other Routines.',
+    },
+    verdict: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['severity', 'coverage'],
+      description: 'What a check-in run concluded. Required for a check-in Routine. Leave it out for other Routines.',
+      properties: {
+        severity: {
+          type: 'string',
+          enum: ['GREEN', 'AMBER', 'RED'],
+          description: 'GREEN when every check passed and nothing needs a person. AMBER for a warning. RED for a failed check.',
+        },
+        coverage: {
+          type: 'string',
+          enum: ['complete', 'incomplete'],
+          description: 'complete only when every configured check ran and returned. Anything unread or unreachable is incomplete.',
+        },
+      },
     },
     candidates: {
       type: 'array',
@@ -51,6 +69,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+const VERDICT_SEVERITIES = new Set(['GREEN', 'AMBER', 'RED'])
+const VERDICT_COVERAGES = new Set(['complete', 'incomplete'])
+
+/** Absent is allowed here; the check-in definition is what makes it required. */
+function parseVerdict(input: unknown): Result<CheckinVerdict | null, string> {
+  if (input === undefined || input === null)
+    return ok(null)
+  if (!isRecord(input)
+    || typeof input.severity !== 'string' || !VERDICT_SEVERITIES.has(input.severity)
+    || typeof input.coverage !== 'string' || !VERDICT_COVERAGES.has(input.coverage)) {
+    return err('A verdict needs a severity of GREEN, AMBER, or RED and a coverage of complete or incomplete.')
+  }
+  return ok({
+    severity: input.severity as CheckinVerdict['severity'],
+    coverage: input.coverage as CheckinVerdict['coverage'],
+  })
+}
+
 function parseCandidates(input: unknown): Result<RoutineScanResponse, string> {
   if (!isRecord(input) || !Array.isArray(input.candidates))
     return err('The scan agent answered without a candidate list.')
@@ -74,7 +110,14 @@ function parseCandidates(input: unknown): Result<RoutineScanResponse, string> {
       estimatedChangedFiles: value.estimatedChangedFiles,
     })
   }
-  return ok({ report: typeof input.report === 'string' ? input.report.trim() : '', candidates })
+  const verdict = parseVerdict(input.verdict)
+  if (verdict._tag === 'Err')
+    return verdict
+  return ok({
+    report: typeof input.report === 'string' ? input.report.trim() : '',
+    candidates,
+    ...(verdict.value === null ? {} : { verdict: verdict.value }),
+  })
 }
 
 /** Shared Candidate rules; each built-in definition supplies its own scan instructions. */

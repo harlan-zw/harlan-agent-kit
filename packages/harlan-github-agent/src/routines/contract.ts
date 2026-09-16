@@ -3,9 +3,27 @@ import type { AgentFeedbackSignal, Candidate, RoutineMode, RoutineName } from '.
 
 export type RoutineCandidate = Pick<Candidate, 'fingerprint' | 'title' | 'target' | 'claim' | 'verification' | 'estimatedChangedFiles'>
 
+/**
+ * What a check-in run concluded, in fields rather than prose.
+ *
+ * The status a reader sees on the issue title used to be scraped out of the
+ * report's first line. Prose does not survive that: a report that opens with a
+ * Markdown heading carries no verdict on line one, and a verdict that ends "no
+ * incomplete coverage" reads as incomplete to a keyword scan. Both shipped, and
+ * every title read BLOCKED. The run states its own verdict instead.
+ *
+ * Severity and coverage travel together because neither alone decides the
+ * status: incomplete coverage blocks a GREEN run.
+ */
+export interface CheckinVerdict {
+  severity: 'GREEN' | 'AMBER' | 'RED'
+  coverage: 'complete' | 'incomplete'
+}
+
 export interface RoutineScanResponse {
   report: string
   candidates: RoutineCandidate[]
+  verdict?: CheckinVerdict
 }
 
 export interface RoutineScanInput {
