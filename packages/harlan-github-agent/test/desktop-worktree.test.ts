@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
 import { DESKTOP_PROTOCOL } from '../src/desktop-protocol.ts'
-import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree } from '../src/desktop-worktree.ts'
+import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree, worktrunkFailure } from '../src/desktop-worktree.ts'
 
 const directories: string[] = []
 afterEach(async () => {
@@ -342,4 +342,20 @@ it('stands down a desktop running another revision', async () => {
   broker.complete(claimed.id, claimed.worktree, null)
   expect(await response).toEqual({ done: false, value: { _tag: 'Message', text: 'finished' } })
   await iterator.next()
+})
+
+it('reports the line Worktrunk failed on, not the hooks that passed', () => {
+  const stderr = [
+    '◎ Running pre-switch primary',
+    '    echo "Worktree switch stopped: origin fetch failed." >&2',
+    '◎ Running pre-start user:pnpm @ /cache/control.desktop-turn',
+    '    timeout 180s pnpm install --frozen-lockfile',
+    '✗ pre-start command failed: pnpm: exit status: 127',
+  ].join('\n')
+
+  expect(worktrunkFailure(stderr)).toBe('✗ pre-start command failed: pnpm: exit status: 127')
+  // The reason used to carry every echoed hook, so a passing check's own text
+  // decided how the failure was classified.
+  expect(worktrunkFailure(stderr)).not.toContain('fetch failed')
+  expect(worktrunkFailure('nothing marked here')).toBeNull()
 })
