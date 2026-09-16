@@ -44,8 +44,13 @@ export async function executeDesktopTurn(options: {
   }
   catch (error) {
     // Keep edits from a failed or interrupted turn available for recovery.
-    const result = await exportDesktopWorktree(workspace, output, { signal: AbortSignal.timeout(30_000), against: snapshot.head })
-    await options.capture?.(result)
+    await exportDesktopWorktree(workspace, output, { signal: AbortSignal.timeout(30_000), against: snapshot.head })
+      .then(result => options.capture?.(result))
+      .catch(() => {
+        // Recovery is best effort: an export the desktop refuses, such as
+        // partial edits over the size limits, cannot be delivered anyway.
+        // Skip capture and rethrow the original error below.
+      })
     throw error
   }
   const result = await exportDesktopWorktree(workspace, output, { signal, against: snapshot.head })
