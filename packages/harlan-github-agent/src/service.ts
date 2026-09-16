@@ -4,6 +4,8 @@ import type { AgentProviderName } from './agent-provider.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
+import type { AgentSlotLimits } from './host-capacity.ts'
+import type { AgentSlotCounts } from './host-memory.ts'
 import type { Result } from './result.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
@@ -30,6 +32,7 @@ import { createCodexProvider } from './codex-provider.ts'
 import { validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
 import { createDesktopBroker } from './desktop-broker.ts'
+import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
 import { createExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
@@ -39,7 +42,7 @@ import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createHostAgentPool } from './host-capacity.ts'
-import { agentSlotSizing, agentSlotSizingLine, localAgentMemoryBytes } from './host-memory.ts'
+import { agentSlotLine, agentSlotSizing, localAgentMemoryBytes } from './host-memory.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
@@ -334,23 +337,39 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
   const desktop = createDesktopBroker({ now: () => now().getTime(), settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json') })
-  const slots = agentSlotSizing(
+  const sizing = agentSlotSizing(
     configuredProfile.maximumActiveAgents,
     await localAgentMemoryBytes(config.agent.hostReserveGiB),
     config.agent.memoryPerAgentGiB,
   )
-  options.logger.info(agentSlotSizingLine(slots))
-  const localMaximum = slots.granted
+  // Harlan owns the slot count. Memory decides only the first run's default,
+  // because a number nobody set must still be safe on this host.
+  const slotLimits: AgentSlotLimits = {
+    hogwildCeiling: sizing.ceiling,
+    hogwildMemoryMaximum: sizing.suggested,
+    desktopCeiling: DESKTOP_AGENT_SLOT_CEILING,
+    memoryPerAgentGiB: sizing.perAgentGiB,
+  }
+  const agentSlots = (): AgentSlotCounts => {
+    const setting = store.getAgentSlots()
+    return {
+      hogwild: Math.min(setting.hogwild ?? sizing.suggested, slotLimits.hogwildCeiling),
+      desktop: Math.min(setting.desktop ?? 1, slotLimits.desktopCeiling),
+    }
+  }
+  options.logger.info(agentSlotLine(agentSlots(), sizing))
   const hosts = createHostAgentPool({
-    localMaximum,
-    desktopMaximum: 1,
+    localMaximum: () => agentSlots().hogwild,
+    desktopMaximum: () => agentSlots().desktop,
     desktopConnected: desktop.available,
     wait: signal => waitForHost(500, undefined, { signal }),
   })
   const runtime = createAgentRuntimeSource({
     chooseProvider,
     configuredProvider: configuredProfile.provider,
-    maximumActiveAgents: localMaximum + 1,
+    // Schedulers are sized for the ceiling, so raising Agent slots takes effect
+    // without a restart. A permit still decides whether one may start.
+    maximumActiveAgents: slotLimits.hogwildCeiling + slotLimits.desktopCeiling,
     roleReasoningEfforts: config.agent.reasoningEffort,
     repositoryReasoningEfforts: new Map(config.repositories.map(repository => [repository.github, repository.reasoningEffort ?? {}])),
     providers: {
@@ -442,7 +461,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const fixWorktrees = createReviewFixWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const baselineWorktrees = createBaselineRepairWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const issueWorktrees = createIssueWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
-    const permits = createAgentPermitPool(() => localMaximum + (desktop.available() || hosts.read().desktopActive > 0 ? 1 : 0))
+    const permits = createAgentPermitPool(() => {
+      const capacity = hosts.read()
+      const desktopUsable = desktop.available() || capacity.desktopActive > 0
+      return capacity.localMaximum + (desktopUsable ? capacity.desktopMaximum : 0)
+    })
     /**
      * Whether a scheduler may start another agent Task right now.
      *
@@ -1231,6 +1254,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     desktop,
     hostCapacity: hosts.read,
     hostTasks: hosts.tasks,
+    agentSlots: slotLimits,
+    setAgentSlots: (host, slots) => {
+      store.setAgentSlots({ host, slots, at: now().toISOString() })
+      return hosts.read()
+    },
     activityLog,
     store: {
       approveIssue: store.approveIssue,

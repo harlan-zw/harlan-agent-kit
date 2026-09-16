@@ -1,6 +1,6 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
-import type { HostAgentPool, HostCapacity } from './host-capacity.ts'
+import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
@@ -15,12 +15,16 @@ import { createError, createEventStream, H3, setResponseStatus } from 'h3'
 import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
+import { parseAgentSlots } from './host-capacity.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
   desktop?: DesktopBroker
   hostCapacity?: () => HostCapacity
   hostTasks?: HostAgentPool['tasks']
+  /** The bounds of the Agent slot control. Absent means the control is unavailable. */
+  agentSlots?: AgentSlotLimits
+  setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
@@ -75,7 +79,7 @@ function defaultDashboardRoot(): string {
  * They only meet here, on the way out to the dashboard.
  */
 function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
-  const snapshot: DashboardSnapshot = { ...options.store.getDashboardSnapshot(options.now().toISOString()), ...(options.hostCapacity === undefined ? {} : { hostCapacity: options.hostCapacity() }), ...(options.desktop === undefined ? {} : { desktop: options.desktop.read() }) }
+  const snapshot: DashboardSnapshot = { ...options.store.getDashboardSnapshot(options.now().toISOString()), ...(options.hostCapacity === undefined ? {} : { hostCapacity: options.hostCapacity() }), ...(options.agentSlots === undefined ? {} : { agentSlots: options.agentSlots }), ...(options.desktop === undefined ? {} : { desktop: options.desktop.read() }) }
   const activityLog = options.activityLog
   if (options.hostTasks !== undefined)
     snapshot.hostTasks = options.hostTasks()
@@ -393,6 +397,24 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const result = body.result === null ? null : desktopInput(parseDesktopWorktree, body.result)
     const failure = typeof body.failure === 'string' ? body.failure : null
     return { accepted: typeof body.id === 'string' && options.desktop?.complete(body.id, result, failure) === true }
+  })
+
+  app.post('/api/agents/slots', async (event) => {
+    const limits = options.agentSlots
+    const write = options.setAgentSlots
+    if (limits === undefined || write === undefined)
+      throw createError({ status: 503, statusText: 'Service Unavailable', message: 'Agent slots cannot be set right now.' })
+    const body = await event.req.json().catch(() => {
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'An Agent slot request must contain valid JSON.' })
+    })
+    let request: { host: AgentHost, slots: number }
+    try {
+      request = parseAgentSlots(body, limits)
+    }
+    catch (error) {
+      throw createError({ status: 400, statusText: 'Bad Request', message: error instanceof Error ? error.message : 'The Agent slot request is invalid.' })
+    }
+    return write(request.host, request.slots)
   })
 
   app.post('/api/agents/pause', () => options.store.pauseAgents(options.now().toISOString()))

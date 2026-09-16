@@ -14,12 +14,12 @@ agent:
   reserve_percent:
     codex: 20
     opencode: 50
-  # How many Agents may run at once. Host memory decides the real number.
-  # The service divides its memory by memory_per_agent_gib and never starts
-  # more Agents than the result. Every start logs the granted count.
-  # A 30 GiB host with the defaults below grants 2, whatever this asks for.
+  # The most Agent slots Hogwild may be set to. Harlan sets the count in force
+  # from the dashboard System pane or the tray, and it survives a restart.
   # maximum_active_agents: 4
-  # Memory one Agent is assumed to need. Lower it to grant more slots.
+  # Memory one Agent is assumed to need. The service divides its memory by this
+  # number and starts there. It is the suggestion the System pane shows, and a
+  # higher count still runs. A 30 GiB host with these defaults suggests 2.
   # memory_per_agent_gib: 8
   # Memory the service leaves to the host before it counts slots.
   # host_reserve_gib: 8

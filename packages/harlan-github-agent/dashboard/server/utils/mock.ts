@@ -49,7 +49,8 @@ function fixture(): DashboardSnapshot {
     mergeState: 'clean',
   })
   return dashboardSnapshot({
-    hostCapacity: { localActive: 1, localMaximum: 1, desktopActive: 1, desktopMaximum: 1, desktopConnected: true },
+    hostCapacity: { localActive: 1, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopConnected: true },
+    agentSlots: { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 },
     hostTasks: [{ taskId: hex('1'), host: 'desktop' }, { taskId: 'run-1', host: 'hogwild' }],
     desktop: { connected: true, report: { memoryGiB: 16, reservedGiB: 12, agents: 1, actions: 1, jobs: { _tag: 'Available', jobs: [{ runner: 'desktop-1', repository: nuxtSeo, name: 'Build and test sitemap fixtures across supported Nuxt versions', startedAt: Date.now() - 120_000 }] } }, requestedMemoryGiB: null },
     status: 'degraded',

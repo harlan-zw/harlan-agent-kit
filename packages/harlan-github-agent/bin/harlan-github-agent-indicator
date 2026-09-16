@@ -107,6 +107,21 @@ def request_agent_select(selection):
         return json.load(response)
 
 
+def request_agent_slots(host, slots):
+    request = urllib.request.Request(
+        f'{DASHBOARD_URL}api/agents/slots',
+        data=json.dumps({'host': host, 'slots': slots}, separators=(',', ':')).encode(),
+        method='POST',
+        headers={
+            'Authorization': dashboard_authorization(),
+            'Content-Type': 'application/json',
+            'Origin': DASHBOARD_ORIGIN,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.load(response)
+
+
 def request_agent_eject(task_id):
     request = urllib.request.Request(
         f'{DASHBOARD_URL}api/agents/eject',
@@ -258,6 +273,48 @@ def agent_selection_choices(dashboard):
         for candidate in [None, *reasoning_efforts]
     )
     return choices
+
+
+def agent_slots(dashboard, host):
+    """The Agent slot count in force for one host, or None when it is unknown."""
+    capacity = (dashboard or {}).get('hostCapacity') or {}
+    key = 'localMaximum' if host == 'hogwild' else 'desktopMaximum'
+    value = capacity.get(key)
+    return value if isinstance(value, int) else None
+
+
+def agent_slot_choices(dashboard, host):
+    """Lists the Agent slot counts the menu offers for one host.
+
+    The ceiling comes from the controller, so the tray and the dashboard always
+    offer the same counts. Host memory is advice, and the menu never hides a
+    count above it.
+    """
+    limits = (dashboard or {}).get('agentSlots') or {}
+    ceiling = limits.get('hogwildCeiling' if host == 'hogwild' else 'desktopCeiling')
+    current = agent_slots(dashboard, host)
+    if not isinstance(ceiling, int) or current is None:
+        return []
+    choices = [{'_tag': 'Heading', 'label': 'Agent slots'}]
+    choices.extend(
+        {'_tag': 'Choice', 'label': str(count), 'selected': count == current, 'slots': count}
+        for count in range(ceiling + 1)
+    )
+    return choices
+
+
+def agent_slot_items(dashboard, host, set_agent_slots):
+    items = []
+    for entry in agent_slot_choices(dashboard, host):
+        if entry['_tag'] == 'Heading':
+            items.append(separator())
+            items.append(menu_item(entry['label'], enabled=False))
+            continue
+        item = menu_item(f"{selection_marker(entry['selected'])} {entry['label']}", enabled=set_agent_slots is not None)
+        if set_agent_slots is not None:
+            item.connect('activate', lambda *_args, count=entry['slots']: set_agent_slots(host, count))
+        items.append(item)
+    return items
 
 
 def agent_selection_items(dashboard, select_agent):
@@ -653,7 +710,7 @@ def incident_url(incident):
     return None if repository is None else f'https://github.com/{repository}'
 
 
-def build_menu(indicator, sources, action_error, refresh, set_agent_control, eject_agent, select_agent, restart_service=None):
+def build_menu(indicator, sources, action_error, refresh, set_agent_control, eject_agent, select_agent, restart_service=None, set_agent_slots=None):
     menu = Gtk.Menu()
     dashboard_source = sources['harlanGithubAgent']
     dashboard = source_dashboard(sources)
@@ -681,7 +738,9 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
         host_menus = {}
         for host, name in (('hogwild', 'Hogwild'), ('desktop', 'Desktop')):
             turns = [turn for turn in dashboard.get('hostTasks', []) if turn['host'] == host]
-            host_item = submenu_item(f'{name} · {len(turns)} running', [])
+            slots = agent_slots(dashboard, host)
+            counted = f'{len(turns)} running' if slots is None else f'{len(turns)} of {slots} running'
+            host_item = submenu_item(f'{name} · {counted}', [])
             host_menus[host] = host_item.get_submenu()
             if not turns:
                 host_menus[host].append(menu_item('No Agent tasks running', enabled=False))
@@ -724,6 +783,12 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, eje
             links.append(menu_item('Open repository', f"https://github.com/{run['repository']}"))
             target_menu = host_menus.get(assignments.get(run.get('id')), menu)
             target_menu.append(submenu_item(active_routine_label(run), links))
+
+        # Slot counts sit under the running work, so the menu reads as state
+        # first and control second.
+        for host in host_menus:
+            for item in agent_slot_items(dashboard, host, set_agent_slots):
+                host_menus[host].append(item)
 
         incidents = dashboard.get('incidents', [])
         if incidents:
@@ -804,7 +869,7 @@ def main():
         indicator.set_label(label, '🟢 99')
         indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
         indicator.set_title(title)
-        build_menu(indicator, sources, control_error, refresh, set_agent_control, eject_agent, select_agent, restart_service)
+        build_menu(indicator, sources, control_error, refresh, set_agent_control, eject_agent, select_agent, restart_service, set_agent_slots)
         if pending_action['value'] is not None:
             refresh()
         return False
@@ -819,6 +884,8 @@ def main():
                     request_agent_control(action['action'])
                 elif action['_tag'] == 'AgentSelect':
                     request_agent_select(action['selection'])
+                elif action['_tag'] == 'AgentSlots':
+                    request_agent_slots(action['host'], action['slots'])
                 elif action['_tag'] == 'ServiceRestart':
                     request_service_restart()
                 else:
@@ -851,6 +918,15 @@ def main():
         }
         return refresh()
 
+    def set_agent_slots(host, slots):
+        pending_action['value'] = {
+            '_tag': 'AgentSlots',
+            'host': host,
+            'slots': slots,
+            'label': 'Agent slots',
+        }
+        return refresh()
+
     def eject_agent(task_id):
         pending_action['value'] = {
             '_tag': 'AgentEject',
@@ -866,7 +942,7 @@ def main():
         }
         return refresh()
 
-    build_menu(indicator, loading_system_sources(), None, refresh, set_agent_control, eject_agent, select_agent, restart_service)
+    build_menu(indicator, loading_system_sources(), None, refresh, set_agent_control, eject_agent, select_agent, restart_service, set_agent_slots)
     refresh()
     GLib.timeout_add_seconds(5, refresh)
     Gtk.main()

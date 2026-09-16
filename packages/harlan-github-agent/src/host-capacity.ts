@@ -10,6 +10,42 @@ export interface HostCapacity {
 
 export type AgentHost = 'hogwild' | 'desktop'
 
+/** The bounds of the Agent slot control, so the dashboard and the tray agree. */
+export interface AgentSlotLimits {
+  /** The most Agent slots Hogwild may be set to. */
+  hogwildCeiling: number
+  /** The Hogwild slot count host memory suggests. */
+  hogwildMemoryMaximum: number
+  /** The most Agent slots the desktop may be set to. */
+  desktopCeiling: number
+  /** Memory one Agent is assumed to need. */
+  memoryPerAgentGiB: number
+}
+
+/** The stored Agent slot count for each host. NULL means the host default. */
+export interface AgentSlotSetting {
+  hogwild: number | null
+  desktop: number | null
+}
+
+/**
+ * Reads one Agent slot request from the Control API.
+ *
+ * The ceiling is a configuration decision, so a request above it is refused
+ * here. Host memory is advice, and a count above it is allowed on purpose.
+ */
+export function parseAgentSlots(value: unknown, limits: AgentSlotLimits): { host: AgentHost, slots: number } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('An Agent slot request must be a JSON object.')
+  const input = value as { host?: unknown, slots?: unknown }
+  if (input.host !== 'hogwild' && input.host !== 'desktop')
+    throw new Error('Agent slots must name the host hogwild or desktop.')
+  const ceiling = input.host === 'hogwild' ? limits.hogwildCeiling : limits.desktopCeiling
+  if (!Number.isSafeInteger(input.slots) || Number(input.slots) < 0 || Number(input.slots) > ceiling)
+    throw new Error(`Agent slots must be a whole number from 0 to ${ceiling}.`)
+  return { host: input.host, slots: Number(input.slots) }
+}
+
 /** The desktop helps only after Hogwild fills every local Agent slot. */
 export function agentHost(capacity: HostCapacity, refused: ReadonlySet<AgentHost> = new Set()): AgentHost | null {
   if (!refused.has('hogwild') && capacity.localActive < capacity.localMaximum)
@@ -25,25 +61,35 @@ export interface HostAgentPool {
   provider: (local: AgentProvider, desktop: AgentProvider) => AgentProvider
 }
 
+/** A limit Harlan can change while the service runs, or a fixed one. */
+export type HostAgentLimit = number | (() => number)
+
+function hostLimit(limit: HostAgentLimit): number {
+  const value = typeof limit === 'number' ? limit : limit()
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new Error('Host Agent limits must be nonnegative integers.')
+  return value
+}
+
 /** One pool spans both providers. Switching providers cannot double host capacity. */
 export function createHostAgentPool(options: {
-  localMaximum: number
-  desktopMaximum: number
+  localMaximum: HostAgentLimit
+  desktopMaximum: HostAgentLimit
   desktopConnected: () => boolean
   wait: (signal: AbortSignal) => Promise<void>
 }): HostAgentPool {
-  for (const limit of [options.localMaximum, options.desktopMaximum]) {
-    if (!Number.isSafeInteger(limit) || limit < 0)
-      throw new Error('Host Agent limits must be nonnegative integers.')
-  }
+  // A function limit is read at every admission, so Agent slots set from the
+  // dashboard or the tray apply to the next turn without a restart.
+  for (const limit of [options.localMaximum, options.desktopMaximum])
+    hostLimit(limit)
   let localActive = 0
   let desktopActive = 0
   const tasks = new Map<symbol, { taskId: string | null, host: AgentHost }>()
   const read = (): HostCapacity => ({
     localActive,
-    localMaximum: options.localMaximum,
+    localMaximum: hostLimit(options.localMaximum),
     desktopActive,
-    desktopMaximum: options.desktopMaximum,
+    desktopMaximum: hostLimit(options.desktopMaximum),
     desktopConnected: options.desktopConnected(),
   })
   return {
