@@ -26,7 +26,7 @@ export async function executeDesktopTurn(options: {
   const { turn, directory, provider, signal } = options
   const snapshot = parseDesktopWorktree(turn.worktree)
   const cache = desktopRepositoryPath(options.repositories, snapshot.origin)
-  const workspace = await prepareDesktopWorktree(snapshot, cache, join(directory, 'worktree'), signal)
+  const workspace = await prepareDesktopWorktree(snapshot, cache, join(directory, 'worktree'), turn.request.taskId ?? turn.id, signal)
   const request = {
     ...turn.request,
     workspace,
