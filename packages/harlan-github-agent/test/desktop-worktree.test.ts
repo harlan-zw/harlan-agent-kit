@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
-import { DESKTOP_PROTOCOL } from '../src/desktop-protocol.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
+import { DESKTOP_PROTOCOL } from '../src/desktop-protocol.ts'
 import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree } from '../src/desktop-worktree.ts'
 
 const directories: string[] = []
