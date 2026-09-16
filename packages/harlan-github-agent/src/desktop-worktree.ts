@@ -18,15 +18,64 @@ export interface DesktopWorktree {
   files: Array<{ path: string, data: string, mode: number }>
 }
 
+export interface DesktopWorktreeLimits {
+  bundle: number
+  patch: number
+  file: number
+  files: number
+}
+
+/**
+ * What one desktop turn may carry across the host boundary.
+ *
+ * The turn travels as one JSON body, so every part counts as base64 text.
+ * Raising these would move hundreds of megabytes through a single string.
+ * A repository whose history does not fit runs on Hogwild instead.
+ */
+export const DESKTOP_WORKTREE_LIMITS: DesktopWorktreeLimits = {
+  bundle: 256 * 1024 ** 2,
+  patch: 64 * 1024 ** 2,
+  file: 64 * 1024 ** 2,
+  files: 50_000,
+}
+
+function size(bytes: number): string {
+  return bytes >= 1024 ** 2 ? `${Math.ceil(bytes / 1024 ** 2)} MiB` : `${Math.ceil(bytes / 1024)} KiB`
+}
+
+/**
+ * Why this Worktree cannot cross the host boundary, or null when it can.
+ *
+ * The exporter and the parser read the same limits here. They used to hold
+ * their own copies, so Hogwild built a payload the desktop had to reject, and
+ * every offloaded turn on a large repository died reading `invalid`.
+ */
+export function desktopWorktreeRefusal(worktree: DesktopWorktree, limits: DesktopWorktreeLimits = DESKTOP_WORKTREE_LIMITS): string | null {
+  if (worktree.bundle.length > limits.bundle)
+    return `Its history is ${size(worktree.bundle.length)}, and the limit is ${size(limits.bundle)}.`
+  if (worktree.patch.length > limits.patch)
+    return `Its uncommitted change is ${size(worktree.patch.length)}, and the limit is ${size(limits.patch)}.`
+  if (worktree.files.length > limits.files)
+    return `Its untracked file count is ${worktree.files.length}, and the limit is ${limits.files}.`
+  const large = worktree.files.find(file => file.data.length > limits.file)
+  if (large !== undefined)
+    return `Its untracked file ${large.path} is ${size(large.data.length)}, and the limit is ${size(limits.file)}.`
+  return null
+}
+
 /** Only repository files cross hosts. Credentials and dependency directories stay local. */
-export async function exportDesktopWorktree(workspace: string, temporary: string, signal?: AbortSignal): Promise<DesktopWorktree> {
+export async function exportDesktopWorktree(workspace: string, temporary: string, signal?: AbortSignal, limits: DesktopWorktreeLimits = DESKTOP_WORKTREE_LIMITS): Promise<DesktopWorktree> {
   const git = (args: string[]) => desktopCommand('git', args, workspace, signal, args[0] === 'diff' || args[0] === 'ls-files')
   const head = await git(['rev-parse', 'HEAD'])
   const origin = await git(['remote', 'get-url', 'origin'])
   const bundle = join(temporary, 'repository.bundle')
   await git(['bundle', 'create', bundle, 'HEAD', 'refs/heads/main', 'refs/remotes/origin/main'])
   const files = await desktopFiles(workspace, signal)
-  return { head, origin, bundle: (await readFile(bundle)).toString('base64'), patch: await git(['diff', '--binary', 'HEAD']), files }
+  const worktree = { head, origin, bundle: (await readFile(bundle)).toString('base64'), patch: await git(['diff', '--binary', 'HEAD']), files }
+  const refusal = desktopWorktreeRefusal(worktree, limits)
+  if (refusal !== null)
+    throw new Error(`The desktop cannot run a turn for ${origin}. ${refusal}`, { cause: 'desktop-unsupported' })
+  return worktree
 }
 
 async function desktopFiles(workspace: string, signal?: AbortSignal): Promise<DesktopWorktree['files']> {

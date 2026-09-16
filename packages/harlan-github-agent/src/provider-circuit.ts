@@ -110,7 +110,9 @@ export function createCircuitProtectedProvider(options: CircuitProtectedProvider
         }
       }
       catch (error) {
-        if (error instanceof Error && error.cause === 'desktop-execution') {
+        // Neither cause says the Agent provider is unhealthy, so neither one
+        // may open its circuit.
+        if (error instanceof Error && (error.cause === 'desktop-execution' || error.cause === 'desktop-unsupported')) {
           if (!request.signal.aborted)
             yield { _tag: 'Failed', reason: error.message }
           return

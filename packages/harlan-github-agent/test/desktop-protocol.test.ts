@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree, readDesktopResponse } from '../src/desktop-protocol.ts'
+import { DESKTOP_WORKTREE_LIMITS } from '../src/desktop-worktree.ts'
 
 describe('desktop boundaries', () => {
   it('accepts a whole memory limit and refuses malformed settings', () => {
@@ -14,7 +15,15 @@ describe('desktop boundaries', () => {
   it('refuses arbitrary provider events and non-GitHub source repositories', () => {
     expect(parseDesktopEvents([{ _tag: 'SessionStarted', sessionId: 'abc' }])).toEqual([{ _tag: 'SessionStarted', sessionId: 'abc' }])
     expect(() => parseDesktopEvents([{ _tag: 'Progress', text: 'bad', percent: 999 }])).toThrow()
-    expect(() => parseDesktopWorktree({ head: 'a'.repeat(40), origin: '/tmp/repo', bundle: '', patch: '', files: [] })).toThrow()
+    expect(() => parseDesktopWorktree({ head: 'a'.repeat(40), origin: '/tmp/repo', bundle: '', patch: '', files: [] })).toThrow('origin is not a GitHub repository')
+  })
+
+  it('names the part of a Worktree it refuses', () => {
+    const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/nuxtseo.com', bundle: '', patch: '', files: [] }
+    expect(parseDesktopWorktree(worktree)).toEqual(worktree)
+    expect(() => parseDesktopWorktree({ ...worktree, head: 'nope' })).toThrow('head commit is invalid')
+    expect(() => parseDesktopWorktree({ ...worktree, bundle: 'a'.repeat(DESKTOP_WORKTREE_LIMITS.bundle + 1) }))
+      .toThrow('The desktop cannot run a turn for https://github.com/harlan-zw/nuxtseo.com. Its history is 257 MiB, and the limit is 256 MiB.')
   })
 })
 

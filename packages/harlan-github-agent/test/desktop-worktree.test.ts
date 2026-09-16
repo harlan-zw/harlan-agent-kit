@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
-import { applyDesktopFiles, desktopCommand, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree } from '../src/desktop-worktree.ts'
+import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree } from '../src/desktop-worktree.ts'
 
 const directories: string[] = []
 afterEach(async () => {
@@ -172,4 +172,24 @@ it('keeps an input file when the desktop commits it', async () => {
   await writeFile(join(f.repository, 'new.txt'), 'keep committed file\n')
   await importDesktopWorktree(f.repository, initial, result, f.transfer)
   expect(await readFile(join(f.repository, 'new.txt'), 'utf8')).toBe('keep committed file\n')
+})
+
+it('refuses to export a Worktree the desktop cannot carry', async () => {
+  const f = await fixture()
+  await writeFile(join(f.repository, 'notes.txt'), 'untracked\n')
+  const limits = { ...DESKTOP_WORKTREE_LIMITS, bundle: 16 }
+
+  await expect(exportDesktopWorktree(f.repository, f.transfer, undefined, limits))
+    .rejects
+    .toThrow(/^The desktop cannot run a turn for .+\. Its history is \d+ KiB, and the limit is 1 KiB\.$/)
+  await expect(exportDesktopWorktree(f.repository, f.transfer, undefined, DESKTOP_WORKTREE_LIMITS)).resolves.toBeDefined()
+})
+
+it('names every part that keeps a Worktree on Hogwild', () => {
+  const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/example', bundle: 'bundle', patch: 'patch', files: [{ path: 'notes.txt', data: 'ZGF0YQ==', mode: 0o644 }] }
+  expect(desktopWorktreeRefusal(worktree)).toBeNull()
+  expect(desktopWorktreeRefusal(worktree, { bundle: 1, patch: 8, file: 8, files: 8 })).toMatch(/^Its history is /)
+  expect(desktopWorktreeRefusal(worktree, { bundle: 8, patch: 1, file: 8, files: 8 })).toMatch(/^Its uncommitted change is /)
+  expect(desktopWorktreeRefusal(worktree, { bundle: 8, patch: 8, file: 8, files: 0 })).toBe('Its untracked file count is 1, and the limit is 0.')
+  expect(desktopWorktreeRefusal(worktree, { bundle: 8, patch: 8, file: 1, files: 8 })).toMatch(/^Its untracked file notes\.txt is /)
 })

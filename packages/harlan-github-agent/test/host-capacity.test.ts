@@ -74,3 +74,52 @@ it('withholds the extra Task claim while the desktop is unavailable', () => {
   first.release()
   expect(permits.tryAcquire()).not.toBeNull()
 })
+
+describe('a Worktree the desktop cannot carry', () => {
+  it('runs the turn on Hogwild as soon as a local slot frees', async () => {
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const local: AgentProvider = { name: 'codex', async* runTurn() {
+      yield { _tag: 'Message', text: 'hogwild' } satisfies AgentEvent
+    } }
+    const unsupported: AgentProvider = { name: 'codex', runTurn() {
+      throw new Error('The desktop cannot run a turn for https://github.com/harlan-zw/nuxtseo.com. Its history is 326 MiB, and the limit is 256 MiB.', { cause: 'desktop-unsupported' })
+    } }
+    const held: AgentProvider = { name: 'codex', async* runTurn() {
+      yield { _tag: 'Message', text: 'holding' } satisfies AgentEvent
+      yield { _tag: 'Message', text: 'released' } satisfies AgentEvent
+    } }
+
+    const holding = pool.provider(held, held).runTurn({ ...request, taskId: 'holding' })[Symbol.asyncIterator]()
+    await holding.next()
+    const offloaded = pool.provider(local, unsupported).runTurn({ ...request, taskId: 'offloaded' })[Symbol.asyncIterator]()
+    const waiting = offloaded.next()
+    await holding.next()
+    await holding.next()
+
+    expect(await waiting).toEqual({ done: false, value: { _tag: 'Message', text: 'hogwild' } })
+    expect(pool.tasks()).toEqual([{ taskId: 'offloaded', host: 'hogwild' }])
+    await offloaded.next()
+    expect(pool.tasks()).toEqual([])
+  })
+
+  it('fails a session already pinned to the desktop, because no other host owns it', async () => {
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const local: AgentProvider = { name: 'codex', async* runTurn() {
+      yield { _tag: 'Message', text: 'hogwild' } satisfies AgentEvent
+    } }
+    const unsupported: AgentProvider = { name: 'codex', runTurn() {
+      throw new Error('The desktop cannot run a turn for https://github.com/harlan-zw/nuxtseo.com. Its history is 326 MiB, and the limit is 256 MiB.', { cause: 'desktop-unsupported' })
+    } }
+
+    const turn = pool.provider(local, unsupported).runTurn({ ...request, sessionId: 'desktop:session-1' })[Symbol.asyncIterator]()
+
+    await expect(turn.next()).rejects.toThrow('The desktop cannot run a turn')
+    expect(pool.tasks()).toEqual([])
+  })
+
+  it('keeps a refused host out of the next selection', () => {
+    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+    expect(agentHost(capacity)).toBe('desktop')
+    expect(agentHost(capacity, new Set(['desktop']))).toBeNull()
+  })
+})
