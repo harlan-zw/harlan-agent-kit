@@ -38,7 +38,7 @@ import { APPROVAL_LABELS } from './approval-labels.ts'
 import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { isIssueTriageState } from './issue-triage.ts'
-import { combineMergeRisk, mergeRiskFloor } from './merge-risk.ts'
+import { combineMergeRisk, describeMergeRisk, mergeRiskFloor } from './merge-risk.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -861,7 +861,7 @@ function gateSummary(name: 'Merge' | 'Review' | 'CI', gate: ReviewGateState, fin
   return `- **${name} gate:** ${outcome}. ${cleanLine(gate.reason)}`
 }
 
-export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[]): string {
+export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const workflow = JSON.stringify({
@@ -884,6 +884,9 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
     gateSummary('Merge', gates.merge, findings),
     gateSummary('Review', gates.review, findings),
     gateSummary('CI', gates.ci, findings),
+    // A repository that never asked for Merge risk records no verdict, so its
+    // comment keeps the shape it always had.
+    ...(mergeRisk === undefined ? [] : [`- **Merge risk:** ${describeMergeRisk(mergeRisk)}`]),
   ]
   const findingLines = findings.map(finding => finding._tag === 'Fixed'
     ? `- **Fixed:** ${cleanLine(finding.summary)}`
@@ -1252,7 +1255,7 @@ async function projectReviewRun(
 
   const outcome = reviewOutcome(gates)
   const confidence = outcome === 'READY' ? run.outcome.confidence : undefined
-  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks)
+  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined)
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication
     ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))

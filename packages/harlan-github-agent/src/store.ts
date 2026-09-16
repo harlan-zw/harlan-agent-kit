@@ -550,6 +550,11 @@ export interface ReviewGateRefresh {
   findings: ReviewFinding[]
   /** The agent's own score, kept whatever the gates said. */
   confidence: number | undefined
+  /**
+   * The verdict this run recorded, so a restated comment keeps its Merge risk
+   * line. Null covers every run recorded before this existed.
+   */
+  mergeRisk: MergeRiskRecord | null
   commentId: number
   /** What the canonical comment holds now, so the edit can compare and swap. */
   publishedBody: string
@@ -575,6 +580,7 @@ interface ReviewGateRefreshRow {
   gates_updated_at: string
   findings: string
   confidence: number | null
+  merge_risk: string | null
   github_comment_id: number
   published_body: string
 }
@@ -2523,9 +2529,12 @@ function digest(value: string): string {
  * The repository policy a stored Review verdict depends on.
  *
  * A change here starts a fresh Review of every open pull request, so this
- * names only the fields the Review gates and Repair authority read. Digesting
- * the whole mapping sent the fleet back through Review whenever a field was
- * added for something else, as Auto merge scope did.
+ * names only the fields the Review gates, Repair authority, and the stored
+ * Merge risk verdict read. The Contained policy decides the stored verdict,
+ * so tightening it must invalidate every verdict recorded under the old one;
+ * a fresh Review then records the verdict the current policy calls for.
+ * Digesting the whole mapping went further than that and sent the fleet back
+ * through Review whenever a field was added for something else.
  */
 export function reviewPolicyDigest(mapping: RepositoryMapping): string {
   return digest(JSON.stringify({
@@ -2535,6 +2544,7 @@ export function reviewPolicyDigest(mapping: RepositoryMapping): string {
     defaultBranch: mapping.defaultBranch,
     writablePullRequestAuthors: mapping.writablePullRequestAuthors,
     writablePullRequestHeadPrefixes: mapping.writablePullRequestHeadPrefixes,
+    mergeRiskPolicy: mapping.autoMerge._tag === 'Contained' ? mapping.autoMerge.policy : null,
   }))
 }
 
@@ -6576,6 +6586,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
       COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
       review_runs.findings,
+      review_runs.merge_risk,
       agent_feedback.kind AS feedback_tag,
       agent_feedback.reason AS feedback_reason,
       agent_feedback.updated_at AS feedback_updated_at,
@@ -12956,6 +12967,7 @@ export function openJournalStore(
       COALESCE(projection.updated_at, ranked.completed_at) AS gates_updated_at,
       ranked.findings,
       COALESCE(projection.confidence, ranked.confidence) AS confidence,
+      ranked.merge_risk,
       published.github_comment_id,
       published.body AS published_body
     FROM ranked
@@ -13058,6 +13070,7 @@ export function openJournalStore(
     gatesUpdatedAt: row.gates_updated_at,
     findings: JSON.parse(row.findings) as ReviewFinding[],
     confidence: row.confidence ?? undefined,
+    mergeRisk: row.merge_risk === null ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
   }))

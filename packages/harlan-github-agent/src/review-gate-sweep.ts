@@ -91,7 +91,7 @@ export async function refreshReviewGates(
         ? { ...finding, nextAction: repair._tag === 'Queued' ? `Repair ${repairRoundLabel(repair.rounds)} starts. ${finding.nextAction}` : repair.reason }
         : finding)
     }
-    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks)
+    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks, review.mergeRisk?.combined)
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can
     // queue that repair. The store answers Existing on every later pass.
