@@ -112,6 +112,15 @@ export interface AgentConfig {
      */
     maximumActiveAgents: number | null
     /**
+     * Memory one Agent is assumed to need, in whole GiB.
+     *
+     * The service divides its memory by this number and never starts more
+     * Agents than the result. Lower it to grant more slots on the same host.
+     */
+    memoryPerAgentGiB: number
+    /** Memory the service leaves to the host, in whole GiB, before it counts slots. */
+    hostReserveGiB: number
+    /**
      * Reasoning effort overrides per Agent provider and role.
      *
      * A listed role replaces that provider's own per-role default. An absent

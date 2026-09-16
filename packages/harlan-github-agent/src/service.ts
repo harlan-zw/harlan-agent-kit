@@ -39,7 +39,7 @@ import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createHostAgentPool } from './host-capacity.ts'
-import { agentSlotsForMemory, localAgentMemoryBytes } from './host-memory.ts'
+import { agentSlotSizing, agentSlotSizingLine, localAgentMemoryBytes } from './host-memory.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
@@ -334,7 +334,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
   const desktop = createDesktopBroker({ now: () => now().getTime(), settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json') })
-  const localMaximum = agentSlotsForMemory(configuredProfile.maximumActiveAgents, await localAgentMemoryBytes(), 8)
+  const slots = agentSlotSizing(
+    configuredProfile.maximumActiveAgents,
+    await localAgentMemoryBytes(config.agent.hostReserveGiB),
+    config.agent.memoryPerAgentGiB,
+  )
+  options.logger.info(agentSlotSizingLine(slots))
+  const localMaximum = slots.granted
   const hosts = createHostAgentPool({
     localMaximum,
     desktopMaximum: 1,

@@ -293,11 +293,25 @@ function isDashboardOrigin(value: string): boolean {
     && allowedHost
 }
 
+/** Memory one Agent is assumed to need, and memory the host keeps for itself. */
+const DEFAULT_MEMORY_PER_AGENT_GIB = 8
+const DEFAULT_HOST_RESERVE_GIB = 8
+
+/** Parses a whole GiB count, keeping the default when the key is absent. */
+function wholeGiB(value: unknown, fallback: number, minimum: number, path: string, issues: ConfigIssue[]): number | undefined {
+  if (value === undefined)
+    return fallback
+  if (typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= 512)
+    return value
+  issues.push({ path, message: `Expected a whole number of GiB from ${minimum} to 512.` })
+  return undefined
+}
+
 /** Defaults to Codex, so an existing configuration keeps its current agent. */
 function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfig['agent'] | undefined {
   const agent = source.agent
   if (agent === undefined)
-    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: DEFAULT_PROVIDER_ORDER, maximumActiveAgents: null, reasoningEffort: {} }
+    return { provider: 'codex', reservePercent: DEFAULT_RESERVE_PERCENT, order: DEFAULT_PROVIDER_ORDER, maximumActiveAgents: null, memoryPerAgentGiB: DEFAULT_MEMORY_PER_AGENT_GIB, hostReserveGiB: DEFAULT_HOST_RESERVE_GIB, reasoningEffort: {} }
   if (!isRecord(agent)) {
     issues.push({ path: '$.agent', message: 'Expected an object.' })
     return undefined
@@ -331,11 +345,18 @@ function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfi
   if (maximumActiveAgents === undefined)
     issues.push({ path: '$.agent.maximum_active_agents', message: 'Expected a whole number from 1 to 16.' })
 
+  // Host memory decides the real Agent count. These two keys move that limit,
+  // so a host with room can run what maximum_active_agents asks for.
+  const memoryPerAgentGiB = wholeGiB(agent.memory_per_agent_gib, DEFAULT_MEMORY_PER_AGENT_GIB, 1, '$.agent.memory_per_agent_gib', issues)
+  const hostReserveGiB = wholeGiB(agent.host_reserve_gib, DEFAULT_HOST_RESERVE_GIB, 0, '$.agent.host_reserve_gib', issues)
+
   const reasoningEffort = roleReasoningEfforts(agent.reasoning_effort, '$.agent.reasoning_effort', issues)
 
   if (provider === undefined || reserve === undefined || order === undefined || maximumActiveAgents === undefined || reasoningEffort === undefined)
     return undefined
-  return { provider, reservePercent: reserve, order, maximumActiveAgents, reasoningEffort }
+  if (memoryPerAgentGiB === undefined || hostReserveGiB === undefined)
+    return undefined
+  return { provider, reservePercent: reserve, order, maximumActiveAgents, memoryPerAgentGiB, hostReserveGiB, reasoningEffort }
 }
 
 /** The webhook listener is off unless the configuration turns it on. */

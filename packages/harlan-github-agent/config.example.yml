@@ -14,6 +14,15 @@ agent:
   reserve_percent:
     codex: 20
     opencode: 50
+  # How many Agents may run at once. Host memory decides the real number.
+  # The service divides its memory by memory_per_agent_gib and never starts
+  # more Agents than the result. Every start logs the granted count.
+  # A 30 GiB host with the defaults below grants 2, whatever this asks for.
+  # maximum_active_agents: 4
+  # Memory one Agent is assumed to need. Lower it to grant more slots.
+  # memory_per_agent_gib: 8
+  # Memory the service leaves to the host before it counts slots.
+  # host_reserve_gib: 8
   # Reasoning effort per Agent provider and role. A listed role replaces that
   # provider's own default. A pinned Agent selection with an explicit
   # Reasoning effort still wins. Values: none, low, medium, high, xhigh, max.
