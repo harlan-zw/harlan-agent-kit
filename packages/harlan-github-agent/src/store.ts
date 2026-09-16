@@ -46,6 +46,7 @@ import type {
   IssueWorkTask,
   ItemDismissalResult,
   ItemSummary,
+  MergeRiskRecord,
   OpenAgentPullRequest,
   PinnedAgentSelection,
   PreparedPublication,
@@ -1245,6 +1246,7 @@ interface ReviewRunRow {
   feedback_tag: AgentFeedback['_tag'] | null
   feedback_reason: string | null
   feedback_updated_at: string | null
+  merge_risk: string | null
 }
 
 interface DashboardReviewRunRow extends ReviewRunRow {
@@ -2651,6 +2653,10 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
         : { _tag: row.feedback_tag, reason: row.feedback_reason ?? '', updatedAt: row.feedback_updated_at },
     gatePublication: row.gate_publication_id === null ? { _tag: 'Unpublished' } : { _tag: 'Published', publicationId: row.gate_publication_id },
     publications,
+    // Null covers every run recorded before Merge risk existed, and every
+    // repository that never asked for it. Both must read as "no verdict",
+    // never as a Contained one.
+    mergeRisk: row.merge_risk === null || row.merge_risk === undefined ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
   }
 }
 
@@ -6317,7 +6323,21 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 72
   }
-  if (version === 72)
+  if (version === 72) {
+    // A rewind replays this against a journal that already carries the column,
+    // and SQLite has no ADD COLUMN IF NOT EXISTS, so ask before adding.
+    const present = database.prepare(`SELECT 1 AS found FROM pragma_table_info('review_runs') WHERE name = 'merge_risk'`).get() !== undefined
+    const addColumn = present
+      ? ''
+      : `ALTER TABLE review_runs ADD COLUMN merge_risk TEXT NULL
+        CHECK (merge_risk IS NULL OR json_valid(merge_risk));`
+    applyMigration(database, `
+      ${addColumn}
+      PRAGMA user_version = 73;
+    `)
+    version = 73
+  }
+  if (version === 73)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7888,8 +7908,8 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, base_ref
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, base_ref, merge_risk
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -7909,6 +7929,7 @@ export function openJournalStore(
         contentDigest,
         usage,
         pullRequest.baseRef ?? null,
+        input.mergeRisk === undefined || input.mergeRisk === null ? null : JSON.stringify(input.mergeRisk),
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -8336,7 +8357,8 @@ export function openJournalStore(
         review_runs.findings,
         agent_feedback.kind AS feedback_tag,
         agent_feedback.reason AS feedback_reason,
-        agent_feedback.updated_at AS feedback_updated_at
+        agent_feedback.updated_at AS feedback_updated_at,
+        review_runs.merge_risk
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN revisions ON revisions.id = review_runs.revision_id

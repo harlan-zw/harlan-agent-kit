@@ -297,6 +297,65 @@ agent:
     expect(every._tag === 'Ok' && every.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Every', minimumConfidence: 80 })
   })
 
+  it('reads a contained pull request scope with its Merge risk policy', () => {
+    const contained = parseConfigText(configText.replace(
+      'issue_work: true',
+      `issue_work: true
+    auto_merge:
+      pull_requests: contained
+      minimum_confidence: 95
+      merge_risk:
+        max_changed_files: 6
+        max_changed_lines: 120
+        sensitive_paths: ["**/migrations/**"]
+        contained_paths: ["src/**", "test/**"]
+        require_test_change: true
+        label_overrides_risk: false`,
+    ))
+    expect(contained._tag === 'Ok' && contained.value.repositories[0]?.autoMerge).toEqual({
+      _tag: 'Contained',
+      labelOverridesRisk: false,
+      minimumConfidence: 95,
+      policy: {
+        containedPaths: ['src/**', 'test/**'],
+        maximumChangedFiles: 6,
+        maximumChangedLines: 120,
+        requireTestChange: true,
+        sensitivePaths: ['**/migrations/**'],
+      },
+    })
+  })
+
+  it('gives a contained scope conservative limits when it names none', () => {
+    const bare = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true\n    auto_merge:\n      pull_requests: contained\n      minimum_confidence: 95',
+    ))
+    expect(bare._tag === 'Ok' && bare.value.repositories[0]?.autoMerge).toEqual({
+      _tag: 'Contained',
+      labelOverridesRisk: true,
+      minimumConfidence: 95,
+      policy: {
+        containedPaths: [],
+        maximumChangedFiles: 12,
+        maximumChangedLines: 300,
+        requireTestChange: false,
+        sensitivePaths: [],
+      },
+    })
+  })
+
+  it('refuses a contained scope on a repository the service does not own or review', () => {
+    const maintained = parseConfigText(configText
+      .replace('ownership: owned', 'ownership: maintained')
+      .replace('conflict_resolution: true', 'conflict_resolution: false')
+      .replace('issue_work: true', 'issue_work: true\n    auto_merge:\n      pull_requests: contained\n      minimum_confidence: 95'))
+    expect(maintained._tag === 'Err' && maintained.error).toContainEqual({
+      path: '$.repositories[0].auto_merge.pull_requests',
+      message: 'Auto merge for a Contained pull request requires an owned repository.',
+    })
+  })
+
   it('rejects an every pull request scope without its own minimum, on a maintained repository, or without review', () => {
     const missing = parseConfigText(configText.replace('issue_work: true', 'issue_work: true\n    auto_merge:\n      pull_requests: every'))
     expect(missing._tag === 'Err' && missing.error).toContainEqual({

@@ -24,6 +24,24 @@ When unsure, leave it off. A missing label costs one human merge. A wrong label 
 
 Remove the label when a pull request grows past the change it was added for.
 
+## Merge risk
+
+A repository on `auto_merge.pull_requests: contained` does not need the label for a low risk code change. Every Review returns a Merge risk, and a `Contained` verdict merges on its own.
+
+| Verdict | Means | Goes to |
+| --- | --- | --- |
+| `Contained` | a mistake costs one revert commit | Auto merge |
+| `Reviewable` | a person should read it | Harlan |
+| `Sensitive` | a mistake is expensive or hard to undo | Harlan |
+
+Two independent answers produce it and the more dangerous wins, so `Contained` needs both. The controller computes a floor from the changed paths and counts. The Review Agent claims the rest from the diff, which is the only part that sees blast radius.
+
+A file an agent reads as instructions is always `Sensitive`, and a repository cannot widen its own path list to cover one.
+
+This changes what the label is for, on those repositories. The label used to be the only way a pull request merged itself. It is now an override a person applies when they have read the change and disagree with the verdict. Set `merge_risk.label_overrides_risk: false` to stop even that beating a `Sensitive` verdict.
+
+Merge risk routes the merge and never the Review. Every tracked pull request is still reviewed.
+
 ## Repository scope
 
 A repository can widen Auto merge from labelled pull requests to every pull request:

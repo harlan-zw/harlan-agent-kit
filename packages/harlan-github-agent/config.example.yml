@@ -102,8 +102,28 @@ repositories: []
 # Set repositories[].auto_merge to widen Auto merge past the label for one owned
 # repository where a wrong merge costs little, such as a demo site:
 #   auto_merge:
-#     pull_requests: every      # labelled (default) or every
+#     pull_requests: every      # labelled (default), contained, or every
 #     minimum_confidence: 80    # replaces $.auto_merge.minimum_confidence here
+# Set pull_requests: contained to let a low risk code change ship without a
+# person. Merge risk decides, from the changed paths and from the Review Agent.
+# Omit the whole block and nothing changes: only a labelled pull request merges.
+#   auto_merge:
+#     pull_requests: contained
+#     minimum_confidence: 95      # the bar a Contained pull request must clear
+#     merge_risk:
+#       max_changed_files: 12     # above this the pull request is Reviewable
+#       max_changed_lines: 300    # above this the pull request is Reviewable
+#       sensitive_paths:          # any match is Sensitive
+#         - "**/migrations/**"
+#         - "**/*.sql"
+#       contained_paths:          # omit to allow any path that is not Sensitive
+#         - "src/**"
+#         - "test/**"
+#       require_test_change: true   # a Contained verdict needs a changed test
+#       label_overrides_risk: true  # false makes a Sensitive verdict beat the label
+# A file an agent reads as instructions is always Sensitive. SKILL.md, AGENTS.md,
+# CLAUDE.md, .github, .claude and .codex need no entry, and a repository cannot
+# widen its own globs to cover them.
 # Package releases are disabled unless an owned Repository mapping includes release.
 # Enable webhooks, repository writes, pull_request_review, and automatic selection first.
 # Trust the publishing actor in writable_pr_authors so the version pull request receives Review.

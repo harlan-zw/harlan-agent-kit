@@ -105,6 +105,82 @@ function autoMergePolicy(source: UnknownRecord, issues: ConfigIssue[]): AutoMerg
   return enabled ? { _tag: 'Enabled', minimumConfidence, method } : { _tag: 'Disabled' }
 }
 
+/** Defaults a repository inherits when it names a Merge risk limit it does not set. */
+const DEFAULT_MERGE_RISK_FILES = 12
+const DEFAULT_MERGE_RISK_LINES = 300
+
+function globList(source: UnknownRecord, key: string, path: string, issues: ConfigIssue[]): readonly string[] | undefined {
+  const value = source[key]
+  if (value === undefined)
+    return []
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string' || entry === '')) {
+    issues.push({ path: `${path}.${key}`, message: 'Expected an array of path patterns.' })
+    return undefined
+  }
+  return value as string[]
+}
+
+function wholeNumber(source: UnknownRecord, key: string, fallback: number, path: string, issues: ConfigIssue[]): number | undefined {
+  const value = source[key]
+  if (value === undefined)
+    return fallback
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0)
+    return value
+  issues.push({ path: `${path}.${key}`, message: 'Expected a whole number above zero.' })
+  return undefined
+}
+
+/**
+ * Auto merge covers what Merge risk calls Contained.
+ *
+ * Every limit has a default, so a repository that opts in without tuning gets
+ * the conservative one rather than an unbounded one.
+ */
+function containedAutoMergeScope(value: UnknownRecord, scopePath: string, repositoryOwnership: RepositoryOwnership | undefined, pullRequestReview: boolean | undefined, issues: ConfigIssue[]): RepositoryAutoMergeScope | undefined {
+  const confidenceValue = value.minimum_confidence
+  const minimumConfidence = typeof confidenceValue === 'number' && Number.isInteger(confidenceValue) && confidenceValue >= 0 && confidenceValue <= 100
+    ? confidenceValue
+    : undefined
+  if (minimumConfidence === undefined)
+    issues.push({ path: `${scopePath}.minimum_confidence`, message: 'Expected an integer from 0 to 100.' })
+  if (repositoryOwnership !== 'owned')
+    issues.push({ path: `${scopePath}.pull_requests`, message: 'Auto merge for a Contained pull request requires an owned repository.' })
+  if (pullRequestReview !== true)
+    issues.push({ path: `${scopePath}.pull_requests`, message: 'Auto merge for a Contained pull request requires pull request review.' })
+
+  const riskValue = value.merge_risk === undefined ? {} : value.merge_risk
+  if (!isRecord(riskValue)) {
+    issues.push({ path: `${scopePath}.merge_risk`, message: 'Expected an object.' })
+    return undefined
+  }
+  const riskPath = `${scopePath}.merge_risk`
+  const maximumChangedFiles = wholeNumber(riskValue, 'max_changed_files', DEFAULT_MERGE_RISK_FILES, riskPath, issues)
+  const maximumChangedLines = wholeNumber(riskValue, 'max_changed_lines', DEFAULT_MERGE_RISK_LINES, riskPath, issues)
+  const sensitivePaths = globList(riskValue, 'sensitive_paths', riskPath, issues)
+  const containedPaths = globList(riskValue, 'contained_paths', riskPath, issues)
+  const requireTestChangeValue = riskValue.require_test_change
+  const requireTestChange = requireTestChangeValue === undefined ? false : requireTestChangeValue
+  if (typeof requireTestChange !== 'boolean')
+    issues.push({ path: `${riskPath}.require_test_change`, message: 'Expected true or false.' })
+  const labelOverridesRiskValue = riskValue.label_overrides_risk
+  const labelOverridesRisk = labelOverridesRiskValue === undefined ? true : labelOverridesRiskValue
+  if (typeof labelOverridesRisk !== 'boolean')
+    issues.push({ path: `${riskPath}.label_overrides_risk`, message: 'Expected true or false.' })
+
+  if (minimumConfidence === undefined || repositoryOwnership !== 'owned' || pullRequestReview !== true)
+    return undefined
+  if (maximumChangedFiles === undefined || maximumChangedLines === undefined || sensitivePaths === undefined || containedPaths === undefined)
+    return undefined
+  if (typeof requireTestChange !== 'boolean' || typeof labelOverridesRisk !== 'boolean')
+    return undefined
+  return {
+    _tag: 'Contained',
+    labelOverridesRisk,
+    minimumConfidence,
+    policy: { containedPaths, maximumChangedFiles, maximumChangedLines, requireTestChange, sensitivePaths },
+  }
+}
+
 /** Auto merge takes labelled pull requests only, unless the repository widens it to every pull request. */
 function repositoryAutoMergeScope(source: UnknownRecord, path: string, repositoryOwnership: RepositoryOwnership | undefined, pullRequestReview: boolean | undefined, issues: ConfigIssue[]): RepositoryAutoMergeScope | undefined {
   const value = source.auto_merge
@@ -125,8 +201,10 @@ function repositoryAutoMergeScope(source: UnknownRecord, path: string, repositor
     issues.push({ path: `${scopePath}.minimum_confidence`, message: 'Labelled pull requests use $.auto_merge.minimum_confidence.' })
     return undefined
   }
+  if (pullRequests === 'contained')
+    return containedAutoMergeScope(value, scopePath, repositoryOwnership, pullRequestReview, issues)
   if (pullRequests !== 'every') {
-    issues.push({ path: `${scopePath}.pull_requests`, message: 'Expected labelled or every.' })
+    issues.push({ path: `${scopePath}.pull_requests`, message: 'Expected labelled, contained, or every.' })
     return undefined
   }
 

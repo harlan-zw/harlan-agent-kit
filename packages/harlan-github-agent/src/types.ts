@@ -3,6 +3,7 @@ import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { HostCapacity } from './host-capacity.ts'
+import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
 import type { PackageReleaseConfig } from './package-release.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { RoutineName } from './routines/index.ts'
@@ -33,6 +34,14 @@ export type RepositoryAuthentication = 'app' | 'user'
 export type RepositoryAutoMergeScope
   = | { _tag: 'Labelled' }
     | { _tag: 'Every', minimumConfidence: number }
+    /**
+     * Auto merge covers a pull request the Merge risk calls Contained.
+     *
+     * The label still works alongside it. `labelOverridesRisk` decides whether
+     * a Sensitive verdict beats a label a person left on a pull request that
+     * has since grown.
+     */
+    | { _tag: 'Contained', minimumConfidence: number, policy: MergeRiskPolicy, labelOverridesRisk: boolean }
 
 export interface RepositoryMapping {
   /** Explicit authority for stable patch and minor package releases. */
@@ -423,6 +432,28 @@ export interface ReviewRun {
   findings: ReviewFinding[]
   feedback: AgentFeedback | null
   publications: ReviewPublication[]
+  /**
+   * What this Review concluded about merging without a person.
+   *
+   * It sits on the Review run rather than on the Review outcome, because an
+   * outcome is derived from the Review gates without judgement and Merge risk
+   * is not a gate. Absent or null covers every run recorded before this
+   * existed, and every repository that never asked for it. A reader must treat
+   * both as no verdict, never as a Contained one.
+   */
+  mergeRisk?: MergeRiskRecord | null
+}
+
+/**
+ * The two independent answers and what they combined to.
+ *
+ * All three are kept, because a wrong verdict has to be attributable. A drifting
+ * Agent claim and a mis-set repository policy need different fixes.
+ */
+export interface MergeRiskRecord {
+  floor: MergeRisk
+  claim: MergeRisk
+  combined: MergeRisk
 }
 
 /** One explicit answer for every successfully completed Review Task. */
@@ -449,7 +480,9 @@ export type ReviewResolution
 
 export type ReviewDesiredOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'WAITING' | 'EXISTING' | 'SKIPPED'
 
-export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'gatePublication' | 'outcome' | 'publications' | 'usage'> {
+export interface RecordReviewRunInput extends Omit<ReviewRun, 'baseRef' | 'feedback' | 'gatePublication' | 'mergeRisk' | 'outcome' | 'publications' | 'usage'> {
+  /** Absent for a repository that never asked for Merge risk. */
+  mergeRisk?: MergeRiskRecord | null
   confidence?: number
   /** Trusted repository policy used by this Review. */
   policyDigest?: string

@@ -593,6 +593,16 @@ What the controller will do about one Incident without being asked.
 
 One of `Retrying`, `Retries exhausted`, or `Action required`.
 
+### Merge risk
+
+What a wrong merge of one pull request would cost, if nobody read it first. One of `Contained`, `Reviewable`, or `Sensitive`.
+
+It routes the merge and never the Review. A Review runs on every tracked pull request whatever the Merge risk says, so it is not a review waiver and never an exemption.
+
+Two independent answers produce it. The controller computes a floor from the changed paths and their counts, and the Review Agent returns a claim from the diff. The more dangerous of the two wins, so `Contained` needs both to agree.
+
+Use Merge risk. Do not use risk level, merge tier, risk score, or risk rating.
+
 ### Benchmark
 
 One named, repeatable measurement a repository declares in its Benchmark manifest, at `perf/benchmarks.json`.
@@ -652,7 +662,7 @@ Evidence that a skill, policy, or workflow should change.
 | source branch, commit id | head ref, head SHA | GitHub's word |
 | CI job, build, test run | check run | GitHub's word |
 | merge status, conflict flag | mergeable state | GitHub's word |
-| automerge, self merge, merge tier | auto-merge | GitHub's spelling of its own feature |
+| automerge, self merge | auto-merge | GitHub's spelling of its own feature |
 | error, problem, outage, alert | Incident | One concept |
 | agent config, model config, model override | Agent selection | One concept |
 | opt-in, allowlist, gating, triage mode | Selection mode | One concept |
@@ -662,7 +672,7 @@ Evidence that a skill, policy, or workflow should change.
 | quota, headroom, budget, safety margin | Reserve | One concept |
 | reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |
-| risk level, skip review, review waiver, review exemption | Auto merge | Auto merge never affects whether review runs |
+| risk level, merge tier, skip review, review waiver, review exemption | Auto merge, or Merge risk for the routing value | Auto merge never affects whether review runs |
 | restart queue, drain mode | Restart request | Queue and Pause already name different service concepts |
 | upgrade, refresh, sync | Service update | These words name different package and data operations |
 | journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | rewrite the sentence | Internal machinery, never user-visible |

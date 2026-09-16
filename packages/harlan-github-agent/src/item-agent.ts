@@ -7,6 +7,7 @@ import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
+import type { MergeRisk } from './merge-risk.ts'
 import type { PullRequestTriageAgent, PullRequestTriageResult } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
@@ -19,6 +20,7 @@ import type {
   ClaimedIssueTriageTask,
   GitHubIssueItem,
   GitHubPullRequestItem,
+  MergeRiskRecord,
   RepositoryMapping,
   ReviewFinding,
   ReviewGates,
@@ -36,6 +38,7 @@ import { APPROVAL_LABELS } from './approval-labels.ts'
 import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { isIssueTriageState } from './issue-triage.ts'
+import { combineMergeRisk, mergeRiskFloor } from './merge-risk.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -56,6 +59,11 @@ interface ReviewResponse {
   premise: {
     reason: string
     verdict: 'sound' | 'wrong'
+  }
+  /** Absent when the Agent did not answer. A reader treats that as Reviewable. */
+  mergeRisk?: {
+    reason: string
+    verdict: 'contained' | 'reviewable' | 'sensitive'
   }
 }
 
@@ -142,6 +150,15 @@ Keep the identity stable across line changes.
 For a sound premise, describe one test that fails before Repair and passes after it.
 For a wrong premise, return null for every regressionTest. The controller will recommend Dismissal.
 Return confidence as an integer from 0 to 100 when every gate you report passes.
+
+Also return mergeRisk: what a wrong merge of this pull request would cost, if nobody read it first.
+This routes the merge only. A person still reads every pull request this does not contain, and Review runs whatever you answer.
+- contained: a mistake here costs one revert commit. The change is local, its callers are visible in the diff, and nothing outside the repository depends on the exact behaviour.
+- reviewable: a person should read it. Use this whenever you are unsure.
+- sensitive: a mistake is expensive or hard to undo. A migration, a published API, an authentication or payment path, a one-way deploy step, or a default that every caller inherits.
+Judge blast radius above diff size, because that is the part paths and line counts cannot see. Three lines that change a shared default reach every consumer, so that is sensitive, not contained.
+The controller already refuses to contain a pull request on size, on a deletion, on a rename, and on any file an agent reads as instructions. You do not need to repeat those. Answer for what the diff means.
+Never answer contained to be helpful. A wrong contained merges code nobody read, while a wrong sensitive costs one person one look.
 Return every field the schema names, including empty arrays and null.`
 const issuePolicy = `Work as a normal local agent session inside the prepared Git worktree. Use the user's global agent context, installed skills, environment, and authenticated GitHub CLI.
 This worktree was prepared fresh for this turn. Assess the current issue from scratch.
@@ -289,6 +306,15 @@ const reviewSchema = {
       },
     },
     confidence: { type: 'integer', minimum: 0, maximum: 100 },
+    mergeRisk: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['verdict', 'reason'],
+      properties: {
+        verdict: { type: 'string', enum: ['contained', 'reviewable', 'sensitive'] },
+        reason: { type: 'string' },
+      },
+    },
   },
 }
 
@@ -329,6 +355,44 @@ export function issueSnapshotDigest(snapshot: { body: string, comments: string[]
   return createHash('sha256').update(JSON.stringify(issue)).digest('hex')
 }
 
+/** The Agent's claim, or Reviewable when it did not answer. */
+function mergeRiskClaim(response: ReviewResponse): MergeRisk {
+  const claim = response.mergeRisk
+  if (claim === undefined)
+    return { _tag: 'Reviewable', reason: 'The review returned no Merge risk.' }
+  if (claim.verdict === 'contained')
+    return { _tag: 'Contained' }
+  return claim.verdict === 'sensitive'
+    ? { _tag: 'Sensitive', reason: claim.reason }
+    : { _tag: 'Reviewable', reason: claim.reason }
+}
+
+/**
+ * Combines the code's floor with the Agent's claim, for a repository that asked.
+ *
+ * A repository on any other Auto merge scope records nothing, so the column
+ * stays null and the gate keeps holding, which is today's behaviour.
+ *
+ * A file list this cannot read is a Reviewable floor, never a Contained one:
+ * the safe direction for a missing answer is always the one that asks a person.
+ */
+async function resolveMergeRisk(
+  options: ReviewWorkerOptions,
+  task: ClaimedAdversarialReviewTask,
+  response: ReviewResponse,
+  signal: AbortSignal,
+): Promise<MergeRiskRecord | null> {
+  const scope = task.repositoryMapping.autoMerge
+  if (scope._tag !== 'Contained')
+    return null
+  const files = await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
+  const floor: MergeRisk = files._tag === 'Err'
+    ? { _tag: 'Reviewable', reason: `The changed files could not be read: ${files.error}` }
+    : mergeRiskFloor(files.value, scope.policy)
+  const claim = mergeRiskClaim(response)
+  return { claim, combined: combineMergeRisk(floor, claim), floor }
+}
+
 function parseReviewResponse(text: string): Promise<Result<ReviewResponse, string>> {
   return Promise.resolve(text)
     .then(value => JSON.parse(value) as Record<string, unknown>)
@@ -338,9 +402,17 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
         : undefined
       const findings = Array.isArray(value.findings) ? value.findings : undefined
       const confidence = value.confidence
+      // Merge risk is optional on the wire. An Agent that omits it leaves the
+      // claim at Reviewable, so a missing answer can never merge anything.
+      const mergeRisk = typeof value.mergeRisk === 'object' && value.mergeRisk !== null
+        ? value.mergeRisk as Partial<NonNullable<ReviewResponse['mergeRisk']>>
+        : undefined
       if (
-        Object.keys(value).length !== 3
+        Object.keys(value).length !== (Object.hasOwn(value, 'mergeRisk') ? 4 : 3)
         || !Object.hasOwn(value, 'premise') || !Object.hasOwn(value, 'findings') || !Object.hasOwn(value, 'confidence')
+        || (Object.hasOwn(value, 'mergeRisk') && (mergeRisk === undefined
+          || (mergeRisk.verdict !== 'contained' && mergeRisk.verdict !== 'reviewable' && mergeRisk.verdict !== 'sensitive')
+          || typeof mergeRisk.reason !== 'string' || cleanLine(mergeRisk.reason).length === 0))
         || premise === undefined
         || (premise.verdict !== 'sound' && premise.verdict !== 'wrong')
         || typeof premise.reason !== 'string' || cleanLine(premise.reason).length === 0
@@ -367,6 +439,7 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
       const reviewed = findings as ReviewResponse['findings']
       return ok({
         premise: { verdict: premise.verdict, reason: cleanLine(premise.reason) },
+        ...(mergeRisk?.verdict === undefined ? {} : { mergeRisk: { verdict: mergeRisk.verdict, reason: cleanLine(mergeRisk.reason ?? '') } }),
         confidence,
         findings: reviewed.map(finding => ({
           identity: normalizedFindingIdentity(finding.identity),
@@ -1047,7 +1120,7 @@ async function triagePullRequest(
   const files = await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
   const triage = files._tag === 'Err'
     ? files
-    : await agent.run(task, { changedFiles: files.value }, signal)
+    : await agent.run(task, { changedFiles: files.value.map(file => file.path) }, signal)
 
   let outcome: RecordPullRequestTriageRunInput['outcome']
   let skipped: PullRequestTriageResult | null = null
@@ -1360,6 +1433,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // write. A retry can now resume at the controller boundary.
       const { gates } = reviewGates(snapshot.value, response, repairsBaseline)
       const outcome = reviewOutcome(gates)
+      const mergeRisk = await resolveMergeRisk(options, task, response, signal)
       const reviewRunId = randomUUID()
       const completedAt = options.now().toISOString()
       const recorded = options.store.recordReviewRun({
@@ -1379,6 +1453,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         gates,
         confidence: response.confidence,
         findings,
+        mergeRisk,
       })
       if (recorded._tag === 'Rejected')
         return err(`The review result could not be saved: ${recorded.reason._tag}.`)
