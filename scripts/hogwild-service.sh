@@ -74,6 +74,35 @@ controller_request() {
     "$@"
 }
 
+# Refuses to start while an earlier deploy is still draining.
+#
+# Every deploy files a Restart request, then waits for the last Agent to finish,
+# which can take many minutes. A second deploy started in that window moves the
+# service checkout under a pending restart and files a second request. Two
+# Claude Code sessions in this repository did that on 2026-09-16.
+#
+# A controller that does not answer cannot report a pending restart, and a deploy
+# is how Hogwild recovers, so that case never blocks. Neither does a controller
+# too old to report Restart requests.
+refuse_while_restart_pending() {
+  local state tag
+  if [ "${HOGWILD_DEPLOY_DESPITE_PENDING_RESTART:-}" = 1 ]; then
+    return 0
+  fi
+  if ! state=$(controller_request "$HOGWILD_ORIGIN/api/state" 2>/dev/null); then
+    return 0
+  fi
+  tag=$(jq --raw-output '.restartRequest._tag // "None"' <<< "$state" 2>/dev/null || printf '%s' None)
+  case "$tag" in
+    Requested|Restarting)
+      echo "Hogwild already has a Restart request that is $tag, so another deploy is still draining." >&2
+      echo "Wait for it to complete, then deploy again." >&2
+      echo "If that restart is stuck, set HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 to deploy anyway." >&2
+      exit 1
+      ;;
+  esac
+}
+
 request_restart() {
   controller_request \
     --header 'Content-Type: application/json' \
@@ -358,6 +387,7 @@ case "$command" in
       echo "The Git ref contains unsupported characters." >&2
       exit 1
     fi
+    refuse_while_restart_pending
     sync_context
     sync_service_override
     sync_worktrunk

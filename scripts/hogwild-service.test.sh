@@ -22,6 +22,9 @@ export HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH=''
 export HOGWILD_SERVICE_TEST_ENV_STAGE=/home/harlan/.cache/harlan-repository-env.fixture
 export HOGWILD_SERVICE_TEST_RESTART_AFTER=1
 export HOGWILD_SERVICE_TEST_STATE_POLLS="$test_root/state-polls"
+# Present once this deploy files its own Restart request. Before that, the
+# controller reports whatever restart an earlier deploy left behind.
+export HOGWILD_SERVICE_TEST_RESTART_FILED="$test_root/restart-filed"
 export HOGWILD_SERVICE_TEST_LEGACY=false
 export HOGWILD_SERVICE_TEST_LEGACY_SAFE_AFTER=1
 export HOGWILD_SERVICE_TEST_LEGACY_STATE="$test_root/legacy-state"
@@ -114,7 +117,11 @@ printf '%s\n' \
   '    exit' \
   '  fi' \
   'fi' \
-  'if [[ "$*" == *api/service/restart* ]]; then printf '\''{"_tag":"Requested","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}\n'\''; exit; fi' \
+  'if [[ "$*" == *api/service/restart* ]]; then : > "$HOGWILD_SERVICE_TEST_RESTART_FILED"; printf '\''{"_tag":"Requested","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}\n'\''; exit; fi' \
+  'if [[ "$*" == *api/state* && ! -e "$HOGWILD_SERVICE_TEST_RESTART_FILED" ]]; then' \
+  '  printf '\''{"agentControl":{"_tag":"Running"},"restartRequest":{"_tag":"%s","id":"restart-0","source":"helper","requestedAt":"2026-08-29T00:00:00.000Z"}}\n'\'' "${HOGWILD_SERVICE_TEST_PRIOR_RESTART:-Completed}"' \
+  '  exit' \
+  'fi' \
   'if [[ "$*" == *api/state* ]]; then' \
   '  polls=$(($(cat "$HOGWILD_SERVICE_TEST_STATE_POLLS") + 1))' \
   '  printf '\''%s\n'\'' "$polls" > "$HOGWILD_SERVICE_TEST_STATE_POLLS"' \
@@ -277,6 +284,10 @@ if [ "$(cat "$HOGWILD_SERVICE_TEST_LEGACY_STATE")" != Paused ]; then
   printf '%s\n' 'The compatibility restart did not preserve manual Pause.' >&2
   exit 1
 fi
+# Every test below runs against a current controller. Leaving this true made
+# each later test silently run against a legacy one, which reports no Restart
+# request at all, so a test about restarts could not fail.
+export HOGWILD_SERVICE_TEST_LEGACY=false
 
 # A sync_verified_file run that dies between staging and activation must not
 # strand its staged file on Hogwild. The fake ssh dies on the verification
@@ -304,6 +315,47 @@ if [ "$reclaim_call" != "$(tail -n 1 "$HOGWILD_SERVICE_TEST_CALLS")" ]; then
 fi
 if ! printf '%s' "$reclaim_call" | grep -F "'${stranded_stage#hogwild:}'" >/dev/null; then
   printf '%s\n' "An interrupted update left ${stranded_stage#hogwild:} on Hogwild." >&2
+  exit 1
+fi
+
+# Two deploys must never overlap while an earlier one is still draining. Every
+# deploy files a Restart request and then waits, often for many minutes, for the
+# last Agent to finish. A second deploy started in that window moves the service
+# checkout under a pending restart and files a second request. On 2026-09-16 two
+# Claude Code sessions in this repository did exactly that. The rule used to be a
+# line in a memory file that every session had to remember.
+for pending in Requested Restarting; do
+  rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED"
+  printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+  : > "$HOGWILD_SERVICE_TEST_CALLS"
+  refused_log="$test_root/refused-$pending.log"
+  if HOGWILD_SERVICE_TEST_PRIOR_RESTART="$pending" PATH="$test_root/bin:/usr/bin:/bin" \
+    bash "$script_dir/hogwild-service.sh" update >"$refused_log" 2>&1; then
+    printf '%s\n' "Hogwild update started while a Restart request was $pending." >&2
+    exit 1
+  fi
+  if ! grep -F 'Restart request' "$refused_log" >/dev/null; then
+    printf '%s\n' "Hogwild refused an update while $pending, but did not say why." >&2
+    exit 1
+  fi
+  if grep -E '^(scp|rsync) ' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+    printf '%s\n' "Hogwild update copied files before refusing a $pending restart." >&2
+    exit 1
+  fi
+  if grep -F 'api/service/restart' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+    printf '%s\n' "Hogwild update filed a second Restart request over a $pending one." >&2
+    exit 1
+  fi
+done
+
+# A restart that is stuck in Restarting would otherwise block every deploy
+# forever, and a deploy is how Hogwild recovers. A person can say so on purpose.
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED"
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+: > "$HOGWILD_SERVICE_TEST_CALLS"
+if ! HOGWILD_SERVICE_TEST_PRIOR_RESTART=Restarting HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 \
+  PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null 2>&1; then
+  printf '%s\n' 'Hogwild refused an update a person explicitly allowed over a stuck restart.' >&2
   exit 1
 fi
 
