@@ -1,8 +1,10 @@
 import type { MergeRiskRecord, RepositoryAutoMergeScope, ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
-import { terminalComment } from '../src/item-agent.ts'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { createReviewWorker, terminalComment } from '../src/item-agent.ts'
+import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 
@@ -83,5 +85,97 @@ describe('a recorded Merge risk verdict stays visible', () => {
   it('carries a describeMergeRisk line beside the gate lines in the published body', () => {
     const body = terminalComment('abc123', 'base123', passedGates(), [], 100, [], containedRisk.combined)
     expect(body).toContain('- **Merge risk:** Contained')
+  })
+})
+
+describe('a fresh Review publishes its Merge risk verdict', () => {
+  it('carries the Merge risk line in the first terminal comment', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const comments: string[] = []
+    const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
+        findings: [],
+        confidence: 96,
+        mergeRisk: { verdict: 'contained', reason: 'One small file inside the diff.' },
+      }))),
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
+        clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
+        listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([{ path: 'src/parser.ts', status: 'modified', additions: 4, deletions: 2, previousFilename: null }])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [passingCheck] },
+          body: 'Fixes the bug.',
+          checks: { _tag: 'Available', checks: [passingCheck] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          requiredChecks: { _tag: 'None' },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
+      },
+      now: () => new Date('2026-09-16T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
+        queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
+        getRepairedHeadFindings: () => [],
+        getWorkerSession: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
+        recordIncident: () => { throw new Error('Unexpected Incident.') },
+        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
+        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        saveWorkerSession: () => undefined,
+        updateAgentProgress: () => true,
+        recordReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
+        recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
+      },
+      status: {
+        publish: (_task, _phase, body) => {
+          comments.push(body)
+          return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+        },
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verifyReview: () => Promise.resolve(ok(undefined)),
+      },
+    })
+
+    const result = await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-09-16T02:00:00.000Z' },
+      updatedAt: '2026-09-16T01:00:00.000Z',
+      repositoryMapping: repositoryMapping({ autoMerge: containedScope }),
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(result._tag).toBe('Ok')
+    if (result._tag !== 'Ok')
+      throw new Error(result.error)
+    const terminal = comments.at(-1)
+    expect(terminal).toContain('READY · 96/100')
+    expect(terminal).toContain('- **Merge risk:** Contained')
   })
 })

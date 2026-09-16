@@ -1498,6 +1498,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         gates,
         outcome: storedOutcome,
         findings,
+        mergeRisk,
         feedback: null,
         publications: [],
       }, repairPreflight(task.repositoryMapping, frozen.value, await options.preflightRepair(task.repository, signal)), signal)

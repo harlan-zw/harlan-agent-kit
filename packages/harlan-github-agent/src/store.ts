@@ -2544,7 +2544,10 @@ export function reviewPolicyDigest(mapping: RepositoryMapping): string {
     defaultBranch: mapping.defaultBranch,
     writablePullRequestAuthors: mapping.writablePullRequestAuthors,
     writablePullRequestHeadPrefixes: mapping.writablePullRequestHeadPrefixes,
-    mergeRiskPolicy: mapping.autoMerge._tag === 'Contained' ? mapping.autoMerge.policy : null,
+    // Absent, not null: JSON.stringify drops undefined keys, so a repository
+    // that never opted in keeps its pre-upgrade digest and no fleet-wide
+    // re-review starts on first deploy. A Contained policy still adds the key.
+    mergeRiskPolicy: mapping.autoMerge._tag === 'Contained' ? mapping.autoMerge.policy : undefined,
   }))
 }
 

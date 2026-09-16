@@ -1,8 +1,9 @@
 import type { AutoMergePolicy } from '../src/auto-merge.ts'
 import type { MergeRiskRecord, RepositoryAutoMergeScope, ReviewGates } from '../src/types.ts'
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { autoMergeDecision } from '../src/auto-merge.ts'
-import { openJournalStore } from '../src/store.ts'
+import { openJournalStore, reviewPolicyDigest } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
@@ -119,5 +120,29 @@ describe('a Contained verdict recorded under one policy', () => {
     expect(decision._tag).toBe('Hold')
     if (decision._tag === 'Hold')
       expect(decision.reason).toContain('no published READY review')
+  })
+})
+
+/** The digest the release before Merge risk policy expiry computed. */
+function preUpgradeDigest(mapping: ReturnType<typeof repositoryMapping>): string {
+  return createHash('sha256').update(JSON.stringify({
+    github: mapping.github,
+    authentication: mapping.authentication,
+    ownership: mapping.ownership,
+    defaultBranch: mapping.defaultBranch,
+    writablePullRequestAuthors: mapping.writablePullRequestAuthors,
+    writablePullRequestHeadPrefixes: mapping.writablePullRequestHeadPrefixes,
+  })).digest('hex')
+}
+
+describe('reviewPolicyDigest', () => {
+  it('keeps the pre-upgrade digest for a repository that never opted in', () => {
+    expect(reviewPolicyDigest(repositoryMapping({ autoMerge: { _tag: 'Labelled' } }))).toBe(preUpgradeDigest(repositoryMapping({ autoMerge: { _tag: 'Labelled' } })))
+    expect(reviewPolicyDigest(repositoryMapping({ autoMerge: { _tag: 'Every', minimumConfidence: 80 } }))).toBe(preUpgradeDigest(repositoryMapping({ autoMerge: { _tag: 'Every', minimumConfidence: 80 } })))
+  })
+
+  it('moves the digest once a repository carries a Contained policy', () => {
+    expect(reviewPolicyDigest(repositoryMapping({ autoMerge: looseScope }))).not.toBe(preUpgradeDigest(repositoryMapping({ autoMerge: looseScope })))
+    expect(reviewPolicyDigest(repositoryMapping({ autoMerge: tightScope }))).not.toBe(reviewPolicyDigest(repositoryMapping({ autoMerge: looseScope })))
   })
 })
