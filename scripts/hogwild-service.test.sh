@@ -78,10 +78,15 @@ if [[ "$*" == *sha256sum* && ( "$*" == *commit-msg.next* || "$*" == *harlan-hook
     if [[ "$token" == *.next* ]]; then
       remote_path=${token//\'/}
       local_path="$HOGWILD_SERVICE_TEST_RENDERED_HOME${remote_path#/home/harlan}"
-      /usr/bin/sha256sum "${local_path%.next}"
+      /usr/bin/sha256sum "${local_path%%.next*}"
     fi
   done
 fi
+FAKE_SSH
+cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
+# A dropped connection dies on the verification call after staging, on a path
+# with no explicit cleanup branch.
+if [[ -n "$HOGWILD_SERVICE_TEST_SSH_DIE" && "$*" == *sha256sum*config.toml.next* ]]; then exit 42; fi
 FAKE_SSH
 printf '%s\n' \
   '#!/usr/bin/env bash' \
@@ -135,19 +140,29 @@ chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
 
-claude_copy_line=$(grep -n '^scp .*CLAUDE.md hogwild:/home/harlan/.claude/CLAUDE.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-codex_copy_line=$(grep -n '^scp .*AGENTS.md hogwild:/home/harlan/.codex/AGENTS.md.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-install_line=$(grep -nF "mv '/home/harlan/.codex/AGENTS.md.next' '/home/harlan/.codex/AGENTS.md'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-limits_copy_line=$(grep -n '^scp .*hogwild-service.conf .*hogwild:/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-limits_install_line=$(grep -nF "mv '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next' '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-env_tool_install_line=$(grep -nF "mv '/home/harlan/.local/bin/harlan-repository-env.next' '/home/harlan/.local/bin/harlan-repository-env'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-env_manifest_install_line=$(grep -nF "mv '/home/harlan/.config/harlan-agent-kit/repository-env-files.next' '/home/harlan/.config/harlan-agent-kit/repository-env-files'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-worktrunk_install_line=$(grep -nF "mv '/home/harlan/.config/worktrunk/config.toml.next' '/home/harlan/.config/worktrunk/config.toml'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+claude_copy_line=$(grep -n '^scp .*CLAUDE.md hogwild:/home/harlan/.claude/CLAUDE.md.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+codex_copy_line=$(grep -n '^scp .*AGENTS.md hogwild:/home/harlan/.codex/AGENTS.md.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+install_line=$(grep -nE "mv '/home/harlan/.codex/AGENTS.md.next\.[0-9.]+' '/home/harlan/.codex/AGENTS.md'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+limits_copy_line=$(grep -n '^scp .*hogwild-service.conf .*hogwild:/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+limits_install_line=$(grep -nE "mv '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf.next\.[0-9.]+' '/home/harlan/.config/systemd/user/harlan-github-agent.service.d/hogwild.conf'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+env_tool_install_line=$(grep -nE "mv '/home/harlan/.local/bin/harlan-repository-env.next\.[0-9.]+' '/home/harlan/.local/bin/harlan-repository-env'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+env_manifest_install_line=$(grep -nE "mv '/home/harlan/.config/harlan-agent-kit/repository-env-files.next\.[0-9.]+' '/home/harlan/.config/harlan-agent-kit/repository-env-files'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+worktrunk_install_line=$(grep -nE "mv '/home/harlan/.config/worktrunk/config.toml.next\.[0-9.]+' '/home/harlan/.config/worktrunk/config.toml'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_copy_line=$(grep -n '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_install_line=$(grep -nF "install-staged '/home/harlan/.cache/harlan-repository-env.fixture'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 prepare_line=$(grep -nF "bash -s -- 'prepare-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 restart_line=$(grep -n '/api/service/restart' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 
+# An empty capture reads as 0 inside (( )), so a pattern that matched nothing
+# would still satisfy the ordering below. Refuse that before comparing.
+for step in claude_copy_line codex_copy_line install_line limits_copy_line limits_install_line \
+  env_tool_install_line env_manifest_install_line worktrunk_install_line env_copy_line \
+  env_install_line prepare_line restart_line; do
+  if [ -z "${!step}" ]; then
+    printf '%s\n' "Hogwild update never logged the step this test orders: $step." >&2
+    exit 1
+  fi
+done
 if ! ((claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line && prepare_line < restart_line)); then
   printf '%s\n' 'Hogwild update did not prepare files before its Restart request.' >&2
   exit 1
@@ -260,6 +275,35 @@ if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null
 fi
 if [ "$(cat "$HOGWILD_SERVICE_TEST_LEGACY_STATE")" != Paused ]; then
   printf '%s\n' 'The compatibility restart did not preserve manual Pause.' >&2
+  exit 1
+fi
+
+# A sync_verified_file run that dies between staging and activation must not
+# strand its staged file on Hogwild. The fake ssh dies on the verification
+# call, so set -e ends the run with no explicit cleanup branch reached.
+: > "$HOGWILD_SERVICE_TEST_CALLS"
+export HOGWILD_SERVICE_TEST_SSH_DIE=1
+if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" sync-worktrunk >/dev/null 2>&1; then
+  printf '%s\n' 'Hogwild worktrunk sync reported success on a dying verification ssh.' >&2
+  exit 1
+fi
+unset HOGWILD_SERVICE_TEST_SSH_DIE
+stranded_stage=$(grep -oE 'hogwild:/home/harlan/\.config/worktrunk/config\.toml\.next[^ ]*' "$HOGWILD_SERVICE_TEST_CALLS" | tail -n 1 || true)
+if [ -z "$stranded_stage" ]; then
+  printf '%s\n' 'The stranded-stage test never staged the Worktrunk configuration.' >&2
+  exit 1
+fi
+reclaim_call=$(grep -F 'rm -f' "$HOGWILD_SERVICE_TEST_CALLS" | tail -n 1 || true)
+if [ -z "$reclaim_call" ]; then
+  printf '%s\n' 'A sync_verified_file run that died after staging left no cleanup behind.' >&2
+  exit 1
+fi
+if [ "$reclaim_call" != "$(tail -n 1 "$HOGWILD_SERVICE_TEST_CALLS")" ]; then
+  printf '%s\n' 'The interrupted update recorded a call after its cleanup.' >&2
+  exit 1
+fi
+if ! printf '%s' "$reclaim_call" | grep -F "'${stranded_stage#hogwild:}'" >/dev/null; then
+  printf '%s\n' "An interrupted update left ${stranded_stage#hogwild:} on Hogwild." >&2
   exit 1
 fi
 

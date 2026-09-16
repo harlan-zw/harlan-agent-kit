@@ -2,6 +2,12 @@
 # Updates the Hogwild service from desktop while keeping its Agent context equal.
 set -euo pipefail
 
+# Each file is staged, digest checked, then moved into place. The service
+# updates itself on merge and a person can deploy by hand in the same minute, so
+# every run stages under its own name. A shared name let one run move a file
+# another run staged, installing content it never checked.
+stage_token="next.$(date +%s%N).$$.$RANDOM"
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 HOGWILD_HOST="${HARLAN_GITHUB_AGENT_HOGWILD_HOST:-hogwild}"
 HOGWILD_ORIGIN="${HARLAN_GITHUB_AGENT_HOGWILD_ORIGIN:-https://hogwild.tailcad325.ts.net}"
@@ -202,23 +208,39 @@ safe_restart() {
   legacy_safe_restart
 }
 
+# The file sync_verified_file has staged on Hogwild but not yet moved into
+# place. Recorded before the scp, so the EXIT trap reclaims it on every exit
+# path, including the ones set -e takes with no cleanup branch in sight.
+staged_file=''
+
+cleanup_staged_file() {
+  if [ -n "$staged_file" ]; then
+    ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$staged_file'" >/dev/null 2>&1 || true
+    staged_file=''
+  fi
+}
+trap cleanup_staged_file EXIT
+
 sync_verified_file() {
   local source=$1
   local target=$2
   local mode=$3
   local label=$4
   local next local_hash remote_hash
-  next="$target.next"
+  next="$target.$stage_token"
+  staged_file="$next"
   local_hash=$(sha256sum "$source" | cut -d' ' -f1)
   ssh -o BatchMode=yes "$HOGWILD_HOST" "mkdir -p '$(dirname "$target")'"
   scp -q "$source" "$HOGWILD_HOST:$next"
   remote_hash=$(ssh -o BatchMode=yes "$HOGWILD_HOST" "sha256sum '$next'" | cut -d' ' -f1)
   if [ "$local_hash" != "$remote_hash" ]; then
-    ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$next'"
     echo "Hogwild received a different $label." >&2
     exit 1
   fi
   ssh -o BatchMode=yes "$HOGWILD_HOST" "chmod '$mode' '$next' && mv '$next' '$target'"
+  # Activation moved the staged file to its final name, so there is nothing
+  # left for the EXIT trap to reclaim.
+  staged_file=''
 }
 
 sync_context() {
