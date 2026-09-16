@@ -180,7 +180,8 @@ it('refuses to export a Worktree the desktop cannot carry', async () => {
   const limits = { ...DESKTOP_WORKTREE_LIMITS, bundle: 16 }
 
   await expect(exportDesktopWorktree(f.repository, f.transfer, undefined, limits))
-    .rejects.toThrow(/^The desktop cannot run a turn for .+\. Its history is \d+ KiB, and the limit is 1 KiB\.$/)
+    .rejects
+    .toThrow(/^The desktop cannot run a turn for .+\. Its history is \d+ KiB, and the limit is 1 KiB\.$/)
   await expect(exportDesktopWorktree(f.repository, f.transfer, undefined, DESKTOP_WORKTREE_LIMITS)).resolves.toBeDefined()
 })
 

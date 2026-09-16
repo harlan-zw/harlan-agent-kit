@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DESKTOP_WORKTREE_LIMITS } from '../src/desktop-worktree.ts'
 import { parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree, readDesktopResponse } from '../src/desktop-protocol.ts'
+import { DESKTOP_WORKTREE_LIMITS } from '../src/desktop-worktree.ts'
 
 describe('desktop boundaries', () => {
   it('accepts a whole memory limit and refuses malformed settings', () => {
