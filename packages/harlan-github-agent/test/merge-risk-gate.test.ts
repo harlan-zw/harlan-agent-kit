@@ -136,6 +136,15 @@ describe('merge risk at the Auto merge gate', () => {
       expect(decision.reason).toContain('below 100')
   })
 
+  it('holds a labelled Contained pull request to the service-wide bar', () => {
+    // The label is the qualification here, so the repository's lower
+    // Merge risk bar must never replace the service-wide one.
+    const decision = decide({ confidence: 95, labelled: true, mergeRisk: containedRisk })
+    expect(decision._tag).toBe('Hold')
+    if (decision._tag === 'Hold')
+      expect(decision.reason).toContain('below 100')
+  })
+
   it('changes nothing for a repository that never opted in', () => {
     expect(decide({ autoMerge: { _tag: 'Labelled' }, mergeRisk: null })._tag).toBe('Hold')
     expect(decide({ autoMerge: { _tag: 'Labelled' }, labelled: true, mergeRisk: null })._tag).toBe('Merge')

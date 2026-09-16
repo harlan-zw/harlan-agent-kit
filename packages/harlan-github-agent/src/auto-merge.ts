@@ -100,7 +100,9 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
       return { _tag: 'Hold', reason: `Merge risk is Sensitive: ${risk.reason}` }
     if (risk._tag !== 'Contained' && !pullRequest.autoMerge)
       return { _tag: 'Hold', reason: `Merge risk is ${risk._tag}: ${risk.reason}` }
-    qualifiedByRisk = risk._tag === 'Contained'
+    // The label is the qualification whenever it is present, so only an
+    // unlabelled pull request ever clears the repository's Merge risk bar.
+    qualifiedByRisk = risk._tag === 'Contained' && !pullRequest.autoMerge
   }
 
   const minimumConfidence = scope._tag === 'Every'
