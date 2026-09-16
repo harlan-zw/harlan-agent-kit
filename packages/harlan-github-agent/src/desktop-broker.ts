@@ -99,7 +99,7 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
         const id = randomUUID()
         let entry: PendingTurn | undefined
         try {
-          const worktree = await exportDesktopWorktree(request.workspace, temporary, request.signal)
+          const worktree = await exportDesktopWorktree(request.workspace, temporary, { signal: request.signal })
           const { signal, ...input } = request
           entry = { turn: { id, provider: name, request: input, worktree }, events: [], state: 'queued', result: null, failure: null }
           pending.set(id, entry)

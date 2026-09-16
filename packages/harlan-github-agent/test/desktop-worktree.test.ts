@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
-import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree } from '../src/desktop-worktree.ts'
+import { applyDesktopFiles, DESKTOP_WORKTREE_LIMITS, desktopCommand, desktopHistoryBundle, desktopRepositoryPath, desktopWorktreeRefusal, exportDesktopWorktree, importDesktopWorktree, prepareDesktopWorktree } from '../src/desktop-worktree.ts'
 
 const directories: string[] = []
 afterEach(async () => {
@@ -26,10 +26,26 @@ async function fixture() {
   await git(['add', '.'])
   await git(['commit', '-m', 'test: seed'])
   await git(['remote', 'add', 'origin', 'https://github.com/harlan-zw/example.git'])
-  await git(['update-ref', 'refs/remotes/origin/main', 'HEAD'])
   const transfer = join(root, 'transfer')
   await mkdir(transfer)
   return { root, repository, git, transfer }
+}
+
+/**
+ * A checkout with a reachable origin, as every real repository has.
+ *
+ * `fixture` deliberately has no origin refs, so it exercises the whole-history
+ * fallback. This one exercises the ordinary path, where the two hosts share a
+ * remote and only local work travels.
+ */
+async function sharedFixture() {
+  const f = await fixture()
+  const origin = join(f.root, 'origin.git')
+  await desktopCommand('git', ['init', '--bare', '-b', 'main', origin], f.root)
+  await f.git(['remote', 'set-url', 'origin', origin])
+  await f.git(['push', 'origin', 'main'])
+  await f.git(['fetch', 'origin'])
+  return { ...f, origin }
 }
 
 it('round trips committed changes, binary edits, and untracked files into the owned Worktree', async () => {
@@ -67,7 +83,7 @@ it('refuses file paths outside the Worktree or inside Git metadata', async () =>
 it('prepares a real Worktrunk checkout from the transferred commit', async () => {
   const f = await fixture()
   const initial = await exportDesktopWorktree(f.repository, f.transfer)
-  const workspace = await prepareDesktopWorktree(initial, join(f.root, 'desktop'))
+  const workspace = await prepareDesktopWorktree(initial, join(f.root, 'desktop'), join(f.root, 'desktop-transfer'))
   expect(await desktopCommand('git', ['rev-parse', 'HEAD'], workspace)).toBe(initial.head)
   expect(await readFile(join(workspace, 'file.txt'), 'utf8')).toBe('original\n')
 })
@@ -129,6 +145,7 @@ it('executes desktop work and maps returned paths back to the controller', async
   const result = await executeDesktopTurn({
     turn: { id: 'test', provider: 'codex', request: { model: 'test', outputSchema: {}, prompt: `Work in ${f.repository}`, workspace: f.repository, sessionId: null }, worktree: initial },
     directory: join(f.root, 'execution'),
+    repositories: join(f.root, 'repositories'),
     signal: new AbortController().signal,
     emit: event => events.push(event),
     provider: { name: 'codex', async* runTurn(request) {
@@ -179,17 +196,101 @@ it('refuses to export a Worktree the desktop cannot carry', async () => {
   await writeFile(join(f.repository, 'notes.txt'), 'untracked\n')
   const limits = { ...DESKTOP_WORKTREE_LIMITS, bundle: 16 }
 
-  await expect(exportDesktopWorktree(f.repository, f.transfer, undefined, limits))
+  await expect(exportDesktopWorktree(f.repository, f.transfer, { limits }))
     .rejects
     .toThrow(/^The desktop cannot run a turn for .+\. Its history is \d+ KiB, and the limit is 1 KiB\.$/)
-  await expect(exportDesktopWorktree(f.repository, f.transfer, undefined, DESKTOP_WORKTREE_LIMITS)).resolves.toBeDefined()
+  await expect(exportDesktopWorktree(f.repository, f.transfer, { limits: DESKTOP_WORKTREE_LIMITS })).resolves.toBeDefined()
 })
 
 it('names every part that keeps a Worktree on Hogwild', () => {
-  const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/example', bundle: 'bundle', patch: 'patch', files: [{ path: 'notes.txt', data: 'ZGF0YQ==', mode: 0o644 }] }
+  const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/example', history: { _tag: 'Whole' as const, bundle: 'bundle' }, patch: 'patch', files: [{ path: 'notes.txt', data: 'ZGF0YQ==', mode: 0o644 }] }
   expect(desktopWorktreeRefusal(worktree)).toBeNull()
   expect(desktopWorktreeRefusal(worktree, { bundle: 1, patch: 8, file: 8, files: 8 })).toMatch(/^Its history is /)
   expect(desktopWorktreeRefusal(worktree, { bundle: 8, patch: 1, file: 8, files: 8 })).toMatch(/^Its uncommitted change is /)
   expect(desktopWorktreeRefusal(worktree, { bundle: 8, patch: 8, file: 8, files: 0 })).toBe('Its untracked file count is 1, and the limit is 0.')
   expect(desktopWorktreeRefusal(worktree, { bundle: 8, patch: 8, file: 1, files: 8 })).toMatch(/^Its untracked file notes\.txt is /)
+})
+
+it('carries nothing when origin already holds the commit', async () => {
+  const f = await sharedFixture()
+
+  const exported = await exportDesktopWorktree(f.repository, f.transfer)
+
+  expect(exported.history).toEqual({ _tag: 'Held' })
+})
+
+it('carries only the commits origin does not have', async () => {
+  const f = await sharedFixture()
+  await writeFile(join(f.repository, 'file.txt'), 'local work\n')
+  await f.git(['commit', '-qam', 'feat: local work'])
+
+  const exported = await exportDesktopWorktree(f.repository, f.transfer)
+
+  expect(exported.history._tag).toBe('Incremental')
+  const carried = join(f.root, 'carried.bundle')
+  await writeFile(carried, Buffer.from(desktopHistoryBundle(exported.history), 'base64'))
+  // A repository holding nothing cannot use it. That refusal is the saving:
+  // every commit origin already has stayed behind.
+  const bare = join(f.root, 'bare')
+  await desktopCommand('git', ['init', '-q', '--bare', bare], f.root)
+  await expect(desktopCommand('git', ['bundle', 'verify', carried], bare)).rejects.toThrow(/prerequisite/i)
+})
+
+it('builds the desktop checkout from origin and unbundles only the local work', async () => {
+  const f = await sharedFixture()
+  await writeFile(join(f.repository, 'file.txt'), 'local work\n')
+  await f.git(['commit', '-qam', 'feat: local work'])
+  const exported = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
+
+  const workspace = await prepareDesktopWorktree(exported, join(f.root, 'desktop'), join(f.root, 'desktop-transfer'))
+
+  expect(await desktopCommand('git', ['rev-parse', 'HEAD'], workspace)).toBe(exported.head)
+  expect(await readFile(join(workspace, 'file.txt'), 'utf8')).toBe('local work\n')
+})
+
+it('reuses one control checkout across turns on the same repository', async () => {
+  const f = await sharedFixture()
+  const cache = join(f.root, 'desktop')
+  const first = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
+  await prepareDesktopWorktree(first, cache, join(f.root, 'transfer-one'))
+  const cloned = await desktopCommand('git', ['rev-parse', '--git-dir'], join(cache, 'control'))
+  await writeFile(join(f.repository, 'file.txt'), 'second turn\n')
+  await f.git(['commit', '-qam', 'feat: second turn'])
+  const second = { ...await exportDesktopWorktree(f.repository, f.transfer), origin: f.origin }
+
+  const workspace = await prepareDesktopWorktree(second, cache, join(f.root, 'transfer-two'))
+
+  expect(await desktopCommand('git', ['rev-parse', '--git-dir'], join(cache, 'control'))).toBe(cloned)
+  expect(await desktopCommand('git', ['rev-parse', 'HEAD'], workspace)).toBe(second.head)
+  expect(await readFile(join(workspace, 'file.txt'), 'utf8')).toBe('second turn\n')
+})
+
+it('sends one turn of work back, not the history the controller already holds', async () => {
+  const f = await sharedFixture()
+  const initial = await exportDesktopWorktree(f.repository, f.transfer)
+  await writeFile(join(f.repository, 'file.txt'), 'desktop work\n')
+  await f.git(['commit', '-qam', 'feat: desktop work'])
+
+  const result = await exportDesktopWorktree(f.repository, f.transfer, { against: initial.head })
+
+  expect(result.history._tag).toBe('Incremental')
+  await f.git(['reset', '--hard', initial.head])
+  await importDesktopWorktree(f.repository, initial, result, f.transfer)
+  expect(await desktopCommand('git', ['rev-parse', 'HEAD'], f.repository)).toBe(result.head)
+  expect(await readFile(join(f.repository, 'file.txt'), 'utf8')).toBe('desktop work\n')
+})
+
+it('refuses a result that names a commit it never sent', async () => {
+  const f = await sharedFixture()
+  const initial = await exportDesktopWorktree(f.repository, f.transfer)
+
+  const forged = { ...initial, head: 'b'.repeat(40), history: { _tag: 'Held' as const } }
+
+  await expect(importDesktopWorktree(f.repository, initial, forged, f.transfer)).rejects.toThrow('names a commit it did not send')
+})
+
+it('separates repositories that share a name across owners', () => {
+  expect(desktopRepositoryPath('/cache', 'https://github.com/harlan-zw/example.git')).toBe('/cache/harlan-zw/example')
+  expect(desktopRepositoryPath('/cache', 'git@github.com:skilld-dev/example')).toBe('/cache/skilld-dev/example')
+  expect(() => desktopRepositoryPath('/cache', '/tmp/repo')).toThrow('not a GitHub repository')
 })
