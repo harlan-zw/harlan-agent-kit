@@ -69,6 +69,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * One spelling for one proposal.
+ *
+ * Dedupe is a UNIQUE (routine_id, fingerprint) that does nothing on conflict,
+ * so an exact string is the whole identity. The Agent writes that string, and
+ * it drifts: scripts.nuxt.com filed six Candidates for three defects, differing
+ * only by `:` against `#`. Four pull requests chased one Sentry event with one
+ * occurrence.
+ *
+ * Case is left alone. Every real spelling agreed on it, and lowercasing a
+ * symbol makes the fingerprint unreadable in the ledger the Agent copies from.
+ * Matching case-insensitively would need a separate key column.
+ *
+ * Canonicalising at the boundary is what makes the fingerprint an identity
+ * rather than a sentence. `:` and `#` both mean "the symbol inside this file",
+ * so they fold together. Two different symbols in one file stay apart, because
+ * they are two proposals.
+ */
+export function canonicalFingerprint(fingerprint: string): string {
+  return fingerprint
+    .replace(/[:#]+/g, '#')
+    .split('#')
+    .map(part => part.trim())
+    .filter(part => part !== '')
+    .join('#')
+}
+
 const VERDICT_SEVERITIES = new Set(['GREEN', 'AMBER', 'RED'])
 const VERDICT_COVERAGES = new Set(['complete', 'incomplete'])
 
@@ -92,8 +119,10 @@ function parseCandidates(input: unknown): Result<RoutineScanResponse, string> {
     return err('The scan agent answered without a candidate list.')
   const candidates: RoutineScanResponse['candidates'] = []
   for (const value of input.candidates) {
-    if (!isRecord(value)
-      || typeof value.fingerprint !== 'string' || value.fingerprint.trim() === ''
+    if (!isRecord(value))
+      return err('Each Candidate needs a fingerprint, target, claim, verification, and positive file estimate.')
+    const fingerprint = typeof value.fingerprint === 'string' ? canonicalFingerprint(value.fingerprint) : ''
+    if (fingerprint === ''
       || typeof value.target !== 'string' || value.target.trim() === ''
       || typeof value.claim !== 'string' || value.claim.trim() === ''
       || typeof value.verification !== 'string'
@@ -102,7 +131,7 @@ function parseCandidates(input: unknown): Result<RoutineScanResponse, string> {
       return err('Each Candidate needs a fingerprint, target, claim, verification, and positive file estimate.')
     }
     candidates.push({
-      fingerprint: value.fingerprint,
+      fingerprint,
       title: typeof value.title === 'string' && value.title.trim() !== '' ? value.title : value.claim,
       target: value.target,
       claim: value.claim,
@@ -146,6 +175,10 @@ export function candidateScanPrompt(input: RoutineScanInput, turn: string, extra
         })
         .join('\n')
 
+  const fingerprints = remembered.length === 0
+    ? 'Nothing is in the ledger yet.'
+    : [...new Set(remembered.map(candidate => candidate.fingerprint))].map(value => `- ${value}`).join('\n')
+
   const known = remembered.filter(candidate => candidate.result._tag !== 'Rejected')
   const knownMemory = JSON.stringify(known.map(candidate => ({
     fingerprint: candidate.fingerprint,
@@ -165,6 +198,13 @@ Return every proposal you would make as a Candidate. Give each one a fingerprint
 that stays the same next time you find it. Use a file path or a symbol path.
 Never use a line number, because a line number changes when anything above it
 changes.
+
+If a proposal is one you already made, copy its fingerprint from the list below,
+character for character. Do not rename it, do not add a suffix, and do not
+resplit the path. A renamed fingerprint opens a second issue for one defect.
+These fingerprints are already in the ledger:
+
+${fingerprints}
 
 Give each one a title. A person reads it in a list of issues, so name the defect
 in under 70 characters. Write it the way you would write a commit subject. Do not

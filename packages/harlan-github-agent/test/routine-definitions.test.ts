@@ -69,3 +69,56 @@ describe('cI review reports', () => {
       .toEqual({ _tag: 'Ok', value: { report: 'Incomplete: logs expired for run 42.', candidates: [] } })
   })
 })
+
+describe('candidate fingerprint canonicalisation', () => {
+  const parse = (fingerprint: string): string => {
+    const result = getRoutine('pr-triage').parseResponse({ candidates: [{ ...candidate, fingerprint }] })
+    if (result._tag === 'Err')
+      throw new Error(result.error)
+    return result.value.candidates[0]!.fingerprint
+  }
+
+  // The six scripts.nuxt.com Candidates that opened four pull requests for one
+  // Sentry event. Three distinct defects, six spellings.
+  it.each([
+    ['nuxt.config.ts:nuxtSentry.policy.ignoreErrors', 'nuxt.config.ts#nuxtSentry.policy.ignoreErrors'],
+    ['nuxt.config.ts#nuxtSentry.policy.ignoreErrors', 'nuxt.config.ts#nuxtSentry.policy.ignoreErrors'],
+    ['nuxt.config.ts#nuxtSentry.policy.dropStacklessErrors', 'nuxt.config.ts#nuxtSentry.policy.dropStacklessErrors'],
+    ['nuxt.config.ts:nuxtSentry.policy.dropStacklessErrors', 'nuxt.config.ts#nuxtSentry.policy.dropStacklessErrors'],
+  ])('reads %s as %s', (spelling, canonical) => {
+    expect(parse(spelling)).toBe(canonical)
+  })
+
+  it('collapses the six real spellings to three identities', () => {
+    const seen = new Set([
+      'nuxt.config.ts:nuxtSentry.policy.ignoreErrors',
+      'nuxt.config.ts#nuxtSentry.policy.ignoreErrors',
+      'nuxt.config.ts#nuxtSentry.policy.ignoreErrors#receiving-end-does-not-exist',
+      'nuxt.config.ts#nuxtSentry.policy.dropStacklessErrors',
+      'nuxt.config.ts:nuxtSentry.policy.dropStacklessErrors',
+      'nuxt.config.ts:nuxtSentry.policy.ignoreErrors',
+    ].map(parse))
+    expect(seen.size).toBe(3)
+  })
+
+  it.each([
+    ['  src/one.ts#probe  ', 'src/one.ts#probe'],
+    ['src/one.ts::probe', 'src/one.ts#probe'],
+    ['src/one.ts#', 'src/one.ts'],
+    ['src/one.ts  #  probe', 'src/one.ts#probe'],
+  ])('trims and collapses %s to %s', (spelling, canonical) => {
+    expect(parse(spelling)).toBe(canonical)
+  })
+
+  it('keeps two genuinely different symbols in one file apart', () => {
+    expect(parse('src/one.ts#alpha')).not.toBe(parse('src/one.ts#beta'))
+  })
+
+  it('leaves case alone, so the ledger stays readable', () => {
+    expect(parse('src/store.ts:openRoutineRun')).toBe('src/store.ts#openRoutineRun')
+  })
+
+  it('refuses a fingerprint that canonicalises to nothing', () => {
+    expect(getRoutine('pr-triage').parseResponse({ candidates: [{ ...candidate, fingerprint: ' ## ' }] })._tag).toBe('Err')
+  })
+})
