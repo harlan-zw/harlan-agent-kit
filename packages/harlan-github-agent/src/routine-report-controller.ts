@@ -1,5 +1,6 @@
 import type { GitHubIssuePublisher } from './github.ts'
 import type { Result } from './result.ts'
+import type { CheckinVerdict } from './routines/contract.ts'
 import type { JournalStore } from './store.ts'
 import type { Candidate, RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
 import { routineIssueLabel } from './candidate-issue-controller.ts'
@@ -54,20 +55,23 @@ export function isRoutineTrackingIssue(input: {
 /**
  * One status for both the issue title and the comment heading.
  *
- * Only the run's own report decides it. The run's Candidates fold in later,
- * when the report is claimed, because a retry can record Candidates after the
- * report was staged.
+ * The run's stated verdict decides it. Reading the status back out of the
+ * report prose does not work: a report that opens with a Markdown heading
+ * carries no verdict on its first line, and a verdict ending "no incomplete
+ * coverage" matches a keyword scan for incomplete. Both shipped on 2026-09-15
+ * and every one of the eight daily titles read BLOCKED, GREEN mornings
+ * included. A run that states no verdict is BLOCKED, because an unstated
+ * status is exactly what a reader cannot act on.
+ *
+ * The run's Candidates fold in later, when the report is claimed, because a
+ * retry can record Candidates after the report was staged.
  */
 function dailyCheckinStatus(report: RoutineRunReport): 'CLEAR' | 'ACTION NEEDED' | 'BLOCKED' {
-  if (report._tag !== 'Completed')
+  if (report._tag !== 'Completed' || report.verdict === undefined)
     return 'BLOCKED'
-  const verdict = (report.detail || report.evidence).trim().split('\n')[0] ?? ''
-  if (/\b(?:incomplete|partial|unknown|blocked)\b/i.test(verdict))
+  if (report.verdict.coverage === 'incomplete')
     return 'BLOCKED'
-  const status = verdict.replace(/^[^a-z]+/i, '').match(/^(GREEN|AMBER|RED|CLEAR|ACTION NEEDED|BLOCKED)\b/i)?.[1]?.toUpperCase()
-  return status === 'GREEN' || status === 'CLEAR'
-    ? 'CLEAR'
-    : status === 'AMBER' || status === 'RED' || status === 'ACTION NEEDED' ? 'ACTION NEEDED' : 'BLOCKED'
+  return report.verdict.severity === 'GREEN' ? 'CLEAR' : 'ACTION NEEDED'
 }
 
 const CLEAR_DAILY_HEADING = /^# \[CLEAR\] (Daily check-in: \d{4}-\d{2}-\d{2})$/m
@@ -100,7 +104,7 @@ Close this issue when its actions are resolved or tracked in linked issues.
 
 /** What one finished run did, in the words the log records. */
 export type RoutineRunReport
-  = | { _tag: 'Completed', evidence: string, detail?: string }
+  = | { _tag: 'Completed', evidence: string, detail?: string, verdict?: CheckinVerdict }
     | { _tag: 'Skipped', reason: string }
     | { _tag: 'Failed', reason: string }
 
