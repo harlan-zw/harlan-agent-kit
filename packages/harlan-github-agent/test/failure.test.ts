@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyCheckFailure, classifyFailure, contextBudgetExhaustedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
+import { classifyCheckFailure, classifyFailure, contextBudgetExhaustedReason, isSubjectMovedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
   it.each([
@@ -239,5 +239,23 @@ describe('classifyCheckFailure', () => {
   it('reads a lost runner as Infrastructure without a log', () => {
     const failure = classifyCheckFailure({ name: 'test', conclusion: 'failure', runnerLost: true, logTail: [] })
     expect(failure).toEqual({ _tag: 'Infrastructure', reason: expect.stringContaining('runner lost the job') })
+  })
+})
+
+describe('isSubjectMovedReason', () => {
+  it.each([
+    'The pull request changed before the review comment was posted.',
+    'GitHub accepted the review comment, but the local review changed. Refresh before retrying.',
+  ])('reads %s as the subject moving on', (reason) => {
+    expect(isSubjectMovedReason(reason)).toBe(true)
+  })
+
+  it.each([
+    'GitHub accepted the Review label, but its receipt lost the Publication lease.',
+    'GitHub accepted the review comment, but its receipt lost the Publication lease.',
+    'The review has no recorded base branch. Run a new Review.',
+    'The Review publication lost its current authority before the GitHub write.',
+  ])('keeps %s reportable', (reason) => {
+    expect(isSubjectMovedReason(reason)).toBe(false)
   })
 })
