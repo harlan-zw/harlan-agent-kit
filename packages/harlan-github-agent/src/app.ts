@@ -29,6 +29,12 @@ export interface AgentAppOptions {
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
+  /**
+   * The service's own listen address, such as `http://127.0.0.1:3210`. The
+   * service host may not resolve its public name, so the control CLI there
+   * reaches this address instead. Each address accepts only its own origin.
+   */
+  listenOrigin?: string
   dashboardPassword: string
   /** Origins allowed to frame the dashboard, such as a talk deck. Empty denies framing. */
   frameAncestors?: readonly string[]
@@ -327,11 +333,14 @@ function desktopInput<Value>(parse: (value: unknown) => Value, value: unknown): 
 
 export function createAgentApp(options: AgentAppOptions): H3 {
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot()
-  const allowedHost = new URL(options.allowedOrigin).host
+  const originByHost = new Map([options.allowedOrigin, options.listenOrigin]
+    .filter(origin => origin !== undefined)
+    .map(origin => [new URL(origin).host, new URL(origin).origin]))
   const framing = framingHeaders(options.frameAncestors ?? [])
   const app = new H3({
     onRequest(event) {
-      if (event.req.headers.get('host') !== allowedHost)
+      const expectedOrigin = originByHost.get(event.req.headers.get('host') ?? '')
+      if (expectedOrigin === undefined)
         throw createError({ status: 421, statusText: 'Misdirected Request', message: 'Host is not allowed.' })
       if (!hasDashboardAccess(event.req, options.dashboardPassword)) {
         throw createError({
@@ -341,7 +350,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
           headers: { 'www-authenticate': 'Basic realm="harlan-github-agent", charset="UTF-8"' },
         })
       }
-      if (event.req.method !== 'GET' && event.req.method !== 'HEAD' && event.req.headers.get('origin') !== options.allowedOrigin)
+      if (event.req.method !== 'GET' && event.req.method !== 'HEAD' && event.req.headers.get('origin') !== expectedOrigin)
         throw createError({ status: 403, statusText: 'Forbidden', message: 'Request origin is not allowed.' })
       event.context.dashboardNonce = randomBytes(18).toString('base64')
     },

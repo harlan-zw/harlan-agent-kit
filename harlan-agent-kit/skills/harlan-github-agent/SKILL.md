@@ -90,6 +90,7 @@ harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config
 ```
 
 `routine-run` opens one Routine run for the current minute, ahead of its cron.
+On the service host, pass `--url http://127.0.0.1:3210`. That host may not resolve its own public name.
 
 For daily check-ins, apply [daily-checkin](../daily-checkin/SKILL.md). It owns collection, interpretation, storage, and reporting.
 

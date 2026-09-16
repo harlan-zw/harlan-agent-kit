@@ -1299,6 +1299,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       restoreItem: store.restoreItem,
     },
     allowedOrigin: config.server.allowedOrigin,
+    listenOrigin: `http://${config.server.host.includes(':') ? `[${config.server.host}]` : config.server.host}:${config.server.port}`,
     frameAncestors: config.server.frameAncestors,
     dashboardPassword: options.dashboardPassword,
     now,
