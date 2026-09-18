@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
+import type { ClassificationSource } from './classification.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedRoutineRun } from './types.ts'
@@ -9,10 +10,13 @@ import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
+import { worthFiling } from './routines/candidates.ts'
 import { getRoutine } from './routines/index.ts'
 
 export interface RoutineScanWorkerOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
+  /** When present, each proposed Candidate must earn its issue: the classification drops only a confident no. */
+  classification?: ClassificationSource | null
   logger: { error: (message: string) => void, info: (message: string) => void }
   maximumChangedFiles?: number
   now: () => Date
@@ -144,10 +148,29 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         : inScope.filter(candidate => candidate.estimatedChangedFiles <= maximumChangedFiles)
       const outsideScope = response.candidates.length - inScope.length
       const oversized = inScope.length - withinSize.length
+      // The worth gate files on every doubt, so a dropped Candidate is the
+      // classification saying no with confidence. Nothing else drops here.
+      const worthRecording = options.classification === undefined || options.classification === null
+        ? withinSize
+        : []
+      for (const candidate of withinSize) {
+        if (options.classification === undefined || options.classification === null)
+          break
+        const worth = await worthFiling({
+          classification: options.classification,
+          routineName: task.routineId,
+          candidate,
+          signal,
+        })
+        if (worth)
+          worthRecording.push(candidate)
+        else
+          options.logger.info(`${task.routineId}: the classification dropped Candidate ${candidate.fingerprint}.`)
+      }
       const fresh = options.store.recordCandidates({
         routineId: task.routineId,
         runId: task.id,
-        candidates: withinSize,
+        candidates: worthRecording,
         at: options.now().toISOString(),
       })
 
