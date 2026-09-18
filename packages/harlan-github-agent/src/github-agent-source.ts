@@ -1117,7 +1117,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const output = { title: update.title, summary: 'The review comment on this pull request carries the detail.' }
       const payload = update._tag === 'Running'
         ? { status: 'in_progress' as const, output }
-        : { status: 'completed' as const, conclusion: update.conclusion, output }
+        : { status: 'completed' as const, conclusion: update.conclusion, completed_at: update.completedAt, output }
       const written = existing.value === undefined
         ? await octokit.value.rest.checks.create({
             owner,

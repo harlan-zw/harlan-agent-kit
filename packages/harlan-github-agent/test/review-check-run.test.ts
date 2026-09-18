@@ -18,7 +18,7 @@ describe('review check run update', () => {
       phase: 'review',
       desiredOutcome: null,
       body: reviewBody('### 🤖 REVIEWING · 55% · Reviewing changed files'),
-    })
+    }, '2026-09-18T20:00:00.000Z')
 
     expect(update).toEqual({
       _tag: 'Running',
@@ -32,7 +32,7 @@ describe('review check run update', () => {
       phase: 'repair',
       desiredOutcome: null,
       body: reviewBody('### 🤖 REPAIR · round 1 of 3 · 35% · Git worktree ready'),
-    })
+    }, '2026-09-18T20:00:00.000Z')
 
     expect(update?._tag).toBe('Running')
   })
@@ -45,9 +45,9 @@ describe('review check run update', () => {
         phase: 'terminal',
         desiredOutcome,
         body: reviewBody(`### 🤖 ${desiredOutcome} · Adversarial review`),
-      })
+      }, '2026-09-18T20:00:00.000Z')
 
-      expect(update).toEqual(expect.objectContaining({ _tag: 'Completed', conclusion: 'neutral' }))
+      expect(update).toEqual(expect.objectContaining({ _tag: 'Completed', conclusion: 'neutral', completedAt: '2026-09-18T20:00:00.000Z' }))
     },
   )
 
@@ -57,7 +57,7 @@ describe('review check run update', () => {
       phase: 'terminal',
       desiredOutcome: 'READY',
       body: reviewBody('### 🤖 READY · Adversarial review'),
-    })
+    }, '2026-09-18T20:00:00.000Z')
 
     expect(update).toEqual(expect.objectContaining({ _tag: 'Completed', conclusion: 'success' }))
   })
@@ -68,7 +68,7 @@ describe('review check run update', () => {
       phase: 'terminal',
       desiredOutcome: 'READY',
       body: reviewBody('### 🤖 READY · Adversarial review'),
-    })
+    }, '2026-09-18T20:00:00.000Z')
 
     expect(update).toBe(null)
   })
@@ -79,7 +79,7 @@ describe('review check run update', () => {
       phase: 'review',
       desiredOutcome: null,
       body: '<!-- harlan-agent-kit:pr-triage -->',
-    })
+    }, '2026-09-18T20:00:00.000Z')
 
     expect(update).toEqual({ _tag: 'Running', title: 'Review' })
   })
@@ -91,7 +91,7 @@ describe('review check run update', () => {
       phase: 'review',
       desiredOutcome: null,
       body: reviewBody(longHeadline),
-    })
+    }, '2026-09-18T20:00:00.000Z')
 
     expect(update?._tag === 'Running' && update.title.length).toBeLessThanOrEqual(255)
   })

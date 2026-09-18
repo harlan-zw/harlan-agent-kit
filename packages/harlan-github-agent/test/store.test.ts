@@ -2567,6 +2567,7 @@ describe('journal store', () => {
       github: {
         clearAgentLabels: () => Promise.resolve(ok(undefined)),
         getPullRequestReviewSnapshot: () => { throw new Error('A merged pull request needs no snapshot.') },
+        upsertReviewCheckRun: () => Promise.resolve(ok(undefined)),
         editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
           // Comment 77 belongs to the trusted actor, so GitHub refuses the edit.
           if (commentId === 77)

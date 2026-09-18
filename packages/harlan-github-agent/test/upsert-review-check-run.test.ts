@@ -38,14 +38,14 @@ const running = reviewCheckRunUpdate({
   phase: 'review',
   desiredOutcome: null,
   body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 REVIEWING · 55% · Reviewing changed files',
-})!
+}, '2026-09-18T20:00:00.000Z')!
 
 const completed = reviewCheckRunUpdate({
   taskKind: 'adversarial_review',
   phase: 'terminal',
   desiredOutcome: 'READY',
   body: '<!-- harlan-agent-kit:pr-triage -->\n### 🤖 READY · Adversarial review',
-})!
+}, '2026-09-18T20:00:00.000Z')!
 
 describe('upsert review check run', () => {
   it('creates the named check run on the head commit when none exists', async () => {
@@ -86,7 +86,7 @@ describe('upsert review check run', () => {
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('completes the check run with its conclusion', async () => {
+  it('completes the check run with its conclusion and completion time', async () => {
     const { source: github, update } = source([
       { id: 500, name: REVIEW_CHECK_RUN_NAME, app: { id: ownAppId } },
     ])
@@ -97,6 +97,7 @@ describe('upsert review check run', () => {
       check_run_id: 500,
       status: 'completed',
       conclusion: 'success',
+      completed_at: '2026-09-18T20:00:00.000Z',
     }))
   })
 

@@ -212,7 +212,7 @@ export async function publishClaimedReviewStatus(
   if (!commentConfirmed)
     return err('GitHub accepted the review comment, but its receipt lost the Publication lease.')
 
-  const checkRun = options.checkRuns === undefined ? null : reviewCheckRunUpdate(command)
+  const checkRun = options.checkRuns === undefined ? null : reviewCheckRunUpdate(command, options.now().toISOString())
   if (options.checkRuns !== undefined && checkRun !== null) {
     const checkRunAuthority = authorizeWrite(options, command)
     if (checkRunAuthority._tag === 'Err')

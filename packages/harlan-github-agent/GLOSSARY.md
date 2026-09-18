@@ -486,7 +486,7 @@ Named after GitHub's `check run`, which has the same shape: one execution agains
 
 One GitHub check run, named `harlan-agent-kit / Review`, that mirrors one Review run's progress and outcome on the pull request.
 
-It concludes `success` only when the Review outcome is READY, and `neutral` for every other outcome. It never concludes `failure`, so branch protection reads no verdict from it. A trusted foreign review reports no check run.
+It concludes `success` only when the Review outcome is READY, and `neutral` for every other outcome. It never concludes `failure`, so branch protection reads no verdict from it. A trusted foreign review reports no check run. A stopped Review closes its check run as `neutral`, so a closed Review never reads as stalled.
 
 The CI Review gate skips every check run this service's own GitHub App wrote, so a Review never gates on itself.
 
