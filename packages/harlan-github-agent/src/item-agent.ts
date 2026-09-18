@@ -96,7 +96,7 @@ export interface ItemAgentOptions {
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -382,7 +382,13 @@ async function resolveMergeRisk(
   const scope = task.repositoryMapping.autoMerge
   if (scope._tag !== 'Contained')
     return null
-  const files = await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
+  // The observation pass already read this Revision's files and recorded
+  // them, so the floor costs no GitHub call. Only a Revision that predates
+  // that recording falls back to a fresh read.
+  const recorded = options.store.getRevisionFiles(task.repository, task.pullRequestNumber, task.revisionId)
+  const files = recorded !== null
+    ? ok(recorded)
+    : await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
   const floor: MergeRisk = files._tag === 'Err'
     ? { _tag: 'Reviewable', reason: `The changed files could not be read: ${files.error}` }
     : mergeRiskFloor(files.value, scope.policy)

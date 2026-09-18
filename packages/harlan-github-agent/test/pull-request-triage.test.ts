@@ -1,6 +1,6 @@
 import type { Questions, SystemOneResult } from 'advocaat'
 import type { ClassificationFailure, ClassificationSource } from '../src/classification.ts'
-import type { PullRequestTriageDecision } from '../src/pull-request-triage.ts'
+import type { PullRequestTriageDecision, PullRequestTriageVerdict } from '../src/pull-request-triage.ts'
 import type { LatestPullRequestTriageRun } from '../src/store.ts'
 import type { GitHubPullRequestItem } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
@@ -25,7 +25,7 @@ function classificationFailure(failure: ClassificationFailure): ClassificationSo
 interface ControllerHarness {
   comments: string[]
   consumedApprovalLabels: string[]
-  decision: () => Promise<PullRequestTriageDecision>
+  verdict: () => Promise<PullRequestTriageVerdict>
   fileReads: number
   classificationCalls: number
   settle: (decision: PullRequestTriageDecision) => Promise<unknown>
@@ -91,7 +91,7 @@ function controller(input: {
   return {
     comments,
     consumedApprovalLabels,
-    decision: () => controller.verdict(repository, subject, signal),
+    verdict: () => controller.verdict(repository, subject, signal),
     get fileReads() {
       return fileReads
     },
@@ -155,16 +155,17 @@ describe('proseOnlyQuestions', () => {
 })
 
 describe('pull request triage controller', () => {
-  it('requires Review from the path rule without reading the classification', async () => {
+  const file = (path: string) => ({ additions: 1, deletions: 0, path, previousFilename: null, status: 'modified' as const })
+
+  it('requires Review from the path rule without reading the classification, and returns the files it read', async () => {
     const harness = controller({
       changedFiles: ['README.md', 'src/deployment.ts'],
       classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.99 }),
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Required',
-      reason: 'rule: src/deployment.ts is outside the prose set.',
-      source: 'rule',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Required', reason: 'rule: src/deployment.ts is outside the prose set.', source: 'rule' },
+      files: [file('README.md'), file('src/deployment.ts')],
     })
     expect(harness.fileReads).toBe(1)
     expect(harness.classificationCalls).toBe(0)
@@ -179,10 +180,9 @@ describe('pull request triage controller', () => {
       },
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Skipped',
-      reason: 'model: Only a typo in the README changed.',
-      source: 'reuse',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Skipped', reason: 'model: Only a typo in the README changed.', source: 'reuse' },
+      files: null,
     })
     expect(harness.fileReads).toBe(0)
   })
@@ -196,10 +196,9 @@ describe('pull request triage controller', () => {
       },
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Skipped',
-      reason: 'model: Only prose changed.',
-      source: 'reuse',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Skipped', reason: 'model: Only prose changed.', source: 'reuse' },
+      files: null,
     })
   })
 
@@ -213,33 +212,32 @@ describe('pull request triage controller', () => {
       classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.95 }),
     })
 
-    await expect(harness.decision()).resolves.toEqual(expect.objectContaining({ _tag: 'Skipped' }))
+    await expect(harness.verdict()).resolves.toMatchObject({ decision: { _tag: 'Skipped' } })
     expect(harness.classificationCalls).toBe(1)
   })
 
   it('answers the manual Review label before any other check', async () => {
     const harness = controller({ approvalLabels: ['review'] })
 
-    await expect(harness.decision()).resolves.toEqual({ _tag: 'RequiredOverride' })
+    await expect(harness.verdict()).resolves.toEqual({ decision: { _tag: 'RequiredOverride' }, files: null })
     expect(harness.fileReads).toBe(0)
   })
 
   it('fails closed when the changed files cannot be read', async () => {
     const harness = controller({ filesFailure: 'GitHub could not list the changed files.' })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Failed',
-      reason: 'rule: the changed files could not be read: GitHub could not list the changed files.',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Failed', reason: 'rule: the changed files could not be read: GitHub could not list the changed files.' },
+      files: null,
     })
   })
 
   it('reviews prose when the classification service is not configured', async () => {
     const harness = controller({ changedFiles: ['README.md'], classification: null })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Required',
-      reason: 'rule: the classification service is not configured, so Review runs.',
-      source: 'rule',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Required', reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' },
+      files: [file('README.md')],
     })
   })
 
@@ -249,10 +247,9 @@ describe('pull request triage controller', () => {
       classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.93 }),
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Skipped',
-      reason: 'model: classification chose skip with confidence 0.93.',
-      source: 'model',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' },
+      files: [file('README.md'), file('docs/guide.md')],
     })
     expect(harness.classificationCalls).toBe(1)
   })
@@ -263,10 +260,9 @@ describe('pull request triage controller', () => {
       classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.4 }),
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Required',
-      reason: 'model: classification chose skip at confidence 0.4, below 0.7, so Review runs.',
-      source: 'model',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Required', reason: 'model: classification chose skip at confidence 0.4, below 0.7, so Review runs.', source: 'model' },
+      files: [file('README.md')],
     })
   })
 
@@ -276,10 +272,9 @@ describe('pull request triage controller', () => {
       classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_REQUIRED', confidence: 0.88 }),
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Required',
-      reason: 'model: classification chose review with confidence 0.88.',
-      source: 'model',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Required', reason: 'model: classification chose review with confidence 0.88.', source: 'model' },
+      files: [file('README.md')],
     })
   })
 
@@ -289,9 +284,9 @@ describe('pull request triage controller', () => {
       classification: classificationFailure({ _tag: 'Unavailable', message: '401 authentication invalid' }),
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Failed',
-      reason: 'model: the classification service failed: 401 authentication invalid',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Failed', reason: 'model: the classification service failed: 401 authentication invalid' },
+      files: [file('README.md')],
     })
   })
 
@@ -301,9 +296,9 @@ describe('pull request triage controller', () => {
       classification: classificationFailure({ _tag: 'Aborted' }),
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Failed',
-      reason: 'The classification request was cancelled.',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: { _tag: 'Failed', reason: 'The classification request was cancelled.' },
+      files: [file('README.md')],
     })
   })
 

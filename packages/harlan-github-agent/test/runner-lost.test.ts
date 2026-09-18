@@ -89,6 +89,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
       storedReviewForHead: () => ({ _tag: 'None' }),
+      getRevisionFiles: () => null,
       supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: (incident) => {
         incidents.push(incident)

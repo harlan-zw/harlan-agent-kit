@@ -1,0 +1,193 @@
+import type { ClassificationSource } from './classification.ts'
+import type { PullRequestFile } from './merge-risk.ts'
+import { DatabaseSync } from 'node:sqlite'
+import { classifyPullRequestPaths, proseOnlyQuestions } from './pull-request-triage.ts'
+
+/**
+ * Replays one recorded Pull request triage decision through the current
+ * decision path: the path rule first, then the classification service.
+ *
+ * The point is measurement, not action. Every replay compares what the path
+ * would decide today against what the journal recorded, so a confidence band
+ * is chosen from evidence instead of a guess.
+ */
+export interface TriageReplayInput {
+  repository: string
+  pullRequestNumber: number
+  title: string
+  files: PullRequestFile[]
+  stored: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure'
+}
+
+export type TriageReplay
+  = | { _tag: 'RuleRequired' }
+    | { _tag: 'Classified', skip: boolean, confidence: number }
+    | { _tag: 'Unavailable' }
+
+export async function replayTriage(input: TriageReplayInput, classification: ClassificationSource | null, signal?: AbortSignal): Promise<TriageReplay> {
+  const verdict = classifyPullRequestPaths(input.files.map(file => file.path))
+  if (verdict._tag === 'ReviewRequired')
+    return { _tag: 'RuleRequired' }
+  if (classification === null)
+    return { _tag: 'Unavailable' }
+  const result = await classification.classify({
+    state: { title: input.title, changedFiles: input.files.map(file => file.path).slice(0, 300) },
+    questions: proseOnlyQuestions(),
+    ...(signal === undefined ? {} : { signal }),
+  })
+  if (result._tag === 'Err')
+    return { _tag: 'Unavailable' }
+  const answer = result.value.answers.review
+  return {
+    _tag: 'Classified',
+    skip: answer.choice === 'ADVERSARIAL_REVIEW_SKIPPED',
+    confidence: Math.round(answer.confidence * 100) / 100,
+  }
+}
+
+export interface TriageBandSummary {
+  band: number
+  /** Replays whose replayed decision equals the stored one. */
+  agreed: number
+  /** Replays that would Review what the journal skipped. Costs a Review; safe. */
+  reviewsAdded: number
+  /** Replays that would skip what the journal sent to Review. Costs a merge nobody read. */
+  skipsAdded: number
+  /** Of the replays that skip, the share the journal also skipped. */
+  skipPrecision: number | null
+}
+
+/**
+ * Applies one skip-confidence band to every classified replay and counts the
+ * outcomes. Rule-required and unavailable replays count as agreed: the rule
+ * answers them the same way today, and an unavailable service reviews.
+ */
+export function summariseBand(replays: Array<{ replay: TriageReplay, stored: TriageReplayInput['stored'] }>, band: number): TriageBandSummary {
+  let agreed = 0
+  let reviewsAdded = 0
+  let skipsAdded = 0
+  let skipTotal = 0
+  let skipAgreed = 0
+  for (const { replay, stored } of replays) {
+    const storedSkip = stored === 'ReviewSkipped'
+    if (replay._tag !== 'Classified') {
+      agreed += 1
+      continue
+    }
+    const skips = replay.skip && replay.confidence >= band
+    if (skips)
+      skipTotal += 1
+    if (skips === storedSkip) {
+      agreed += 1
+      if (skips)
+        skipAgreed += 1
+    }
+    else if (storedSkip) {
+      reviewsAdded += 1
+    }
+    else {
+      skipsAdded += 1
+    }
+  }
+  return {
+    band,
+    agreed,
+    reviewsAdded,
+    skipsAdded,
+    skipPrecision: skipTotal === 0 ? null : Math.round((skipAgreed / skipTotal) * 100) / 100,
+  }
+}
+
+/** Every band the summary walks, coarse enough to read and fine enough to place a floor. */
+export const TRIAGE_BANDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95] as const
+
+/**
+ * Chooses the band to ship: the one that skips the most while never skipping
+ * what the journal sent to Review. When no band reaches zero, the one that
+ * comes closest names the tradeoff instead of hiding it.
+ */
+export function suggestBand(replays: Array<{ replay: TriageReplay, stored: TriageReplayInput['stored'] }>): TriageBandSummary {
+  const summaries = TRIAGE_BANDS.map(band => summariseBand(replays, band))
+  const safe = summaries.filter(summary => summary.skipsAdded === 0)
+  const pool = safe.length > 0 ? safe : summaries
+  return pool.reduce((best, candidate) => {
+    if (candidate.agreed > best.agreed)
+      return candidate
+    if (candidate.agreed === best.agreed && (candidate.skipPrecision ?? 0) > (best.skipPrecision ?? 0))
+      return candidate
+    return best
+  })
+}
+
+export interface StoredTriageReplaySummary {
+  replayed: number
+  /** Recorded decisions whose Revision has no changed-file list. They replay once a later observation records one. */
+  skippedWithoutFiles: number
+  suggestion: TriageBandSummary
+}
+
+/**
+ * Replays the journal's recorded Pull request triage decisions, newest first,
+ * through the classification service and reports the band evidence.
+ *
+ * The journal opens read only, so this never competes with the running
+ * service for a write lock.
+ */
+export async function replayStoredTriage(input: {
+  journalPath: string
+  limit: number
+  classification: ClassificationSource
+  log: (line: string) => void
+}): Promise<StoredTriageReplaySummary> {
+  const database = new DatabaseSync(input.journalPath, { readOnly: true })
+  try {
+    const rows = database.prepare(`
+      SELECT
+        repositories.github AS repository,
+        subjects.github_number AS pull_request_number,
+        json_extract(revisions.payload, '$.title') AS title,
+        pull_request_triage_runs.outcome_tag AS stored,
+        revision_files.files_json AS files_json
+      FROM pull_request_triage_runs
+      JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = pull_request_triage_runs.revision_id
+      JOIN revision_files ON revision_files.subject_id = subjects.id AND revision_files.revision_id = revisions.id
+      ORDER BY pull_request_triage_runs.completed_at DESC
+      LIMIT ?
+    `).all(input.limit) as unknown as Array<{ repository: string, pull_request_number: number, title: string | null, stored: TriageReplayInput['stored'], files_json: string }>
+    const withoutFiles = database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM pull_request_triage_runs
+      WHERE NOT EXISTS (
+        SELECT 1 FROM revision_files
+        WHERE revision_files.subject_id = pull_request_triage_runs.subject_id
+          AND revision_files.revision_id = pull_request_triage_runs.revision_id
+      )
+    `).get() as { count: number }
+
+    const replays: Array<{ replay: TriageReplay, stored: TriageReplayInput['stored'] }> = []
+    for (const row of rows) {
+      const replay = await replayTriage({
+        repository: row.repository,
+        pullRequestNumber: row.pull_request_number,
+        title: row.title ?? '',
+        files: JSON.parse(row.files_json) as PullRequestFile[],
+        stored: row.stored,
+      }, input.classification)
+      replays.push({ replay, stored: row.stored })
+    }
+    for (const band of TRIAGE_BANDS) {
+      const summary = summariseBand(replays, band)
+      input.log(`Band ${band}: ${summary.agreed} agreed, ${summary.reviewsAdded} extra Reviews, ${summary.skipsAdded} would skip what Review read${summary.skipPrecision === null ? '' : `, skip precision ${summary.skipPrecision}`}.`)
+    }
+    return {
+      replayed: replays.length,
+      skippedWithoutFiles: withoutFiles.count,
+      suggestion: suggestBand(replays),
+    }
+  }
+  finally {
+    database.close()
+  }
+}

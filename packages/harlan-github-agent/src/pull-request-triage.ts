@@ -1,5 +1,6 @@
 import type { ClassificationSource } from './classification.ts'
 import type { GitHubAgentSource } from './github-agent-source.ts'
+import type { PullRequestFile } from './merge-risk.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
@@ -100,10 +101,20 @@ ${automatedDisclosure({ kind: 'triage', updatedAt: updatedAtLabel(at) })}
 }
 
 export interface PullRequestTriageController {
-  /** The decision for one observed pull request, computed before the observation is recorded. */
-  verdict: (repository: RepositoryMapping, subject: GitHubPullRequestItem, signal: AbortSignal) => Promise<PullRequestTriageDecision>
+  /**
+   * The decision for one observed pull request, computed before the observation
+   * is recorded. The changed files read along the way ride with it, so the
+   * journal records them once per Revision instead of every reader refetching.
+   */
+  verdict: (repository: RepositoryMapping, subject: GitHubPullRequestItem, signal: AbortSignal) => Promise<PullRequestTriageVerdict>
   /** Performs the GitHub writes a settled decision needs. Safe to retry; every write is idempotent. */
   settle: (repository: RepositoryMapping, subject: GitHubPullRequestItem, decision: PullRequestTriageDecision, signal: AbortSignal) => Promise<Result<void, string>>
+}
+
+export interface PullRequestTriageVerdict {
+  decision: PullRequestTriageDecision
+  /** The changed files read for this verdict, or null when the verdict needed none. */
+  files: PullRequestFile[] | null
 }
 
 export interface PullRequestTriageControllerOptions {
@@ -191,27 +202,28 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       // The manual Review label is late authority. It wins before any other
       // check and its decision consumes it.
       if (subject.approvalLabels.includes('review'))
-        return { _tag: 'RequiredOverride' }
+        return { decision: { _tag: 'RequiredOverride' }, files: null }
 
       const reused = reuseStoredDecision(options.store, repository, subject)
       if (reused !== null)
-        return reused
+        return { decision: reused, files: null }
 
       const files = await options.github.listPullRequestFiles(repository, subject.number, signal)
       if (files._tag === 'Err') {
         // A pull request whose files cannot be read is reviewed, and the
         // failure row lets the next observation try again.
-        return { _tag: 'Failed', reason: `rule: the changed files could not be read: ${files.error}` }
+        return { decision: { _tag: 'Failed', reason: `rule: the changed files could not be read: ${files.error}` }, files: null }
       }
       const changedFiles = files.value.map(file => file.path)
       const verdict = classifyPullRequestPaths(changedFiles)
       if (verdict._tag === 'ReviewRequired')
-        return { _tag: 'Required', reason: `rule: ${verdict.path} is outside the prose set.`, source: 'rule' }
+        return { decision: { _tag: 'Required', reason: `rule: ${verdict.path} is outside the prose set.`, source: 'rule' }, files: files.value }
 
       if (options.classification === null) {
-        return { _tag: 'Required', reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' }
+        return { decision: { _tag: 'Required', reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' }, files: files.value }
       }
-      return classificationDecision({ classification: options.classification, subject, changedFiles, signal })
+      const decision = await classificationDecision({ classification: options.classification, subject, changedFiles, signal })
+      return { decision, files: files.value }
     },
 
     async settle(repository, subject, decision, signal) {
