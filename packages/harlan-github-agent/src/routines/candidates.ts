@@ -248,6 +248,11 @@ ${input.mode === 'report'
  * confidence: every failure and every doubt files the issue, because a lost
  * Candidate is invisible and a filed issue is only one close click.
  */
+/**
+ * Option order affects the answer distribution, so the criteria order is part
+ * of the measured contract: reorder only alongside a fresh eval of dropped
+ * Candidates.
+ */
 export function candidateWorthQuestions(routineName: string) {
   return {
     worth: choice(

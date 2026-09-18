@@ -42,6 +42,10 @@ describe('candidate worth gate', () => {
     await expect(worthFiling({ classification: failure(), routineName: 'r', candidate })).resolves.toBe(true)
   })
 
+  it('keeps its option order stable, because order moves the distribution', () => {
+    expect(Object.keys(candidateWorthQuestions('r').worth.criteria)).toEqual(['FILE', 'DROP'])
+  })
+
   it('names the routine and the untrusted candidate in the question', () => {
     const questions = candidateWorthQuestions('harlan-zw/example:sentry-checkin')
     expect(questions.worth.instructions).toContain('harlan-zw/example:sentry-checkin')
