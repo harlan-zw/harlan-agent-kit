@@ -118,7 +118,7 @@ Switching the Agent provider starts new sessions. A saved session belongs to the
 
 Grant read access to metadata, contents, issues, commit statuses, and administration. Grant write access to Actions, checks, contents, deployments, issues, and pull requests. The service mints and reuses short-lived, repository-scoped tokens.
 
-The Review also reports on one GitHub check run, `harlan-agent-kit / Review`, so `gh pr checks` shows its progress beside CI. It concludes `success` for a READY Review and `neutral` for every other outcome, never `failure`, so branch protection cannot gate on it. The service skips its own check runs when it reads CI, so the Review never gates on itself. An installation that has not granted Checks write sees every Review publication defer, and the defers clear once the permission lands.
+The Review also reports on one GitHub check run, `harlan-agent-kit / Review`, so `gh pr checks` shows its progress beside CI. It concludes `success` for a READY Review and `neutral` for every other outcome, never `failure`, so branch protection cannot gate on it. The service skips its own check runs when it reads CI, so the Review never gates on itself. User-token repositories report no check run, because a user credential would create one the App identity can never recognise. An installation that has not granted Checks write sees every Review publication defer, and the defers clear once the permission lands.
 
 A conflict fix also requires an owned repository, an allowed pull request author, an allowed branch prefix, and an unprotected head branch. The service pushes the checked commit from a clean bare Git repository.
 
