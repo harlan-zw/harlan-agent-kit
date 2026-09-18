@@ -119,6 +119,18 @@ describe('jev api', () => {
     })
   })
 
+  it('fails a 2xx response whose answers are not an object', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({ success: true, result: { state: 'Completed', result: { model: 'jev-1.13.0', answers: null } } }),
+    })
+
+    const failure = await client.systemOne({ state: null, questions: { q: noul() } }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(APIError)
+  })
+
   it('fails a 2xx response whose body carries no answers', async () => {
     const client = jev({
       accountId: 'acc-1',
