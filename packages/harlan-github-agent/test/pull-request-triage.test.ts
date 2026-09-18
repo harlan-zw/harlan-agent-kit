@@ -191,10 +191,13 @@ describe('pull request triage controller', () => {
       reviewForHead: { id: 'run-1' } as never,
     })
 
-    await expect(harness.decision()).resolves.toEqual({
-      _tag: 'Required',
-      reason: 'rule: this head commit already has a Review.',
-      source: 'reuse',
+    await expect(harness.verdict()).resolves.toEqual({
+      decision: {
+        _tag: 'Required',
+        reason: 'rule: this head commit already has a Review.',
+        source: 'reuse',
+      },
+      files: null,
     })
   })
 
