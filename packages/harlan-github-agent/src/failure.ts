@@ -465,6 +465,11 @@ export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureCl
  * The classification question for one failing check the patterns could not
  * name. Exported so tests can assert the contract without the service.
  */
+/**
+ * Option order affects the answer distribution, so the criteria order is part
+ * of the measured contract: reorder only alongside a fresh eval of the
+ * residual classifier.
+ */
 export function checkFailureQuestions(checkName: string) {
   return {
     cause: choice(
@@ -507,7 +512,11 @@ export async function classifyCheckFailureWithResidual(input: {
   })
   if (result._tag === 'Err')
     return classified
+  // The boundary trust ends here: an answer that is not a typed choice with
+  // a numeric confidence reads as no answer, never as a verdict.
   const answer = result.value.answers.cause
+  if (answer === undefined || answer.type !== 'choice' || typeof answer.choice !== 'string' || typeof answer.confidence !== 'number')
+    return classified
   const confidence = Math.round(answer.confidence * 100) / 100
   if (answer.choice !== 'Infrastructure' || confidence < CHECK_INFRASTRUCTURE_CONFIDENCE_FLOOR)
     return classified
