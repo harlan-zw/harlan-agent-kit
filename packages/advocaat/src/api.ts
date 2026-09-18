@@ -282,8 +282,16 @@ function unwrap(parsed: unknown, res: Response): unknown {
   // `/ai/run` wraps the model answer once more: `{ state, result, gatewayMetadata }`.
   if (isRunWrapper(value))
     value = (value as { result: unknown }).result
-  if (typeof value !== 'object' || value === null || !('answers' in value))
+  // The System One result must carry an answers object. Anything else,
+  // including `answers: null`, failed: a caller reading a question's answer
+  // off it must never crash on the shape it trusted.
+  if (
+    typeof value !== 'object' || value === null || !('answers' in value)
+    || typeof (value as { answers: unknown }).answers !== 'object'
+    || (value as { answers: unknown }).answers === null
+  ) {
     throw new APIError(res.status, parsed, res.headers.get('cf-ray') ?? '')
+  }
   return value
 }
 
