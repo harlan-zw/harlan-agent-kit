@@ -215,6 +215,40 @@ describe('pull request triage Stats', () => {
     })
     expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-02T00:06:00.000Z', 60_000)).not.toBeNull()
 
+    // An explicit rerun outranks a stored skip: the Task it queues survives
+    // the next poll instead of being superseded back into silence.
+    const skippedHead = createStore()
+    skippedHead.syncRepositories([repositoryMapping()], '2026-09-01T00:00:00.000Z')
+    const rerunSubject = pullRequestItem({ mergeState: 'clean' })
+    const rerunRevision = skippedHead.recordObservation({
+      externalId: 'rerun-skip',
+      observedAt: '2026-09-02T00:00:00.000Z',
+      source: 'poll',
+      subject: rerunSubject,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.95.', source: 'model' },
+    })
+    if (rerunRevision._tag !== 'Inserted')
+      throw new Error('Expected the skipped Revision.')
+    const requested = skippedHead.requestReviewRerun({
+      repository: rerunSubject.repository,
+      pullRequestNumber: rerunSubject.number,
+      revisionId: rerunRevision.revisionId,
+      requestId: 'rerun-1',
+      source: 'github_comment',
+      requestedBy: 'harlan-zw',
+      at: '2026-09-02T00:01:00.000Z',
+    })
+    if (requested._tag !== 'Queued' && requested._tag !== 'AlreadyQueued')
+      throw new Error('Expected the rerun Task.')
+    skippedHead.recordObservation({
+      externalId: 'rerun-skip-again',
+      observedAt: '2026-09-02T00:02:00.000Z',
+      source: 'poll',
+      subject: rerunSubject,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.95.', source: 'reuse' },
+    })
+    expect(skippedHead.claimNextAdversarialReviewTask('reviewer-3', '2026-09-02T00:03:00.000Z', 60_000)).not.toBeNull()
+
     const stats = store.getStats({
       from: '2026-08-01T00:00:00.000Z',
       to: '2026-08-08T00:00:00.000Z',
