@@ -41,6 +41,7 @@ const { createGitHubAgentSource } = await import('../src/github-agent-source.ts'
 function source() {
   return createGitHubAgentSource({
     actorLogin: () => 'harlan-agent[bot]',
+    ownAppId: 98114,
     tokens: {
       getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T02:00:00.000Z' })),
       invalidate: () => undefined,

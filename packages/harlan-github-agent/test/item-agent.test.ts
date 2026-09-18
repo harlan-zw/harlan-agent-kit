@@ -61,6 +61,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -206,6 +207,7 @@ describe('subject Workers', () => {
         return Promise.resolve(ok(undefined))
       },
       editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+      upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
       ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
       clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -438,6 +440,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -543,6 +546,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -671,6 +675,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -780,6 +785,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -881,6 +887,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -983,6 +990,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -1078,6 +1086,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -1169,6 +1178,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -1257,6 +1267,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -1355,6 +1366,7 @@ describe('subject Workers', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),

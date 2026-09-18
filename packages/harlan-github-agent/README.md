@@ -116,7 +116,9 @@ Switching the Agent provider starts new sessions. A saved session belongs to the
 
 `external_repositories` watches exact issue numbers or all current issues in a public repository. These watches use public GitHub data. They receive no GitHub App token and never add work to the queue.
 
-Grant read access to metadata, contents, issues, checks, commit statuses, and administration. Grant write access to Actions, contents, deployments, issues, and pull requests. The service mints and reuses short-lived, repository-scoped tokens.
+Grant read access to metadata, contents, issues, commit statuses, and administration. Grant write access to Actions, checks, contents, deployments, issues, and pull requests. The service mints and reuses short-lived, repository-scoped tokens.
+
+The Review also reports on one GitHub check run, `harlan-agent-kit / Review`, so `gh pr checks` shows its progress beside CI. It concludes `success` for a READY Review and `neutral` for every other outcome, never `failure`, so branch protection cannot gate on it. The service skips its own check runs when it reads CI, so the Review never gates on itself. An installation that has not granted Checks write sees every Review publication defer, and the defers clear once the permission lands.
 
 A conflict fix also requires an owned repository, an allowed pull request author, an allowed branch prefix, and an unprotected head branch. The service pushes the checked commit from a clean bare Git repository.
 
