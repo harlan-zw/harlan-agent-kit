@@ -61,7 +61,7 @@ storage:
 # classification:
 #   account_id: your-cloudflare-account-id
 #   token_path: /home/harlan/.config/harlan-github-agent/classification-token
-#   gateway_id: jev-prod
+#   gateway_id: harlan-github-agent
 #   model: typesafe/jev
 # What may start work on this machine. Defaults to every trigger.
 # An always-on second machine runs [routine] while the desktop keeps [github].
