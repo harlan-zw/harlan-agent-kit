@@ -193,7 +193,8 @@ describe('pull request triage Stats', () => {
     expect(failedFirst.claimNextAdversarialReviewTask('reviewer-1', '2026-09-02T00:06:00.000Z', 60_000)).toBeNull()
 
     // The manual Review label overrides the stored skip: the decision queues
-    // the Review Task the label asks for.
+    // the Review Task the label asks for, and the row itself turns Required,
+    // so the next poll reuses Review instead of superseding the Task.
     const overridden = store.recordObservation({
       externalId: 'stats-triage-3',
       observedAt: '2026-08-02T00:03:00.000Z',
@@ -202,7 +203,17 @@ describe('pull request triage Stats', () => {
       pullRequestTriage: { _tag: 'RequiredOverride' },
     })
     expect(overridden).toEqual({ _tag: 'Duplicate', revisionId: first.revisionId })
+    expect(store.getLatestPullRequestTriageRun(subject.repository, subject.number, subject.headSha)).toMatchObject({ outcome: 'ReviewRequired' })
     expect(store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-02T00:04:00.000Z', 60_000)).not.toBeNull()
+    // The label consumed, a later poll keeps the Task: the stored row says Review.
+    store.recordObservation({
+      externalId: 'stats-triage-4',
+      observedAt: '2026-08-02T00:05:00.000Z',
+      source: 'poll',
+      subject,
+      pullRequestTriage: { _tag: 'Required', reason: 'rule: this head commit already has a Review.', source: 'reuse' },
+    })
+    expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-02T00:06:00.000Z', 60_000)).not.toBeNull()
 
     const stats = store.getStats({
       from: '2026-08-01T00:00:00.000Z',
@@ -213,7 +224,7 @@ describe('pull request triage Stats', () => {
     expect(stats.repositories).toEqual([expect.objectContaining({ repository: subject.repository, runs: 1 })])
     expect(stats.work.find(work => work._tag === 'PullRequestTriage')).toEqual(expect.objectContaining({
       runs: 1,
-      reviewSkipped: 1,
+      reviewRequired: 1,
     }))
   })
 })

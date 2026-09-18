@@ -105,8 +105,14 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       // on every poll for a decision that cannot land.
       if (subject.draft || subject.mergeState !== 'clean')
         return null
+      // Match the planner's own approval rule: Manual Selection or an
+      // untrusted author needs Approval before a Review is planned, so no
+      // decision could land and asking would re-pay the classification and
+      // re-settle the comment on every poll. The manual Review label is the
+      // exception: it carries its own override decision.
       const trustedAuthor = repository.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
-      if (!trustedAuthor && !subject.approvalLabels.includes('review'))
+      const approvalRequired = dependencies.store.getSelectionMode() === 'manual' || !trustedAuthor
+      if (approvalRequired && !subject.approvalLabels.includes('review'))
         return null
       return dependencies.pullRequestTriage?.verdict(repository, subject, triageSignal)
     }))
