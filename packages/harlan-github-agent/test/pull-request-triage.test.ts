@@ -2,10 +2,11 @@ import type { Questions, SystemOneResult } from 'advocaat'
 import type { ClassificationFailure, ClassificationSource } from '../src/classification.ts'
 import type { PullRequestTriageDecision, PullRequestTriageVerdict } from '../src/pull-request-triage.ts'
 import type { LatestPullRequestTriageRun } from '../src/store.ts'
-import type { GitHubPullRequestItem } from '../src/types.ts'
+import type { GitHubPullRequestItem, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { classifyPullRequestPaths, createPullRequestTriageController, proseOnlyQuestions } from '../src/pull-request-triage.ts'
 import { err, ok } from '../src/result.ts'
+import { updatedAtLabel } from '../src/text.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 function classificationAnswer(answer: { choice: 'ADVERSARIAL_REVIEW_REQUIRED' | 'ADVERSARIAL_REVIEW_SKIPPED', confidence: number }): ClassificationSource {
@@ -38,6 +39,7 @@ function controller(input: {
   classification?: ClassificationSource | null
   filesFailure?: string
   stored?: LatestPullRequestTriageRun | null
+  reviewForHead?: ReviewRun
   title?: string
 }): ControllerHarness {
   const subject = pullRequestItem({
@@ -85,6 +87,7 @@ function controller(input: {
     now: () => new Date('2026-09-18T01:00:00.000Z'),
     store: {
       getLatestPullRequestTriageRun: () => input.stored ?? null,
+      storedReviewForHead: () => input.reviewForHead ? { _tag: 'Current', run: input.reviewForHead } : { _tag: 'None' },
     },
   })
   const signal = new AbortController().signal
@@ -140,6 +143,13 @@ describe('classifyPullRequestPaths', () => {
 })
 
 describe('proseOnlyQuestions', () => {
+  it('keeps its option order stable, because order moves the distribution', () => {
+    expect(Object.keys(proseOnlyQuestions().review.criteria)).toEqual([
+      'ADVERSARIAL_REVIEW_REQUIRED',
+      'ADVERSARIAL_REVIEW_SKIPPED',
+    ])
+  })
+
   it('offers exactly skip and review with an untrusted-state note', () => {
     expect(proseOnlyQuestions()).toEqual({
       review: {
@@ -169,6 +179,42 @@ describe('pull request triage controller', () => {
     })
     expect(harness.fileReads).toBe(1)
     expect(harness.classificationCalls).toBe(0)
+  })
+
+  it('reuses a stored skip as Required once the head has a completed Review', async () => {
+    const harness = controller({
+      stored: {
+        outcome: 'ReviewSkipped',
+        reason: 'model: Only a typo in the README changed.',
+        completedAt: '2026-09-17T23:00:00.000Z',
+      },
+      reviewForHead: { id: 'run-1' } as never,
+    })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Required',
+      reason: 'rule: this head commit already has a Review.',
+      source: 'reuse',
+    })
+  })
+
+  it('settles the skip body from the stored decision time, not the poll clock', async () => {
+    const harness = controller({
+      stored: {
+        outcome: 'ReviewSkipped',
+        reason: 'model: classification chose skip with confidence 0.93.',
+        completedAt: '2026-09-17T23:00:00.000Z',
+      },
+    })
+
+    const first = await harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })
+    const second = await harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })
+
+    expect(first).toEqual(ok(undefined))
+    expect(second).toEqual(ok(undefined))
+    expect(harness.comments).toHaveLength(2)
+    expect(harness.comments[0]).toContain(updatedAtLabel('2026-09-17T23:00:00.000Z'))
+    expect(harness.comments[1]).toBe(harness.comments[0])
   })
 
   it('reuses the stored decision for the same head commit before anything else', async () => {
@@ -345,7 +391,10 @@ describe('pull request triage controller', () => {
         upsertReviewStatus: () => Promise.resolve(err('GitHub refused the comment.')),
       },
       now: () => new Date('2026-09-18T01:00:00.000Z'),
-      store: { getLatestPullRequestTriageRun: () => null },
+      store: {
+        getLatestPullRequestTriageRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
+      },
     })
 
     const settled = await controllerInstance.settle(repositoryMapping(), subject, { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' }, new AbortController().signal)

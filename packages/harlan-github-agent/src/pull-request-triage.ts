@@ -121,13 +121,20 @@ export interface PullRequestTriageControllerOptions {
   classification: ClassificationSource | null
   github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'listPullRequestFiles' | 'stampAgentLabel' | 'upsertReviewStatus'>
   now: () => Date
-  store: Pick<JournalStore, 'getLatestPullRequestTriageRun'>
+  store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'storedReviewForHead'>
 }
 
 function reuseStoredDecision(store: PullRequestTriageControllerOptions['store'], repository: RepositoryMapping, subject: GitHubPullRequestItem): PullRequestTriageDecision | null {
   const stored = store.getLatestPullRequestTriageRun(repository.github, subject.number, subject.headSha)
   if (stored === null || stored.outcome === 'ReviewRequiredAfterFailure')
     return null
+  // A completed Review for this exact head outranks the stored skip: the
+  // manual label overrode the decision, the Review answered, and re-settling
+  // a skip would replace its verdict on GitHub. Reuse reads as Required.
+  if (stored.outcome === 'ReviewSkipped'
+    && store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current') {
+    return { _tag: 'Required', reason: 'rule: this head commit already has a Review.', source: 'reuse' }
+  }
   // Rows recorded before the prefix contract were all model decisions.
   const reason = /^(?:rule|model): /.test(stored.reason) ? stored.reason : `model: ${stored.reason}`
   return stored.outcome === 'ReviewSkipped'
@@ -139,6 +146,10 @@ function reuseStoredDecision(store: PullRequestTriageControllerOptions['store'],
  * The classification question for a prose-only pull request.
  *
  * Exported so tests can assert its contract without the service.
+ */
+/**
+ * Option order affects the answer distribution, so the criteria order is part
+ * of the measured contract: reorder only with a fresh evaluate-triage run.
  */
 export function proseOnlyQuestions() {
   return {
@@ -152,7 +163,7 @@ export function proseOnlyQuestions() {
   }
 }
 
-function classificationDecision(input: {
+export function classificationDecision(input: {
   classification: ClassificationSource
   subject: GitHubPullRequestItem
   changedFiles: string[]
@@ -238,8 +249,12 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       if (decision._tag !== 'Skipped')
         return ok(undefined)
 
+      // The comment body carries the decision's own stored time, never the
+      // clock of this poll, so a retried settle writes the identical body and
+      // GitHub confirms it without a publish.
+      const stored = options.store.getLatestPullRequestTriageRun(repository.github, subject.number, subject.headSha)
       const result: PullRequestTriageResult = { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: decision.reason, source: decision.source }
-      const body = reviewSkippedComment(subject.headSha, subject.baseSha, result, options.now().toISOString())
+      const body = reviewSkippedComment(subject.headSha, subject.baseSha, result, stored?.completedAt ?? options.now().toISOString())
       const posted = await options.github.upsertReviewStatus(repository, subject.number, null, body, false, signal)
       if (posted._tag === 'Err')
         return posted

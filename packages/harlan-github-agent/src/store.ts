@@ -4401,12 +4401,19 @@ function insertTriageRun(
   at: string,
 ): void {
   const contentDigest = digest(JSON.stringify({ subjectId, revisionId, headSha, outcome: outcome.tag }))
+  // A later successful decision replaces an earlier failure row, so reuse
+  // converges instead of re-asking the classification every poll. A failure
+  // never replaces anything: the first non-failure decision stays.
   database.prepare(`
     INSERT INTO pull_request_triage_runs (
       task_id, subject_id, revision_id, head_sha, started_at, completed_at,
       outcome_tag, reason, content_digest
     ) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(subject_id, revision_id) DO NOTHING
+    ON CONFLICT(subject_id, revision_id) DO UPDATE SET
+      outcome_tag = excluded.outcome_tag, reason = excluded.reason,
+      head_sha = excluded.head_sha, started_at = excluded.started_at,
+      completed_at = excluded.completed_at, content_digest = excluded.content_digest
+    WHERE pull_request_triage_runs.outcome_tag = 'ReviewRequiredAfterFailure'
   `).run(subjectId, revisionId, headSha, at, at, outcome.tag, outcome.reason, contentDigest)
   database.prepare(`
     UPDATE stats_coverage SET started_at = MIN(started_at, ?)
@@ -4585,6 +4592,10 @@ function planAdversarialReview(
   // retired any Task this revision queued.
   if (triage !== undefined && subject.kind === 'pull_request') {
     if (triage._tag === 'Skipped' && !manualReviewRequested) {
+      // A Task queued before this decision landed (a failure row recovered,
+      // or a poll that computed no verdict) is retired here: a live-leased
+      // Running Review keeps its turn, everything else waits for nothing.
+      supersedeWorkerTasks(database, subjectId, 'adversarial_review', observedAt, 'Pull request triage skipped Review for this head commit.', undefined, revisionId)
       insertTriageRun(database, subjectId, revisionId, subject.headSha, {
         tag: 'ReviewSkipped',
         reason: triage.reason,
