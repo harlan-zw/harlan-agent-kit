@@ -207,6 +207,11 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       const reused = reuseStoredDecision(options.store, repository, subject)
       if (reused !== null)
         return reused
+      // A completed Review for this exact head outranks a fresh skip too: a
+      // rerun or a recovered failure row must never settle a skip over an
+      // existing Review verdict.
+      if (options.store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current')
+        return { _tag: 'Required', reason: 'rule: this head commit already has a Review.', source: 'reuse' }
 
       const files = await options.github.listPullRequestFiles(repository, subject.number, signal)
       if (files._tag === 'Err') {
