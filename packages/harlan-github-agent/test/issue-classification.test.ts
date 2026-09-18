@@ -166,6 +166,26 @@ describe('issue triage classification in the journal', () => {
     expect(run).toMatchObject({ result: { _tag: 'NEEDS_INFO', difficulty: 2 }, confidence: 0.95 })
   })
 
+  it('records an Agent-kept decision so the same Revision is never asked again', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ issueWork: true })], '2026-09-18T00:00:00.000Z')
+    const issue = issueItem({ author: 'harlan-zw' })
+    const inserted = store.recordObservation({
+      externalId: 'issue-agent-kept',
+      observedAt: '2026-09-18T00:01:00.000Z',
+      source: 'poll',
+      subject: issue,
+      issueTriage: { _tag: 'AgentTriage', reason: 'The classification left the route to the Agent turn.' },
+    })
+    if (inserted._tag !== 'Inserted')
+      throw new Error('Expected one inserted Revision.')
+
+    const stored = store.getLatestIssueTriageRun(issue.repository, issue.number, inserted.revisionId)
+    expect(stored).toMatchObject({ _tag: 'AgentTriage' })
+    // The Agent-kept Revision still queues its Task.
+    expect(store.claimNextIssueTriageTask('triager-1', '2026-09-18T00:02:00.000Z', 60_000)).not.toBeNull()
+  })
+
   it('queues the triage Task for an Agent decision', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({ issueWork: true })], '2026-09-18T00:00:00.000Z')
@@ -182,6 +202,14 @@ describe('issue triage classification in the journal', () => {
 })
 
 describe('issueRouteQuestions', () => {
+  it('keeps its option order stable, because order moves the distribution', () => {
+    expect(Object.keys(issueRouteQuestions().route.criteria)).toEqual([
+      'NEEDS_INFO',
+      'WAIT_TO_IMPLEMENT',
+      'AGENT_TRIAGE',
+    ])
+  })
+
   it('offers the three routes with an untrusted-state note', () => {
     const questions = issueRouteQuestions()
     expect(questions.route.criteria).toEqual({

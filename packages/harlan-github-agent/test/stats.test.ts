@@ -166,6 +166,32 @@ describe('pull request triage Stats', () => {
       completedAt: '2026-08-02T00:00:00.000Z',
     })
 
+    // A failure row converges: a later successful decision replaces it, so
+    // reuse works and the classification is not re-asked every poll.
+    const failedFirst = createStore()
+    failedFirst.syncRepositories([repositoryMapping()], '2026-09-01T00:00:00.000Z')
+    const failing = pullRequestItem({ mergeState: 'clean' })
+    const failureRevision = failedFirst.recordObservation({
+      externalId: 'convergence-failure',
+      observedAt: '2026-09-02T00:00:00.000Z',
+      source: 'poll',
+      subject: failing,
+      pullRequestTriage: { _tag: 'Failed', reason: 'model: the classification service failed: down' },
+    })
+    if (failureRevision._tag !== 'Inserted')
+      throw new Error('Expected the failure Revision.')
+    expect(failedFirst.getLatestPullRequestTriageRun(failing.repository, failing.number, failing.headSha)).toMatchObject({ outcome: 'ReviewRequiredAfterFailure' })
+
+    failedFirst.recordObservation({
+      externalId: 'convergence-recovery',
+      observedAt: '2026-09-02T00:05:00.000Z',
+      source: 'poll',
+      subject: failing,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' },
+    })
+    expect(failedFirst.getLatestPullRequestTriageRun(failing.repository, failing.number, failing.headSha)).toMatchObject({ outcome: 'ReviewSkipped' })
+    expect(failedFirst.claimNextAdversarialReviewTask('reviewer-1', '2026-09-02T00:06:00.000Z', 60_000)).toBeNull()
+
     // The manual Review label overrides the stored skip: the decision queues
     // the Review Task the label asks for.
     const overridden = store.recordObservation({
