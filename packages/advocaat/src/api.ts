@@ -267,15 +267,32 @@ function within(list: unknown, min: number, max: number) {
   return Array.isArray(list) && list.length >= min && list.length <= max
 }
 
-// Cloudflare answers REST calls with `{ success, errors, result }` on failure
-// and sometimes wraps success. Jev itself answers with the System One result.
+// Cloudflare answers REST calls with `{ success, errors, result }` and, on
+// `/ai/run`, wraps the model answer once more inside `{ state, result,
+// gatewayMetadata }`. Whatever shape arrives, the System One result with its
+// `answers` must come out, or the call failed.
 function unwrap(parsed: unknown, res: Response): unknown {
-  if (typeof parsed !== 'object' || parsed === null || !('success' in parsed))
-    return parsed
-  const envelope = parsed as { success: boolean, errors?: unknown, result?: unknown }
-  if (!envelope.success)
-    throw new APIError(res.status, envelope.errors ?? parsed, res.headers.get('cf-ray') ?? '')
-  return 'result' in envelope ? envelope.result : parsed
+  let value = parsed
+  if (isEnvelope(value)) {
+    const envelope = value as { success: boolean, errors?: unknown, result?: unknown }
+    if (!envelope.success)
+      throw new APIError(res.status, envelope.errors ?? parsed, res.headers.get('cf-ray') ?? '')
+    value = envelope.result ?? parsed
+  }
+  // `/ai/run` wraps the model answer once more: `{ state, result, gatewayMetadata }`.
+  if (isRunWrapper(value))
+    value = (value as { result: unknown }).result
+  if (typeof value !== 'object' || value === null || !('answers' in value))
+    throw new APIError(res.status, parsed, res.headers.get('cf-ray') ?? '')
+  return value
+}
+
+function isEnvelope(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && 'success' in value
+}
+
+function isRunWrapper(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && 'state' in value && 'result' in value
 }
 
 function backoffMilliseconds(res: Response, attempted: number): number {

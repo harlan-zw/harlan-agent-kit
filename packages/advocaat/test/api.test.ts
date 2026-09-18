@@ -90,6 +90,48 @@ describe('jev api', () => {
     expect(result.model).toBe('jev-1.13.0')
   })
 
+  it('unwraps the double /ai/run envelope observed live', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({
+        result: {
+          state: 'Completed',
+          result: {
+            model: 'jev-1.13.0',
+            answers: { q: { type: 'noul', noul: 0.95 } },
+            usage: { input_tokens: 396, output_tokens: 53 },
+          },
+          gatewayMetadata: { keySource: 'Unified' },
+        },
+        success: true,
+        errors: [],
+        messages: [],
+      }),
+    })
+
+    const result = await client.systemOne({ state: null, questions: { q: noul('Is this urgent?') } })
+
+    expect(result).toEqual({
+      model: 'jev-1.13.0',
+      answers: { q: { type: 'noul', noul: 0.95 } },
+      usage: { input_tokens: 396, output_tokens: 53 },
+    })
+  })
+
+  it('fails a 2xx response whose body carries no answers', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({ success: true, result: { state: 'Completed' } }),
+    })
+
+    const failure = await client.systemOne({ state: null, questions: { q: noul() } }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(APIError)
+    expect(failure.status).toBe(200)
+  })
+
   it('throws APIError when Cloudflare marks the call failed', async () => {
     const client = jev({
       accountId: 'acc-1',
