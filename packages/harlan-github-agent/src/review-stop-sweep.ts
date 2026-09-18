@@ -92,7 +92,7 @@ ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal
 
 The automated review stopped. Reason: ${cleanLine(review.reason)}
 
-Push a new commit to start a new review. To review this commit again, comment \`/harlan-agent rerun\`.`
+Push a new commit to start a new review. To review this commit again, comment \`@harlan-agent rerun\`.`
 }
 
 /**

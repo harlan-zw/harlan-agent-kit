@@ -257,7 +257,7 @@ Before trusting a locally inferred close, read that exact pull request from GitH
 
 Treat trusted marked comments as status only. Complete queued Review only when stored Review evidence matches the current head commit, target branch, and repository policy. If Harlan requests a rerun, dispatch fresh Review. Use local Task ownership to decide whether an Agent still runs.
 
-Allow Harlan to rerun the current head commit from the dashboard or with the exact pull request comment `/harlan-agent rerun`. GitHub does not autocomplete regular GitHub Apps as native agents. Reject GitHub rerun commands from every other author. Store the command identity before queueing work. Repeated polls must not queue it twice.
+Allow Harlan to rerun the current head commit from the dashboard or with the exact pull request comment `@harlan-agent rerun`. The App bot's own logins and the slash form `/harlan-agent rerun` also queue it, because GitHub's mention picker does not offer regular GitHub App bots the way it offers `@claude` or `@coderabbitai`; `@harlan-agent` is an Organization that authenticates nothing and exists as the summon handle. Reject GitHub rerun commands from every other author. Store the command identity before queueing work. Repeated polls must not queue it twice.
 
 If GitHub closes the pull request unmerged, revoke its running task. Stop the agent within five seconds.
 
