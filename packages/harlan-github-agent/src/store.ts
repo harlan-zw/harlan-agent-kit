@@ -4392,11 +4392,17 @@ function insertTriageRun(
   headSha: string,
   outcome: { tag: PullRequestTriageStatsOutcome, reason: string },
   at: string,
+  /** A manual override replaces a stored skip: the person outranks the model. */
+  override = false,
 ): void {
   const contentDigest = digest(JSON.stringify({ subjectId, revisionId, headSha, outcome: outcome.tag }))
   // A later successful decision replaces an earlier failure row, so reuse
   // converges instead of re-asking the classification every poll. A failure
-  // never replaces anything: the first non-failure decision stays.
+  // never replaces anything, and neither does a later model decision: the
+  // first non-failure decision stays. Only a manual override replaces a
+  // skip, because the Task it forces would otherwise be silently superseded
+  // by the next poll reusing that skip.
+  const overrideClause = override ? `OR (excluded.outcome_tag = 'ReviewRequired' AND pull_request_triage_runs.outcome_tag = 'ReviewSkipped')` : ''
   database.prepare(`
     INSERT INTO pull_request_triage_runs (
       task_id, subject_id, revision_id, head_sha, started_at, completed_at,
@@ -4406,7 +4412,7 @@ function insertTriageRun(
       outcome_tag = excluded.outcome_tag, reason = excluded.reason,
       head_sha = excluded.head_sha, started_at = excluded.started_at,
       completed_at = excluded.completed_at, content_digest = excluded.content_digest
-    WHERE pull_request_triage_runs.outcome_tag = 'ReviewRequiredAfterFailure'
+    WHERE pull_request_triage_runs.outcome_tag = 'ReviewRequiredAfterFailure' ${overrideClause}
   `).run(subjectId, revisionId, headSha, at, at, outcome.tag, outcome.reason, contentDigest)
   database.prepare(`
     UPDATE stats_coverage SET started_at = MIN(started_at, ?)
@@ -4552,7 +4558,7 @@ function planAdversarialReview(
     insertTriageRun(database, subjectId, revisionId, subject.headSha, {
       tag: triage._tag === 'Failed' ? 'ReviewRequiredAfterFailure' : 'ReviewRequired',
       reason: triage._tag === 'RequiredOverride' ? PULL_REQUEST_TRIAGE_OVERRIDE_REASON : triage.reason,
-    }, observedAt)
+    }, observedAt, triage._tag === 'RequiredOverride')
   }
   // Review Tasks follow the head commit, so one Revision can hold several.
   // The live one answers, then the last one that ran.
