@@ -515,8 +515,12 @@ export async function classifyCheckFailureWithResidual(input: {
   // The boundary trust ends here: an answer that is not a typed choice with
   // a numeric confidence reads as no answer, never as a verdict.
   const answer = result.value.answers.cause
-  if (answer === undefined || answer.type !== 'choice' || typeof answer.choice !== 'string' || typeof answer.confidence !== 'number')
+  if (
+    answer === undefined || answer.type !== 'choice' || typeof answer.choice !== 'string'
+    || !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1
+  ) {
     return classified
+  }
   const confidence = Math.round(answer.confidence * 100) / 100
   if (answer.choice !== 'Infrastructure' || confidence < CHECK_INFRASTRUCTURE_CONFIDENCE_FLOOR)
     return classified
