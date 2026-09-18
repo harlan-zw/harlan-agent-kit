@@ -1109,8 +1109,11 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     /** The Issue triage classification decision computed for this observation, when one was. */
     issueTriage?: IssueClassificationDecision
   }) => RecordObservationResult
-  /** The changed files recorded for one Revision at observation time, or null when none were. */
-  getRevisionFiles: (repository: string, pullRequestNumber: number, revisionId: string) => PullRequestFile[] | null
+  /**
+   * The changed files recorded for one Revision at observation time, with the
+   * head they were read for, or null when none were.
+   */
+  getRevisionFiles: (repository: string, pullRequestNumber: number, revisionId: string) => { files: PullRequestFile[], headSha: string } | null
   /** The routed Issue triage decision recorded for one Revision, or null when none was. */
   getLatestIssueTriageRun: (repository: string, issueNumber: number, revisionId: string) => StoredIssueTriageRun | null
   /** True when an Agent triage Task already answered this Revision, so no classification is needed. */
@@ -8140,21 +8143,22 @@ export function openJournalStore(
 
   const getRevisionFiles: JournalStore['getRevisionFiles'] = (repository, pullRequestNumber, revisionId) => {
     const row = database.prepare(`
-      SELECT revision_files.files_json
+      SELECT revision_files.files_json, revision_files.head_sha
       FROM revision_files
       JOIN subjects ON subjects.id = revision_files.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
         AND revision_files.revision_id = ?
-    `).get(repository, pullRequestNumber, revisionId) as { files_json: string } | undefined
+    `).get(repository, pullRequestNumber, revisionId) as { files_json: string, head_sha: string } | undefined
     if (row === undefined)
       return null
     try {
-      return parseRevisionFiles(row.files_json)
-    }
-    catch {
+      const files = parseRevisionFiles(row.files_json)
       // A row that no longer parses reads as absent, so the caller refetches
       // from GitHub rather than trusting a broken list.
+      return files === null ? null : { files, headSha: row.head_sha }
+    }
+    catch {
       return null
     }
   }
