@@ -86,13 +86,27 @@ describe('check failure residual classification', () => {
   })
 
   it('reads a malformed answer as no answer, never as a verdict', async () => {
-    const malformed: ClassificationSource = {
+    const noAnswers: ClassificationSource = {
       classify: <Q extends Questions>() => Promise.resolve({
         _tag: 'Ok' as const,
         value: { model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 0, output_tokens: 0 } } as unknown as SystemOneResult<Q>,
       }),
     }
-    await expect(classifyCheckFailureWithResidual({ signal, classification: malformed })).resolves.toEqual({ _tag: 'Repairable' })
+    await expect(classifyCheckFailureWithResidual({ signal, classification: noAnswers })).resolves.toEqual({ _tag: 'Repairable' })
+
+    // A confidence outside zero to one is not confidence: it must never clear
+    // the infrastructure floor.
+    const outOfRange: ClassificationSource = {
+      classify: <Q extends Questions>() => Promise.resolve({
+        _tag: 'Ok' as const,
+        value: {
+          model: 'jev-1.13.0',
+          answers: { cause: { type: 'choice', choice: 'Infrastructure', confidence: 5, probabilities: {} } },
+          usage: { input_tokens: 0, output_tokens: 0 },
+        } as unknown as SystemOneResult<Q>,
+      }),
+    }
+    await expect(classifyCheckFailureWithResidual({ signal, classification: outOfRange })).resolves.toEqual({ _tag: 'Repairable' })
   })
 
   it('names the check and both owners in the question', () => {
