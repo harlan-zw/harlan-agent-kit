@@ -71,8 +71,15 @@ describe('summariseBand', () => {
   ]
 
   it('counts agreement, extra Reviews, and skips of read Reviews per band', () => {
-    expect(summariseBand(rows, 0.5)).toEqual({ band: 0.5, agreed: 3, unavailable: 0, reviewsAdded: 0, skipsAdded: 1, skipPrecision: 0.5 })
-    expect(summariseBand(rows, 0.9)).toEqual({ band: 0.9, agreed: 4, unavailable: 0, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
+    expect(summariseBand(rows, 0.5)).toEqual({ band: 0.5, agreed: 2, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 1, skipPrecision: 0.5 })
+    expect(summariseBand(rows, 0.9)).toEqual({ band: 0.9, agreed: 3, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
+  })
+
+  it('counts a rule-required replay in its own bucket, because the rule can drift', () => {
+    expect(summariseBand([
+      { replay: { _tag: 'RuleRequired' }, stored: 'ReviewRequired' },
+      { replay: { _tag: 'Classified', skip: true, confidence: 0.9 }, stored: 'ReviewSkipped' },
+    ], 0.7)).toEqual({ band: 0.7, agreed: 1, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
   })
 
   it('counts an unavailable replay nowhere, so a broken run cannot inflate agreement', () => {
@@ -80,14 +87,14 @@ describe('summariseBand', () => {
       { replay: { _tag: 'Unavailable' }, stored: 'ReviewSkipped' },
       { replay: { _tag: 'Unavailable' }, stored: 'ReviewRequired' },
       { replay: { _tag: 'Classified', skip: true, confidence: 0.9 }, stored: 'ReviewSkipped' },
-    ], 0.7)).toEqual({ band: 0.7, agreed: 1, unavailable: 2, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
+    ], 0.7)).toEqual({ band: 0.7, agreed: 1, ruleRequired: 0, unavailable: 2, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
   })
 
   it('counts an over-confident skip as an added Review, never a lost one', () => {
     expect(summariseBand([
       { replay: { _tag: 'Classified', skip: true, confidence: 0.99 }, stored: 'ReviewSkipped' },
       { replay: { _tag: 'Classified', skip: false, confidence: 0.6 }, stored: 'ReviewSkipped' },
-    ], 0.7)).toEqual({ band: 0.7, agreed: 1, unavailable: 0, reviewsAdded: 1, skipsAdded: 0, skipPrecision: 1 })
+    ], 0.7)).toEqual({ band: 0.7, agreed: 1, ruleRequired: 0, unavailable: 0, reviewsAdded: 1, skipsAdded: 0, skipPrecision: 1 })
   })
 })
 
