@@ -133,7 +133,10 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   const settleResults = new Map<number, Extract<IssueClassificationDecision, { _tag: 'Routed' }>['result']>()
   if (writesEnabled && dependencies.issueClassification !== undefined) {
     await Promise.all(eligibleItems.map(async (subject) => {
-      if (subject.kind !== 'issue' || subject.state !== 'open' || !repository.issueWork || !repository.enabled || subject.routineTracking)
+      // An external repository is watched, never acted in: its issues carry
+      // no local decision row, so classifying them would publish comments
+      // there and repeat the ask forever.
+      if (subject.kind !== 'issue' || subject.state !== 'open' || !repository.issueWork || !repository.enabled || repository.ownership === 'external' || subject.routineTracking)
         return
       const revisionId = revisionIdFor(subject)
       const stored = dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionId)
