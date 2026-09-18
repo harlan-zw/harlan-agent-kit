@@ -47,8 +47,10 @@ export async function replayTriage(input: TriageReplayInput, classification: Cla
 
 export interface TriageBandSummary {
   band: number
-  /** Replays whose replayed decision equals the stored one. */
+  /** Classified replays whose replayed decision equals the stored one. */
   agreed: number
+  /** Replays the path rule answers. They carry no evidence about the band, because the rule can drift after a decision was stored. */
+  ruleRequired: number
   /** Replays the service could not answer. They carry no evidence either way and count nowhere. */
   unavailable: number
   /** Replays that would Review what the journal skipped. Costs a Review; safe. */
@@ -61,11 +63,14 @@ export interface TriageBandSummary {
 
 /**
  * Applies one skip-confidence band to every classified replay and counts the
- * outcomes. Rule-required and unavailable replays count as agreed: the rule
- * answers them the same way today, and an unavailable service reviews.
+ * outcomes. The band gates skips, and only classified replays can skip, so
+ * rule-required and unavailable replays count in their own buckets: the rule
+ * can drift after a decision was stored, and an unavailable service carries
+ * no evidence at all.
  */
 export function summariseBand(replays: Array<{ replay: TriageReplay, stored: TriageReplayInput['stored'] }>, band: number): TriageBandSummary {
   let agreed = 0
+  let ruleRequired = 0
   let unavailable = 0
   let reviewsAdded = 0
   let skipsAdded = 0
@@ -78,7 +83,7 @@ export function summariseBand(replays: Array<{ replay: TriageReplay, stored: Tri
       continue
     }
     if (replay._tag !== 'Classified') {
-      agreed += 1
+      ruleRequired += 1
       continue
     }
     const skips = replay.skip && replay.confidence >= band
@@ -99,6 +104,7 @@ export function summariseBand(replays: Array<{ replay: TriageReplay, stored: Tri
   return {
     band,
     agreed,
+    ruleRequired,
     unavailable,
     reviewsAdded,
     skipsAdded,
