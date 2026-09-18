@@ -231,8 +231,38 @@ export function jev(options: JevOptions = {}) {
         if (q.type === 'choice' && !within(Object.keys(q.criteria ?? {}), 2, 255))
           throw new TypeError(`Choice question "${name}" needs 2 to 255 options.`)
       }
-      return send(req, init)
+      return send(req, init).then(validate(req.questions))
     },
+  }
+
+  // Every answer is parsed against its question: a choice names one of its
+  // own criteria with a finite confidence in zero to one, a score and a noul
+  // are finite numbers. Anything else failed, so no caller can crash on, or
+  // act on, an answer it trusted.
+  function validate<Q extends Questions>(questions: Q): (result: SystemOneResult<Q>) => SystemOneResult<Q> {
+    return (result) => {
+      const answers = result.answers as Record<string, unknown>
+      for (const [name, question] of Object.entries(questions)) {
+        const answer = answers[name]
+        if (typeof answer !== 'object' || answer === null || typeof (answer as { type?: unknown }).type !== 'string')
+          throw new APIError(200, { error: `Answer "${name}" is not a typed answer.` })
+        if (question.type === 'choice') {
+          const { choice, confidence } = answer as { choice?: unknown, confidence?: unknown }
+          if (typeof choice !== 'string' || !(choice in question.criteria))
+            throw new APIError(200, { error: `Answer "${name}" does not name one of its criteria.` })
+          if (!Number.isFinite(confidence) || (confidence as number) < 0 || (confidence as number) > 1)
+            throw new APIError(200, { error: `Answer "${name}" carries no confidence between zero and one.` })
+        }
+        else if (question.type === 'score') {
+          if (!Number.isFinite((answer as { score?: unknown }).score))
+            throw new APIError(200, { error: `Answer "${name}" carries no numeric score.` })
+        }
+        else if (!Number.isFinite((answer as { noul?: unknown }).noul)) {
+          throw new APIError(200, { error: `Answer "${name}" carries no numeric probability.` })
+        }
+      }
+      return result
+    }
   }
 
   async function send<Q extends Questions>(req: SystemOneRequest<Q>, init: RequestOptions): Promise<SystemOneResult<Q>> {

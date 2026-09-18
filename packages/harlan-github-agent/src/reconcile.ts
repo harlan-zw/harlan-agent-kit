@@ -214,12 +214,12 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
         return Promise.resolve(ok(undefined))
       return dependencies.pullRequestTriage?.settle(repository, subject, verdict.decision, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
     }))
+    // A failed settle records the failure and lets the pass continue: the
+    // decision row landed with the observation, the settle retries from it on
+    // the next poll, and Approvals and Auto merge are independent of it.
     const failedSettle = settled.find(result => result._tag === 'Err')
-    if (failedSettle?._tag === 'Err') {
-      if (dependencies.signal?.aborted !== true)
-        dependencies.store.recordPollFailure(repository.github, observedAt, failedSettle.error)
-      return err({ repository: repository.github, message: failedSettle.error })
-    }
+    if (failedSettle?._tag === 'Err' && dependencies.signal?.aborted !== true)
+      dependencies.store.recordPollFailure(repository.github, observedAt, failedSettle.error)
   }
 
   // A routed Issue triage decision publishes its comment and label after the
