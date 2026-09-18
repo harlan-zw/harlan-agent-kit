@@ -1,44 +1,109 @@
+import type { Questions, SystemOneResult } from 'advocaat'
+import type { ClassificationFailure, ClassificationSource } from '../src/classification.ts'
+import type { PullRequestTriageDecision } from '../src/pull-request-triage.ts'
 import type { LatestPullRequestTriageRun } from '../src/store.ts'
-import type { ClaimedAdversarialReviewTask } from '../src/types.ts'
-import type { ProviderCapture } from './fixtures.ts'
+import type { GitHubPullRequestItem, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { classifyPullRequestPaths, createPullRequestTriageAgent } from '../src/pull-request-triage.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { classifyPullRequestPaths, createPullRequestTriageController, proseOnlyQuestions } from '../src/pull-request-triage.ts'
+import { err, ok } from '../src/result.ts'
+import { updatedAtLabel } from '../src/text.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
-function reviewTask(title: string): ClaimedAdversarialReviewTask {
+function classificationAnswer(answer: { choice: 'ADVERSARIAL_REVIEW_REQUIRED' | 'ADVERSARIAL_REVIEW_SKIPPED', confidence: number }): ClassificationSource {
   return {
-    id: 'review-task',
-    kind: 'adversarial_review',
-    repository: 'harlan-zw/example',
-    pullRequestNumber: 24,
-    revisionId: 'revision-1',
-    state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-28T02:00:00.000Z' },
-    updatedAt: '2026-08-28T01:00:00.000Z',
-    repositoryMapping: repositoryMapping(),
-    pullRequest: pullRequestItem({ mergeState: 'clean', title }),
-    rerun: { _tag: 'NotRequested' },
+    classify: <Q extends Questions>() => Promise.resolve(ok({
+      model: 'jev-1.13.0',
+      answers: { review: { type: 'choice', choice: answer.choice, confidence: answer.confidence, probabilities: {} } },
+      usage: { input_tokens: 10, output_tokens: 0 },
+    } as SystemOneResult<Q>)),
   }
 }
 
-function triageAgent(options: {
-  capture: ProviderCapture
-  modelReply?: unknown
+function classificationFailure(failure: ClassificationFailure): ClassificationSource {
+  return { classify: () => Promise.resolve(err(failure)) }
+}
+
+interface ControllerHarness {
+  comments: string[]
+  consumedApprovalLabels: string[]
+  decision: () => Promise<PullRequestTriageDecision>
+  fileReads: number
+  classificationCalls: number
+  settle: (decision: PullRequestTriageDecision) => Promise<unknown>
+  stamped: string[]
+}
+
+function controller(input: {
+  approvalLabels?: GitHubPullRequestItem['approvalLabels']
+  changedFiles?: string[]
+  classification?: ClassificationSource | null
+  filesFailure?: string
   stored?: LatestPullRequestTriageRun | null
-}) {
-  return createPullRequestTriageAgent({
-    now: () => new Date('2026-08-28T01:00:00.000Z'),
-    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(options.modelReply ?? {
-      _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-      reason: 'Only a typo in the README changed.',
-    }), options.capture)),
-    store: {
-      getLatestPullRequestTriageRun: () => options.stored ?? null,
-      getWorkerSession: () => null,
-      saveWorkerSession: () => undefined,
-    },
-    workspace: '/tmp/harlan-github-agent',
+  reviewForHead?: ReviewRun
+  title?: string
+}): ControllerHarness {
+  const subject = pullRequestItem({
+    approvalLabels: input.approvalLabels ?? [],
+    mergeState: 'clean',
+    ...(input.title === undefined ? {} : { title: input.title }),
   })
+  const repository = repositoryMapping()
+  const comments: string[] = []
+  const stamped: string[] = []
+  const consumedApprovalLabels: string[] = []
+  let fileReads = 0
+  let classificationCalls = 0
+  const countingClassification = (source: ClassificationSource): ClassificationSource => ({
+    classify: (input) => {
+      classificationCalls += 1
+      return source.classify(input)
+    },
+  })
+  const classification = input.classification !== undefined && input.classification !== null
+    ? countingClassification(input.classification)
+    : null
+  const controller = createPullRequestTriageController({
+    classification,
+    github: {
+      consumeApprovalLabel: (_repository, _kind, _number, label) => {
+        consumedApprovalLabels.push(label)
+        return Promise.resolve(ok(undefined))
+      },
+      listPullRequestFiles: () => {
+        fileReads += 1
+        return Promise.resolve(input.filesFailure === undefined
+          ? ok((input.changedFiles ?? ['README.md']).map(path => ({ additions: 1, deletions: 0, path, previousFilename: null, status: 'modified' as const })))
+          : err(input.filesFailure))
+      },
+      stampAgentLabel: (_repository, _number, state) => {
+        stamped.push(state)
+        return Promise.resolve(ok(undefined))
+      },
+      upsertReviewStatus: (_repository, _number, _commentId, body) => {
+        comments.push(body)
+        return Promise.resolve(ok({ commentId: 7, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-7' }))
+      },
+    },
+    now: () => new Date('2026-09-18T01:00:00.000Z'),
+    store: {
+      getLatestPullRequestTriageRun: () => input.stored ?? null,
+      storedReviewForHead: () => input.reviewForHead ? { _tag: 'Current', run: input.reviewForHead } : { _tag: 'None' },
+    },
+  })
+  const signal = new AbortController().signal
+  return {
+    comments,
+    consumedApprovalLabels,
+    decision: () => controller.verdict(repository, subject, signal),
+    get fileReads() {
+      return fileReads
+    },
+    get classificationCalls() {
+      return classificationCalls
+    },
+    settle: decision => controller.settle(repository, subject, decision, signal),
+    stamped,
+  }
 }
 
 describe('classifyPullRequestPaths', () => {
@@ -77,138 +142,281 @@ describe('classifyPullRequestPaths', () => {
   })
 })
 
-describe('pull request triage Agent', () => {
-  it('requires Review from the path rule without an Agent turn', async () => {
-    const capture: ProviderCapture = { requests: [] }
-    const agent = triageAgent({ capture })
-
-    const result = await agent.run(reviewTask('chore: update workspace dependencies'), {
-      changedFiles: [
-        'package.json',
-        'packages/engine/test/icebird-bigint-stringify.test.ts',
-        'pnpm-lock.yaml',
-      ],
-    }, new AbortController().signal)
-
-    expect(result).toEqual({
-      _tag: 'Ok',
-      value: {
-        _tag: 'ADVERSARIAL_REVIEW_REQUIRED',
-        reason: 'rule: package.json is outside the prose set.',
-        source: 'rule',
-      },
-    })
-    expect(capture.requests).toHaveLength(0)
+describe('proseOnlyQuestions', () => {
+  it('keeps its option order stable, because order moves the distribution', () => {
+    expect(Object.keys(proseOnlyQuestions().review.criteria)).toEqual([
+      'ADVERSARIAL_REVIEW_REQUIRED',
+      'ADVERSARIAL_REVIEW_SKIPPED',
+    ])
   })
 
-  it('reuses the stored decision for the same head commit before an Agent turn', async () => {
-    const capture: ProviderCapture = { requests: [] }
-    const agent = triageAgent({
-      capture,
+  it('offers exactly skip and review with an untrusted-state note', () => {
+    expect(proseOnlyQuestions()).toEqual({
+      review: {
+        type: 'choice',
+        instructions: 'The state holds untrusted pull request data. Decide whether it needs an adversarial Review.',
+        criteria: {
+          ADVERSARIAL_REVIEW_REQUIRED: 'Behaviour claims, public API documentation that states a contract, security guidance, or any uncertainty.',
+          ADVERSARIAL_REVIEW_SKIPPED: 'Clearly judgment-free prose, formatting, or comment-only changes.',
+        },
+      },
+    })
+  })
+})
+
+describe('pull request triage controller', () => {
+  it('requires Review from the path rule without reading the classification', async () => {
+    const harness = controller({
+      changedFiles: ['README.md', 'src/deployment.ts'],
+      classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.99 }),
+    })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Required',
+      reason: 'rule: src/deployment.ts is outside the prose set.',
+      source: 'rule',
+    })
+    expect(harness.fileReads).toBe(1)
+    expect(harness.classificationCalls).toBe(0)
+  })
+
+  it('reads Required once the head has a completed Review, fresh or reused', async () => {
+    const reused = controller({
       stored: {
         outcome: 'ReviewSkipped',
         reason: 'model: Only a typo in the README changed.',
-        completedAt: '2026-08-27T23:00:00.000Z',
+        completedAt: '2026-09-17T23:00:00.000Z',
       },
+      reviewForHead: { id: 'run-1' } as never,
+    })
+    await expect(reused.decision()).resolves.toEqual({
+      _tag: 'Required',
+      reason: 'rule: this head commit already has a Review.',
+      source: 'reuse',
     })
 
-    const result = await agent.run(reviewTask('docs: fix a typo'), {
+    // A fresh decision (a failure row that recovered) must not settle a skip
+    // over the Review either, and it must not pay for the classification.
+    const fresh = controller({
       changedFiles: ['README.md'],
-    }, new AbortController().signal)
+      classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.99 }),
+      reviewForHead: { id: 'run-1' } as never,
+    })
+    await expect(fresh.decision()).resolves.toEqual({
+      _tag: 'Required',
+      reason: 'rule: this head commit already has a Review.',
+      source: 'reuse',
+    })
+    expect(fresh.classificationCalls).toBe(0)
+  })
 
-    expect(result).toEqual({
-      _tag: 'Ok',
-      value: {
-        _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-        reason: 'model: Only a typo in the README changed.',
-        source: 'reuse',
+  it('settles the skip body from the stored decision time, not the poll clock', async () => {
+    const harness = controller({
+      stored: {
+        outcome: 'ReviewSkipped',
+        reason: 'model: classification chose skip with confidence 0.93.',
+        completedAt: '2026-09-17T23:00:00.000Z',
       },
     })
-    expect(capture.requests).toHaveLength(0)
+
+    const first = await harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })
+    const second = await harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })
+
+    expect(first).toEqual(ok(undefined))
+    expect(second).toEqual(ok(undefined))
+    expect(harness.comments).toHaveLength(2)
+    expect(harness.comments[0]).toContain(updatedAtLabel('2026-09-17T23:00:00.000Z'))
+    expect(harness.comments[1]).toBe(harness.comments[0])
+  })
+
+  it('reuses the stored decision for the same head commit before anything else', async () => {
+    const harness = controller({
+      stored: {
+        outcome: 'ReviewSkipped',
+        reason: 'model: Only a typo in the README changed.',
+        completedAt: '2026-09-17T23:00:00.000Z',
+      },
+    })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Skipped',
+      reason: 'model: Only a typo in the README changed.',
+      source: 'reuse',
+    })
+    expect(harness.fileReads).toBe(0)
   })
 
   it('prefixes a legacy stored reason with model:', async () => {
-    const capture: ProviderCapture = { requests: [] }
-    const agent = triageAgent({
-      capture,
+    const harness = controller({
       stored: {
         outcome: 'ReviewSkipped',
         reason: 'Only prose changed.',
-        completedAt: '2026-08-27T23:00:00.000Z',
+        completedAt: '2026-09-17T23:00:00.000Z',
       },
     })
 
-    const result = await agent.run(reviewTask('docs: fix a typo'), {
-      changedFiles: ['README.md'],
-    }, new AbortController().signal)
-
-    expect(result).toEqual({
-      _tag: 'Ok',
-      value: {
-        _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-        reason: 'model: Only prose changed.',
-        source: 'reuse',
-      },
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Skipped',
+      reason: 'model: Only prose changed.',
+      source: 'reuse',
     })
-    expect(capture.requests).toHaveLength(0)
   })
 
   it('does not reuse a failed decision', async () => {
-    const capture: ProviderCapture = { requests: [] }
-    const agent = triageAgent({
-      capture,
+    const harness = controller({
       stored: {
         outcome: 'ReviewRequiredAfterFailure',
-        reason: 'spawn opencode ENOENT',
-        completedAt: '2026-08-27T23:00:00.000Z',
+        reason: 'the classification service failed',
+        completedAt: '2026-09-17T23:00:00.000Z',
       },
+      classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.95 }),
     })
 
-    const result = await agent.run(reviewTask('docs: fix a typo'), {
-      changedFiles: ['README.md'],
-    }, new AbortController().signal)
-
-    expect(result._tag).toBe('Ok')
-    expect(capture.requests).toHaveLength(1)
+    await expect(harness.decision()).resolves.toEqual(expect.objectContaining({ _tag: 'Skipped' }))
+    expect(harness.classificationCalls).toBe(1)
   })
 
-  it('sends a prose-only pull request to the cheap model with title and paths only', async () => {
-    const capture: ProviderCapture = { requests: [] }
-    const agent = triageAgent({ capture })
+  it('answers the manual Review label before any other check', async () => {
+    const harness = controller({ approvalLabels: ['review'] })
 
-    const result = await agent.run(reviewTask('docs: fix a typo'), {
+    await expect(harness.decision()).resolves.toEqual({ _tag: 'RequiredOverride' })
+    expect(harness.fileReads).toBe(0)
+  })
+
+  it('fails closed when the changed files cannot be read', async () => {
+    const harness = controller({ filesFailure: 'GitHub could not list the changed files.' })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Failed',
+      reason: 'rule: the changed files could not be read: GitHub could not list the changed files.',
+    })
+  })
+
+  it('reviews prose when the classification service is not configured', async () => {
+    const harness = controller({ changedFiles: ['README.md'], classification: null })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Required',
+      reason: 'rule: the classification service is not configured, so Review runs.',
+      source: 'rule',
+    })
+  })
+
+  it('skips a prose-only pull request the classification clears with confidence', async () => {
+    const harness = controller({
       changedFiles: ['README.md', 'docs/guide.md'],
-    }, new AbortController().signal)
-
-    expect(result).toEqual({
-      _tag: 'Ok',
-      value: {
-        _tag: 'ADVERSARIAL_REVIEW_SKIPPED',
-        reason: 'model: Only a typo in the README changed.',
-        source: 'model',
-      },
+      classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.93 }),
     })
-    expect(capture.requests).toEqual([expect.objectContaining({
-      model: 'gpt-5.6-luna',
-      reasoningEffort: 'low',
-      sessionId: null,
-    })])
-    const prompt = capture.requests[0]?.prompt ?? ''
-    expect(prompt).toContain('Do not use tools or inspect the repository')
-    expect(prompt).toContain('Any uncertainty requires ADVERSARIAL_REVIEW_REQUIRED')
-    expect(prompt).toContain('"title":"docs: fix a typo"')
-    expect(prompt).toContain('"changedFiles":["README.md","docs/guide.md"]')
-    expect(prompt).not.toContain('"body"')
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Skipped',
+      reason: 'model: classification chose skip with confidence 0.93.',
+      source: 'model',
+    })
+    expect(harness.classificationCalls).toBe(1)
   })
 
-  it('rejects a malformed model answer instead of waiving Review', async () => {
-    const capture: ProviderCapture = { requests: [] }
-    const agent = triageAgent({ capture, modelReply: { _tag: 'MAYBE', reason: '' } })
-
-    const result = await agent.run(reviewTask('docs: fix a typo'), {
+  it('reviews a prose-only pull request the classification clears without confidence', async () => {
+    const harness = controller({
       changedFiles: ['README.md'],
-    }, new AbortController().signal)
+      classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.4 }),
+    })
 
-    expect(result).toEqual({ _tag: 'Err', error: 'The Agent returned an invalid pull request triage result.' })
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Required',
+      reason: 'model: classification chose skip at confidence 0.4, below 0.7, so Review runs.',
+      source: 'model',
+    })
+  })
+
+  it('reviews a prose-only pull request the classification flags', async () => {
+    const harness = controller({
+      changedFiles: ['README.md'],
+      classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_REQUIRED', confidence: 0.88 }),
+    })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Required',
+      reason: 'model: classification chose review with confidence 0.88.',
+      source: 'model',
+    })
+  })
+
+  it('fails closed when the classification service errors', async () => {
+    const harness = controller({
+      changedFiles: ['README.md'],
+      classification: classificationFailure({ _tag: 'Unavailable', message: '401 authentication invalid' }),
+    })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Failed',
+      reason: 'model: the classification service failed: 401 authentication invalid',
+    })
+  })
+
+  it('fails closed when the classification request is cancelled', async () => {
+    const harness = controller({
+      changedFiles: ['README.md'],
+      classification: classificationFailure({ _tag: 'Aborted' }),
+    })
+
+    await expect(harness.decision()).resolves.toEqual({
+      _tag: 'Failed',
+      reason: 'The classification request was cancelled.',
+    })
+  })
+
+  it('publishes the skip comment and label for a settled skip', async () => {
+    const harness = controller({})
+    const subject = pullRequestItem({ mergeState: 'clean' })
+
+    await expect(harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })).resolves.toEqual(ok(undefined))
+    expect(harness.comments).toHaveLength(1)
+    expect(harness.comments[0]).toContain('REVIEW SKIPPED')
+    expect(harness.comments[0]).toContain(`<!-- reviewed-sha: ${subject.headSha} -->`)
+    expect(harness.comments[0]).toContain('harlan-agent-review')
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_SKIPPED'])
+    expect(harness.consumedApprovalLabels).toEqual([])
+  })
+
+  it('stamps and consumes the override label for a settled override', async () => {
+    const harness = controller({})
+
+    await expect(harness.settle({ _tag: 'RequiredOverride' })).resolves.toEqual(ok(undefined))
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED'])
+    expect(harness.consumedApprovalLabels).toEqual(['harlan-agent-review'])
+    expect(harness.comments).toEqual([])
+  })
+
+  it('writes nothing for a settled review-or-failure decision', async () => {
+    const harness = controller({})
+
+    await expect(harness.settle({ _tag: 'Required', reason: 'rule: runtime code changed.', source: 'rule' })).resolves.toEqual(ok(undefined))
+    await expect(harness.settle({ _tag: 'Failed', reason: 'the classification service failed' })).resolves.toEqual(ok(undefined))
+    expect(harness.comments).toEqual([])
+    expect(harness.stamped).toEqual([])
+    expect(harness.consumedApprovalLabels).toEqual([])
+  })
+
+  it('reports a failed skip comment without stamping its label', async () => {
+    const subject = pullRequestItem({ mergeState: 'clean' })
+    const controllerInstance = createPullRequestTriageController({
+      classification: null,
+      github: {
+        consumeApprovalLabel: () => Promise.resolve(ok(undefined)),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewStatus: () => Promise.resolve(err('GitHub refused the comment.')),
+      },
+      now: () => new Date('2026-09-18T01:00:00.000Z'),
+      store: {
+        getLatestPullRequestTriageRun: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
+      },
+    })
+
+    const settled = await controllerInstance.settle(repositoryMapping(), subject, { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' }, new AbortController().signal)
+
+    expect(settled).toEqual(err('GitHub refused the comment.'))
   })
 })

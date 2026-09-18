@@ -31,6 +31,13 @@ const { connection: host, history: hostHistory } = useHogwildStatus()
 
 const capacity = computed(() => snapshot.value.providerCapacities.map(capacityRow))
 const circuits = computed(() => activeProviderCircuits(snapshot.value.providerCircuits).flatMap(circuit => circuitNotice(circuit) ?? []))
+const triageSummary = computed(() => {
+  const decisions = snapshot.value.triageDecisions
+  const parts = [`${decisions.reviewSkipped} skipped`, `${decisions.reviewRequired} sent to Review`]
+  if (decisions.couldNotDecide > 0)
+    parts.push(`${decisions.couldNotDecide} could not decide`)
+  return parts.join(', ')
+})
 const update = computed(() => serviceUpdatePresentation(snapshot.value.serviceUpdate))
 const updatePending = computed(() => snapshot.value.restartRequest?._tag === 'Requested' || snapshot.value.restartRequest?._tag === 'Restarting')
 
@@ -339,6 +346,26 @@ function activityLine(item: AgentActivityItem): string {
           {{ notice.text }}<template v-if="notice._tag === 'Open'">
             Retry {{ relativeTime(notice.retryAt) }}.
           </template>
+        </p>
+      </section>
+
+      <section aria-labelledby="system-classification">
+        <h3 id="system-classification" class="field-label flex items-center gap-2">
+          Classification
+          <span class="h-px flex-1 bg-border" aria-hidden="true" />
+        </h3>
+        <div v-if="snapshot.classification !== undefined" class="mt-1 py-2.5">
+          <div class="flex items-baseline justify-between gap-3">
+            <span class="text-sm text-highlighted">Jev</span>
+            <span class="font-mono text-sm text-muted">{{ snapshot.classification.model }}</span>
+          </div>
+          <p class="mt-0.5 text-sm text-muted">
+            Pull request triage decisions via the {{ snapshot.classification.gatewayId }} gateway.
+            Last 24 hours: {{ triageSummary }}.
+          </p>
+        </div>
+        <p v-else class="mt-2 text-sm text-muted">
+          Classification is not configured. Prose-only pull requests get a full Review.
         </p>
       </section>
 

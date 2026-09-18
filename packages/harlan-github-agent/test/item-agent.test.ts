@@ -1,10 +1,8 @@
-import type { RecordPullRequestTriageRunInput } from '../src/stats.ts'
-import type { GitHubPullRequestItem, RecordReviewRunInput } from '../src/types.ts'
+import type { RecordReviewRunInput } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, createAgentRuntimeSource } from '../src/agent-profile.ts'
 import { createIssueTriageWorker, createReviewWorker, issueMovedUnderTriage, reviewSnapshotDigest } from '../src/item-agent.ts'
-import { createPullRequestTriageAgent } from '../src/pull-request-triage.ts'
 import { err, ok } from '../src/result.ts'
 import { agentRuntime, issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
@@ -102,7 +100,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -160,275 +157,6 @@ describe('subject Workers', () => {
     expect(capture.requests[0]?.prompt).toContain('Use pnpm for every package command. Never use npx.')
   })
 
-  /**
-   * One Review worker whose Pull request triage is the real Agent over a stub
-   * provider. `providerReply` is what the provider answers, and the
-   * captured requests say which role asked.
-   */
-  function triagedReviewWorker(input: {
-    approvalLabels?: GitHubPullRequestItem['approvalLabels']
-    changedFiles: string[]
-    providerReply: unknown
-    title: string
-    triageFailure?: string
-    lateApprovalLabels?: GitHubPullRequestItem['approvalLabels']
-    rereadFailure?: string
-  }) {
-    const pullRequest = pullRequestItem({
-      approvalLabels: input.approvalLabels ?? [],
-      mergeState: 'clean',
-      title: input.title,
-    })
-    const capture: ProviderCapture = { requests: [] }
-    const comments: string[] = []
-    const stamped: string[] = []
-    const triageRuns: RecordPullRequestTriageRunInput[] = []
-    const worktrees: string[] = []
-    const consumedApprovalLabels: string[] = []
-    let snapshotReads = 0
-    const replies = Array.isArray(input.providerReply) ? input.providerReply : [input.providerReply]
-    let providerCalls = 0
-    const runtime = agentRuntime(CODEX_AGENT_PROFILE, {
-      name: 'codex',
-      runTurn: (request) => {
-        capture.requests.push(request)
-        const reply = replies[Math.min(providerCalls, replies.length - 1)]
-        providerCalls += 1
-        async function* replay() {
-          yield* turnEvents(reply)
-        }
-        return replay()
-      },
-    })
-    const github: Parameters<typeof createReviewWorker>[0]['github'] = {
-      consumeApprovalLabel: (_repository, _subjectKind, _number, label) => {
-        consumedApprovalLabels.push(label)
-        return Promise.resolve(ok(undefined))
-      },
-      editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
-      ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
-      clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
-      clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
-      listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
-      stampAgentLabel: (_repository, _number, outcome) => {
-        stamped.push(outcome)
-        return Promise.resolve(ok(undefined))
-      },
-      findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
-      getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
-      getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
-      getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
-      listPullRequestFiles: () => Promise.resolve(input.triageFailure === undefined ? ok(input.changedFiles.map(path => ({ additions: 1, deletions: 0, path, previousFilename: null, status: 'modified' as const }))) : err(input.triageFailure)),
-      getPullRequestReviewSnapshot: () => {
-        snapshotReads += 1
-        if (snapshotReads === 2 && input.rereadFailure !== undefined)
-          return Promise.resolve(err(input.rereadFailure))
-        const readPullRequest = snapshotReads === 2 && input.lateApprovalLabels !== undefined
-          ? { ...pullRequest, approvalLabels: input.lateApprovalLabels }
-          : pullRequest
-        return Promise.resolve(ok({
-          baseChecks: { _tag: 'Available', checks: [] },
-          body: 'Pull request body.',
-          checks: { _tag: 'Available', checks: [] },
-          comments: [],
-          priorAutomatedReview: { _tag: 'None' },
-          pullRequest: readPullRequest,
-          requiredChecks: { _tag: 'None' },
-          reviews: [],
-        }))
-      },
-      upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
-      upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
-    }
-    const worker = createReviewWorker({
-      runtime,
-      github,
-      now: () => new Date('2026-08-28T01:00:00.000Z'),
-      preflightRepair: () => Promise.resolve(ok(undefined)),
-      pullRequestTriage: createPullRequestTriageAgent({
-        now: () => new Date('2026-08-28T01:00:00.000Z'),
-        runtime,
-        store: {
-          getLatestPullRequestTriageRun: () => null,
-          getWorkerSession: () => null,
-          saveWorkerSession: () => undefined,
-        },
-        workspace: '/tmp/harlan-github-agent',
-      }),
-      store: {
-        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
-        queueReviewFixTaskForReview: () => { throw new Error('A clean Review must not queue Repair work.') },
-        getRepairedHeadFindings: () => [],
-        getWorkerSession: () => null,
-        storedReviewForHead: () => ({ _tag: 'None' }),
-        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
-        recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: (run) => {
-          triageRuns.push(run)
-          return { _tag: 'Inserted' }
-        },
-        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
-        retireBaselineRepairForReview: () => 0,
-        saveWorkerSession: () => undefined,
-        updateAgentProgress: () => true,
-        recordReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
-        recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
-      },
-      status: {
-        publish: (_task, _phase, body) => {
-          comments.push(body)
-          return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
-        },
-      },
-      triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
-      workspaces: {
-        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
-        prepareReview: () => {
-          worktrees.push(pullRequest.headSha)
-          return Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha }))
-        },
-        verifyReview: () => Promise.resolve(ok(undefined)),
-      },
-    })
-    const run = () => worker.run({
-      id: 'review-task',
-      kind: 'adversarial_review',
-      repository: 'harlan-zw/example',
-      pullRequestNumber: 24,
-      revisionId: 'revision-1',
-      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-28T02:00:00.000Z' },
-      updatedAt: '2026-08-28T01:00:00.000Z',
-      repositoryMapping: repositoryMapping(),
-      pullRequest,
-      rerun: { _tag: 'NotRequested' },
-    }, new AbortController().signal)
-    return { capture, comments, consumedApprovalLabels, run, stamped, triageRuns, worktrees }
-  }
-
-  const cleanReview = {
-    premise: { verdict: 'sound', reason: 'The change remains valid.' },
-    findings: [],
-    confidence: 94,
-  }
-
-  it('skips Review for a Markdown-only pull request without a Review Agent', async () => {
-    const harness = triagedReviewWorker({
-      changedFiles: ['README.md', 'docs/guide.md'],
-      providerReply: { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
-      title: 'docs: fix a typo in the guide',
-    })
-
-    const result = await harness.run()
-
-    expect(result).toEqual(ok({
-      evidence: JSON.stringify({ _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'model: Only a typo in the guide changed.' }),
-      resolution: { _tag: 'ReviewSkipped', reason: 'model: Only a typo in the guide changed.' },
-    }))
-    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna'])
-    expect(harness.worktrees).toEqual([])
-    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_SKIPPED'])
-    expect(harness.comments).toHaveLength(1)
-    expect(harness.comments[0]).toContain('REVIEW SKIPPED')
-    expect(harness.comments[0]).toContain('harlan-agent-review')
-    expect(harness.triageRuns).toEqual([expect.objectContaining({
-      taskId: 'review-task',
-      headSha: 'abc123',
-      outcome: { _tag: 'ReviewSkipped', reason: 'model: Only a typo in the guide changed.' },
-    })])
-  })
-
-  it('reaches Review for a TypeScript pull request without a triage model call', async () => {
-    const harness = triagedReviewWorker({
-      changedFiles: ['README.md', 'src/deployment.ts'],
-      providerReply: cleanReview,
-      title: 'chore: update workspace dependencies',
-    })
-
-    const result = await harness.run()
-
-    expect(result._tag).toBe('Ok')
-    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-sol'])
-    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
-    expect(harness.comments.at(-1)).toContain('READY · 94/100')
-    expect(harness.triageRuns).toEqual([expect.objectContaining({
-      outcome: { _tag: 'ReviewRequired', reason: 'rule: src/deployment.ts is outside the prose set.' },
-    })])
-  })
-
-  it('reviews a prose-only pull request that carries the manual override label', async () => {
-    const harness = triagedReviewWorker({
-      approvalLabels: ['review'],
-      changedFiles: ['README.md'],
-      providerReply: cleanReview,
-      title: 'docs: fix a typo in the guide',
-    })
-
-    const result = await harness.run()
-
-    expect(result._tag).toBe('Ok')
-    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-sol'])
-    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
-    expect(harness.triageRuns).toEqual([])
-  })
-
-  it('reviews the pull request when the late override re-read fails', async () => {
-    const harness = triagedReviewWorker({
-      changedFiles: ['README.md'],
-      providerReply: [
-        { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
-        cleanReview,
-      ],
-      rereadFailure: 'GitHub rate limited the label re-read.',
-      title: 'docs: fix a typo in the guide',
-    })
-
-    const result = await harness.run()
-
-    expect(result._tag).toBe('Ok')
-    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
-    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
-    expect(harness.triageRuns).toEqual([expect.objectContaining({
-      outcome: { _tag: 'ReviewRequired', reason: 'rule: The harlan-agent-review label requires Review for this head commit.' },
-    })])
-  })
-
-  it('consumes the override label that arrives while triage runs', async () => {
-    const harness = triagedReviewWorker({
-      changedFiles: ['README.md'],
-      lateApprovalLabels: ['review'],
-      providerReply: [
-        { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'Only a typo in the guide changed.' },
-        cleanReview,
-      ],
-      title: 'docs: fix a typo in the guide',
-    })
-
-    const result = await harness.run()
-
-    expect(result._tag).toBe('Ok')
-    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
-    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
-    expect(harness.consumedApprovalLabels).toEqual(['harlan-agent-review'])
-  })
-
-  it('reviews the pull request anyway when triage fails', async () => {
-    const harness = triagedReviewWorker({
-      changedFiles: ['README.md'],
-      providerReply: cleanReview,
-      title: 'docs: fix a typo in the guide',
-      triageFailure: 'GitHub could not list the changed files.',
-    })
-
-    const result = await harness.run()
-
-    expect(result._tag).toBe('Ok')
-    expect(harness.capture.requests.map(request => request.model)).toEqual(['gpt-5.6-sol'])
-    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED', 'READY'])
-    expect(harness.triageRuns).toEqual([expect.objectContaining({
-      outcome: { _tag: 'ReviewRequiredAfterFailure', reason: 'GitHub could not list the changed files.' },
-    })])
-  })
-
   it.each(['None', 'Stale'] as const)('reviews afresh when a complete comment has %s local target evidence', async (storedTag) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let workspaceCreated = false
@@ -476,7 +204,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: storedTag }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
@@ -579,7 +306,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: (input) => {
@@ -707,7 +433,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: (input) => {
@@ -813,7 +538,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: (input) => {
@@ -932,7 +656,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: (input) => {
@@ -1016,7 +739,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => {
           baselineQueued = true
           return { _tag: 'Queued', taskId: 'baseline-task' }
@@ -1111,7 +833,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => ({
           _tag: 'NotAuthorized',
           reason: 'Repository policy does not authorize Baseline repair for this base commit.',
@@ -1203,7 +924,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A stacked pull request must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
@@ -1291,7 +1011,6 @@ describe('subject Workers', () => {
         storedReviewForHead: () => ({ _tag: 'None' }),
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
         queueBaselineRepairForReview: () => { throw new Error('A Baseline repair must not queue another Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),

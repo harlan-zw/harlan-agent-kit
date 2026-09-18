@@ -234,6 +234,11 @@ useHead({
               :number="item.number"
               size="sm"
             />
+            <span
+              v-if="item.kind === 'pull_request' && item.triage !== undefined"
+              :title="item.triage.reason"
+              class="ml-auto shrink-0 font-mono text-xs text-dimmed"
+            >{{ item.triage.outcome === 'ReviewSkipped' ? 'Review skipped' : item.triage.outcome === 'ReviewRequired' ? 'Sent to Review' : 'Could not decide' }}</span>
           </li>
         </ul>
 

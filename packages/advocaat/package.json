@@ -1,0 +1,21 @@
+{
+  "name": "advocaat",
+  "type": "module",
+  "version": "0.0.5",
+  "private": true,
+  "description": "Typed Jev client over the Cloudflare AI /ai/run endpoint. Forked from pithings/advocaat.",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

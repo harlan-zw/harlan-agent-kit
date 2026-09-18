@@ -8,10 +8,8 @@ import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageS
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
 import type { MergeRisk } from './merge-risk.ts'
-import type { PullRequestTriageAgent, PullRequestTriageResult } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
-import type { RecordPullRequestTriageRunInput } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type {
   AgentProgress,
@@ -98,8 +96,7 @@ export interface ItemAgentOptions {
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  pullRequestTriage?: PullRequestTriageAgent
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordPullRequestTriageRun' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -841,19 +838,6 @@ Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
 Next: merge or repair the marked Baseline repair pull request.`
 }
 
-function reviewSkippedComment(headSha: string, baseSha: string, result: PullRequestTriageResult, at: string): string {
-  const workflow = JSON.stringify({ _tag: 'ReviewSkipped', headSha, baseSha })
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
-<!-- workflow-state: ${workflow} -->
-### 🤖 REVIEW SKIPPED
-
-${automatedDisclosure({ kind: 'triage', updatedAt: updatedAtLabel(at) })}
-
-- **Reason:** ${cleanLine(result.reason)}
-- **Override:** Add the \`${APPROVAL_LABELS.review}\` label to force an adversarial Review.`
-}
-
 function gateSummary(name: 'Merge' | 'Review' | 'CI', gate: ReviewGateState, findings: ReviewFinding[]): string {
   if (gate._tag === 'Passed')
     return `- **${name} gate:** Passed.${name === 'Review' && findings.length === 0 ? ' No material issues.' : ''}`
@@ -1098,97 +1082,6 @@ function storedOutcomeName(run: ReviewRun): ReviewOutcomeName {
     : run.outcome._tag === 'Pending' ? 'PENDING' : 'BLOCKED'
 }
 
-type PullRequestTriageRoute
-  = | { _tag: 'ReviewRequired' }
-    | { _tag: 'ReviewSkipped', reason: string }
-
-/**
- * Pull request triage in front of Review. The Agent decides by path rule
- * first, then a stored decision for this head commit, then the low-cost
- * model for a prose-only pull request. A failed or malformed answer never
- * waives the Review, and a stored decision that disagrees is left alone: the
- * safe direction is always Review.
- *
- * A skip is durable before it is visible. The triage row is recorded first, so
- * a retry after a failed publication reuses the decision instead of paying for
- * the model again.
- */
-async function triagePullRequest(
-  options: ReviewWorkerOptions,
-  agent: PullRequestTriageAgent,
-  task: ClaimedAdversarialReviewTask,
-  signal: AbortSignal,
-): Promise<Result<PullRequestTriageRoute, string>> {
-  const startedAt = options.now().toISOString()
-  const files = await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
-  const triage = files._tag === 'Err'
-    ? files
-    : await agent.run(task, { changedFiles: files.value.map(file => file.path) }, signal)
-
-  let outcome: RecordPullRequestTriageRunInput['outcome']
-  let skipped: PullRequestTriageResult | null = null
-  let overridden = false
-  if (triage._tag === 'Err') {
-    outcome = { _tag: 'ReviewRequiredAfterFailure', reason: triage.error }
-  }
-  else if (triage.value._tag === 'ADVERSARIAL_REVIEW_REQUIRED') {
-    outcome = { _tag: 'ReviewRequired', reason: triage.value.reason }
-  }
-  else {
-    // A person may add the manual override while the low-cost Agent runs.
-    // Re-read the labels before settling so that late authority always wins.
-    // A failed re-read could hide a fresh override, so only a successful read
-    // without the label settles on a skip: the safe direction is always Review.
-    const current = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal)
-    overridden = current._tag === 'Err'
-      || (current.value.pullRequest.headSha === task.pullRequest.headSha
-        && current.value.pullRequest.approvalLabels.includes('review'))
-    outcome = overridden
-      ? { _tag: 'ReviewRequired', reason: `rule: The ${APPROVAL_LABELS.review} label requires Review for this head commit.` }
-      : { _tag: 'ReviewSkipped', reason: triage.value.reason }
-    skipped = overridden ? null : triage.value
-  }
-
-  const recorded = options.store.recordPullRequestTriageRun({
-    taskId: task.id,
-    repository: task.repository,
-    pullRequestNumber: task.pullRequestNumber,
-    revisionId: task.revisionId,
-    headSha: task.pullRequest.headSha,
-    startedAt,
-    completedAt: options.now().toISOString(),
-    outcome,
-  })
-  if (recorded._tag === 'Rejected')
-    return err('The pull request changed before its triage decision was recorded.')
-  if (skipped === null || recorded._tag === 'Conflict') {
-    await stampAgentLabel(options, task, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
-    if (overridden) {
-      // The review label approves one head only, so consume it here exactly
-      // like the manualReview branch: a later head must not inherit it.
-      const consumed = await options.github.consumeApprovalLabel(
-        task.repositoryMapping,
-        'pull_request',
-        task.pullRequestNumber,
-        APPROVAL_LABELS.review,
-        signal,
-      )
-      if (consumed._tag === 'Err')
-        options.onProgressPublishFailure?.(task, consumed.error)
-    }
-    return ok({ _tag: 'ReviewRequired' })
-  }
-
-  const body = reviewSkippedComment(task.pullRequest.headSha, task.pullRequest.baseSha, skipped, options.now().toISOString())
-  const staged = options.status.stageTerminal === undefined
-    ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
-    : options.status.stageTerminal(task, body, 'SKIPPED')
-  if (staged._tag === 'Err')
-    return staged
-  await stampAgentLabel(options, task, 'ADVERSARIAL_REVIEW_SKIPPED', signal)
-  return ok({ _tag: 'ReviewSkipped', reason: skipped.reason })
-}
-
 /**
  * Projects one durable Agent report through the controller's current gates.
  *
@@ -1317,19 +1210,9 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         }
         freshReviewSession = true
       }
-      else if (task.rerun._tag === 'NotRequested' && options.pullRequestTriage !== undefined) {
-        const route = await triagePullRequest(options, options.pullRequestTriage, task, signal)
-        if (route._tag === 'Err')
-          return route
-        if (route.value._tag === 'ReviewSkipped') {
-          return ok({
-            evidence: JSON.stringify({ _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: route.value.reason }),
-            resolution: { _tag: 'ReviewSkipped', reason: route.value.reason },
-          })
-        }
-        freshReviewSession = true
-      }
       else if (task.rerun._tag === 'NotRequested') {
+        // No Pull request triage decision reached the planner for this Task,
+        // so the safe direction runs: a full Review.
         await stampAgentLabel(options, task, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
         freshReviewSession = true
       }

@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 import { batchPlanPrompt } from '../src/batch-worker.ts'
 import { conflictResolutionPrompt } from '../src/conflict-worker.ts'
 import { issuePrompt, reviewPrompt } from '../src/item-agent.ts'
-import { pullRequestTriagePrompt } from '../src/pull-request-triage.ts'
 import { getRoutine } from '../src/routines/index.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -151,12 +150,5 @@ describe('project memory in Agent prompts', () => {
 
     expect(prompt).not.toContain('MEMORY.md')
     expect(prompt).toContain('These proposals were rejected before.')
-  })
-
-  it('withholds memory from Pull request triage, which may use no tools', () => {
-    const prompt = pullRequestTriagePrompt(reviewTask(), ['README.md'])
-
-    expect(prompt).not.toContain('MEMORY.md')
-    expect(prompt).toContain('Do not use tools or inspect the repository.')
   })
 })

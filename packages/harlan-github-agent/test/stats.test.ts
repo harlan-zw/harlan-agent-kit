@@ -131,61 +131,100 @@ describe('pull request triage Stats', () => {
   it('records one final decision for one pull request head commit', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-01T00:00:00.000Z')
-    const observed = store.recordObservation({
-      externalId: 'stats-triage',
+    const subject = pullRequestItem({ mergeState: 'clean' })
+    const first = store.recordObservation({
+      externalId: 'stats-triage-1',
       observedAt: '2026-08-02T00:00:00.000Z',
       source: 'poll',
-      subject: pullRequestItem({ mergeState: 'clean' }),
+      subject,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' },
     })
-    if (observed._tag !== 'Inserted')
+    if (first._tag !== 'Inserted')
       throw new Error('Expected a pull request Revision.')
-    const task = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-02T00:01:00.000Z', 60_000)
-    if (task === null)
-      throw new Error('Expected the Review Task.')
-    const input = {
-      taskId: task.id,
-      repository: task.repository,
-      pullRequestNumber: task.pullRequestNumber,
-      revisionId: task.revisionId,
-      headSha: task.pullRequest.headSha,
-      startedAt: '2026-08-02T00:01:01.000Z',
-      completedAt: '2026-08-02T00:01:02.000Z',
-      outcome: { _tag: 'ReviewSkipped' as const, reason: 'Only prose changed.' },
-    }
 
-    expect(store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha)).toBeNull()
-    expect(store.recordPullRequestTriageRun(input)).toEqual({ _tag: 'Inserted' })
-    expect(store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha)).toEqual({
+    // A skip queues no Review Task, so nothing is claimable.
+    expect(store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-02T00:01:00.000Z', 60_000)).toBeNull()
+    expect(store.getLatestPullRequestTriageRun(subject.repository, subject.number, subject.headSha)).toEqual({
       outcome: 'ReviewSkipped',
-      reason: 'Only prose changed.',
-      completedAt: '2026-08-02T00:01:02.000Z',
+      reason: 'model: classification chose skip with confidence 0.93.',
+      completedAt: '2026-08-02T00:00:00.000Z',
     })
-    expect(store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, 'f'.repeat(40))).toBeNull()
-    expect(store.recordPullRequestTriageRun({
-      ...input,
-      startedAt: '2026-08-02T00:02:01.000Z',
-      completedAt: '2026-08-02T00:02:02.000Z',
-    })).toEqual({ _tag: 'Duplicate' })
-    expect(store.recordPullRequestTriageRun({
-      ...input,
-      startedAt: '2026-08-02T00:03:01.000Z',
-      completedAt: '2026-08-02T00:03:02.000Z',
-      outcome: { _tag: 'ReviewSkipped' as const, reason: 'A retry reworded the same skip verdict.' },
-    })).toEqual({ _tag: 'Duplicate' })
-    expect(store.recordPullRequestTriageRun({
-      ...input,
-      outcome: { _tag: 'ReviewRequired', reason: 'Runtime code changed.' },
-    })).toEqual({ _tag: 'Conflict' })
+    expect(store.getLatestPullRequestTriageRun(subject.repository, subject.number, 'f'.repeat(40))).toBeNull()
+
+    // A reworded decision for the same Revision changes nothing: the first row stays authoritative.
+    const reworded = store.recordObservation({
+      externalId: 'stats-triage-2',
+      observedAt: '2026-08-02T00:02:00.000Z',
+      source: 'poll',
+      subject,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: a retry reworded the same skip verdict.', source: 'model' },
+    })
+    expect(reworded).toEqual({ _tag: 'Duplicate', revisionId: first.revisionId })
+    expect(store.getLatestPullRequestTriageRun(subject.repository, subject.number, subject.headSha)).toEqual({
+      outcome: 'ReviewSkipped',
+      reason: 'model: classification chose skip with confidence 0.93.',
+      completedAt: '2026-08-02T00:00:00.000Z',
+    })
+
+    // A failure row converges: a later successful decision replaces it, so
+    // reuse works and the classification is not re-asked every poll.
+    const failedFirst = createStore()
+    failedFirst.syncRepositories([repositoryMapping()], '2026-09-01T00:00:00.000Z')
+    const failing = pullRequestItem({ mergeState: 'clean' })
+    const failureRevision = failedFirst.recordObservation({
+      externalId: 'convergence-failure',
+      observedAt: '2026-09-02T00:00:00.000Z',
+      source: 'poll',
+      subject: failing,
+      pullRequestTriage: { _tag: 'Failed', reason: 'model: the classification service failed: down' },
+    })
+    if (failureRevision._tag !== 'Inserted')
+      throw new Error('Expected the failure Revision.')
+    expect(failedFirst.getLatestPullRequestTriageRun(failing.repository, failing.number, failing.headSha)).toMatchObject({ outcome: 'ReviewRequiredAfterFailure' })
+
+    failedFirst.recordObservation({
+      externalId: 'convergence-recovery',
+      observedAt: '2026-09-02T00:05:00.000Z',
+      source: 'poll',
+      subject: failing,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' },
+    })
+    expect(failedFirst.getLatestPullRequestTriageRun(failing.repository, failing.number, failing.headSha)).toMatchObject({ outcome: 'ReviewSkipped' })
+    expect(failedFirst.claimNextAdversarialReviewTask('reviewer-1', '2026-09-02T00:06:00.000Z', 60_000)).toBeNull()
+
+    // The manual Review label overrides the stored skip: the decision queues
+    // the Review Task the label asks for, and the row itself turns Required,
+    // so the next poll reuses Review instead of superseding the Task.
+    const overridden = store.recordObservation({
+      externalId: 'stats-triage-3',
+      observedAt: '2026-08-02T00:03:00.000Z',
+      source: 'poll',
+      subject,
+      pullRequestTriage: { _tag: 'RequiredOverride' },
+    })
+    expect(overridden).toEqual({ _tag: 'Duplicate', revisionId: first.revisionId })
+    expect(store.getLatestPullRequestTriageRun(subject.repository, subject.number, subject.headSha)).toMatchObject({ outcome: 'ReviewRequired' })
+    expect(store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-02T00:04:00.000Z', 60_000)).not.toBeNull()
+    // The label consumed, a later poll keeps the Task: the stored row says Review.
+    store.recordObservation({
+      externalId: 'stats-triage-4',
+      observedAt: '2026-08-02T00:05:00.000Z',
+      source: 'poll',
+      subject,
+      pullRequestTriage: { _tag: 'Required', reason: 'rule: this head commit already has a Review.', source: 'reuse' },
+    })
+    expect(store.claimNextAdversarialReviewTask('reviewer-2', '2026-08-02T00:06:00.000Z', 60_000)).not.toBeNull()
+
     const stats = store.getStats({
       from: '2026-08-01T00:00:00.000Z',
       to: '2026-08-08T00:00:00.000Z',
       timeZone: 'UTC',
     }, '2026-08-08T00:00:00.000Z')
 
-    expect(stats.repositories).toEqual([expect.objectContaining({ repository: task.repository, runs: 1 })])
+    expect(stats.repositories).toEqual([expect.objectContaining({ repository: subject.repository, runs: 1 })])
     expect(stats.work.find(work => work._tag === 'PullRequestTriage')).toEqual(expect.objectContaining({
       runs: 1,
-      reviewSkipped: 1,
+      reviewRequired: 1,
     }))
   })
 })

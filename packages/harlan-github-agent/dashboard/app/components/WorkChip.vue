@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { AgentRole } from '../../../src/types.ts'
+import type { WorkKey } from '../utils/dashboard.ts'
 import { workChip } from '../utils/dashboard.ts'
 
 /** Says what a card is for: an icon and a word, muted, no box. Colour on this board means state. */
-const { work } = defineProps<{ work: AgentRole }>()
+const { work } = defineProps<{ work: WorkKey }>()
 
 const chip = computed(() => workChip(work))
 </script>
