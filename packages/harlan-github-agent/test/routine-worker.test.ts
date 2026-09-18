@@ -1,4 +1,6 @@
+import type { Entry, Questions, SystemOneResult } from 'advocaat'
 import type { AgentEvent } from '../src/agent-provider.ts'
+import type { ClassificationSource } from '../src/classification.ts'
 import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
@@ -42,9 +44,11 @@ function workerFor(
   provider: ReturnType<typeof scanning>,
   maximumChangedFiles?: number,
   activityLog?: ReturnType<typeof createAgentActivityLog>,
+  classification?: ClassificationSource | null,
 ) {
   return createRoutineScanWorker({
     ...(activityLog === undefined ? {} : { activityLog }),
+    ...(classification === undefined ? {} : { classification }),
     logger: { error: () => undefined, info: () => undefined },
     ...(maximumChangedFiles === undefined ? {} : { maximumChangedFiles }),
     now,
@@ -52,6 +56,19 @@ function workerFor(
     store,
     workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123' }) },
   })
+}
+
+function worthClassification(dropTitles: string[]): ClassificationSource {
+  return {
+    classify: <Q extends Questions>(input: { state: Entry }) => Promise.resolve({
+      _tag: 'Ok' as const,
+      value: {
+        model: 'jev-1.13.0',
+        answers: { worth: { type: 'choice', choice: dropTitles.includes(String((input.state as { title?: unknown }).title)) ? 'DROP' : 'FILE', confidence: 0.9, probabilities: {} } },
+        usage: { input_tokens: 10, output_tokens: 0 },
+      } as SystemOneResult<Q>,
+    }),
+  }
 }
 
 function seed(store: ReturnType<typeof openJournalStore>, name: ClaimedRoutineRun['name'] = 'pr-triage'): void {
@@ -80,6 +97,52 @@ const candidate = {
 }
 
 describe('building the scan prompt', () => {
+  it('drops only the candidate the worth gate refuses and says so in the run line', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const noise = { ...candidate, fingerprint: 'scripts/alerts.log#count', title: 'Alert count grew by one' }
+      const task = claimStoredRun(store)
+      const result = await workerFor(store, scanning({ report: 'One real finding.', candidates: [candidate, noise] }), undefined, undefined, worthClassification([noise.title]))
+        .run(task, new AbortController().signal)
+
+      expect(result._tag).toBe('Ok')
+      if (result._tag !== 'Ok')
+        throw new Error(result.error)
+      expect(store.listCandidates('harlan-zw/example:ci-review').map(entry => entry.fingerprint)).toEqual([candidate.fingerprint])
+      expect(result.value.evidence).toContain('1 dropped by the classification gate')
+      expect(result.value.evidence).toContain('1 new')
+      expect(result.value.evidence).not.toContain('2 new')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps every candidate when the worth gate fails', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const task = claimStoredRun(store)
+      const failing: ClassificationSource = {
+        classify: () => Promise.resolve({ _tag: 'Err' as const, error: { _tag: 'Unavailable' as const, message: 'down' } }),
+      }
+      const result = await workerFor(store, scanning({ report: 'Findings.', candidates: [candidate] }), undefined, undefined, failing)
+        .run(task, new AbortController().signal)
+
+      expect(result._tag).toBe('Ok')
+      if (result._tag !== 'Ok')
+        throw new Error(result.error)
+      expect(store.listCandidates('harlan-zw/example:ci-review').map(entry => entry.fingerprint)).toEqual([candidate.fingerprint])
+      expect(result.value.evidence).not.toContain('dropped by the classification gate')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('keeps Agent feedback proposals inside one skill file', () => {
     expect(getRoutine('agent-feedback').selectCandidates([
       { ...candidate, target: 'src/controller.ts' },
