@@ -698,6 +698,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           source: tokens,
           worker: createBaselineRepairWorker({
             activityLog,
+            classification,
             claudeHome: agentContext.value.claudeHome,
             github: workerGithub,
             inspectWorkspace: inspectWorkspaceFiles,
