@@ -3,8 +3,10 @@ import type { ControlClient } from './control-client.ts'
 import type { Result } from './result.ts'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
+import { jev } from 'advocaat'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
+import { createClassificationSource } from './classification.ts'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadClassificationToken, loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateRepositoryMappings } from './config.ts'
@@ -18,6 +20,7 @@ import { createGitServiceUpdateSource } from './service-update.ts'
 import { startAgentService } from './service.ts'
 import { stopWithin } from './shutdown.ts'
 import { openJournalStore } from './store.ts'
+import { replayStoredTriage } from './triage-evaluation.ts'
 import { agentWorktreeLeaseKey, listSweepableAgentWorktrees, sweepAgentWorktrees } from './worktree.ts'
 
 function waitForShutdown(): Promise<void> {
@@ -358,7 +361,52 @@ const rootArguments = {
   config: configArgument,
 }
 
-const rootSubCommandNames = ['combine-service-state', 'sweep-worktrees', 'control']
+const evaluateTriage = defineCommand({
+  meta: {
+    name: 'evaluate-triage',
+    description: 'Replay recorded Pull request triage decisions through the classification service and suggest a skip band.',
+  },
+  args: {
+    ...rootArguments,
+    limit: {
+      type: 'string',
+      alias: 'l',
+      description: 'Newest decisions to replay.',
+      default: '100',
+    },
+  },
+  async run({ args }) {
+    const parsed = await loadConfig(resolve(args.config))
+    if (parsed._tag === 'Err')
+      throw new Error(parsed.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+    const classification = parsed.value.classification
+    if (classification._tag !== 'Enabled')
+      throw new Error('The configuration has no classification block, so there is nothing to evaluate with.')
+    const token = await loadClassificationToken(classification.tokenPath)
+    if (token._tag === 'Err')
+      throw new Error(token.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+    const limit = Number.parseInt(args.limit ?? '100', 10)
+    if (!Number.isInteger(limit) || limit < 1)
+      throw new Error('--limit needs a whole number above zero.')
+    const summary = await replayStoredTriage({
+      journalPath: parsed.value.storage.path,
+      limit,
+      classification: createClassificationSource({
+        client: jev({
+          accountId: classification.accountId,
+          apiToken: token.value,
+          ...(classification.gatewayId === undefined ? {} : { gatewayId: classification.gatewayId }),
+          model: classification.model,
+        }),
+      }),
+      log: line => consola.info(line),
+    })
+    consola.success(`Replayed ${summary.replayed} decisions. ${summary.skippedWithoutFiles} recorded decisions carry no changed-file list and are excluded from every replay; only decisions recorded after this change replay.`)
+    consola.info(`Suggested skip band: ${summary.suggestion.band}, ${summary.suggestion.agreed}/${summary.replayed} agreed, ${summary.suggestion.skipsAdded} would skip what Review read.`)
+  },
+})
+
+const rootSubCommandNames = ['combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage']
 
 const command = defineCommand({
   meta: {
@@ -371,6 +419,7 @@ const command = defineCommand({
     'combine-service-state': combineState,
     'sweep-worktrees': sweepWorktrees,
     'control': controlCommand,
+    'evaluate-triage': evaluateTriage,
   },
   async run({ args, rawArgs }) {
     // citty runs this after it ran the subcommand, so stop before the service
