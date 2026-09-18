@@ -38,6 +38,7 @@
     "@coldtea/pr-lens-renderer": "catalog:",
     "@coldtea/pr-lens-schema": "catalog:",
     "@openai/codex-sdk": "catalog:",
+    "advocaat": "workspace:*",
     "citty": "catalog:",
     "consola": "catalog:",
     "h3": "catalog:",

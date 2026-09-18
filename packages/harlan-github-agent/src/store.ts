@@ -5,7 +5,8 @@ import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type { IssueTriageState } from './issue-triage.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
-import type { PullRequestTriageStatsOutcome, RecordPullRequestTriageRunInput, RecordPullRequestTriageRunResult, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
+import type { PullRequestTriageDecision } from './pull-request-triage.ts'
+import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
   AgentFeedback,
@@ -116,6 +117,7 @@ import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetr
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
+import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON } from './pull-request-triage.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
@@ -740,7 +742,6 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   authorizePublication: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
   cancelReviewForHead: (input: { repository: string, pullRequestNumber: number, headSha: string, requestId: string, requestedBy: string, at: string }) => boolean
   cancelTask: (input: { taskId: string, at: string }) => CancelTaskResult
-  recordPullRequestTriageRun: (input: RecordPullRequestTriageRunInput) => RecordPullRequestTriageRunResult
   /** The newest recorded Pull request triage decision for one exact head commit, or null. */
   getLatestPullRequestTriageRun: (repository: string, pullRequestNumber: number, headSha: string) => LatestPullRequestTriageRun | null
   hasPriorityAgentTask: () => boolean
@@ -855,6 +856,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     externalId: string
     observedAt: string
     subject: GitHubPullRequestItem
+    /** The Pull request triage decision computed for this observation, when one was. */
+    pullRequestTriage?: PullRequestTriageDecision
   }) => RecordObservationResult
   /** Records one exact closed pull request read from GitHub. */
   recordVerifiedPullRequestClosure: (input: {
@@ -1085,6 +1088,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     observedAt: string
     source: 'poll' | 'webhook'
     subject: GitHubItem
+    /** The Pull request triage decision computed for this observation, when one was. */
+    pullRequestTriage?: PullRequestTriageDecision
   }) => RecordObservationResult
   recordPollAttempt: (github: string, at: string) => void
   recordPollFailure: (github: string, at: string, message: string, status?: number) => void
@@ -4369,6 +4374,34 @@ const existingReviewLabelClaimSql = `(review_status_commands.task_kind = 'existi
             WHERE lower(value) = lower(json_extract(status_revision.payload, '$.author'))))
       ))`
 
+/**
+ * Records a Pull request triage decision inside the caller's transaction.
+ *
+ * The first decision for one Revision stays authoritative: a later poll that
+ * rewords the reason changes nothing.
+ */
+function insertTriageRun(
+  database: DatabaseSync,
+  subjectId: number,
+  revisionId: string,
+  headSha: string,
+  outcome: { tag: PullRequestTriageStatsOutcome, reason: string },
+  at: string,
+): void {
+  const contentDigest = digest(JSON.stringify({ subjectId, revisionId, headSha, outcome: outcome.tag }))
+  database.prepare(`
+    INSERT INTO pull_request_triage_runs (
+      task_id, subject_id, revision_id, head_sha, started_at, completed_at,
+      outcome_tag, reason, content_digest
+    ) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(subject_id, revision_id) DO NOTHING
+  `).run(subjectId, revisionId, headSha, at, at, outcome.tag, outcome.reason, contentDigest)
+  database.prepare(`
+    UPDATE stats_coverage SET started_at = MIN(started_at, ?)
+    WHERE kind = 'pull_request_triage'
+  `).run(at)
+}
+
 function planAdversarialReview(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4378,6 +4411,7 @@ function planAdversarialReview(
   mapping: RepositoryMapping,
   reviewApproved: boolean,
   manualReviewRequested: boolean,
+  triage?: PullRequestTriageDecision,
 ): void {
   const approvalRequired = subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, subject.author)
   const rerunRequested = database.prepare(`
@@ -4486,6 +4520,24 @@ function planAdversarialReview(
   }
 
   supersedeWorkerTasks(database, subjectId, 'adversarial_review', observedAt, 'A newer pull request head commit replaced this review.', revisionId)
+  // Pull request triage decided at observation time. A skip is durable before
+  // it is visible: the row lands in this same transaction, so a retry reuses
+  // the decision instead of paying for the classification again. The manual
+  // Review label still wins over any skip, and the supersede above already
+  // retired any Task this revision queued.
+  if (triage !== undefined && subject.kind === 'pull_request') {
+    if (triage._tag === 'Skipped' && !manualReviewRequested) {
+      insertTriageRun(database, subjectId, revisionId, subject.headSha, {
+        tag: 'ReviewSkipped',
+        reason: triage.reason,
+      }, observedAt)
+      return
+    }
+    insertTriageRun(database, subjectId, revisionId, subject.headSha, {
+      tag: triage._tag === 'Failed' ? 'ReviewRequiredAfterFailure' : 'ReviewRequired',
+      reason: triage._tag === 'RequiredOverride' ? PULL_REQUEST_TRIAGE_OVERRIDE_REASON : triage.reason,
+    }, observedAt)
+  }
   // Review Tasks follow the head commit, so one Revision can hold several.
   // The live one answers, then the last one that ran.
   const existing = database.prepare(`
@@ -5339,7 +5391,7 @@ const routineProgressMigration = `
 /** Stores the one Pull request triage decision that was previously ephemeral. */
 const statsMigration = `
   CREATE TABLE IF NOT EXISTS pull_request_triage_runs (
-    task_id TEXT PRIMARY KEY REFERENCES worker_tasks(id),
+    task_id TEXT REFERENCES worker_tasks(id),
     subject_id INTEGER NOT NULL REFERENCES subjects(id),
     revision_id TEXT NOT NULL,
     head_sha TEXT NOT NULL,
@@ -6379,7 +6431,37 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 74
   }
-  if (version === 74)
+  if (version === 74) {
+    // Pull request triage moved from the claimed Review Task to observation
+    // time, so its rows no longer reference one. A rewind replays this against
+    // a journal already carrying the new shape.
+    const taskKeyed = database.prepare(`SELECT 1 AS found FROM pragma_table_info('pull_request_triage_runs') WHERE name = 'task_id' AND pk = 1`).get() !== undefined
+    applyMigration(database, taskKeyed
+      ? `
+      CREATE TABLE pull_request_triage_runs_v75 (
+        task_id TEXT REFERENCES worker_tasks(id),
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        revision_id TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        outcome_tag TEXT NOT NULL CHECK (outcome_tag IN ('ReviewRequired', 'ReviewSkipped', 'ReviewRequiredAfterFailure')),
+        reason TEXT NOT NULL CHECK (reason != ''),
+        content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+        UNIQUE (subject_id, revision_id),
+        FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id),
+        CHECK (completed_at >= started_at)
+      );
+      INSERT INTO pull_request_triage_runs_v75 SELECT * FROM pull_request_triage_runs;
+      DROP TABLE pull_request_triage_runs;
+      ALTER TABLE pull_request_triage_runs_v75 RENAME TO pull_request_triage_runs;
+      CREATE INDEX IF NOT EXISTS pull_request_triage_runs_completed ON pull_request_triage_runs(completed_at);
+      PRAGMA user_version = 75;
+    `
+      : 'PRAGMA user_version = 75;')
+    version = 75
+  }
+  if (version === 75)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7237,6 +7319,7 @@ export function openJournalStore(
           mapping,
           reviewApproved,
           input.subject.kind === 'pull_request' && input.subject.approvalLabels.includes('review'),
+          input.subject.kind === 'pull_request' ? input.pullRequestTriage : undefined,
         )
         planIssueTriage(database, input.subject, subject.id, revisionId, input.observedAt, mapping)
       }
@@ -7797,76 +7880,6 @@ export function openJournalStore(
       recovery: failure._tag === 'Transient' ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: at } : { _tag: 'ActionRequired' },
       at,
     })
-  }
-
-  const recordPullRequestTriageRun: JournalStore['recordPullRequestTriageRun'] = (input) => {
-    const revisionId = currentSameHeadRevision(database, input.revisionId)
-    const revision = database.prepare(`
-      SELECT worker_tasks.subject_id, revisions.payload
-      FROM worker_tasks
-      JOIN subjects ON subjects.id = worker_tasks.subject_id
-      JOIN repositories ON repositories.id = subjects.repository_id
-      JOIN revisions ON revisions.id = worker_tasks.revision_id
-      WHERE worker_tasks.id = ? AND worker_tasks.kind = 'adversarial_review'
-        AND repositories.github = ? AND subjects.github_number = ?
-        AND worker_tasks.revision_id = ? AND revisions.id = ?
-    `).get(
-      input.taskId,
-      input.repository,
-      input.pullRequestNumber,
-      revisionId,
-      revisionId,
-    ) as { subject_id: number, payload: string } | undefined
-    const subject = revision === undefined ? undefined : JSON.parse(revision.payload) as GitHubItem
-    if (revision === undefined || subject?.kind !== 'pull_request' || subject.headSha !== input.headSha)
-      return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
-
-    const contentDigest = digest(JSON.stringify(input))
-    database.exec('BEGIN IMMEDIATE')
-    try {
-      const existing = database.prepare(`
-        SELECT head_sha, outcome_tag FROM pull_request_triage_runs
-        WHERE task_id = ? OR (subject_id = ? AND revision_id = ?)
-      `).get(input.taskId, revision.subject_id, revisionId) as {
-        head_sha: string
-        outcome_tag: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure'
-      } | undefined
-      if (existing !== undefined) {
-        database.exec('COMMIT')
-        // The reason is Agent-authored prose, so a retry rewords it. Only the
-        // head commit and the outcome tag define the decision; the first
-        // stored reason stays authoritative for stats.
-        const sameDecision = existing.head_sha === input.headSha
-          && existing.outcome_tag === input.outcome._tag
-        return sameDecision ? { _tag: 'Duplicate' } : { _tag: 'Conflict' }
-      }
-      database.prepare(`
-        INSERT INTO pull_request_triage_runs (
-          task_id, subject_id, revision_id, head_sha, started_at, completed_at,
-          outcome_tag, reason, content_digest
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        input.taskId,
-        revision.subject_id,
-        revisionId,
-        input.headSha,
-        input.startedAt,
-        input.completedAt,
-        input.outcome._tag,
-        input.outcome.reason,
-        contentDigest,
-      )
-      database.prepare(`
-        UPDATE stats_coverage SET started_at = MIN(started_at, ?)
-        WHERE kind = 'pull_request_triage'
-      `).run(input.startedAt)
-      database.exec('COMMIT')
-      return { _tag: 'Inserted' }
-    }
-    catch (error) {
-      database.exec('ROLLBACK')
-      throw error
-    }
   }
 
   const getLatestPullRequestTriageRun: JournalStore['getLatestPullRequestTriageRun'] = (repository, pullRequestNumber, headSha) => {
@@ -14765,7 +14778,6 @@ export function openJournalStore(
     authorizeReviewStatus,
     cancelTask,
     cancelReviewForHead,
-    recordPullRequestTriageRun,
     getLatestPullRequestTriageRun,
     hasPriorityAgentTask: () => hasHigherPriorityTask(0, 'adversarial_review'),
     claimNextAdversarialReviewTask,

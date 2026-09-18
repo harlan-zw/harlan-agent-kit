@@ -83,6 +83,17 @@ export type WebhookConfig
   = | { _tag: 'Disabled' }
     | { _tag: 'Enabled', host: string, port: number, secretPath: string }
 
+/** The Jev classification service, reached through the Cloudflare AI endpoint. */
+export type ClassificationConfig
+  = | { _tag: 'Disabled' }
+    | {
+      _tag: 'Enabled'
+      accountId: string
+      tokenPath: string
+      gatewayId?: string
+      model: string
+    }
+
 /**
  * What may start work on this machine.
  *
@@ -159,6 +170,8 @@ export interface AgentConfig {
    * cannot reach the control API on the dashboard port.
    */
   webhook: WebhookConfig
+  /** The Jev classification service, reached through Cloudflare. Off unless the configuration turns it on. */
+  classification: ClassificationConfig
   storage: {
     path: string
   }
@@ -688,7 +701,7 @@ export type AgentTask = ConflictResolutionTask | ReviewFixTask | BaselineRepairT
 export type ClaimedAgentTask = ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask
 /** A Task as shown by the dashboard, including its last durable phase. */
 export type DashboardTask = AgentTask & { progress: AgentProgress }
-export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'pull_request_triage' | 'issue_triage' | 'issue_work' | 'batch_plan' | 'routine_scan' | 'routine_fix'
+export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'issue_triage' | 'issue_work' | 'batch_plan' | 'routine_scan' | 'routine_fix'
 
 /**
  * Every Routine the service knows how to run.

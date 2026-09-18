@@ -1,5 +1,5 @@
 import type { StatsComparison, StatsCoverage, StatsDay, StatsRange, StatsSnapshot, StatsWork } from '../../../src/stats.ts'
-import type { AgentRole } from '../../../src/types.ts'
+import type { WorkKey } from './dashboard.ts'
 import { calcTrendPercent } from './formatting.ts'
 
 /**
@@ -154,7 +154,7 @@ export function coverageText(coverage: StatsCoverage): string | undefined {
 }
 
 /** The work kind a Stats row stands for, so the row carries the same chip as the board. */
-export function workRole(entry: StatsWork): AgentRole {
+export function workRole(entry: StatsWork): WorkKey {
   switch (entry._tag) {
     case 'PullRequestTriage':
       return 'pull_request_triage'
@@ -203,6 +203,6 @@ export function medianText(milliseconds: number | null): string {
 }
 
 /** The History query that shows the records behind one Stats row. */
-export function historyQuery(entry: StatsWork, input: StatsDateInputs): { from: string, to: string, work: AgentRole } {
+export function historyQuery(entry: StatsWork, input: StatsDateInputs): { from: string, to: string, work: WorkKey } {
   return { from: input.from, to: input.to, work: workRole(entry) }
 }

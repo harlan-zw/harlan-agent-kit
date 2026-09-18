@@ -168,8 +168,11 @@ export function activeProviderCircuits(circuits: ProviderCircuit[]): ProviderCir
   return circuits.filter(circuit => circuit.state._tag !== 'Closed')
 }
 
-/** One label per Agent role. The Record makes a missing role a type error, not a fallthrough. */
-const workLabels: Record<AgentRole, string> = {
+/** What a Stats or History row can stand for: an Agent role, or Pull request triage which no Agent answers. */
+export type WorkKey = AgentRole | 'pull_request_triage'
+
+/** One label per work kind. The Record makes a missing kind a type error, not a fallthrough. */
+const workLabels: Record<WorkKey, string> = {
   adversarial_review: 'Review',
   pull_request_triage: 'Pull request triage',
   review_fix: 'Repair',
@@ -184,7 +187,7 @@ const workLabels: Record<AgentRole, string> = {
 
 export const agentRoleLabels: Array<[AgentRole, string]> = Object.entries(workLabels) as Array<[AgentRole, string]>
 
-export function workLabel(work: AgentRole): string {
+export function workLabel(work: WorkKey): string {
   return workLabels[work]
 }
 
@@ -724,7 +727,7 @@ export interface WorkChip {
   icon: string
 }
 
-const workChips: Record<AgentRole, WorkChip> = {
+const workChips: Record<WorkKey, WorkChip> = {
   adversarial_review: { label: 'Review', icon: 'i-octicon-code-review-16' },
   pull_request_triage: { label: 'Pull request triage', icon: 'i-octicon-checklist-16' },
   review_fix: { label: 'Repair', icon: 'i-octicon-tools-16' },
@@ -739,7 +742,7 @@ const workChips: Record<AgentRole, WorkChip> = {
 
 export const workChipEntries: Array<[AgentRole, WorkChip]> = Object.entries(workChips) as Array<[AgentRole, WorkChip]>
 
-export function workChip(work: AgentRole): WorkChip {
+export function workChip(work: WorkKey): WorkChip {
   return workChips[work]
 }
 

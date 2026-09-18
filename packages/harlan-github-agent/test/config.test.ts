@@ -140,11 +140,11 @@ agent:
   reasoning_effort:
     opencode:
       review_fix: medium
-      pull_request_triage: low
+      issue_triage: low
 `)
 
     expect(parsed._tag === 'Ok' && parsed.value.agent.reasoningEffort).toEqual({
-      opencode: { review_fix: 'medium', pull_request_triage: 'low' },
+      opencode: { review_fix: 'medium', issue_triage: 'low' },
     })
   })
 

@@ -1,11 +1,10 @@
 import type {
   AgentFeedback,
-  AgentRole,
   DashboardSnapshot,
   ReviewAgent,
   ReviewGateState,
 } from '../../../src/types.ts'
-import type { CardBadge, HistoryCategory, HistoryRecord } from './dashboard.ts'
+import type { CardBadge, HistoryCategory, HistoryRecord, WorkKey } from './dashboard.ts'
 import {
   buildHistory,
   historyCategory,
@@ -58,9 +57,9 @@ export function outcomeFilterMatches(row: HistoryRow, filter: OutcomeFilter): bo
  */
 export type HistoryRange
   = | { _tag: 'All' }
-    | { _tag: 'Stats', from: string | undefined, to: string | undefined, work: AgentRole | undefined }
+    | { _tag: 'Stats', from: string | undefined, to: string | undefined, work: WorkKey | undefined }
 
-const agentRoles: ReadonlySet<string> = new Set<AgentRole>([
+const workKeys: ReadonlySet<string> = new Set<WorkKey>([
   'conflict_resolution',
   'review_fix',
   'baseline_repair',
@@ -81,13 +80,13 @@ export function historyRangeFromQuery(query: Record<string, unknown>): HistoryRa
   const from = queryString(query.from)
   const to = queryString(query.to)
   const workValue = queryString(query.work)
-  const work = workValue !== undefined && agentRoles.has(workValue) ? workValue as AgentRole : undefined
+  const work = workValue !== undefined && workKeys.has(workValue) ? workValue as WorkKey : undefined
   if (from === undefined && to === undefined && work === undefined)
     return { _tag: 'All' }
   return { _tag: 'Stats', from, to, work }
 }
 
-export function historyRowWork(row: HistoryRow): AgentRole {
+export function historyRowWork(row: HistoryRow): WorkKey {
   switch (row._tag) {
     case 'Review': return 'adversarial_review'
     case 'Routine': return 'routine_scan'

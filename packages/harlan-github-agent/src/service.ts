@@ -14,6 +14,7 @@ import type { ClaimedAgentTask, DashboardSnapshot, IncidentScope, RepositoryMapp
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { setTimeout as waitForHost } from 'node:timers/promises'
+import { jev } from 'advocaat'
 import { createAgentActivityLog } from './agent-activity.ts'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
 import { agentLabelItem } from './agent-label.ts'
@@ -28,6 +29,7 @@ import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
+import { createClassificationSource } from './classification.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
@@ -56,7 +58,7 @@ import { createCircuitProtectedProvider } from './provider-circuit.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
 import { findPullRequestDiagramReference } from './pull-request-diagram.ts'
 import { createPullRequestStatusController } from './pull-request-status-controller.ts'
-import { createPullRequestTriageAgent } from './pull-request-triage.ts'
+import { createPullRequestTriageController } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
@@ -91,6 +93,8 @@ export interface StartAgentServiceOptions {
   config: ValidatedAgentConfig
   /** Required when the configuration enables the webhook listener. */
   webhookSecret?: string
+  /** Required when the configuration enables the classification service. */
+  classification?: { accountId: string, apiToken: string, gatewayId?: string, model: string }
   userAccess?: GitHubUserAccess
   dashboardPassword: string
   githubPrivateKey: string
@@ -448,6 +452,26 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     legacyActor: { login: userLogin, tokens: legacyUserTokens },
     tokens,
   })
+  // Pull request triage classifies at observation time, before the planner
+  // queues anything. Without the classification service it still runs: the
+  // path rule decides, and a prose-only pull request falls back to a full
+  // Review.
+  const classification = options.classification === undefined
+    ? null
+    : createClassificationSource({
+        client: jev({
+          accountId: options.classification.accountId,
+          apiToken: options.classification.apiToken,
+          ...(options.classification.gatewayId === undefined ? {} : { gatewayId: options.classification.gatewayId }),
+          model: options.classification.model,
+        }),
+      })
+  const pullRequestTriage = createPullRequestTriageController({
+    classification,
+    github: workerGithub,
+    now,
+    store,
+  })
   const mutationSchedulers = await (async () => {
     if (!config.mutationsEnabled)
       return undefined
@@ -606,7 +630,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         )
       },
       preflightRepair: (repository: string, signal: AbortSignal) => preflightGitHubWriteAccess(tokens, repository, ['contents_write'], signal),
-      pullRequestTriage: createPullRequestTriageAgent({ activityLog, now, runtime, store, workspace: controllerRoot }),
       store,
       runtime,
       status: reviewStatus,
@@ -1176,6 +1199,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           ...(mutationSchedulers === undefined
             ? {}
             : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge, refreshReviewGates: refreshRepositoryReviewGates }),
+          ...(pullRequestTriage === null ? {} : { pullRequestTriage }),
           github,
           store,
           now,

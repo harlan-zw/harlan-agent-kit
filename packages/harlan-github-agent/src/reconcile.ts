@@ -1,6 +1,7 @@
 import type { ApprovalController } from './approval-controller.ts'
 import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
+import type { PullRequestTriageController, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
@@ -25,6 +26,7 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
+  pullRequestTriage?: PullRequestTriageController
   refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
   store: JournalStore
@@ -87,12 +89,33 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   const finalIssues = finalIssueReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const finalPullRequests = finalPullRequestReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const observedItems = [...eligibleItems, ...finalIssues, ...finalPullRequests]
-  const eligibleWrites = eligibleItems.map(subject => dependencies.store.recordObservation({
-    externalId: observationId(repository.github, subject),
-    observedAt,
-    source: 'poll',
-    subject,
-  }))
+  // Pull request triage decides before the observation is recorded, so the
+  // planner never queues a Review Task it would skip. Only an open, writable,
+  // review-enabled repository is worth a decision.
+  const triageSignal = dependencies.signal ?? AbortSignal.timeout(30_000)
+  const triageDecisions = new Map<number, PullRequestTriageDecision>()
+  if (writesEnabled && dependencies.pullRequestTriage !== undefined) {
+    const decisions = await Promise.all(eligibleItems.map(async (subject) => {
+      if (subject.kind !== 'pull_request' || subject.state !== 'open' || !repository.pullRequestReview || !repository.enabled)
+        return null
+      return dependencies.pullRequestTriage?.verdict(repository, subject, triageSignal)
+    }))
+    eligibleItems.forEach((subject, index) => {
+      const decision = decisions[index]
+      if (decision !== null && decision !== undefined)
+        triageDecisions.set(subject.number, decision)
+    })
+  }
+  const eligibleWrites = eligibleItems.map((subject) => {
+    const decision = subject.kind === 'pull_request' ? triageDecisions.get(subject.number) : undefined
+    return dependencies.store.recordObservation({
+      externalId: observationId(repository.github, subject),
+      observedAt,
+      source: 'poll',
+      subject,
+      ...(decision === undefined ? {} : { pullRequestTriage: decision }),
+    })
+  })
   const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
@@ -129,6 +152,27 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const message = 'The final pull request state could not be saved.'
     dependencies.store.recordPollFailure(repository.github, observedAt, message)
     return err({ repository: repository.github, message })
+  }
+
+  // The decision rows landed with the observations above, so the visible half
+  // of each decision can follow. A failure here retries on the next poll,
+  // because the stored decision is reused and settled again.
+  if (writesEnabled && dependencies.pullRequestTriage !== undefined) {
+    const settled = await Promise.all(eligibleItems.map((subject, index) => {
+      if (subject.kind !== 'pull_request')
+        return Promise.resolve(ok(undefined))
+      const decision = triageDecisions.get(subject.number)
+      const write = eligibleWrites[index]
+      if (decision === undefined || write === undefined || (write._tag !== 'Inserted' && write._tag !== 'Duplicate'))
+        return Promise.resolve(ok(undefined))
+      return dependencies.pullRequestTriage?.settle(repository, subject, decision, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
+    }))
+    const failedSettle = settled.find(result => result._tag === 'Err')
+    if (failedSettle?._tag === 'Err') {
+      if (dependencies.signal?.aborted !== true)
+        dependencies.store.recordPollFailure(repository.github, observedAt, failedSettle.error)
+      return err({ repository: repository.github, message: failedSettle.error })
+    }
   }
 
   if (writesEnabled && dependencies.approvals !== undefined) {

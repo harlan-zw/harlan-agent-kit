@@ -446,13 +446,21 @@ One self identified automated triage record on an issue. Re-runs update the cano
 
 ### Pull request triage
 
-One routing decision for one exact pull request head commit.
+One routing decision for one exact pull request head commit, made at observation time before any Task is queued.
 
-The path rule decides first. One changed path outside the prose set requires Review without starting an Agent. Agent instruction files and `.github/**` count as behaviour, not prose.
+The path rule decides first. One changed path outside the prose set requires Review without a model call. Agent instruction files and `.github/**` count as behaviour, not prose.
 
-A prose-only pull request reuses the stored decision for the same head commit. Otherwise it uses a low-cost Agent decision from the title and changed paths. Any uncertainty requires Review.
+A prose-only pull request reuses the stored decision for the same head commit. Otherwise it asks the Classification service, which answers from the title and changed paths with a confidence. A skip needs confidence at or above its floor; any uncertainty or failure requires Review.
 
 `harlan-agent-review-required` records the automatic route to Review. `harlan-agent-review-skipped` records a skipped Review.
+
+### Classification
+
+A typed decision from the Jev model, reached through the Cloudflare AI endpoint. Answers carry probabilities and a confidence, never prose.
+
+One Classification call sends every question about one state in a single request. Pull request triage is the first caller; it decides skip versus Review for a prose-only pull request.
+
+Every caller keeps its deterministic floor, and a Classification failure takes the safe direction. A stored decision for the same input is reused instead of asked again.
 
 `harlan-agent-review` is the manual override. The service consumes it after it records Approval.
 

@@ -94,11 +94,11 @@ describe('agent profile resolution', () => {
     const profile = resolveAgentProfile(
       { provider: 'opencode', model: null, reasoningEffort: null },
       3,
-      { opencode: { review_fix: 'medium', pull_request_triage: 'low' } },
+      { opencode: { review_fix: 'medium', issue_triage: 'low' } },
     )
 
     expect(profile.roles.review_fix).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'medium' })
-    expect(profile.roles.pull_request_triage).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'low' })
+    expect(profile.roles.issue_triage).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'low' })
     expect(profile.roles.adversarial_review).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' })
   })
 
