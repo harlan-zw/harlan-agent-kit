@@ -4614,10 +4614,10 @@ function planAdversarialReview(
   // Pull request triage decided at observation time. A skip is durable before
   // it is visible: the row lands in this same transaction, so a retry reuses
   // the decision instead of paying for the classification again. The manual
-  // Review label still wins over any skip, and the supersede above already
-  // retired any Task this revision queued.
+  // Review label still wins over any skip, an explicit rerun wins too, and
+  // the supersede above already retired any Task this revision queued.
   if (triage !== undefined && subject.kind === 'pull_request') {
-    if (triage._tag === 'Skipped' && !manualReviewRequested) {
+    if (triage._tag === 'Skipped' && !manualReviewRequested && !rerunRequested) {
       // A Task queued before this decision landed (a failure row recovered,
       // or a poll that computed no verdict) is retired here: a live-leased
       // Running Review keeps its turn, everything else waits for nothing.
