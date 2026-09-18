@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { ClassificationSource } from './classification.ts'
 import type { FailedJobContext, GitHubAgentSource, GitHubCheck, PullRequestReviewSnapshot, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
@@ -12,7 +13,7 @@ import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { runRepairedAgentTurn } from './agent-turn.ts'
 import { withBaselineRepairMarker } from './baseline-repair-state.ts'
-import { classifyCheckFailure } from './failure.ts'
+import { classifyCheckFailureWithResidual } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
@@ -60,6 +61,8 @@ export interface WorkspaceFile {
 const GITHUB_ACTIONS_APP_ID = 15368
 
 export interface BaselineRepairWorkerOptions {
+  /** When present, checks the patterns cannot name are asked to the classification service. */
+  classification?: ClassificationSource | null
   /**
    * Harlan's Claude Code home, which holds the per-repository memory.
    *
@@ -325,15 +328,19 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           ? { _tag: 'Available', check, job: job.value }
           : { _tag: 'Unavailable', check, reason: job.error }
       }))
-      const classified = contexts.map(context => ({
+      const classified = await Promise.all(contexts.map(async context => ({
         context,
-        failure: classifyCheckFailure({
-          name: context.check.name,
-          conclusion: context.check.conclusion,
-          runnerLost: context.check.failure._tag === 'RunnerLost',
-          logTail: context._tag === 'Available' ? context.job.logTail : [],
+        failure: await classifyCheckFailureWithResidual({
+          signal: {
+            name: context.check.name,
+            conclusion: context.check.conclusion,
+            runnerLost: context.check.failure._tag === 'RunnerLost',
+            logTail: context._tag === 'Available' ? context.job.logTail : [],
+          },
+          classification: options.classification ?? null,
+          abort: signal,
         }),
-      }))
+      })))
       const infrastructure = classified.flatMap(entry => entry.failure._tag === 'Infrastructure' ? [{ check: entry.context.check, reason: entry.failure.reason }] : [])
       const repairable = classified.flatMap(entry => entry.failure._tag === 'Repairable' ? [entry.context] : [])
       // No change to the repository fixes a dead runner or a remote outage.
