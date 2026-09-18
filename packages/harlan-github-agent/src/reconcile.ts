@@ -102,6 +102,15 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const verdicts = await Promise.all(eligibleItems.map(async (subject) => {
       if (subject.kind !== 'pull_request' || subject.state !== 'open' || !repository.pullRequestReview || !repository.enabled)
         return null
+      // The planner queues a Review only for a clean, non-draft pull request
+      // from a trusted author or one the manual label approves. The verdict
+      // asks only those, so an ineligible head is never read or classified
+      // on every poll for a decision that cannot land.
+      if (subject.draft || subject.mergeState !== 'clean')
+        return null
+      const trustedAuthor = repository.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
+      if (!trustedAuthor && !subject.approvalLabels.includes('review'))
+        return null
       return dependencies.pullRequestTriage?.verdict(repository, subject, triageSignal)
     }))
     eligibleItems.forEach((subject, index) => {
