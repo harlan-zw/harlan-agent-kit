@@ -526,9 +526,15 @@ function classificationConfig(source: UnknownRecord, issues: ConfigIssue[]): Cla
     issues.push({ path: '$.classification.token_path', message: 'Expected an absolute path.' })
   const gatewayId = optionalString(value, 'gateway_id', '$.classification', issues)
   const model = requiredString(value, 'model', '$.classification', issues)
-  if (accountId === undefined || tokenPath === undefined || model === undefined || gatewayId === undefined)
+  const bandValue = value.issue_triage_band
+  const issueTriageBand = bandValue === undefined
+    ? null
+    : typeof bandValue === 'number' && bandValue >= 0.5 && bandValue <= 0.99 ? bandValue : undefined
+  if (issueTriageBand === undefined)
+    issues.push({ path: '$.classification.issue_triage_band', message: 'Expected a number from 0.5 to 0.99.' })
+  if (accountId === undefined || tokenPath === undefined || model === undefined || gatewayId === undefined || issueTriageBand === undefined)
     return undefined
-  return { _tag: 'Enabled', accountId, tokenPath, ...(gatewayId === null ? {} : { gatewayId }), model }
+  return { _tag: 'Enabled', accountId, tokenPath, ...(gatewayId === null ? {} : { gatewayId }), model, issueTriageBand }
 }
 
 /**

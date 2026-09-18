@@ -20,7 +20,7 @@ import { createGitServiceUpdateSource } from './service-update.ts'
 import { startAgentService } from './service.ts'
 import { stopWithin } from './shutdown.ts'
 import { openJournalStore } from './store.ts'
-import { replayStoredTriage } from './triage-evaluation.ts'
+import { replayStoredIssueTriage, replayStoredTriage } from './triage-evaluation.ts'
 import { agentWorktreeLeaseKey, listSweepableAgentWorktrees, sweepAgentWorktrees } from './worktree.ts'
 
 function waitForShutdown(): Promise<void> {
@@ -406,7 +406,53 @@ const evaluateTriage = defineCommand({
   },
 })
 
-const rootSubCommandNames = ['combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage']
+const evaluateIssueTriage = defineCommand({
+  meta: {
+    name: 'evaluate-issue-triage',
+    description: 'Replay recorded Issue triage decisions through the classification service and suggest a route band.',
+  },
+  args: {
+    ...rootArguments,
+    limit: {
+      type: 'string',
+      alias: 'l',
+      description: 'Newest decisions to replay.',
+      default: '100',
+    },
+  },
+  async run({ args }) {
+    const parsed = await loadConfig(resolve(args.config))
+    if (parsed._tag === 'Err')
+      throw new Error(parsed.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+    const classification = parsed.value.classification
+    if (classification._tag !== 'Enabled')
+      throw new Error('The configuration has no classification block, so there is nothing to evaluate with.')
+    const token = await loadClassificationToken(classification.tokenPath)
+    if (token._tag === 'Err')
+      throw new Error(token.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+    const limit = Number.parseInt(args.limit ?? '100', 10)
+    if (!Number.isInteger(limit) || limit < 1)
+      throw new Error('--limit needs a whole number above zero.')
+    const source = createClassificationSource({
+      client: jev({
+        accountId: classification.accountId,
+        apiToken: token.value,
+        ...(classification.gatewayId === undefined ? {} : { gatewayId: classification.gatewayId }),
+        model: classification.model,
+      }),
+    })
+    const summary = await replayStoredIssueTriage({
+      journalPath: parsed.value.storage.path,
+      limit,
+      classification: source,
+      log: line => consola.info(line),
+    })
+    consola.success(`Replayed ${summary.replayed} Agent triage decisions from titles alone; bodies are not in the journal.`)
+    consola.info(`Suggested issue_triage_band: ${summary.suggestion.band}, ${summary.suggestion.agreed}/${summary.replayed} agreed, ${summary.suggestion.readyStalled} ready issues would stall.`)
+  },
+})
+
+const rootSubCommandNames = ['combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage', 'evaluate-issue-triage']
 
 const command = defineCommand({
   meta: {
@@ -420,6 +466,7 @@ const command = defineCommand({
     'sweep-worktrees': sweepWorktrees,
     'control': controlCommand,
     'evaluate-triage': evaluateTriage,
+    'evaluate-issue-triage': evaluateIssueTriage,
   },
   async run({ args, rawArgs }) {
     // citty runs this after it ran the subcommand, so stop before the service

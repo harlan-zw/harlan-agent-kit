@@ -92,6 +92,8 @@ export type ClassificationConfig
       tokenPath: string
       gatewayId?: string
       model: string
+      /** The confidence an Issue triage route needs before it bypasses the Agent turn. Null never bypasses. */
+      issueTriageBand: number | null
     }
 
 /**

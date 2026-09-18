@@ -1,6 +1,8 @@
 import type { ClassificationSource } from './classification.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import { DatabaseSync } from 'node:sqlite'
+import { issueRouteQuestions } from './issue-classification.ts'
+import { parseStoredIssueTriage } from './issue-triage.ts'
 import { classifyPullRequestPaths, proseOnlyQuestions } from './pull-request-triage.ts'
 
 /**
@@ -186,6 +188,124 @@ export async function replayStoredTriage(input: {
       skippedWithoutFiles: withoutFiles.count,
       suggestion: suggestBand(replays),
     }
+  }
+  finally {
+    database.close()
+  }
+}
+
+export interface IssueTriageReplay {
+  stored: 'READY_TO_IMPLEMENT' | 'READY_TO_SPEC' | 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT'
+  /** The route the classification would answer, null when the call failed. */
+  route: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'AGENT_TRIAGE' | null
+  confidence: number | null
+}
+
+export interface IssueBandSummary {
+  band: number
+  agreed: number
+  /** Issues the Agent sent to work that a bypass would have stalled. */
+  readyStalled: number
+  /** Issues the Agent wanted information for that the bypass routes the same way. */
+  routedAsStored: number
+}
+
+/**
+ * Applies one bypass band to the issue replays. A bypass happens only when the
+ * classification names NEEDS_INFO or WAIT_TO_IMPLEMENT at or above the band
+ * and the stored evidence agrees; everything else keeps the Agent turn.
+ */
+export function summariseIssueBand(replays: IssueTriageReplay[], band: number): IssueBandSummary {
+  let agreed = 0
+  let readyStalled = 0
+  let routedAsStored = 0
+  for (const replay of replays) {
+    if (replay.route === null) {
+      agreed += 1
+      continue
+    }
+    const bypass = (replay.route === 'NEEDS_INFO' || replay.route === 'WAIT_TO_IMPLEMENT')
+      && replay.confidence !== null && replay.confidence >= band
+    const storedBypass = replay.stored === 'NEEDS_INFO' || replay.stored === 'WAIT_TO_IMPLEMENT'
+    if (bypass === storedBypass) {
+      agreed += 1
+      if (bypass)
+        routedAsStored += 1
+    }
+    else if (bypass && replay.stored.startsWith('READY')) {
+      readyStalled += 1
+    }
+    else {
+      // The Agent routed for information and the bypass would not: that costs
+      // one Agent turn, which is today's behaviour and never a loss.
+      agreed += 1
+    }
+  }
+  return { band, agreed, readyStalled, routedAsStored }
+}
+
+export function suggestIssueBand(replays: IssueTriageReplay[]): IssueBandSummary {
+  const summaries = TRIAGE_BANDS.map(band => summariseIssueBand(replays, band))
+  const safe = summaries.filter(summary => summary.readyStalled === 0)
+  const pool = safe.length > 0 ? safe : summaries
+  return pool.reduce((best, candidate) => (candidate.agreed > best.agreed ? candidate : best))
+}
+
+export interface StoredIssueTriageReplaySummary {
+  replayed: number
+  suggestion: IssueBandSummary
+}
+
+/**
+ * Replays the Agent's recorded Issue triage decisions through the route
+ * questions. The journal holds the title at decision time but not the body, so
+ * the replay reads the title alone and says so in its counts.
+ */
+export async function replayStoredIssueTriage(input: {
+  journalPath: string
+  limit: number
+  classification: ClassificationSource
+  log: (line: string) => void
+}): Promise<StoredIssueTriageReplaySummary> {
+  const database = new DatabaseSync(input.journalPath, { readOnly: true })
+  try {
+    const rows = database.prepare(`
+      SELECT
+        worker_tasks.evidence AS evidence,
+        json_extract(revisions.payload, '$.title') AS title
+      FROM worker_tasks
+      JOIN subjects ON subjects.id = worker_tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = worker_tasks.revision_id
+      WHERE worker_tasks.kind = 'issue_triage' AND worker_tasks.state_tag = 'Completed'
+        AND worker_tasks.evidence IS NOT NULL
+      ORDER BY worker_tasks.updated_at DESC
+      LIMIT ?
+    `).all(input.limit) as unknown as Array<{ evidence: string, title: string | null }>
+    const replays: IssueTriageReplay[] = []
+    for (const row of rows) {
+      const stored = parseStoredIssueTriage(row.evidence)
+      if (stored === null)
+        continue
+      const result = await input.classification.classify({
+        state: { title: row.title ?? '' },
+        questions: issueRouteQuestions(),
+      })
+      if (result._tag === 'Err') {
+        replays.push({ stored: stored._tag, route: null, confidence: null })
+        continue
+      }
+      replays.push({
+        stored: stored._tag,
+        route: result.value.answers.route.choice,
+        confidence: Math.round(result.value.answers.route.confidence * 100) / 100,
+      })
+    }
+    for (const band of TRIAGE_BANDS) {
+      const summary = summariseIssueBand(replays, band)
+      input.log(`Band ${band}: ${summary.agreed}/${replays.length} agreed, ${summary.readyStalled} ready issues stalled, ${summary.routedAsStored} routed as stored.`)
+    }
+    return { replayed: replays.length, suggestion: suggestIssueBand(replays) }
   }
   finally {
     database.close()
