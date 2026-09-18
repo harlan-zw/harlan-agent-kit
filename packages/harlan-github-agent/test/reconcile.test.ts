@@ -105,6 +105,38 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
+  it('never asks for a triage verdict in Manual Selection without the Review label', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const at = '2026-09-18T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.setSelectionMode('manual')
+    let verdicts = 0
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          listOpenItems: () => Promise.resolve(ok([pullRequestItem({ mergeState: 'clean' })])),
+        },
+        store,
+        now: () => new Date(at),
+        pullRequestTriage: {
+          verdict: async () => {
+            verdicts++
+            throw new Error('No verdict was asked for.')
+          },
+          settle: async () => { throw new Error('No settle was asked for.') },
+        },
+      })
+      expect(result._tag).toBe('Ok')
+      expect(verdicts).toBe(0)
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('never asks for a triage verdict on a draft or untrusted pull request', async () => {
     const store = openJournalStore(':memory:', true)
     const repository = repositoryMapping()
