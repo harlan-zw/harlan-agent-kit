@@ -1300,10 +1300,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           capacity: capacity.read(provider),
           reservePercent: config.agent.reservePercent[provider],
         }))
+        const classification = options.classification === undefined
+          ? undefined
+          : { model: options.classification.model, gatewayId: options.classification.gatewayId ?? 'default' }
         const current = {
           ...snapshot,
           agentProviderOrder: config.agent.order,
           providerCapacities,
+          ...(classification === undefined ? {} : { classification }),
         }
         return { ...current, agentStart: resolveAgentStartState(current) }
       },

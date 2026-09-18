@@ -1186,6 +1186,8 @@ interface SubjectRow {
 interface DashboardSubjectRow extends SubjectRow {
   policy_json: string
   review_approved_at: string | null
+  triage_outcome: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure' | null
+  triage_reason: string | null
   dismissed: number
 }
 
@@ -2838,6 +2840,9 @@ function subjectFromRow(database: DatabaseSync, row: DashboardSubjectRow): ItemS
       author: row.author,
       reviewApprovedAt: row.review_approved_at,
     }),
+    ...(row.triage_outcome === null || row.triage_reason === null
+      ? {}
+      : { triage: { outcome: row.triage_outcome, reason: row.triage_reason } }),
   }
 }
 
@@ -12462,6 +12467,14 @@ export function openJournalStore(
           SELECT approved_at FROM pull_request_approvals
           WHERE subject_id = subjects.id AND revision_id = revisions.id AND kind = 'review'
         ) AS review_approved_at,
+        (
+          SELECT outcome_tag FROM pull_request_triage_runs
+          WHERE subject_id = subjects.id AND revision_id = revisions.id
+        ) AS triage_outcome,
+        (
+          SELECT reason FROM pull_request_triage_runs
+          WHERE subject_id = subjects.id AND revision_id = revisions.id
+        ) AS triage_reason,
         EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id) AS dismissed
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
@@ -12623,6 +12636,12 @@ export function openJournalStore(
       ? storedAgentControl
       : { ...storedAgentControl, safeToRestart: isSafeToRestart() }
     const restartRequest = getRestartRequest()
+    const triageDecisionRows = database.prepare(`
+      SELECT outcome_tag, COUNT(*) AS count FROM pull_request_triage_runs
+      WHERE completed_at >= ?
+      GROUP BY outcome_tag
+    `).all(new Date(Date.parse(generatedAt) - 24 * 60 * 60 * 1000).toISOString()) as unknown as Array<{ outcome_tag: string, count: number }>
+    const triageDecisionCount = (tag: string) => triageDecisionRows.find(row => row.outcome_tag === tag)?.count ?? 0
 
     return {
       generatedAt,
@@ -12634,6 +12653,11 @@ export function openJournalStore(
       selectionMode: currentSelectionMode,
       openPullRequests: countOpenPullRequests(),
       maxOpenPullRequests,
+      triageDecisions: {
+        reviewRequired: triageDecisionCount('ReviewRequired'),
+        reviewSkipped: triageDecisionCount('ReviewSkipped'),
+        couldNotDecide: triageDecisionCount('ReviewRequiredAfterFailure'),
+      },
       agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents, roleReasoningEfforts),
       agentSelection: getAgentSelection(),
       agentStart: !mutationsEnabled

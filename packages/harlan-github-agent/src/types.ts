@@ -324,9 +324,15 @@ export type ItemDismissalResult
     | { _tag: 'Duplicate' }
     | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
 
+type PullRequestItemSummary = GitHubPullRequestItem & ItemSummaryBase & {
+  approval: PullRequestApprovalState
+  /** The Pull request triage decision for this exact Revision, when one is recorded. */
+  triage?: { outcome: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure', reason: string }
+}
+
 export type ItemSummary
   = | GitHubIssueItem & ItemSummaryBase
-    | GitHubPullRequestItem & ItemSummaryBase & { approval: PullRequestApprovalState }
+    | PullRequestItemSummary
 
 export interface ReviewEvidence {
   label: string
@@ -1539,6 +1545,10 @@ export interface DashboardSnapshot {
   openPullRequests: number
   /** Issue work stops when open pull requests reach this limit. */
   maxOpenPullRequests: number
+  /** Classification service facts, present when the configuration enables it. */
+  classification?: { model: string, gatewayId: string }
+  /** Pull request triage decisions over the last 24 hours. */
+  triageDecisions: { reviewRequired: number, reviewSkipped: number, couldNotDecide: number }
   agentProfile: AgentProfile
   agentSelection: AgentSelection
   agentStart: AgentStartState
