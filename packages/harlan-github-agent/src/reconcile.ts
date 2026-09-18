@@ -223,13 +223,20 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   }
 
   // A routed Issue triage decision publishes its comment and label after the
-  // row landed with the observation. Fresh and stored routes settle the same
-  // idempotent way, so a failed write retries on the next poll.
+  // row landed with the observation. A fresh decision settles only when its
+  // observation landed: a Stale or Conflicting write recorded no row, so
+  // publishing its comment would put a verdict on GitHub the journal never
+  // held. A stored row settles by definition, because the row is what
+  // retries.
   if (writesEnabled && dependencies.issueClassification !== undefined) {
-    for (const [number, decision] of issueDecisions) {
-      if (decision._tag === 'Routed')
-        settleResults.set(number, decision.result)
-    }
+    eligibleItems.forEach((subject, index) => {
+      if (subject.kind !== 'issue')
+        return
+      const decision = issueDecisions.get(subject.number)
+      const write = eligibleWrites[index]
+      if (decision !== undefined && decision._tag === 'Routed' && (write?._tag === 'Inserted' || write?._tag === 'Duplicate'))
+        settleResults.set(subject.number, decision.result)
+    })
     const settledIssues = await Promise.all(eligibleItems.map((subject) => {
       if (subject.kind !== 'issue')
         return Promise.resolve(ok(undefined))
