@@ -3,6 +3,7 @@ import type { AgentLabelState } from './agent-label.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { Result } from './result.ts'
+import type { ReviewCheckRunPublisher, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
@@ -14,6 +15,7 @@ import { currentBaseChecks, currentBaseSha } from './github-base.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
+import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
 
 /**
@@ -332,6 +334,15 @@ export interface GitHubAgentSource {
    */
   editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, expectedBody: string, body: string, signal: AbortSignal) => Promise<Result<EditedReviewStatus, string>>
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal, authorize?: ReviewPublicationAuthority) => Promise<Result<PublishedReviewStatus, string>>
+  /**
+   * Mirrors one Review publication onto the Review check run for that head.
+   *
+   * The check run reports visibility, never a verdict: `success` for a READY
+   * Review and `neutral` for every other outcome, so branch protection cannot
+   * gate on this service's own opinion. `reviewCheckRunUpdate` decides what
+   * one publication owes; this write lands it.
+   */
+  upsertReviewCheckRun: ReviewCheckRunPublisher['upsertReviewCheckRun']
 }
 
 export interface GitHubAgentSourceOptions {
@@ -343,6 +354,12 @@ export interface GitHubAgentSourceOptions {
     login: string
     tokens: GitHubTokenProvider
   }
+  /**
+   * This app's own GitHub App id. Check runs the app writes report the Review,
+   * so reading them back as CI would make the Review gate on itself, and every
+   * checks read drops them.
+   */
+  ownAppId: number
   tokens: GitHubTokenProvider
   userAgent?: string
 }
@@ -854,7 +871,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
               const completedWorkflows = new Map(workflowRuns.flatMap(run => run.status === 'completed' && run.conclusion && run.check_suite_id
                 ? [[run.check_suite_id, run.conclusion] as const]
                 : []))
-              const runs = allRuns.filter(check => check.check_suite?.id === undefined || check.check_suite.id === null || !derivedSuites.has(check.check_suite.id))
+              // This app's own check runs report the Review, so reading them
+              // as CI would make a Review gate on its own progress and stall.
+              const runs = allRuns.filter(check => check.app?.id !== options.ownAppId
+                && (check.check_suite?.id === undefined || check.check_suite.id === null || !derivedSuites.has(check.check_suite.id)))
               const current = currentGitHubChecks([
                 ...runs.map((check) => {
                   // GitHub can leave jobs queued after their workflow has finished.
@@ -1071,5 +1091,124 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         return ok({ commentId: confirmed.data.id, url: confirmed.data.html_url })
       }).catch((error: unknown) => err(message(error)))
     },
+
+    async upsertReviewCheckRun(repository, headSha, update, signal, authorize) {
+      // The Review check run belongs to the App bot's identity, which the
+      // read side then filters by app id. A user credential would create a
+      // check run this service can never recognise as its own, so a
+      // user-token repository publishes its comment alone.
+      if (repository.authentication !== 'app')
+        return ok(undefined)
+      const octokit = await client(repository.github, 'check_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      // One publication at a time per head: two first publications that both
+      // read "no check run yet" would both create one, and the loser stays in
+      // progress forever. The whole read-then-write section sits behind the
+      // gate, so the second publication sees the first one's check run.
+      const gateKey = `${repository.github.toLowerCase()}:${headSha.toLowerCase()}`
+      const queued = (checkRunWriteGates.get(gateKey) ?? Promise.resolve())
+        .then(() => writeReviewCheckRun(octokit.value, owner, repo, headSha, update, options.ownAppId, signal, authorize))
+      const tail = queued.then(() => undefined, () => undefined)
+      checkRunWriteGates.set(gateKey, tail)
+      // One publication at a time per head, and the entry leaves when the
+      // head goes quiet, so the map never grows past the busy heads.
+      void tail.then(() => {
+        if (checkRunWriteGates.get(gateKey) === tail)
+          checkRunWriteGates.delete(gateKey)
+      })
+      return queued
+    },
   }
+}
+
+/** Chains Review check run writes for one head, so the map never grows past the busy heads. */
+const checkRunWriteGates = new Map<string, Promise<void>>()
+
+async function writeReviewCheckRun(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  headSha: string,
+  update: ReviewCheckRunUpdate,
+  ownAppId: number,
+  signal: AbortSignal,
+  authorize: ReviewPublicationAuthority | undefined,
+): Promise<Result<void, string>> {
+  const requestOptions = { request: { signal } }
+  const listed = await octokit.paginate(octokit.rest.checks.listForRef, {
+    owner,
+    repo,
+    ref: headSha,
+    app_id: ownAppId,
+    per_page: 100,
+    ...requestOptions,
+  })
+    .then(runs => ok(
+      runs
+        .filter(check => check.app?.id === ownAppId && check.name === REVIEW_CHECK_RUN_NAME)
+        // A race before the gate existed can leave two check runs for one head.
+        // The newest carries the Review; an older one is a stranded duplicate.
+        .sort((left, right) => right.id - left.id),
+    ))
+    .catch((error: unknown): Result<Array<{ id: number, status: string }>, string> => err(message(error)))
+  if (listed._tag === 'Err')
+    return listed
+  const authorization = authorize?.()
+  if (authorization?._tag === 'Err')
+    return authorization
+  // The name plus the app id is the identity, so a foreign check run that
+  // borrows the name never takes this service's write.
+  const output = { title: update.title, summary: 'The review comment on this pull request carries the detail.' }
+  const payload = update._tag === 'Running'
+    ? { status: 'in_progress' as const, output }
+    : { status: 'completed' as const, conclusion: update.conclusion, completed_at: update.completedAt, output }
+  const newest = listed.value[0]
+  const written = await (newest === undefined
+    ? octokit.rest.checks.create({
+        owner,
+        repo,
+        head_sha: headSha,
+        name: REVIEW_CHECK_RUN_NAME,
+        ...payload,
+        ...requestOptions,
+      })
+    : octokit.rest.checks.update({
+        owner,
+        repo,
+        check_run_id: newest.id,
+        ...payload,
+        ...requestOptions,
+      }))
+    .then(response => typeof response.data?.id === 'number'
+      ? ok(undefined)
+      : err('GitHub did not confirm the Review check run write.'))
+    .catch((error: unknown): Result<void, string> => err(message(error)))
+  if (written._tag === 'Err')
+    return written
+  // Only a completing publication closes strays, because only it arrives with
+  // a timestamp. That still guarantees every head that settles leaves no
+  // check run in progress behind it.
+  if (update._tag !== 'Completed')
+    return ok(undefined)
+  for (const stray of listed.value.slice(1)) {
+    if (stray.status === 'completed')
+      continue
+    const closed = await octokit.rest.checks.update({
+      owner,
+      repo,
+      check_run_id: stray.id,
+      status: 'completed',
+      conclusion: 'neutral',
+      completed_at: update.completedAt,
+      output,
+      ...requestOptions,
+    })
+      .then((): Result<void, string> => ok(undefined))
+      .catch((error: unknown): Result<void, string> => err(message(error)))
+    if (closed._tag === 'Err')
+      return closed
+  }
+  return ok(undefined)
 }

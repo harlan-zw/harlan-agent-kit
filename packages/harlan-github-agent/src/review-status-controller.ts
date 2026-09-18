@@ -1,11 +1,13 @@
 import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
+import type { ReviewCheckRunPublisher } from './review-check-run.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
+import { reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { updatedAtLabel } from './text.ts'
 
@@ -16,6 +18,8 @@ export interface ReviewStatusController {
 }
 
 export interface ReviewStatusControllerOptions {
+  /** Mirrors each Review publication onto the Review check run. Absent leaves the check run unwritten. */
+  checkRuns?: ReviewCheckRunPublisher
   commentControls?: boolean
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
   leaseMilliseconds: number
@@ -25,6 +29,7 @@ export interface ReviewStatusControllerOptions {
 }
 
 export interface ReviewStatusPublicationOptions {
+  checkRuns?: ReviewCheckRunPublisher
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
   now: () => Date
   store: Pick<JournalStore, 'authorizeReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
@@ -206,6 +211,39 @@ export async function publishClaimedReviewStatus(
   })
   if (!commentConfirmed)
     return err('GitHub accepted the review comment, but its receipt lost the Publication lease.')
+
+  const checkRun = options.checkRuns === undefined ? null : reviewCheckRunUpdate(command, options.now().toISOString())
+  if (options.checkRuns !== undefined && checkRun !== null) {
+    const checkRunAuthority = authorizeWrite(options, command)
+    if (checkRunAuthority._tag === 'Err')
+      return checkRunAuthority
+    const mirrored = await options.checkRuns.upsertReviewCheckRun(
+      command.repositoryMapping,
+      command.expectedHeadSha,
+      checkRun,
+      signal,
+      () => authorizeWrite(options, command),
+    )
+    if (mirrored._tag === 'Err') {
+      options.store.deferReviewStatus({
+        commandId: command.id,
+        workerId: command.workerId,
+        fence: command.fence,
+        at: options.now().toISOString(),
+        reason: mirrored.error,
+      })
+      return mirrored
+    }
+    const checkRunConfirmed = options.store.recordReviewStatusReceipt({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: options.now().toISOString(),
+      sink: 'check_run',
+    })
+    if (!checkRunConfirmed)
+      return err('GitHub accepted the Review check run, but its receipt lost the Publication lease.')
+  }
 
   const label = command.phase !== 'terminal'
     ? null
