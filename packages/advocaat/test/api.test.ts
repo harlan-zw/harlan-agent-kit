@@ -68,11 +68,11 @@ describe('jev api', () => {
       model: 'typesafe/jev@jev-1.13.0',
       fetch: async (url, init) => {
         seen = { url: String(url), init: init! }
-        return json({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 0, output_tokens: 0 } })
+        return json({ model: 'jev-1.13.0', answers: { q: { type: 'noul', noul: 0.5 } }, usage: { input_tokens: 0, output_tokens: 0 } })
       },
     })
 
-    await client.systemOne({ state: null, questions: { q: noul() } })
+    await client.systemOne({ state: null, questions: { q: noul('Q?') } })
 
     expect((seen!.init.headers as Record<string, string>)['cf-aig-gateway-id']).toBe('jev-prod')
     expect(JSON.parse(seen!.init.body as string).model).toBe('typesafe/jev@jev-1.13.0')
@@ -82,10 +82,10 @@ describe('jev api', () => {
     const client = jev({
       accountId: 'acc-1',
       apiToken: 'k',
-      fetch: async () => json({ success: true, result: { model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 0, output_tokens: 0 } } }),
+      fetch: async () => json({ success: true, result: { model: 'jev-1.13.0', answers: { q: { type: 'noul', noul: 0.5 } }, usage: { input_tokens: 0, output_tokens: 0 } } }),
     })
 
-    const result = await client.systemOne({ state: null, questions: { q: noul() } })
+    const result = await client.systemOne({ state: null, questions: { q: noul('Q?') } })
 
     expect(result.model).toBe('jev-1.13.0')
   })
@@ -129,6 +129,45 @@ describe('jev api', () => {
     const failure = await client.systemOne({ state: null, questions: { q: noul() } }).catch(error => error)
 
     expect(failure).toBeInstanceOf(APIError)
+  })
+
+  it('refuses an answer that does not name one of its criteria', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({ model: 'jev-1.13.0', answers: { tone: { type: 'choice', choice: 'furious', confidence: 0.9 } }, usage: { input_tokens: 0, output_tokens: 0 } }),
+    })
+
+    const failure = await client.systemOne({ state: null, questions: { tone: choice('Tone?', { calm: null, angry: null }) } }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(APIError)
+    expect(failure.message).toContain('criteria')
+  })
+
+  it('refuses a confidence outside zero to one', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({ model: 'jev-1.13.0', answers: { tone: { type: 'choice', choice: 'calm', confidence: 5 } }, usage: { input_tokens: 0, output_tokens: 0 } }),
+    })
+
+    const failure = await client.systemOne({ state: null, questions: { tone: choice('Tone?', { calm: null, angry: null }) } }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(APIError)
+    expect(failure.message).toContain('confidence')
+  })
+
+  it('refuses an answer that is not a typed object', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({ model: 'jev-1.13.0', answers: { q: null }, usage: { input_tokens: 0, output_tokens: 0 } }),
+    })
+
+    const failure = await client.systemOne({ state: null, questions: { q: noul('Q?') } }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(APIError)
+    expect(failure.message).toContain('typed answer')
   })
 
   it('fails a 2xx response whose body carries no answers', async () => {
@@ -237,10 +276,10 @@ describe('jev api', () => {
       const client = jev({
         fetch: async (url, init) => {
           seen = { url: String(url), init: init! }
-          return json({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 0, output_tokens: 0 } })
+          return json({ model: 'jev-1.13.0', answers: { q: { type: 'noul', noul: 0.5 } }, usage: { input_tokens: 0, output_tokens: 0 } })
         },
       })
-      await client.systemOne({ state: null, questions: { q: noul() } })
+      await client.systemOne({ state: null, questions: { q: noul('Q?') } })
       expect(seen!.url).toBe('https://api.cloudflare.com/client/v4/accounts/env-account/ai/run')
       expect((seen!.init.headers as Record<string, string>).Authorization).toBe('Bearer env-token')
 
