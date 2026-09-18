@@ -189,13 +189,17 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           })
         : 0
 
+      // A gate drop is a judgement this run made, not prior knowledge: the run
+      // line names it as its own count so the ledger and the report agree.
+      const droppedByGate = withinSize.length - worthRecording.length
       const evidence = [
         `${task.name} on ${task.repository}`,
         `${response.candidates.length} ${definition.findingsLabel}`,
         `${fresh.length} new`,
-        `${withinSize.length - fresh.length} already known`,
+        `${withinSize.length - fresh.length - droppedByGate} already known`,
         `${outsideScope} outside allowed scope`,
         maximumChangedFiles === null ? 'no file limit' : `${oversized} over ${maximumChangedFiles} files`,
+        ...(droppedByGate === 0 ? [] : [`${droppedByGate} dropped by the classification gate`]),
         `${requested} issues requested`,
       ].join(' | ')
       // Every run writes its line, including the ones that found nothing. A

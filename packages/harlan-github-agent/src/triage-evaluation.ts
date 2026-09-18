@@ -51,6 +51,8 @@ export interface TriageBandSummary {
   band: number
   /** Replays whose replayed decision equals the stored one. */
   agreed: number
+  /** Replays the service could not answer. They carry no evidence either way and count nowhere. */
+  unavailable: number
   /** Replays that would Review what the journal skipped. Costs a Review; safe. */
   reviewsAdded: number
   /** Replays that would skip what the journal sent to Review. Costs a merge nobody read. */
@@ -66,12 +68,17 @@ export interface TriageBandSummary {
  */
 export function summariseBand(replays: Array<{ replay: TriageReplay, stored: TriageReplayInput['stored'] }>, band: number): TriageBandSummary {
   let agreed = 0
+  let unavailable = 0
   let reviewsAdded = 0
   let skipsAdded = 0
   let skipTotal = 0
   let skipAgreed = 0
   for (const { replay, stored } of replays) {
     const storedSkip = stored === 'ReviewSkipped'
+    if (replay._tag === 'Unavailable') {
+      unavailable += 1
+      continue
+    }
     if (replay._tag !== 'Classified') {
       agreed += 1
       continue
@@ -94,6 +101,7 @@ export function summariseBand(replays: Array<{ replay: TriageReplay, stored: Tri
   return {
     band,
     agreed,
+    unavailable,
     reviewsAdded,
     skipsAdded,
     skipPrecision: skipTotal === 0 ? null : Math.round((skipAgreed / skipTotal) * 100) / 100,
@@ -183,6 +191,23 @@ export async function replayStoredTriage(input: {
       const summary = summariseBand(replays, band)
       input.log(`Band ${band}: ${summary.agreed} agreed, ${summary.reviewsAdded} extra Reviews, ${summary.skipsAdded} would skip what Review read${summary.skipPrecision === null ? '' : `, skip precision ${summary.skipPrecision}`}.`)
     }
+    // Accuracy within probability bands, the check a threshold choice needs:
+    // it shows where the model knows and where it guesses.
+    const buckets = new Map<string, { total: number, correct: number }>()
+    for (const { replay, stored } of replays) {
+      if (replay._tag !== 'Classified')
+        continue
+      const bucket = `${Math.floor(replay.confidence * 10) / 10}-${Math.floor(replay.confidence * 10) / 10 + 0.1}`
+      const entry = buckets.get(bucket) ?? { total: 0, correct: 0 }
+      entry.total += 1
+      if ((replay.skip && replay.confidence >= TRIAGE_BANDS[0]) === (stored === 'ReviewSkipped'))
+        entry.correct += 1
+      buckets.set(bucket, entry)
+    }
+    for (const [bucket, entry] of [...buckets.entries()].sort(([left], [right]) => left.localeCompare(right)))
+      input.log(`Confidence ${bucket}: ${entry.correct}/${entry.total} agreed with the stored decision.`)
+    if (replays.length < 100)
+      input.log(`Only ${replays.length} replays: below the 100-150 example floor, so treat the suggested band as provisional.`)
     return {
       replayed: replays.length,
       skippedWithoutFiles: withoutFiles.count,
@@ -204,6 +229,8 @@ export interface IssueTriageReplay {
 export interface IssueBandSummary {
   band: number
   agreed: number
+  /** Replays the service could not answer. They carry no evidence either way and count nowhere. */
+  unavailable: number
   /** Issues the Agent sent to work that a bypass would have stalled. */
   readyStalled: number
   /** Issues the Agent wanted information for that the bypass routes the same way. */
@@ -219,9 +246,10 @@ export function summariseIssueBand(replays: IssueTriageReplay[], band: number): 
   let agreed = 0
   let readyStalled = 0
   let routedAsStored = 0
+  let unavailable = 0
   for (const replay of replays) {
     if (replay.route === null) {
-      agreed += 1
+      unavailable += 1
       continue
     }
     const bypass = (replay.route === 'NEEDS_INFO' || replay.route === 'WAIT_TO_IMPLEMENT')
@@ -241,7 +269,7 @@ export function summariseIssueBand(replays: IssueTriageReplay[], band: number): 
       agreed += 1
     }
   }
-  return { band, agreed, readyStalled, routedAsStored }
+  return { band, agreed, unavailable, readyStalled, routedAsStored }
 }
 
 export function suggestIssueBand(replays: IssueTriageReplay[]): IssueBandSummary {
@@ -303,8 +331,10 @@ export async function replayStoredIssueTriage(input: {
     }
     for (const band of TRIAGE_BANDS) {
       const summary = summariseIssueBand(replays, band)
-      input.log(`Band ${band}: ${summary.agreed}/${replays.length} agreed, ${summary.readyStalled} ready issues stalled, ${summary.routedAsStored} routed as stored.`)
+      input.log(`Band ${band}: ${summary.agreed}/${replays.length} agreed, ${summary.readyStalled} ready issues stalled, ${summary.routedAsStored} routed as stored, ${summary.unavailable} unavailable.`)
     }
+    if (replays.length < 100)
+      input.log(`Only ${replays.length} replays: below the 100-150 example floor, so treat the suggested band as provisional.`)
     return { replayed: replays.length, suggestion: suggestIssueBand(replays) }
   }
   finally {
