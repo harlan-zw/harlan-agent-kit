@@ -721,12 +721,15 @@ export interface LatestPullRequestTriageRun {
   completedAt: string
 }
 
-/** One routed Issue triage decision, recorded at observation time without an Agent Task. */
-export interface StoredIssueTriageRun {
-  result: Extract<IssueTriageResult, { _tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' }>
-  confidence: number
-  decidedAt: string
-}
+/** One classified Issue triage decision, recorded at observation time. */
+export type StoredIssueTriageRun
+  = | { _tag: 'AgentTriage', reason: string, decidedAt: string }
+    | {
+      _tag: 'Routed'
+      result: Extract<IssueTriageResult, { _tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' }>
+      confidence: number
+      decidedAt: string
+    }
 
 export interface JournalStore extends BatchStore, PackageReleaseStore {
   /**
@@ -4736,9 +4739,10 @@ function insertIssueTriageRun(
   database: DatabaseSync,
   subjectId: number,
   revisionId: string,
-  decision: Extract<IssueClassificationDecision, { _tag: 'Routed' }>,
+  decision: Extract<IssueClassificationDecision, { _tag: 'Routed' | 'AgentTriage' }>,
   at: string,
 ): void {
+  const routed = decision._tag === 'Routed'
   database.prepare(`
     INSERT OR IGNORE INTO issue_triage_runs (
       subject_id, revision_id, route_tag, confidence, difficulty, impact,
@@ -4747,14 +4751,16 @@ function insertIssueTriageRun(
   `).run(
     subjectId,
     revisionId,
-    decision.result._tag,
-    decision.confidence,
-    decision.result.difficulty,
-    decision.result.impact,
-    decision.result.hasReproduction ? 1 : 0,
-    decision.title,
-    decision.body,
-    `model: classification routed ${decision.result._tag} with confidence ${Math.round(decision.confidence * 100) / 100}.`,
+    routed ? decision.result._tag : 'AGENT_TRIAGE',
+    routed ? decision.confidence : 0,
+    routed ? decision.result.difficulty : 0,
+    routed ? decision.result.impact : 0,
+    routed && decision.result.hasReproduction ? 1 : 0,
+    routed ? decision.title : '',
+    routed ? decision.body : '',
+    routed
+      ? `model: classification routed ${decision.result._tag} with confidence ${Math.round(decision.confidence * 100) / 100}.`
+      : `model: classification left the route to the Agent: ${decision.reason}`,
     at,
   )
 }
@@ -4817,14 +4823,16 @@ function planIssueTriage(
     return
   }
 
-  // A routed decision is durable: the row answers this Revision, and no Agent
-  // Task is queued for it. A later poll that recomputes nothing reads the row.
-  if (!agentAnswered && classification !== undefined && classification._tag === 'Routed') {
+  // Both classified outcomes are durable, so neither is asked twice. A routed
+  // Revision queues no Task; an Agent-kept Revision records why and still
+  // queues its Task below. An Agent answer outranks both.
+  if (!agentAnswered && classification !== undefined && (classification._tag === 'Routed' || classification._tag === 'AgentTriage')) {
     insertIssueTriageRun(database, subjectId, revisionId, classification, observedAt)
-    return
+    if (classification._tag === 'Routed')
+      return
   }
   const routed = database.prepare(`
-    SELECT 1 FROM issue_triage_runs WHERE subject_id = ? AND revision_id = ?
+    SELECT 1 FROM issue_triage_runs WHERE subject_id = ? AND revision_id = ? AND route_tag != 'AGENT_TRIAGE'
   `).get(subjectId, revisionId) !== undefined
   if (routed)
     return
@@ -6622,7 +6630,33 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 77
   }
-  if (version === 77)
+  if (version === 77) {
+    // Agent-kept routes are recorded too, so a Revision the classification
+    // left to the Agent is never asked again.
+    applyMigration(database, `
+      CREATE TABLE issue_triage_runs_v78 (
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        revision_id TEXT NOT NULL,
+        route_tag TEXT NOT NULL CHECK (route_tag IN ('NEEDS_INFO', 'WAIT_TO_IMPLEMENT', 'AGENT_TRIAGE')),
+        confidence REAL NOT NULL,
+        difficulty INTEGER NOT NULL,
+        impact INTEGER NOT NULL,
+        has_reproduction INTEGER NOT NULL,
+        state_title TEXT NOT NULL,
+        state_body TEXT NOT NULL,
+        reason TEXT NOT NULL CHECK (reason != ''),
+        decided_at TEXT NOT NULL,
+        UNIQUE (subject_id, revision_id),
+        FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
+      );
+      INSERT INTO issue_triage_runs_v78 SELECT * FROM issue_triage_runs;
+      DROP TABLE issue_triage_runs;
+      ALTER TABLE issue_triage_runs_v78 RENAME TO issue_triage_runs;
+      PRAGMA user_version = 78;
+    `)
+    version = 78
+  }
+  if (version === 78)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8047,23 +8081,27 @@ export function openJournalStore(
 
   const getLatestIssueTriageRun: JournalStore['getLatestIssueTriageRun'] = (repository, issueNumber, revisionId) => {
     const row = database.prepare(`
-      SELECT route_tag, confidence, difficulty, impact, has_reproduction, decided_at
+      SELECT route_tag, confidence, difficulty, impact, has_reproduction, reason, decided_at
       FROM issue_triage_runs
       JOIN subjects ON subjects.id = issue_triage_runs.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
         AND issue_triage_runs.revision_id = ?
     `).get(repository, issueNumber, revisionId) as {
-      route_tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT'
+      route_tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'AGENT_TRIAGE'
       confidence: number
       difficulty: number
       impact: number
       has_reproduction: number
+      reason: string
       decided_at: string
     } | undefined
     if (row === undefined)
       return null
+    if (row.route_tag === 'AGENT_TRIAGE')
+      return { _tag: 'AgentTriage', reason: row.reason, decidedAt: row.decided_at }
     return {
+      _tag: 'Routed',
       result: {
         _tag: row.route_tag,
         difficulty: row.difficulty,

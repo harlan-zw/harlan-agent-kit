@@ -26,6 +26,10 @@ export type IssueClassificationDecision
  * reproduction read cost one call together. Exported so tests can assert the
  * contract without the service.
  */
+/**
+ * Option order affects the answer distribution, so the criteria order is part
+ * of the measured contract: reorder only with a fresh evaluate-issue-triage run.
+ */
 export function issueRouteQuestions() {
   return {
     route: choice(
@@ -58,7 +62,7 @@ export function issueRouteQuestions() {
 /** A routed issue needs this much confidence before the Agent turn is skipped. Below it, the Agent investigates. */
 export const ISSUE_ROUTE_CONFIDENCE_FLOOR = 0.9
 
-function routedResult(input: {
+export function routedResult(input: {
   route: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT'
   difficulty: number
   impact: number
@@ -118,8 +122,14 @@ export function createIssueClassificationController(options: IssueClassification
       const snapshot = await options.github.getIssueTriageSnapshot(repository, issue.number, signal)
       if (snapshot._tag === 'Err')
         return { _tag: 'AgentTriage', reason: `The issue could not be read: ${snapshot.error}` }
+      // Comments are part of the report the route reads: a reproduction may
+      // have arrived in a comment after the issue body was written.
       const result = await options.classification.classify({
-        state: { title: snapshot.value.title, body: snapshot.value.body },
+        state: {
+          title: snapshot.value.title,
+          body: snapshot.value.body,
+          comments: snapshot.value.comments.slice(-20),
+        },
         questions: issueRouteQuestions(),
         signal,
       })

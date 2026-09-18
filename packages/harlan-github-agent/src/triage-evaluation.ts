@@ -204,6 +204,8 @@ export interface IssueTriageReplay {
 export interface IssueBandSummary {
   band: number
   agreed: number
+  /** Replays the service could not answer. They carry no evidence either way and count nowhere. */
+  unavailable: number
   /** Issues the Agent sent to work that a bypass would have stalled. */
   readyStalled: number
   /** Issues the Agent wanted information for that the bypass routes the same way. */
@@ -219,9 +221,10 @@ export function summariseIssueBand(replays: IssueTriageReplay[], band: number): 
   let agreed = 0
   let readyStalled = 0
   let routedAsStored = 0
+  let unavailable = 0
   for (const replay of replays) {
     if (replay.route === null) {
-      agreed += 1
+      unavailable += 1
       continue
     }
     const bypass = (replay.route === 'NEEDS_INFO' || replay.route === 'WAIT_TO_IMPLEMENT')
@@ -241,7 +244,7 @@ export function summariseIssueBand(replays: IssueTriageReplay[], band: number): 
       agreed += 1
     }
   }
-  return { band, agreed, readyStalled, routedAsStored }
+  return { band, agreed, unavailable, readyStalled, routedAsStored }
 }
 
 export function suggestIssueBand(replays: IssueTriageReplay[]): IssueBandSummary {
@@ -303,8 +306,10 @@ export async function replayStoredIssueTriage(input: {
     }
     for (const band of TRIAGE_BANDS) {
       const summary = summariseIssueBand(replays, band)
-      input.log(`Band ${band}: ${summary.agreed}/${replays.length} agreed, ${summary.readyStalled} ready issues stalled, ${summary.routedAsStored} routed as stored.`)
+      input.log(`Band ${band}: ${summary.agreed}/${replays.length} agreed, ${summary.readyStalled} ready issues stalled, ${summary.routedAsStored} routed as stored, ${summary.unavailable} unavailable.`)
     }
+    if (replays.length < 100)
+      input.log(`Only ${replays.length} replays: below the 100-150 example floor, so treat the suggested band as provisional.`)
     return { replayed: replays.length, suggestion: suggestIssueBand(replays) }
   }
   finally {

@@ -114,16 +114,24 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   // with a stored route needs no second decision, so only new content pays
   // for the read and the classification.
   const issueDecisions = new Map<number, IssueClassificationDecision>()
+  /** Routed decisions to settle: fresh ones, plus stored ones a failed settle left behind. */
+  const settleResults = new Map<number, Extract<IssueClassificationDecision, { _tag: 'Routed' }>['result']>()
   if (writesEnabled && dependencies.issueClassification !== undefined) {
     await Promise.all(eligibleItems.map(async (subject) => {
       if (subject.kind !== 'issue' || subject.state !== 'open' || !repository.issueWork || !repository.enabled || subject.routineTracking)
         return
-      if (
-        dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionIdFor(subject)) !== null
-        || dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionIdFor(subject))
-      ) {
+      const revisionId = revisionIdFor(subject)
+      const stored = dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionId)
+      if (stored !== null) {
+        // A stored routed decision settles again until its comment and label
+        // land; an Agent-kept Revision needs nothing here, and an Agent
+        // answer outranks both.
+        if (stored._tag === 'Routed' && !dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
+          settleResults.set(subject.number, stored.result)
         return
       }
+      if (dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
+        return
       const decision = await dependencies.issueClassification?.verdict(repository, subject, dependencies.signal ?? AbortSignal.timeout(30_000))
       if (decision !== undefined)
         issueDecisions.set(subject.number, decision)
@@ -206,16 +214,20 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   }
 
   // A routed Issue triage decision publishes its comment and label after the
-  // row landed with the observation. The stored route settles it again on the
-  // next poll when a write fails here.
+  // row landed with the observation. Fresh and stored routes settle the same
+  // idempotent way, so a failed write retries on the next poll.
   if (writesEnabled && dependencies.issueClassification !== undefined) {
+    for (const [number, decision] of issueDecisions) {
+      if (decision._tag === 'Routed')
+        settleResults.set(number, decision.result)
+    }
     const settledIssues = await Promise.all(eligibleItems.map((subject) => {
       if (subject.kind !== 'issue')
         return Promise.resolve(ok(undefined))
-      const decision = issueDecisions.get(subject.number)
-      if (decision === undefined || decision._tag !== 'Routed')
+      const result = settleResults.get(subject.number)
+      if (result === undefined)
         return Promise.resolve(ok(undefined))
-      return dependencies.issueClassification?.settle(repository, subject, decision.result, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
+      return dependencies.issueClassification?.settle(repository, subject, result, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
     }))
     const failedIssueSettle = settledIssues.find(result => result._tag === 'Err')
     if (failedIssueSettle?._tag === 'Err') {
