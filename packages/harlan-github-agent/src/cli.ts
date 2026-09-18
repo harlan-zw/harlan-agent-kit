@@ -401,7 +401,7 @@ const evaluateTriage = defineCommand({
       }),
       log: line => consola.info(line),
     })
-    consola.success(`Replayed ${summary.replayed} decisions. ${summary.skippedWithoutFiles} recorded decisions have no changed-file list yet; they replay once observed after the files are recorded.`)
+    consola.success(`Replayed ${summary.replayed} decisions. ${summary.skippedWithoutFiles} recorded decisions carry no changed-file list and are excluded from every replay; only decisions recorded after this change replay.`)
     consola.info(`Suggested skip band: ${summary.suggestion.band}, ${summary.suggestion.agreed}/${summary.replayed} agreed, ${summary.suggestion.skipsAdded} would skip what Review read.`)
   },
 })
