@@ -3,7 +3,8 @@ import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
-import type { IssueTriageState } from './issue-triage.ts'
+import type { IssueClassificationDecision } from './issue-classification.ts'
+import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
@@ -720,6 +721,16 @@ export interface LatestPullRequestTriageRun {
   completedAt: string
 }
 
+/** One classified Issue triage decision, recorded at observation time. */
+export type StoredIssueTriageRun
+  = | { _tag: 'AgentTriage', reason: string, decidedAt: string }
+    | {
+      _tag: 'Routed'
+      result: Extract<IssueTriageResult, { _tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' }>
+      confidence: number
+      decidedAt: string
+    }
+
 export interface JournalStore extends BatchStore, PackageReleaseStore {
   /**
    * Approves one exact issue state from an outside author. The Approval unlocks
@@ -1095,12 +1106,18 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     pullRequestTriage?: PullRequestTriageDecision
     /** The changed files read while deciding, recorded once per Revision. */
     pullRequestFiles?: readonly PullRequestFile[]
+    /** The Issue triage classification decision computed for this observation, when one was. */
+    issueTriage?: IssueClassificationDecision
   }) => RecordObservationResult
   /**
    * The changed files recorded for one Revision at observation time, with the
    * head they were read for, or null when none were.
    */
   getRevisionFiles: (repository: string, pullRequestNumber: number, revisionId: string) => { files: PullRequestFile[], headSha: string } | null
+  /** The routed Issue triage decision recorded for one Revision, or null when none was. */
+  getLatestIssueTriageRun: (repository: string, issueNumber: number, revisionId: string) => StoredIssueTriageRun | null
+  /** True when an Agent triage Task already answered this Revision, so no classification is needed. */
+  hasIssueTriageEvidence: (repository: string, issueNumber: number, revisionId: string) => boolean
   recordPollAttempt: (github: string, at: string) => void
   recordPollFailure: (github: string, at: string, message: string, status?: number) => void
   recordPollSuccess: (github: string, at: string) => void
@@ -2581,7 +2598,7 @@ function issueTriageState(evidence: string | null): IssueTriageState | undefined
 
 const freshIssueTriageReason = 'Fresh triage is required before approved issue work can continue.'
 
-function revisionIdFor(subject: GitHubItem): string {
+export function revisionIdFor(subject: GitHubItem): string {
   const { updatedAt: _activityAt, ...revision } = subject
   delete (revision as Partial<GitHubItem>).approvalLabels
   if (revision.kind === 'pull_request') {
@@ -4732,6 +4749,42 @@ function planAdversarialReview(
   recordWorkerTransition(database, { taskId, from: null, to: 'Queued', reason: null, fence: 0, at: observedAt })
 }
 
+/**
+ * Records one routed Issue triage decision inside the caller's transaction.
+ *
+ * The row answers every later poll for the same Revision, so the decision is
+ * paid for once and the Agent Task is never queued for it.
+ */
+function insertIssueTriageRun(
+  database: DatabaseSync,
+  subjectId: number,
+  revisionId: string,
+  decision: Extract<IssueClassificationDecision, { _tag: 'Routed' | 'AgentTriage' }>,
+  at: string,
+): void {
+  const routed = decision._tag === 'Routed'
+  database.prepare(`
+    INSERT OR IGNORE INTO issue_triage_runs (
+      subject_id, revision_id, route_tag, confidence, difficulty, impact,
+      has_reproduction, state_title, state_body, reason, decided_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    subjectId,
+    revisionId,
+    routed ? decision.result._tag : 'AGENT_TRIAGE',
+    routed ? decision.confidence : 0,
+    routed ? decision.result.difficulty : 0,
+    routed ? decision.result.impact : 0,
+    routed && decision.result.hasReproduction ? 1 : 0,
+    routed ? decision.title : '',
+    routed ? decision.body : '',
+    routed
+      ? `model: classification routed ${decision.result._tag} with confidence ${Math.round(decision.confidence * 100) / 100}.`
+      : `model: classification left the route to the Agent: ${decision.reason}`,
+    at,
+  )
+}
+
 function planIssueTriage(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4739,6 +4792,7 @@ function planIssueTriage(
   revisionId: string,
   observedAt: string,
   mapping: RepositoryMapping,
+  classification?: IssueClassificationDecision,
 ): void {
   const routineTrackingIssue = subject.kind === 'issue' && (
     subject.routineTracking === true
@@ -4762,6 +4816,9 @@ function planIssueTriage(
     SELECT id, state_tag, evidence, fence FROM worker_tasks
     WHERE subject_id = ? AND kind = 'issue_triage' AND revision_id = ?
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], evidence: string | null, fence: number } | undefined
+  // An Agent answer for this Revision outranks any later classification: it
+  // investigated the repository, and its evidence drives Issue work.
+  const agentAnswered = existing?.state_tag === 'Completed' && existing.evidence !== null
   if (existing !== undefined) {
     if (existing.state_tag === 'Superseded') {
       // Closing the issue superseded a triage that had not run. The same
@@ -4785,6 +4842,20 @@ function planIssueTriage(
     }
     return
   }
+
+  // Both classified outcomes are durable, so neither is asked twice. A routed
+  // Revision queues no Task; an Agent-kept Revision records why and still
+  // queues its Task below. An Agent answer outranks both.
+  if (!agentAnswered && classification !== undefined && (classification._tag === 'Routed' || classification._tag === 'AgentTriage')) {
+    insertIssueTriageRun(database, subjectId, revisionId, classification, observedAt)
+    if (classification._tag === 'Routed')
+      return
+  }
+  const routed = database.prepare(`
+    SELECT 1 FROM issue_triage_runs WHERE subject_id = ? AND revision_id = ? AND route_tag != 'AGENT_TRIAGE'
+  `).get(subjectId, revisionId) !== undefined
+  if (routed)
+    return
 
   const taskId = digest(`${mapping.github}:issue:${subject.number}:${revisionId}:issue_triage`)
   database.prepare(`
@@ -6556,7 +6627,56 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 76
   }
-  if (version === 76)
+  if (version === 76) {
+    // Routed Issue triage decisions land at observation time with no Agent
+    // Task, carrying the state they were decided against.
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS issue_triage_runs (
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        revision_id TEXT NOT NULL,
+        route_tag TEXT NOT NULL CHECK (route_tag IN ('NEEDS_INFO', 'WAIT_TO_IMPLEMENT')),
+        confidence REAL NOT NULL,
+        difficulty INTEGER NOT NULL,
+        impact INTEGER NOT NULL,
+        has_reproduction INTEGER NOT NULL,
+        state_title TEXT NOT NULL,
+        state_body TEXT NOT NULL,
+        reason TEXT NOT NULL CHECK (reason != ''),
+        decided_at TEXT NOT NULL,
+        UNIQUE (subject_id, revision_id),
+        FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
+      );
+      PRAGMA user_version = 77;
+    `)
+    version = 77
+  }
+  if (version === 77) {
+    // Agent-kept routes are recorded too, so a Revision the classification
+    // left to the Agent is never asked again.
+    applyMigration(database, `
+      CREATE TABLE issue_triage_runs_v78 (
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        revision_id TEXT NOT NULL,
+        route_tag TEXT NOT NULL CHECK (route_tag IN ('NEEDS_INFO', 'WAIT_TO_IMPLEMENT', 'AGENT_TRIAGE')),
+        confidence REAL NOT NULL,
+        difficulty INTEGER NOT NULL,
+        impact INTEGER NOT NULL,
+        has_reproduction INTEGER NOT NULL,
+        state_title TEXT NOT NULL,
+        state_body TEXT NOT NULL,
+        reason TEXT NOT NULL CHECK (reason != ''),
+        decided_at TEXT NOT NULL,
+        UNIQUE (subject_id, revision_id),
+        FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
+      );
+      INSERT INTO issue_triage_runs_v78 SELECT * FROM issue_triage_runs;
+      DROP TABLE issue_triage_runs;
+      ALTER TABLE issue_triage_runs_v78 RENAME TO issue_triage_runs;
+      PRAGMA user_version = 78;
+    `)
+    version = 78
+  }
+  if (version === 78)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7418,7 +7538,7 @@ export function openJournalStore(
           input.subject.kind === 'pull_request' && input.subject.approvalLabels.includes('review'),
           input.subject.kind === 'pull_request' ? input.pullRequestTriage : undefined,
         )
-        planIssueTriage(database, input.subject, subject.id, revisionId, input.observedAt, mapping)
+        planIssueTriage(database, input.subject, subject.id, revisionId, input.observedAt, mapping, input.issueTriage)
       }
       const isStaleAgainstCurrent = (current: GitHubItem, currentRevisionId: string): boolean => {
         const older = input.subject.updatedAt < current.updatedAt
@@ -7978,6 +8098,54 @@ export function openJournalStore(
       at,
     })
   }
+
+  const getLatestIssueTriageRun: JournalStore['getLatestIssueTriageRun'] = (repository, issueNumber, revisionId) => {
+    const row = database.prepare(`
+      SELECT route_tag, confidence, difficulty, impact, has_reproduction, reason, decided_at
+      FROM issue_triage_runs
+      JOIN subjects ON subjects.id = issue_triage_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
+        AND issue_triage_runs.revision_id = ?
+    `).get(repository, issueNumber, revisionId) as {
+      route_tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'AGENT_TRIAGE'
+      confidence: number
+      difficulty: number
+      impact: number
+      has_reproduction: number
+      reason: string
+      decided_at: string
+    } | undefined
+    if (row === undefined)
+      return null
+    if (row.route_tag === 'AGENT_TRIAGE')
+      return { _tag: 'AgentTriage', reason: row.reason, decidedAt: row.decided_at }
+    return {
+      _tag: 'Routed',
+      result: {
+        _tag: row.route_tag,
+        difficulty: row.difficulty,
+        impact: row.impact,
+        hasReproduction: row.has_reproduction === 1,
+        needsCodebaseReview: false,
+        summary: 'The classification service routed this from the report alone.',
+        nextAction: row.route_tag === 'NEEDS_INFO' ? 'Add what is missing.' : 'Resume when the blocking change lands.',
+        relatedIssues: [],
+      },
+      confidence: row.confidence,
+      decidedAt: row.decided_at,
+    }
+  }
+
+  const hasIssueTriageEvidence: JournalStore['hasIssueTriageEvidence'] = (repository, issueNumber, revisionId) => database.prepare(`
+    SELECT 1
+    FROM worker_tasks
+    JOIN subjects ON subjects.id = worker_tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
+      AND worker_tasks.kind = 'issue_triage' AND worker_tasks.revision_id = ?
+      AND worker_tasks.state_tag = 'Completed' AND worker_tasks.evidence IS NOT NULL
+  `).get(repository, issueNumber, revisionId) !== undefined
 
   const getRevisionFiles: JournalStore['getRevisionFiles'] = (repository, pullRequestNumber, revisionId) => {
     const row = database.prepare(`
@@ -14917,6 +15085,8 @@ export function openJournalStore(
     cancelTask,
     cancelReviewForHead,
     getLatestPullRequestTriageRun,
+    getLatestIssueTriageRun,
+    hasIssueTriageEvidence,
     getRevisionFiles,
     hasPriorityAgentTask: () => hasHigherPriorityTask(0, 'adversarial_review'),
     claimNextAdversarialReviewTask,

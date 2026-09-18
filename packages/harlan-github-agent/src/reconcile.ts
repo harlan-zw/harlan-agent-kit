@@ -1,6 +1,7 @@
 import type { ApprovalController } from './approval-controller.ts'
 import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
+import type { IssueClassificationController, IssueClassificationDecision } from './issue-classification.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PullRequestTriageController, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
@@ -9,6 +10,7 @@ import type { RepositoryMapping } from './types.ts'
 import { createHash } from 'node:crypto'
 import { isEligibleGitHubSubjectAuthor } from './github.ts'
 import { err, ok } from './result.ts'
+import { revisionIdFor } from './store.ts'
 
 export interface ReconciliationSummary {
   repository: string
@@ -27,6 +29,7 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
+  issueClassification?: IssueClassificationController
   pullRequestTriage?: PullRequestTriageController
   refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
@@ -122,8 +125,36 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
         triageVerdicts.set(subject.number, verdict)
     })
   }
+  // Issue triage classification decides at observation time too. A Revision
+  // with a stored route needs no second decision, so only new content pays
+  // for the read and the classification.
+  const issueDecisions = new Map<number, IssueClassificationDecision>()
+  /** Routed decisions to settle: fresh ones, plus stored ones a failed settle left behind. */
+  const settleResults = new Map<number, Extract<IssueClassificationDecision, { _tag: 'Routed' }>['result']>()
+  if (writesEnabled && dependencies.issueClassification !== undefined) {
+    await Promise.all(eligibleItems.map(async (subject) => {
+      if (subject.kind !== 'issue' || subject.state !== 'open' || !repository.issueWork || !repository.enabled || subject.routineTracking)
+        return
+      const revisionId = revisionIdFor(subject)
+      const stored = dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionId)
+      if (stored !== null) {
+        // A stored routed decision settles again until its comment and label
+        // land; an Agent-kept Revision needs nothing here, and an Agent
+        // answer outranks both.
+        if (stored._tag === 'Routed' && !dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
+          settleResults.set(subject.number, stored.result)
+        return
+      }
+      if (dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
+        return
+      const decision = await dependencies.issueClassification?.verdict(repository, subject, dependencies.signal ?? AbortSignal.timeout(30_000))
+      if (decision !== undefined)
+        issueDecisions.set(subject.number, decision)
+    }))
+  }
   const eligibleWrites = eligibleItems.map((subject) => {
     const verdict = subject.kind === 'pull_request' ? triageVerdicts.get(subject.number) : undefined
+    const issueDecision = subject.kind === 'issue' ? issueDecisions.get(subject.number) : undefined
     return dependencies.store.recordObservation({
       externalId: observationId(repository.github, subject),
       observedAt,
@@ -135,6 +166,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
             pullRequestTriage: verdict.decision,
             ...(verdict.files === null ? {} : { pullRequestFiles: verdict.files }),
           }),
+      ...(issueDecision === undefined ? {} : { issueTriage: issueDecision }),
     })
   })
   const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordObservation({
@@ -194,6 +226,37 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const failedSettle = settled.find(result => result._tag === 'Err')
     if (failedSettle?._tag === 'Err' && dependencies.signal?.aborted !== true)
       dependencies.store.recordPollFailure(repository.github, observedAt, failedSettle.error)
+  }
+
+  // A routed Issue triage decision publishes its comment and label after the
+  // row landed with the observation. A fresh decision settles only when its
+  // observation landed: a Stale or Conflicting write recorded no row, so
+  // publishing its comment would put a verdict on GitHub the journal never
+  // held. A stored row settles by definition, because the row is what
+  // retries.
+  if (writesEnabled && dependencies.issueClassification !== undefined) {
+    eligibleItems.forEach((subject, index) => {
+      if (subject.kind !== 'issue')
+        return
+      const decision = issueDecisions.get(subject.number)
+      const write = eligibleWrites[index]
+      if (decision !== undefined && decision._tag === 'Routed' && (write?._tag === 'Inserted' || write?._tag === 'Duplicate'))
+        settleResults.set(subject.number, decision.result)
+    })
+    const settledIssues = await Promise.all(eligibleItems.map((subject) => {
+      if (subject.kind !== 'issue')
+        return Promise.resolve(ok(undefined))
+      const result = settleResults.get(subject.number)
+      if (result === undefined)
+        return Promise.resolve(ok(undefined))
+      return dependencies.issueClassification?.settle(repository, subject, result, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
+    }))
+    const failedIssueSettle = settledIssues.find(result => result._tag === 'Err')
+    if (failedIssueSettle?._tag === 'Err') {
+      if (dependencies.signal?.aborted !== true)
+        dependencies.store.recordPollFailure(repository.github, observedAt, failedIssueSettle.error)
+      return err({ repository: repository.github, message: failedIssueSettle.error })
+    }
   }
 
   if (writesEnabled && dependencies.approvals !== undefined) {
