@@ -224,7 +224,7 @@ describe('pull request triage Stats', () => {
     expect(stats.repositories).toEqual([expect.objectContaining({ repository: subject.repository, runs: 1 })])
     expect(stats.work.find(work => work._tag === 'PullRequestTriage')).toEqual(expect.objectContaining({
       runs: 1,
-      reviewSkipped: 1,
+      reviewRequired: 1,
     }))
   })
 })
