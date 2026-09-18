@@ -99,7 +99,7 @@ describe('classification on the dashboard snapshot', () => {
       pullRequestFiles: [{ path: 'OTHER.md', status: 'modified', additions: 9, deletions: 9, previousFilename: null }],
     })
 
-    expect(store.getRevisionFiles(subject.repository, subject.number, inserted.revisionId)).toEqual(files)
+    expect(store.getRevisionFiles(subject.repository, subject.number, inserted.revisionId)).toEqual({ files, headSha: subject.headSha })
     expect(store.getRevisionFiles(subject.repository, subject.number, 'missing-revision')).toBeNull()
   })
 })
