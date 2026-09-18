@@ -181,8 +181,8 @@ describe('pull request triage controller', () => {
     expect(harness.classificationCalls).toBe(0)
   })
 
-  it('reuses a stored skip as Required once the head has a completed Review', async () => {
-    const harness = controller({
+  it('reads Required once the head has a completed Review, fresh or reused', async () => {
+    const reused = controller({
       stored: {
         outcome: 'ReviewSkipped',
         reason: 'model: Only a typo in the README changed.',
@@ -190,8 +190,7 @@ describe('pull request triage controller', () => {
       },
       reviewForHead: { id: 'run-1' } as never,
     })
-
-    await expect(harness.verdict()).resolves.toEqual({
+    await expect(reused.verdict()).resolves.toEqual({
       decision: {
         _tag: 'Required',
         reason: 'rule: this head commit already has a Review.',
@@ -199,6 +198,23 @@ describe('pull request triage controller', () => {
       },
       files: null,
     })
+
+    // A fresh decision (a failure row that recovered) must not settle a skip
+    // over the Review either, and it must not pay for the classification.
+    const fresh = controller({
+      changedFiles: ['README.md'],
+      classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.99 }),
+      reviewForHead: { id: 'run-1' } as never,
+    })
+    await expect(fresh.verdict()).resolves.toEqual({
+      decision: {
+        _tag: 'Required',
+        reason: 'rule: this head commit already has a Review.',
+        source: 'reuse',
+      },
+      files: null,
+    })
+    expect(fresh.classificationCalls).toBe(0)
   })
 
   it('settles the skip body from the stored decision time, not the poll clock', async () => {
