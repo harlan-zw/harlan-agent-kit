@@ -148,6 +148,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       // again, on every poll.
       if (dependencies.store.isItemDismissed(repository.github, 'issue', subject.number))
         return
+      // The payload heuristic can miss an issue the routines table already
+      // registered as a Routine's tracking issue. The planner would discard
+      // the verdict, so asking would burn the classification every poll.
+      if (dependencies.store.isRoutineTrackingIssue(repository.github, subject.number))
+        return
       const revisionId = revisionIdFor(subject)
       const stored = dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionId)
       if (stored !== null) {
@@ -265,11 +270,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       return dependencies.issueClassification?.settle(repository, subject, result, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
     }))
     const failedIssueSettle = settledIssues.find(result => result._tag === 'Err')
-    if (failedIssueSettle?._tag === 'Err') {
-      if (dependencies.signal?.aborted !== true)
-        dependencies.store.recordPollFailure(repository.github, observedAt, failedIssueSettle.error)
-      return err({ repository: repository.github, message: failedIssueSettle.error })
-    }
+    // A failed settle records the failure and lets the pass continue: the
+    // stored decision retries on the next poll, and Approvals and Auto
+    // merge must not starve behind one refused comment.
+    if (failedIssueSettle?._tag === 'Err' && dependencies.signal?.aborted !== true)
+      dependencies.store.recordPollFailure(repository.github, observedAt, failedIssueSettle.error)
   }
 
   if (writesEnabled && dependencies.approvals !== undefined) {

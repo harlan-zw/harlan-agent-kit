@@ -862,6 +862,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   listOpenIssueNumbers: (github: string) => number[]
   /** Whether one item carries a Dismissal, which outranks every planner and classifier. */
   isItemDismissed: (github: string, kind: GitHubItem['kind'], itemNumber: number) => boolean
+  /** Whether the routines table names one issue as a Routine's tracking issue. */
+  isRoutineTrackingIssue: (github: string, issueNumber: number) => boolean
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
   listOpenPullRequestNumbers: (github: string) => number[]
   /** Old inferred closures need one exact read before GitHub becomes final truth. */
@@ -4803,6 +4805,18 @@ function insertIssueTriageRun(
   )
 }
 
+/**
+ * Whether the routines table names one issue as a Routine's tracking issue.
+ *
+ * The payload heuristic misses an issue the table already registered, so the
+ * planner and the classifier both read the table through here.
+ */
+function routineTrackingIssueInDatabase(database: DatabaseSync, repository: string, issueNumber: number): boolean {
+  return database.prepare(`
+    SELECT 1 FROM routines WHERE repository = ? AND tracking_issue_number = ?
+  `).get(repository, issueNumber) !== undefined
+}
+
 function planIssueTriage(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4814,9 +4828,7 @@ function planIssueTriage(
 ): void {
   const routineTrackingIssue = subject.kind === 'issue' && (
     subject.routineTracking === true
-    || database.prepare(`
-      SELECT 1 FROM routines WHERE repository = ? AND tracking_issue_number = ?
-    `).get(subject.repository, subject.number) !== undefined
+    || routineTrackingIssueInDatabase(database, subject.repository, subject.number)
   )
   const eligible = subject.kind === 'issue'
     && subject.state === 'open'
@@ -4837,6 +4849,15 @@ function planIssueTriage(
   // An Agent answer for this Revision outranks any later classification: it
   // investigated the repository, and its evidence drives Issue work.
   const agentAnswered = existing?.state_tag === 'Completed' && existing.evidence !== null
+  // Both classified outcomes are durable, so neither is asked twice. The row
+  // lands even when a Task row already exists: a queued Task that has not
+  // answered must not leave the decision unpersisted, or every later poll
+  // re-asks the classification and re-settles the comment against it.
+  if (!agentAnswered && classification !== undefined && (classification._tag === 'Routed' || classification._tag === 'AgentTriage')) {
+    insertIssueTriageRun(database, subjectId, revisionId, classification, observedAt)
+    if (classification._tag === 'Routed')
+      return
+  }
   if (existing !== undefined) {
     if (existing.state_tag === 'Superseded') {
       // Closing the issue superseded a triage that had not run. The same
@@ -4861,14 +4882,6 @@ function planIssueTriage(
     return
   }
 
-  // Both classified outcomes are durable, so neither is asked twice. A routed
-  // Revision queues no Task; an Agent-kept Revision records why and still
-  // queues its Task below. An Agent answer outranks both.
-  if (!agentAnswered && classification !== undefined && (classification._tag === 'Routed' || classification._tag === 'AgentTriage')) {
-    insertIssueTriageRun(database, subjectId, revisionId, classification, observedAt)
-    if (classification._tag === 'Routed')
-      return
-  }
   const routed = database.prepare(`
     SELECT 1 FROM issue_triage_runs WHERE subject_id = ? AND revision_id = ? AND route_tag != 'AGENT_TRIAGE'
   `).get(subjectId, revisionId) !== undefined
@@ -7854,6 +7867,8 @@ export function openJournalStore(
     JOIN repositories ON repositories.id = subjects.repository_id
     WHERE repositories.github = ? AND subjects.kind = ? AND subjects.github_number = ?
   `).get(github, kind, itemNumber) !== undefined
+
+  const isRoutineTrackingIssue: JournalStore['isRoutineTrackingIssue'] = (github, issueNumber) => routineTrackingIssueInDatabase(database, github, issueNumber)
 
   const listUnverifiedClosedPullRequestNumbers: JournalStore['listUnverifiedClosedPullRequestNumbers'] = (github, limit = 5) => {
     const safeLimit = Math.max(0, Math.min(20, Math.trunc(limit)))
@@ -15086,6 +15101,7 @@ export function openJournalStore(
     failRoutineRun,
     isIssueApprovalPending,
     isItemDismissed,
+    isRoutineTrackingIssue,
     listOpenIssueNumbers,
     listOpenPullRequestNumbers,
     listUnverifiedClosedPullRequestNumbers,
