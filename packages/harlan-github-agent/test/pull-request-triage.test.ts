@@ -24,6 +24,7 @@ function classificationFailure(failure: ClassificationFailure): ClassificationSo
 }
 
 interface ControllerHarness {
+  checkRuns: Array<{ headSha: string, update: unknown }>
   comments: string[]
   consumedApprovalLabels: string[]
   decision: () => Promise<PullRequestTriageDecision>
@@ -37,6 +38,7 @@ function controller(input: {
   approvalLabels?: GitHubPullRequestItem['approvalLabels']
   changedFiles?: string[]
   classification?: ClassificationSource | null
+  checkRunFailure?: string
   filesFailure?: string
   stored?: LatestPullRequestTriageRun | null
   reviewForHead?: ReviewRun
@@ -48,6 +50,7 @@ function controller(input: {
     ...(input.title === undefined ? {} : { title: input.title }),
   })
   const repository = repositoryMapping()
+  const checkRuns: Array<{ headSha: string, update: unknown }> = []
   const comments: string[] = []
   const stamped: string[] = []
   const consumedApprovalLabels: string[] = []
@@ -79,6 +82,10 @@ function controller(input: {
         stamped.push(state)
         return Promise.resolve(ok(undefined))
       },
+      upsertReviewCheckRun: (_repository, headSha, update) => {
+        checkRuns.push({ headSha, update })
+        return Promise.resolve(input.checkRunFailure === undefined ? ok(undefined) : err(input.checkRunFailure))
+      },
       upsertReviewStatus: (_repository, _number, _commentId, body) => {
         comments.push(body)
         return Promise.resolve(ok({ commentId: 7, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-7' }))
@@ -92,6 +99,7 @@ function controller(input: {
   })
   const signal = new AbortController().signal
   return {
+    checkRuns,
     comments,
     consumedApprovalLabels,
     decision: () => controller.verdict(repository, subject, signal),
@@ -379,6 +387,32 @@ describe('pull request triage controller', () => {
     expect(harness.consumedApprovalLabels).toEqual([])
   })
 
+  it('mirrors the Review check run beside a settled skip, identically on retry', async () => {
+    const harness = controller({
+      stored: { outcome: 'ReviewSkipped', reason: 'model: classification chose skip with confidence 0.93.', completedAt: '2026-09-18T00:30:00.000Z' },
+    })
+    const subject = pullRequestItem({ mergeState: 'clean' })
+    const decision = { _tag: 'Skipped' as const, reason: 'model: classification chose skip with confidence 0.93.', source: 'model' as const }
+
+    await expect(harness.settle(decision)).resolves.toEqual(ok(undefined))
+    await expect(harness.settle(decision)).resolves.toEqual(ok(undefined))
+    expect(harness.comments).toHaveLength(2)
+    expect(harness.comments[0]).toBe(harness.comments[1])
+    expect(harness.checkRuns).toEqual([
+      { headSha: subject.headSha, update: { _tag: 'Completed', title: '🤖 REVIEW SKIPPED', conclusion: 'neutral', completedAt: '2026-09-18T00:30:00.000Z' } },
+      { headSha: subject.headSha, update: { _tag: 'Completed', title: '🤖 REVIEW SKIPPED', conclusion: 'neutral', completedAt: '2026-09-18T00:30:00.000Z' } },
+    ])
+  })
+
+  it('reports a settled skip whose Review check run mirror failed', async () => {
+    const harness = controller({ checkRunFailure: 'GitHub refused the check run.' })
+
+    const settled = await harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })
+    expect(settled).toEqual(err('The skip comment published but its Review check run did not: GitHub refused the check run.'))
+    expect(harness.comments).toHaveLength(1)
+    expect(harness.stamped).toEqual([])
+  })
+
   it('stamps and consumes the override label for a settled override', async () => {
     const harness = controller({})
 
@@ -394,6 +428,7 @@ describe('pull request triage controller', () => {
     await expect(harness.settle({ _tag: 'Required', reason: 'rule: runtime code changed.', source: 'rule' })).resolves.toEqual(ok(undefined))
     await expect(harness.settle({ _tag: 'Failed', reason: 'the classification service failed' })).resolves.toEqual(ok(undefined))
     expect(harness.comments).toEqual([])
+    expect(harness.checkRuns).toEqual([])
     expect(harness.stamped).toEqual([])
     expect(harness.consumedApprovalLabels).toEqual([])
   })
@@ -406,6 +441,7 @@ describe('pull request triage controller', () => {
         consumeApprovalLabel: () => Promise.resolve(ok(undefined)),
         listPullRequestFiles: () => Promise.resolve(ok([])),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewCheckRun: () => Promise.resolve(err('A failed comment must not reach the check run.')),
         upsertReviewStatus: () => Promise.resolve(err('GitHub refused the comment.')),
       },
       now: () => new Date('2026-09-18T01:00:00.000Z'),

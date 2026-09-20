@@ -4025,6 +4025,53 @@ describe('journal store', () => {
     expect(rerun?.state.fence).toBe(2)
   })
 
+  it('replaces a stored skip once the same head has a completed Review', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'clean' })
+    const observed = store.recordExactPullRequestObservation({
+      externalId: 'skip-then-reviewed',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      subject,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' },
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request.')
+    expect(store.getLatestPullRequestTriageRun('harlan-zw/example', subject.number, subject.headSha)?.outcome).toBe('ReviewSkipped')
+
+    expect(store.recordReviewRun({
+      id: 'override-review',
+      revisionId: observed.revisionId,
+      repository: 'harlan-zw/example',
+      pullRequestNumber: subject.number,
+      headSha: subject.headSha,
+      provider: 'codex',
+      sessionId: 'session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'd'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: passedReviewGates(),
+      confidence: 100,
+      findings: [],
+    })._tag).toBe('Inserted')
+
+    store.recordExactPullRequestObservation({
+      externalId: 'skip-then-reviewed-again',
+      observedAt: '2026-08-13T01:05:00.000Z',
+      subject,
+    })
+
+    expect(store.getLatestPullRequestTriageRun('harlan-zw/example', subject.number, subject.headSha)).toEqual({
+      outcome: 'ReviewRequired',
+      reason: 'rule: this head commit already has a Review.',
+      completedAt: '2026-08-13T01:05:00.000Z',
+    })
+    const dashboardItem = store.getDashboardSnapshot('2026-08-13T01:05:01.000Z').items.find(item => item.number === subject.number)
+    expect(dashboardItem !== undefined && dashboardItem.kind === 'pull_request' ? dashboardItem.triage?.outcome : undefined).toBe('ReviewRequired')
+  })
+
   it('lets the manual Review label override a skipped triage result', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

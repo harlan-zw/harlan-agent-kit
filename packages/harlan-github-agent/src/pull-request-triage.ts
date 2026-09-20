@@ -6,6 +6,7 @@ import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 import { choice } from 'advocaat'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
+import { reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
@@ -108,7 +109,7 @@ export interface PullRequestTriageController {
 
 export interface PullRequestTriageControllerOptions {
   classification: ClassificationSource | null
-  github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'listPullRequestFiles' | 'stampAgentLabel' | 'upsertReviewStatus'>
+  github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'listPullRequestFiles' | 'stampAgentLabel' | 'upsertReviewCheckRun' | 'upsertReviewStatus'>
   now: () => Date
   store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'storedReviewForHead'>
 }
@@ -247,10 +248,20 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       // GitHub confirms it without a publish.
       const stored = options.store.getLatestPullRequestTriageRun(repository.github, subject.number, subject.headSha)
       const result: PullRequestTriageResult = { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: decision.reason, source: decision.source }
-      const body = reviewSkippedComment(subject.headSha, subject.baseSha, result, stored?.completedAt ?? options.now().toISOString())
+      const decisionTime = stored?.completedAt ?? options.now().toISOString()
+      const body = reviewSkippedComment(subject.headSha, subject.baseSha, result, decisionTime)
       const posted = await options.github.upsertReviewStatus(repository, subject.number, null, body, false, signal)
       if (posted._tag === 'Err')
         return posted
+      // The Review check run mirrors the skip comment, so a skipped pull
+      // request keeps its Review entry beside CI. The same decision time
+      // keeps a retry identical, like the comment above.
+      const mirrored = reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'SKIPPED', body }, decisionTime)
+      if (mirrored !== null) {
+        const checkRun = await options.github.upsertReviewCheckRun(repository, subject.headSha, mirrored, signal)
+        if (checkRun._tag === 'Err')
+          return err(`The skip comment published but its Review check run did not: ${checkRun.error}`)
+      }
       const stamped = await options.github.stampAgentLabel(repository, subject.number, 'ADVERSARIAL_REVIEW_SKIPPED', signal)
       if (stamped._tag === 'Err')
         return err(`The skip comment published but its label did not: ${stamped.error}`)

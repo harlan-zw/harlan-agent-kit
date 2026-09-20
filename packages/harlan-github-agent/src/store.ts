@@ -4490,6 +4490,21 @@ function planAdversarialReview(
   // is usually that same run. Read the other way round, a base branch move
   // filed every verdict as someone else's review.
   if (alreadyReviewed && localAttempt.head_review_run_id !== null) {
+    // The Review outranks the stored skip row itself, not only its reuse: the
+    // dashboard reads that row, so a reviewed head must stop counting as a
+    // skip. Idempotent, because a replaced row no longer matches.
+    database.prepare(`
+      UPDATE pull_request_triage_runs
+      SET outcome_tag = 'ReviewRequired', reason = ?, started_at = ?, completed_at = ?, content_digest = ?
+      WHERE subject_id = ? AND revision_id = ? AND outcome_tag = 'ReviewSkipped'
+    `).run(
+      'rule: this head commit already has a Review.',
+      observedAt,
+      observedAt,
+      digest(JSON.stringify({ subjectId, revisionId, headSha: subject.kind === 'pull_request' ? subject.headSha : '', outcome: 'ReviewRequired' })),
+      subjectId,
+      revisionId,
+    )
     const stored = database.prepare(`
       INSERT INTO review_resolutions (
         subject_id, revision_id, task_id, task_fence, resolution_tag,
