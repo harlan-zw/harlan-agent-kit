@@ -35,11 +35,14 @@ interface ControllerHarness {
 }
 
 function controller(input: {
+  activeReviewTask?: boolean
   approvalLabels?: GitHubPullRequestItem['approvalLabels']
   changedFiles?: string[]
   classification?: ClassificationSource | null
   checkRunFailure?: string
   filesFailure?: string
+  /** Models a marker write that never landed, so a retry still owes its sinks. */
+  neverSettles?: boolean
   stored?: LatestPullRequestTriageRun | null
   reviewForHead?: ReviewRun
   title?: string
@@ -65,6 +68,8 @@ function controller(input: {
   const classification = input.classification !== undefined && input.classification !== null
     ? countingClassification(input.classification)
     : null
+  let settledAt: string | null = input.stored?.settledAt ?? null
+  const storedRow = (): LatestPullRequestTriageRun | null => input.stored === undefined || input.stored === null ? null : { ...input.stored, settledAt }
   const controller = createPullRequestTriageController({
     classification,
     github: {
@@ -93,7 +98,14 @@ function controller(input: {
     },
     now: () => new Date('2026-09-18T01:00:00.000Z'),
     store: {
-      getLatestPullRequestTriageRun: () => input.stored ?? null,
+      getLatestPullRequestTriageRun: () => storedRow(),
+      hasActiveReviewTask: () => input.activeReviewTask === true,
+      markPullRequestTriageSettled: (_repository, _number, _headSha, at) => {
+        if (input.neverSettles === true)
+          return false
+        settledAt = at
+        return true
+      },
       storedReviewForHead: () => input.reviewForHead ? { _tag: 'Current', run: input.reviewForHead } : { _tag: 'None' },
     },
   })
@@ -195,6 +207,7 @@ describe('pull request triage controller', () => {
         outcome: 'ReviewSkipped',
         reason: 'model: Only a typo in the README changed.',
         completedAt: '2026-09-17T23:00:00.000Z',
+        settledAt: null,
       },
       reviewForHead: { id: 'run-1' } as never,
     })
@@ -227,10 +240,12 @@ describe('pull request triage controller', () => {
 
   it('settles the skip body from the stored decision time, not the poll clock', async () => {
     const harness = controller({
+      neverSettles: true,
       stored: {
         outcome: 'ReviewSkipped',
         reason: 'model: classification chose skip with confidence 0.93.',
         completedAt: '2026-09-17T23:00:00.000Z',
+        settledAt: null,
       },
     })
 
@@ -250,6 +265,7 @@ describe('pull request triage controller', () => {
         outcome: 'ReviewSkipped',
         reason: 'model: Only a typo in the README changed.',
         completedAt: '2026-09-17T23:00:00.000Z',
+        settledAt: null,
       },
     })
 
@@ -266,6 +282,7 @@ describe('pull request triage controller', () => {
         outcome: 'ReviewSkipped',
         reason: 'Only prose changed.',
         completedAt: '2026-09-17T23:00:00.000Z',
+        settledAt: null,
       },
     })
 
@@ -281,6 +298,7 @@ describe('pull request triage controller', () => {
         outcome: 'ReviewRequiredAfterFailure',
         reason: 'the classification service failed',
         completedAt: '2026-09-17T23:00:00.000Z',
+        settledAt: null,
       },
       classification: classificationAnswer({ choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.95 }),
     })
@@ -390,7 +408,8 @@ describe('pull request triage controller', () => {
 
   it('mirrors the Review check run beside a settled skip, identically on retry', async () => {
     const harness = controller({
-      stored: { outcome: 'ReviewSkipped', reason: 'model: classification chose skip with confidence 0.93.', completedAt: '2026-09-18T00:30:00.000Z' },
+      neverSettles: true,
+      stored: { outcome: 'ReviewSkipped', reason: 'model: classification chose skip with confidence 0.93.', completedAt: '2026-09-18T00:30:00.000Z', settledAt: null },
     })
     const subject = pullRequestItem({ mergeState: 'clean' })
     const decision = { _tag: 'Skipped' as const, reason: 'model: classification chose skip with confidence 0.93.', source: 'model' as const }
@@ -443,6 +462,31 @@ describe('pull request triage controller', () => {
     expect(harness.stamped).toEqual([])
   })
 
+  it('spends no GitHub call on a skip that already settled', async () => {
+    const harness = controller({
+      stored: { outcome: 'ReviewSkipped', reason: 'model: classification chose skip with confidence 0.93.', completedAt: '2026-09-18T00:30:00.000Z', settledAt: null },
+    })
+    const decision = { _tag: 'Skipped' as const, reason: 'model: classification chose skip with confidence 0.93.', source: 'model' as const }
+
+    await expect(harness.settle(decision)).resolves.toEqual(ok(undefined))
+    const writes = harness.comments.length + harness.checkRuns.length + harness.stamped.length
+    expect(writes).toBeGreaterThan(0)
+
+    await expect(harness.settle(decision)).resolves.toEqual(ok(undefined))
+    expect(harness.comments).toHaveLength(1)
+    expect(harness.checkRuns).toHaveLength(1)
+    expect(harness.stamped).toHaveLength(1)
+  })
+
+  it('settles nothing while a Review of this head is running', async () => {
+    const harness = controller({ activeReviewTask: true })
+
+    await expect(harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })).resolves.toEqual(ok(undefined))
+    expect(harness.comments).toEqual([])
+    expect(harness.checkRuns).toEqual([])
+    expect(harness.stamped).toEqual([])
+  })
+
   it('reports a failed skip comment without stamping its label', async () => {
     const subject = pullRequestItem({ mergeState: 'clean' })
     const controllerInstance = createPullRequestTriageController({
@@ -457,6 +501,8 @@ describe('pull request triage controller', () => {
       now: () => new Date('2026-09-18T01:00:00.000Z'),
       store: {
         getLatestPullRequestTriageRun: () => null,
+        hasActiveReviewTask: () => false,
+        markPullRequestTriageSettled: () => false,
         storedReviewForHead: () => ({ _tag: 'None' }),
       },
     })

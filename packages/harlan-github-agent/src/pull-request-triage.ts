@@ -122,7 +122,7 @@ export interface PullRequestTriageControllerOptions {
   classification: ClassificationSource | null
   github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'listPullRequestFiles' | 'stampAgentLabel' | 'upsertReviewCheckRun' | 'upsertReviewStatus'>
   now: () => Date
-  store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'storedReviewForHead'>
+  store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'hasActiveReviewTask' | 'markPullRequestTriageSettled' | 'storedReviewForHead'>
 }
 
 function reuseStoredDecision(store: PullRequestTriageControllerOptions['store'], repository: RepositoryMapping, subject: GitHubPullRequestItem): PullRequestTriageDecision | null {
@@ -255,17 +255,21 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       if (decision._tag !== 'Skipped')
         return ok(undefined)
 
-      // A Review can answer this head while the decision was in flight: a
-      // rerun finished, or an override landed between verdict and settle.
-      // The published verdict outranks the skip, so settling stops here
-      // rather than overwrite it.
-      if (options.store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current')
-        return ok(undefined)
-
       // The comment body carries the decision's own stored time, never the
       // clock of this poll, so a retried settle writes the identical body and
       // GitHub confirms it without a publish.
       const stored = options.store.getLatestPullRequestTriageRun(repository.github, subject.number, subject.headSha)
+      // A settle that already landed owes nothing: every later poll spends no
+      // GitHub call republishing visibility that stands.
+      if (stored?.settledAt !== null && stored?.settledAt !== undefined)
+        return ok(undefined)
+      // A Review answering this head while the decision waited outranks the
+      // skip: a running rerun is about to publish, and a completed Review
+      // already did. Settling would overwrite either.
+      if (options.store.hasActiveReviewTask(repository.github, subject.number, subject.headSha))
+        return ok(undefined)
+      if (options.store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current')
+        return ok(undefined)
       const result: PullRequestTriageResult = { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: decision.reason, source: decision.source }
       const decisionTime = stored?.completedAt ?? options.now().toISOString()
       const body = reviewSkippedComment(subject.headSha, subject.baseSha, result, decisionTime)
@@ -284,6 +288,10 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       const stamped = await options.github.stampAgentLabel(repository, subject.number, 'ADVERSARIAL_REVIEW_SKIPPED', signal)
       if (stamped._tag === 'Err')
         return err(`The skip comment published but its label did not: ${stamped.error}`)
+      // Every sink landed, so later polls owe this head no GitHub call. A
+      // partial failure above keeps the marker unset and the next poll
+      // re-settles the missing piece.
+      options.store.markPullRequestTriageSettled(repository.github, subject.number, subject.headSha, options.now().toISOString())
       return ok(undefined)
     },
   }
