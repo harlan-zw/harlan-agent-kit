@@ -210,6 +210,37 @@ describe('gitHub reconciliation', () => {
     }
   })
 
+  it('settles nothing and asks no classification on a read-only deployment', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping({ issueWork: true })
+    const at = '2026-09-18T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          listOpenItems: () => Promise.resolve(ok([pullRequestItem({ mergeState: 'clean' }), issueItem()])),
+        },
+        mutationsEnabled: false,
+        store,
+        now: () => new Date(at),
+        pullRequestTriage: {
+          verdict: async () => {
+            throw new Error('No verdict was asked for.')
+          },
+          settle: async () => {
+            throw new Error('No settle was asked for.')
+          },
+        },
+      })
+      expect(result._tag).toBe('Ok')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('ignores issues authored by automated accounts', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
