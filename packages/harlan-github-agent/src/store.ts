@@ -718,6 +718,8 @@ export interface LatestPullRequestTriageRun {
   outcome: PullRequestTriageStatsOutcome
   reason: string
   completedAt: string
+  /** When the skip's comment, check run, and label all landed. Null while it still owes a settle. */
+  settledAt: string | null
 }
 
 export interface JournalStore extends BatchStore, PackageReleaseStore {
@@ -745,6 +747,10 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   cancelTask: (input: { taskId: string, at: string }) => CancelTaskResult
   /** The newest recorded Pull request triage decision for one exact head commit, or null. */
   getLatestPullRequestTriageRun: (repository: string, pullRequestNumber: number, headSha: string) => LatestPullRequestTriageRun | null
+  /** Records that a stored skip finished publishing, so later polls spend no GitHub call on it. */
+  markPullRequestTriageSettled: (repository: string, pullRequestNumber: number, headSha: string, at: string) => boolean
+  /** Whether a Review Task for this exact head is queued or running, as a rerun is. */
+  hasActiveReviewTask: (repository: string, pullRequestNumber: number, headSha: string) => boolean
   hasPriorityAgentTask: () => boolean
   claimNextAdversarialReviewTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedAdversarialReviewTask | null
   claimNextBaselineRepairTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedBaselineRepairTask | null
@@ -6573,7 +6579,17 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 76
   }
-  if (version === 76)
+  if (version === 76) {
+    // A settled skip records its own landing, so a later poll spends no
+    // GitHub calls republishing visibility that already stands. A rewind
+    // replays this against a journal already carrying the column.
+    const settledColumn = database.prepare(`SELECT 1 AS found FROM pragma_table_info('pull_request_triage_runs') WHERE name = 'settled_at'`).get() !== undefined
+    applyMigration(database, settledColumn
+      ? 'PRAGMA user_version = 77;'
+      : 'ALTER TABLE pull_request_triage_runs ADD COLUMN settled_at TEXT; PRAGMA user_version = 77;')
+    version = 77
+  }
+  if (version === 77)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8028,7 +8044,7 @@ export function openJournalStore(
 
   const getLatestPullRequestTriageRun: JournalStore['getLatestPullRequestTriageRun'] = (repository, pullRequestNumber, headSha) => {
     const row = database.prepare(`
-      SELECT pull_request_triage_runs.outcome_tag, pull_request_triage_runs.reason, pull_request_triage_runs.completed_at
+      SELECT pull_request_triage_runs.outcome_tag, pull_request_triage_runs.reason, pull_request_triage_runs.completed_at, pull_request_triage_runs.settled_at
       FROM pull_request_triage_runs
       JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
@@ -8040,11 +8056,39 @@ export function openJournalStore(
       outcome_tag: PullRequestTriageStatsOutcome
       reason: string
       completed_at: string
+      settled_at: string | null
     } | undefined
     return row === undefined
       ? null
-      : { outcome: row.outcome_tag, reason: row.reason, completedAt: row.completed_at }
+      : { outcome: row.outcome_tag, reason: row.reason, completedAt: row.completed_at, settledAt: row.settled_at }
   }
+
+  const markPullRequestTriageSettled: JournalStore['markPullRequestTriageSettled'] = (repository, pullRequestNumber, headSha, at) => database.prepare(`
+    UPDATE pull_request_triage_runs
+    SET settled_at = ?
+    WHERE rowid = (
+      SELECT pull_request_triage_runs.rowid
+      FROM pull_request_triage_runs
+      JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND pull_request_triage_runs.head_sha = ?
+      ORDER BY pull_request_triage_runs.completed_at DESC
+      LIMIT 1
+    ) AND pull_request_triage_runs.settled_at IS NULL
+  `).run(at, repository, pullRequestNumber, headSha).changes === 1
+
+  const hasActiveReviewTask: JournalStore['hasActiveReviewTask'] = (repository, pullRequestNumber, headSha) => database.prepare(`
+    SELECT 1
+    FROM worker_tasks
+    JOIN subjects ON subjects.id = worker_tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = worker_tasks.revision_id
+    WHERE repositories.github = ? AND subjects.kind = 'pull_request' AND subjects.github_number = ?
+      AND worker_tasks.kind = 'adversarial_review'
+      AND worker_tasks.state_tag IN ('Queued', 'Running')
+      AND json_extract(revisions.payload, '$.headSha') = ?
+  `).get(repository, pullRequestNumber, headSha) !== undefined
 
   const recordReviewRun: JournalStore['recordReviewRun'] = (input) => {
     const revisionId = currentSameHeadRevision(database, input.revisionId)
@@ -14944,6 +14988,8 @@ export function openJournalStore(
     cancelReviewForHead,
     getLatestPullRequestTriageRun,
     getRevisionFiles,
+    hasActiveReviewTask,
+    markPullRequestTriageSettled,
     hasPriorityAgentTask: () => hasHigherPriorityTask(0, 'adversarial_review'),
     claimNextAdversarialReviewTask,
     claimNextBaselineRepairTask,

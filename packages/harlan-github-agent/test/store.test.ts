@@ -4067,6 +4067,7 @@ describe('journal store', () => {
       outcome: 'ReviewRequired',
       reason: 'rule: this head commit already has a Review.',
       completedAt: '2026-08-13T01:05:00.000Z',
+      settledAt: null,
     })
     const dashboardItem = store.getDashboardSnapshot('2026-08-13T01:05:01.000Z').items.find(item => item.number === subject.number)
     expect(dashboardItem !== undefined && dashboardItem.kind === 'pull_request' ? dashboardItem.triage?.outcome : undefined).toBe('ReviewRequired')
