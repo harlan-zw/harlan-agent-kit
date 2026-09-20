@@ -39,6 +39,7 @@ function legacySource(initialBody = oldBody) {
   }) as unknown as Octokit
   const source = createGitHubAgentSource({
     actorLogin: () => 'harlan-github-agent[bot]',
+    ownAppId: 98114,
     createClient: token => token === 'user-token' ? client(userUpdate) : client(appUpdate),
     legacyActor: {
       login: 'harlan-zw',

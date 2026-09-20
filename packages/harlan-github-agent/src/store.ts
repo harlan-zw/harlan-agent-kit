@@ -882,7 +882,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     workerId: string
     fence: number
     at: string
-    sink: 'comment' | 'outcome_label'
+    sink: 'comment' | 'check_run' | 'outcome_label'
     commentId?: number
     url?: string
   }) => boolean
@@ -10826,7 +10826,7 @@ export function openJournalStore(
       if (changed) {
         recordReviewStatusEvent(database, {
           commandId: input.commandId,
-          event: input.sink === 'comment' ? 'CommentConfirmed' : 'OutcomeLabelConfirmed',
+          event: input.sink === 'comment' ? 'CommentConfirmed' : input.sink === 'check_run' ? 'CheckRunConfirmed' : 'OutcomeLabelConfirmed',
           from: 'Running',
           to: 'Running',
           fence: input.fence,

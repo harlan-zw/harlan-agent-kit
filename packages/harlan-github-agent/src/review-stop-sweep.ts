@@ -1,8 +1,10 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
+import type { ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { JournalStore, StoppedReview, StoppedReviewDisposition } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { err, ok } from './result.ts'
+import { reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
@@ -26,7 +28,7 @@ export interface StoppedReviewSweep {
 }
 
 export interface ReviewStopSweepOptions {
-  github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'editReviewStatus' | 'getPullRequestReviewSnapshot'>
+  github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'upsertReviewCheckRun'>
   now: () => Date
   repositories: RepositoryMapping[]
   store: Pick<JournalStore, 'listStoppedReviews' | 'recordDeletedReviewComment' | 'recordReviewClosure' | 'recordStoppedReviewStatus'>
@@ -40,6 +42,32 @@ export interface ReviewStopSweepOptions {
    * now and the next pass carries on.
    */
   budgetMilliseconds?: number
+}
+
+/**
+ * Closes the Review check run a stopped review leaves in progress.
+ *
+ * The comment and the check run must not disagree: a comment that says STOPPED
+ * beside a check run that says in progress reads as a stalled Review on every
+ * `gh pr checks`. A stopped Review settled nothing, so the check run concludes
+ * `neutral`, never a verdict. Skipped for a superseded or foreign comment,
+ * because another Task owns the Review there and carries the check run itself.
+ */
+function completeStoppedReviewCheckRun(
+  options: ReviewStopSweepOptions,
+  mapping: RepositoryMapping,
+  review: StoppedReview,
+  body: string,
+  at: string,
+  signal: AbortSignal,
+): Promise<Result<void, string>> {
+  const update: ReviewCheckRunUpdate | null = reviewCheckRunUpdate(
+    { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: 'SKIPPED', body },
+    at,
+  )
+  if (update === null)
+    return Promise.resolve(ok(undefined))
+  return options.github.upsertReviewCheckRun(mapping, review.headSha, update, signal)
 }
 
 export function stoppedReviewComment(
@@ -92,7 +120,7 @@ ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal
 
 The automated review stopped. Reason: ${cleanLine(review.reason)}
 
-Push a new commit to start a new review. To review this commit again, comment \`/harlan-agent rerun\`.`
+Push a new commit to start a new review. To review this commit again, comment \`@harlan-agent rerun\`.`
 }
 
 /**
@@ -147,6 +175,11 @@ export async function publishStoppedReviews(
       return err(`${review.repository}#${review.pullRequestNumber}: ${edited.error}`)
     const closure = disposition._tag === 'Stopped' ? null : disposition
     if (edited.value._tag === 'Missing') {
+      // The comment is gone, but the check run it mirrored is not. Close it
+      // before any record, so a failed write keeps the row eligible.
+      const checkRun = await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
+      if (checkRun._tag === 'Err')
+        return err(`${review.repository}#${review.pullRequestNumber}: ${checkRun.error}`)
       if (closure !== null) {
         const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
         if (labels._tag === 'Err')
@@ -209,6 +242,13 @@ export async function publishStoppedReviews(
         ? { _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber }
         : { _tag: 'Retired', repository: review.repository, pullRequestNumber: review.pullRequestNumber, reason: foreign })
     }
+    // The comment is closed. Close the check run it mirrored before any
+    // record, so a failed write keeps the row eligible and the next pass
+    // retries both: the comment edit above is idempotent when the body
+    // already holds.
+    const checkRun = await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
+    if (checkRun._tag === 'Err')
+      return err(`${review.repository}#${review.pullRequestNumber}: ${checkRun.error}`)
     const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
     if (labels._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)

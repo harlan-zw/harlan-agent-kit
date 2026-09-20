@@ -490,6 +490,16 @@ Store it before later GitHub reads or writes. A failed controller operation resu
 
 Named after GitHub's `check run`, which has the same shape: one execution against one commit that reports a conclusion. Do not use attempt, pass, or session.
 
+### Review check run
+
+One GitHub check run, named `harlan-agent-kit / Review`, that mirrors one Review run's progress and outcome on the pull request.
+
+It concludes `success` only when the Review outcome is READY, and `neutral` for every other outcome. It never concludes `failure`, so branch protection reads no verdict from it. A trusted foreign review reports no check run. A stopped Review closes its check run as `neutral`, so a closed Review never reads as stalled. A user-token repository reports no check run, because the check run belongs to the App bot's identity.
+
+The CI Review gate skips every check run this service's own GitHub App wrote, so a Review never gates on itself.
+
+Do not use agent check, review status check, or status check. Do not require it in branch protection.
+
 ### Review usage
 
 The total input, cached input, cache write, output, and reasoning tokens one Review run used.
