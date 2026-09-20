@@ -24,6 +24,7 @@ function harness(heading = '### 🤖 READY · 95/100') {
   } as unknown as Octokit
   const source = createGitHubAgentSource({
     actorLogin: () => 'harlan-github-agent[bot]',
+    ownAppId: 98114,
     createClient: () => client,
     tokens: {
       getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T00:00:00.000Z' })),

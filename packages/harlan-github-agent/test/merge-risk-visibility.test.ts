@@ -103,6 +103,7 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
@@ -198,6 +199,7 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
         stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
         findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
         getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),

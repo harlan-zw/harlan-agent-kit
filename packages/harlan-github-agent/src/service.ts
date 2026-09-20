@@ -450,6 +450,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const workerGithub = createGitHubAgentSource({
     actorLogin,
     legacyActor: { login: userLogin, tokens: legacyUserTokens },
+    ownAppId: config.github.appId,
     tokens,
   })
   // Pull request triage classifies at observation time, before the planner
@@ -588,6 +589,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
     })
     const reviewStatus = createReviewStatusController({
+      checkRuns: workerGithub,
       commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
       github: workerGithub,
       leaseMilliseconds: 2 * 60_000,
@@ -763,6 +765,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
+        checkRuns: workerGithub,
         github: workerGithub,
         intervalMilliseconds: 2_000,
         leaseMilliseconds: 2 * 60_000,

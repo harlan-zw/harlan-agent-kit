@@ -53,7 +53,7 @@ const pullRequestSteps: Step[] = [
   { title: 'Conflict resolution', text: 'Merge the current base into the pull request branch, resolve the conflicts, and push one fix commit.' },
   { title: 'Adversarial review', text: 'The Review Agent reads the full diff and the surrounding code at high Reasoning effort.' },
   { title: 'One automated comment', text: 'The controller keeps one self-identified comment and posts READY, PENDING, or BLOCKED.' },
-  { title: 'Rerun review', text: 'Harlan uses the dashboard or comments /harlan-agent rerun to queue the current head commit once.' },
+  { title: 'Rerun review', text: 'Harlan uses the dashboard or comments @harlan-agent rerun to queue the current head commit once.' },
   { title: 'GitHub status', text: 'Open pull requests stay live, and a completed Review caches the closed or merged state once.' },
 ]
 
