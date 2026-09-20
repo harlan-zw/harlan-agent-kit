@@ -210,6 +210,45 @@ describe('gitHub reconciliation', () => {
     }
   })
 
+  it('never classifies or settles a dismissed issue', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping({ issueWork: true })
+    const at = '2026-09-18T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    const issue = issueItem()
+    store.recordObservation({
+      externalId: 'dismissed-issue',
+      observedAt: '2026-09-18T00:59:00.000Z',
+      source: 'poll',
+      subject: issue,
+    })
+    if (store.dismissItem({ repository: repository.github, itemNumber: issue.number, at: '2026-09-18T00:59:30.000Z' })._tag !== 'Dismissed')
+      throw new Error('Expected the issue to be dismissed.')
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          listOpenItems: () => Promise.resolve(ok([issue])),
+        },
+        store,
+        now: () => new Date(at),
+        issueClassification: {
+          verdict: async () => {
+            throw new Error('No verdict was asked for.')
+          },
+          settle: async () => {
+            throw new Error('No settle was asked for.')
+          },
+        },
+      })
+      expect(result._tag).toBe('Ok')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('ignores issues authored by automated accounts', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()

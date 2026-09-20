@@ -143,6 +143,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       // there and repeat the ask forever.
       if (subject.kind !== 'issue' || subject.state !== 'open' || !repository.issueWork || !repository.enabled || repository.ownership === 'external' || subject.routineTracking)
         return
+      // A Dismissal outranks every planner and every classifier: a dismissed
+      // issue must not be classified, and a stored route must not settle
+      // again, on every poll.
+      if (dependencies.store.isItemDismissed(repository.github, 'issue', subject.number))
+        return
       const revisionId = revisionIdFor(subject)
       const stored = dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionId)
       if (stored !== null) {
