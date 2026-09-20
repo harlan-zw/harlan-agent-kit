@@ -1213,6 +1213,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           ...(mutationSchedulers === undefined
             ? {}
             : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge, refreshReviewGates: refreshRepositoryReviewGates }),
+          // A read-only deployment runs no classification and settles nothing.
+          mutationsEnabled: config.mutationsEnabled,
           ...(pullRequestTriage === null ? {} : { pullRequestTriage }),
           issueClassification,
           github,

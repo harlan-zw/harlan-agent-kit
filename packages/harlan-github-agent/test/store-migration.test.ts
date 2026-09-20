@@ -822,3 +822,79 @@ describe('candidate title migration', () => {
     }
   })
 })
+
+it('converges a sibling journal that skipped the settled column', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping()], '2026-09-18T00:00:00.000Z')
+  const subject = pullRequestItem({ mergeState: 'clean' })
+  const observed = before.recordObservation({
+    externalId: 'sibling-settled',
+    observedAt: '2026-09-18T00:01:00.000Z',
+    source: 'poll',
+    subject,
+    pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' },
+  })
+  if (observed._tag !== 'Inserted')
+    throw new Error('Expected a pull request Revision.')
+  before.close()
+  // A stacked sibling branch carried this journal past the settled column's
+  // own step, so its version number outruns its schema.
+  const sibling = new DatabaseSync(path)
+  sibling.exec('ALTER TABLE pull_request_triage_runs DROP COLUMN settled_at; PRAGMA user_version = 76;')
+  sibling.close()
+
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.getLatestPullRequestTriageRun('harlan-zw/example', subject.number, subject.headSha)).toMatchObject({ outcome: 'ReviewSkipped' })
+    expect(migrated.markPullRequestTriageSettled('harlan-zw/example', subject.number, subject.headSha, '2026-09-18T00:02:00.000Z')).toBe(true)
+  }
+  finally {
+    migrated.close()
+  }
+})
+
+it('converges a sibling journal that carries no issue triage runs', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping({ issueWork: true })], '2026-09-18T00:00:00.000Z')
+  before.close()
+  // A stacked sibling branch carried this journal past the issue triage
+  // table's own step, so its version number outruns its schema.
+  const sibling = new DatabaseSync(path)
+  sibling.exec('DROP TABLE issue_triage_runs; PRAGMA user_version = 77;')
+  sibling.close()
+
+  const migrated = openJournalStore(path)
+  try {
+    const issue = issueItem({ author: 'harlan-zw' })
+    const observed = migrated.recordObservation({
+      externalId: 'sibling-converged-route',
+      observedAt: '2026-09-18T00:01:00.000Z',
+      source: 'poll',
+      subject: issue,
+      issueTriage: {
+        _tag: 'Routed',
+        confidence: 0.95,
+        title: 'Button does nothing',
+        body: 'Steps: open the app.',
+        result: {
+          _tag: 'NEEDS_INFO',
+          difficulty: 2,
+          impact: 3,
+          hasReproduction: true,
+          needsCodebaseReview: false,
+          summary: 'The classification service routed this from the report alone: information is missing before work can start.',
+          nextAction: 'Add what is missing. The next comment after an edit re-runs triage.',
+          relatedIssues: [],
+        },
+      },
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected one inserted Revision.')
+    expect(migrated.getLatestIssueTriageRun(issue.repository, issue.number, observed.revisionId)).toMatchObject({ _tag: 'Routed', confidence: 0.95 })
+  }
+  finally {
+    migrated.close()
+  }
+})
