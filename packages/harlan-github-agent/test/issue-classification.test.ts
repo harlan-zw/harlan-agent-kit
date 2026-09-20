@@ -2,7 +2,7 @@ import type { Questions, SystemOneResult } from 'advocaat'
 import type { ClassificationSource } from '../src/classification.ts'
 import type { RepositoryMapping } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createIssueClassificationController, issueRouteQuestions } from '../src/issue-classification.ts'
+import { createIssueClassificationController, issueRouteQuestions, routedResult } from '../src/issue-classification.ts'
 import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, repositoryMapping } from './fixtures.ts'
@@ -146,16 +146,7 @@ describe('issue triage classification in the journal', () => {
         confidence: 0.95,
         title: 'Button does nothing',
         body: 'Steps: open the app.',
-        result: {
-          _tag: 'NEEDS_INFO',
-          difficulty: 2,
-          impact: 3,
-          hasReproduction: true,
-          needsCodebaseReview: false,
-          summary: 'The classification service routed this from the report alone.',
-          nextAction: 'Add what is missing.',
-          relatedIssues: [],
-        },
+        result: routedResult({ route: 'NEEDS_INFO', difficulty: 2, impact: 3, hasReproduction: true }),
       },
     })
     if (inserted._tag !== 'Inserted')
@@ -164,6 +155,37 @@ describe('issue triage classification in the journal', () => {
     expect(store.claimNextIssueTriageTask('triager-1', '2026-09-18T00:02:00.000Z', 60_000)).toBeNull()
     const run = store.getLatestIssueTriageRun(issue.repository, issue.number, inserted.revisionId)
     expect(run).toMatchObject({ result: { _tag: 'NEEDS_INFO', difficulty: 2 }, confidence: 0.95 })
+  })
+
+  it('rebuilds a stored routed decision exactly as it settled', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ issueWork: true })], '2026-09-18T00:00:00.000Z')
+    const issue = issueItem()
+    const settled = routedResult({ route: 'NEEDS_INFO', difficulty: 2, impact: 3, hasReproduction: true })
+    const inserted = store.recordObservation({
+      externalId: 'issue-routed-rebuild',
+      observedAt: '2026-09-18T00:01:00.000Z',
+      source: 'poll',
+      subject: issue,
+      issueTriage: {
+        _tag: 'Routed',
+        confidence: 0.95,
+        title: 'Button does nothing',
+        body: 'Steps: open the app.',
+        result: settled,
+      },
+    })
+    if (inserted._tag !== 'Inserted')
+      throw new Error('Expected one inserted Revision.')
+
+    // The poll settles a stored route again, so the rebuilt result must
+    // reproduce the settled comment byte for byte. A shorter rebuild would
+    // rewrite the comment the first poll after it landed.
+    const run = store.getLatestIssueTriageRun(issue.repository, issue.number, inserted.revisionId)
+    expect(run).toMatchObject({ _tag: 'Routed' })
+    if (run?._tag !== 'Routed')
+      throw new Error('Expected a stored routed decision.')
+    expect(run.result).toEqual(settled)
   })
 
   it('records an Agent-kept decision so the same Revision is never asked again', () => {

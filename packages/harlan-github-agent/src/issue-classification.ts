@@ -67,7 +67,7 @@ export function routedResult(input: {
   difficulty: number
   impact: number
   hasReproduction: boolean
-}): IssueTriageResult {
+}): Extract<IssueTriageResult, { _tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' }> {
   return input.route === 'NEEDS_INFO'
     ? {
         _tag: 'NEEDS_INFO',

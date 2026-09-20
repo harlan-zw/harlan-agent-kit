@@ -117,6 +117,7 @@ import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSele
 import { createBatchStore } from './batch-store.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
+import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON } from './pull-request-triage.ts'
@@ -8122,16 +8123,15 @@ export function openJournalStore(
       return { _tag: 'AgentTriage', reason: row.reason, decidedAt: row.decided_at }
     return {
       _tag: 'Routed',
-      result: {
-        _tag: row.route_tag,
+      // The rebuild must reproduce the settled decision exactly: the poll
+      // settles a stored route again, and a shorter summary or next action
+      // would rewrite the comment the first poll after it landed.
+      result: routedResult({
+        route: row.route_tag,
         difficulty: row.difficulty,
         impact: row.impact,
         hasReproduction: row.has_reproduction === 1,
-        needsCodebaseReview: false,
-        summary: 'The classification service routed this from the report alone.',
-        nextAction: row.route_tag === 'NEEDS_INFO' ? 'Add what is missing.' : 'Resume when the blocking change lands.',
-        relatedIssues: [],
-      },
+      }),
       confidence: row.confidence,
       decidedAt: row.decided_at,
     }
