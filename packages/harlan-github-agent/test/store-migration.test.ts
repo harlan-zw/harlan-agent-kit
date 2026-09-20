@@ -822,3 +822,34 @@ describe('candidate title migration', () => {
     }
   })
 })
+
+it('converges a sibling journal that skipped the settled column', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping()], '2026-09-18T00:00:00.000Z')
+  const subject = pullRequestItem({ mergeState: 'clean' })
+  const observed = before.recordObservation({
+    externalId: 'sibling-settled',
+    observedAt: '2026-09-18T00:01:00.000Z',
+    source: 'poll',
+    subject,
+    pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' },
+  })
+  if (observed._tag !== 'Inserted')
+    throw new Error('Expected a pull request Revision.')
+  before.close()
+  // A stacked sibling branch carried this journal past the settled column's
+  // own step, so its version number outruns its schema.
+  const sibling = new DatabaseSync(path)
+  sibling.exec('ALTER TABLE pull_request_triage_runs DROP COLUMN settled_at; PRAGMA user_version = 76;')
+  sibling.close()
+
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.getLatestPullRequestTriageRun('harlan-zw/example', subject.number, subject.headSha)).toMatchObject({ outcome: 'ReviewSkipped' })
+    expect(migrated.markPullRequestTriageSettled('harlan-zw/example', subject.number, subject.headSha, '2026-09-18T00:02:00.000Z')).toBe(true)
+  }
+  finally {
+    migrated.close()
+  }
+})

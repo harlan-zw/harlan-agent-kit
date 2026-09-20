@@ -29,7 +29,12 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
+<<<<<<< HEAD
   issueClassification?: IssueClassificationController
+=======
+  /** False on a read-only deployment: no classification budget, no GitHub writes. Defaults to true. */
+  mutationsEnabled?: boolean
+>>>>>>> origin/feat-jev-revision-files
   pullRequestTriage?: PullRequestTriageController
   refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
@@ -56,7 +61,9 @@ function countResults(results: RecordObservationResult[]): Pick<ReconciliationSu
 
 export async function reconcileRepository(repository: RepositoryMapping, dependencies: ReconciliationDependencies): Promise<Result<ReconciliationSummary, ReconciliationError>> {
   const observedAt = dependencies.now().toISOString()
-  const writesEnabled = dependencies.store.mayWriteRepository(repository.github)
+  // Repository writes are per-repository; mutations are per-deployment. A
+  // read-only deployment owns neither, whatever a repository row claims.
+  const writesEnabled = dependencies.store.mayWriteRepository(repository.github) && dependencies.mutationsEnabled !== false
   dependencies.store.recordPollAttempt(repository.github, observedAt)
   const result = await dependencies.github.listOpenItems(repository, dependencies.signal)
   if (result._tag === 'Err') {

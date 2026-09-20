@@ -6647,9 +6647,12 @@ function installSchema(database: DatabaseSync): void {
       : 'PRAGMA user_version = 75;')
     version = 75
   }
-  if (version === 75) {
-    // The changed files a Revision was decided against, read once at
-    // observation time and reused by Merge risk and by evaluation replays.
+  if (version >= 75) {
+    // Stacked sibling branches ship their own v75+ migrations, so the
+    // journal's version number cannot name which schema it carries. This
+    // step is content-addressed: it adds exactly what is missing, whatever
+    // route the journal took here, and never lowers the recorded version.
+    const target = Math.max(version, 77)
     applyMigration(database, `
       CREATE TABLE IF NOT EXISTS revision_files (
         subject_id INTEGER NOT NULL REFERENCES subjects(id),
@@ -6660,8 +6663,9 @@ function installSchema(database: DatabaseSync): void {
         UNIQUE (subject_id, revision_id),
         FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
       );
-      PRAGMA user_version = 76;
+      PRAGMA user_version = ${target};
     `)
+<<<<<<< HEAD
     version = 76
   }
   if (version === 76) {
@@ -6722,6 +6726,13 @@ function installSchema(database: DatabaseSync): void {
       ? 'PRAGMA user_version = 79;'
       : 'ALTER TABLE pull_request_triage_runs ADD COLUMN settled_at TEXT; PRAGMA user_version = 79;')
     version = 79
+=======
+    const settledColumn = database.prepare(`SELECT 1 AS found FROM pragma_table_info('pull_request_triage_runs') WHERE name = 'settled_at'`).get() !== undefined
+    applyMigration(database, settledColumn
+      ? `PRAGMA user_version = ${target};`
+      : `ALTER TABLE pull_request_triage_runs ADD COLUMN settled_at TEXT; PRAGMA user_version = ${target};`)
+    version = target
+>>>>>>> origin/feat-jev-revision-files
   }
   if (version === 79)
     return
