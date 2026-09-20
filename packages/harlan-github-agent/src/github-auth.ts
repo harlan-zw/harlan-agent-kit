@@ -72,12 +72,17 @@ function repositoryName(repository: string): string {
  * `checks_read` carries `actions` because the base gate lists workflow runs
  * to drop the suites a `workflow_run` event attached to the default branch
  * tip. Without it GitHub answers 403 and every CI gate reads PENDING.
+ *
+ * `check_write` carries Checks write alone, because the Review check run is
+ * the only write it serves and a narrower token cannot touch comments.
  */
 function permissions(access: GitHubRepositoryAccess): Record<string, PermissionLevel> {
   if (access === 'read')
     return { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }
   if (access === 'checks_read')
     return { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }
+  if (access === 'check_write')
+    return { checks: 'write', metadata: 'read' }
   if (access === 'item_write')
     return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
   if (access === 'pull_request_merge')
