@@ -6665,7 +6665,6 @@ function installSchema(database: DatabaseSync): void {
     version = 76
   }
   if (version === 76) {
-<<<<<<< HEAD
     // Routed Issue triage decisions land at observation time with no Agent
     // Task, carrying the state they were decided against.
     applyMigration(database, `
