@@ -71,6 +71,7 @@ export function githubPublicationFixture(options: {
   } as unknown as Octokit
   const source = createGitHubAgentSource({
     actorLogin: () => 'harlan-github-agent[bot]',
+    ownAppId: 98114,
     createClient: () => octokit,
     tokens: {
       getToken: () => {

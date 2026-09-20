@@ -148,12 +148,19 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         : inScope.filter(candidate => candidate.estimatedChangedFiles <= maximumChangedFiles)
       const outsideScope = response.candidates.length - inScope.length
       const oversized = inScope.length - withinSize.length
+      // The ledger decides before the gate does: a fingerprint it already
+      // holds can only re-record as a no-op, so a worth call on it buys
+      // nothing and its drop would mislabel prior knowledge as this run's
+      // judgement. It stays in the recording set, where the ledger's own
+      // conflict rule turns it into the no-op it is.
+      const knownFingerprints = new Set(options.store.listCandidates(task.routineId).map(entry => entry.fingerprint))
+      const unclassified = withinSize.filter(candidate => !knownFingerprints.has(candidate.fingerprint))
       // The worth gate files on every doubt, so a dropped Candidate is the
       // classification saying no with confidence. Nothing else drops here.
       const worthRecording = options.classification === undefined || options.classification === null
         ? withinSize
-        : []
-      for (const candidate of withinSize) {
+        : withinSize.filter(candidate => knownFingerprints.has(candidate.fingerprint))
+      for (const candidate of unclassified) {
         if (options.classification === undefined || options.classification === null)
           break
         const worth = await worthFiling({

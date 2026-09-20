@@ -50,6 +50,7 @@ describe('review snapshot approval labels', () => {
   it('reads the manual Review label the poller reads', async () => {
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client(['harlan-agent-review', 'bug']),
       tokens: {
         getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T02:00:00.000Z' })),

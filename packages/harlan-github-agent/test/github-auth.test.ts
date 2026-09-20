@@ -7,6 +7,7 @@ describe('gitHub App authentication', () => {
   it.each([
     ['read', { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }],
     ['checks_read', { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }],
+    ['check_write', { checks: 'write', metadata: 'read' }],
     ['contents_write', { contents: 'write', metadata: 'read' }],
     ['item_write', { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }],
     ['pull_request_merge', { contents: 'write', metadata: 'read', pull_requests: 'write' }],

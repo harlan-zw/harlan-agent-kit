@@ -117,6 +117,7 @@ import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSele
 import { createBatchStore } from './batch-store.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
+import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON } from './pull-request-triage.ts'
@@ -896,7 +897,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     workerId: string
     fence: number
     at: string
-    sink: 'comment' | 'outcome_label'
+    sink: 'comment' | 'check_run' | 'outcome_label'
     commentId?: number
     url?: string
   }) => boolean
@@ -4563,6 +4564,21 @@ function planAdversarialReview(
   // is usually that same run. Read the other way round, a base branch move
   // filed every verdict as someone else's review.
   if (alreadyReviewed && localAttempt.head_review_run_id !== null) {
+    // The Review outranks the stored skip row itself, not only its reuse: the
+    // dashboard reads that row, so a reviewed head must stop counting as a
+    // skip. Idempotent, because a replaced row no longer matches.
+    database.prepare(`
+      UPDATE pull_request_triage_runs
+      SET outcome_tag = 'ReviewRequired', reason = ?, started_at = ?, completed_at = ?, content_digest = ?
+      WHERE subject_id = ? AND revision_id = ? AND outcome_tag = 'ReviewSkipped'
+    `).run(
+      'rule: this head commit already has a Review.',
+      observedAt,
+      observedAt,
+      digest(JSON.stringify({ subjectId, revisionId, headSha: subject.kind === 'pull_request' ? subject.headSha : '', outcome: 'ReviewRequired' })),
+      subjectId,
+      revisionId,
+    )
     const stored = database.prepare(`
       INSERT INTO review_resolutions (
         subject_id, revision_id, task_id, task_fence, resolution_tag,
@@ -8122,16 +8138,15 @@ export function openJournalStore(
       return { _tag: 'AgentTriage', reason: row.reason, decidedAt: row.decided_at }
     return {
       _tag: 'Routed',
-      result: {
-        _tag: row.route_tag,
+      // The rebuild must reproduce the settled decision exactly: the poll
+      // settles a stored route again, and a shorter summary or next action
+      // would rewrite the comment the first poll after it landed.
+      result: routedResult({
+        route: row.route_tag,
         difficulty: row.difficulty,
         impact: row.impact,
         hasReproduction: row.has_reproduction === 1,
-        needsCodebaseReview: false,
-        summary: 'The classification service routed this from the report alone.',
-        nextAction: row.route_tag === 'NEEDS_INFO' ? 'Add what is missing.' : 'Resume when the blocking change lands.',
-        relatedIssues: [],
-      },
+      }),
       confidence: row.confidence,
       decidedAt: row.decided_at,
     }
@@ -11091,7 +11106,7 @@ export function openJournalStore(
       if (changed) {
         recordReviewStatusEvent(database, {
           commandId: input.commandId,
-          event: input.sink === 'comment' ? 'CommentConfirmed' : 'OutcomeLabelConfirmed',
+          event: input.sink === 'comment' ? 'CommentConfirmed' : input.sink === 'check_run' ? 'CheckRunConfirmed' : 'OutcomeLabelConfirmed',
           from: 'Running',
           to: 'Running',
           fence: input.fence,
