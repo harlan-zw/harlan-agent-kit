@@ -148,6 +148,7 @@ describe('pull request triage Stats', () => {
       outcome: 'ReviewSkipped',
       reason: 'model: classification chose skip with confidence 0.93.',
       completedAt: '2026-08-02T00:00:00.000Z',
+      settledAt: null,
     })
     expect(store.getLatestPullRequestTriageRun(subject.repository, subject.number, 'f'.repeat(40))).toBeNull()
 
@@ -164,6 +165,7 @@ describe('pull request triage Stats', () => {
       outcome: 'ReviewSkipped',
       reason: 'model: classification chose skip with confidence 0.93.',
       completedAt: '2026-08-02T00:00:00.000Z',
+      settledAt: null,
     })
 
     // A failure row converges: a later successful decision replaces it, so
