@@ -102,6 +102,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const verdicts = await Promise.all(eligibleItems.map(async (subject) => {
       if (subject.kind !== 'pull_request' || subject.state !== 'open' || !repository.pullRequestReview || !repository.enabled)
         return null
+      // A Dismissal outranks every planner and every classifier: a dismissed
+      // pull request must not be read, classified, or settled on every poll
+      // for a decision that can never land.
+      if (dependencies.store.isItemDismissed(repository.github, 'pull_request', subject.number))
+        return null
       // The planner queues a Review only for a clean, non-draft pull request
       // from a trusted author or one the manual label approves. The verdict
       // asks only those, so an ineligible head is never read or classified
@@ -137,6 +142,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       // no local decision row, so classifying them would publish comments
       // there and repeat the ask forever.
       if (subject.kind !== 'issue' || subject.state !== 'open' || !repository.issueWork || !repository.enabled || repository.ownership === 'external' || subject.routineTracking)
+        return
+      // A Dismissal outranks every planner and every classifier: a dismissed
+      // issue must not be classified, and a stored route must not settle
+      // again, on every poll.
+      if (dependencies.store.isItemDismissed(repository.github, 'issue', subject.number))
         return
       const revisionId = revisionIdFor(subject)
       const stored = dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionId)
