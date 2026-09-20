@@ -98,6 +98,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const decisions = await Promise.all(eligibleItems.map(async (subject) => {
       if (subject.kind !== 'pull_request' || subject.state !== 'open' || !repository.pullRequestReview || !repository.enabled)
         return null
+      // A Dismissal outranks every planner and every classifier: a dismissed
+      // pull request must not be read, classified, or settled on every poll
+      // for a decision that can never land.
+      if (dependencies.store.isItemDismissed(repository.github, 'pull_request', subject.number))
+        return null
       // The planner queues a Review only for a clean, non-draft pull request
       // from a trusted author or one the manual label approves. The verdict
       // asks only those, so an ineligible head is never read or classified
