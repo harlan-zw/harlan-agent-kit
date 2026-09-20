@@ -6652,7 +6652,7 @@ function installSchema(database: DatabaseSync): void {
     // journal's version number cannot name which schema it carries. This
     // step is content-addressed: it adds exactly what is missing, whatever
     // route the journal took here, and never lowers the recorded version.
-    const target = Math.max(version, 77)
+    const target = Math.max(version, 79)
     applyMigration(database, `
       CREATE TABLE IF NOT EXISTS revision_files (
         subject_id INTEGER NOT NULL REFERENCES subjects(id),
@@ -6665,37 +6665,8 @@ function installSchema(database: DatabaseSync): void {
       );
       PRAGMA user_version = ${target};
     `)
-<<<<<<< HEAD
-    version = 76
-  }
-  if (version === 76) {
-    // Routed Issue triage decisions land at observation time with no Agent
-    // Task, carrying the state they were decided against.
     applyMigration(database, `
       CREATE TABLE IF NOT EXISTS issue_triage_runs (
-        subject_id INTEGER NOT NULL REFERENCES subjects(id),
-        revision_id TEXT NOT NULL,
-        route_tag TEXT NOT NULL CHECK (route_tag IN ('NEEDS_INFO', 'WAIT_TO_IMPLEMENT')),
-        confidence REAL NOT NULL,
-        difficulty INTEGER NOT NULL,
-        impact INTEGER NOT NULL,
-        has_reproduction INTEGER NOT NULL,
-        state_title TEXT NOT NULL,
-        state_body TEXT NOT NULL,
-        reason TEXT NOT NULL CHECK (reason != ''),
-        decided_at TEXT NOT NULL,
-        UNIQUE (subject_id, revision_id),
-        FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
-      );
-      PRAGMA user_version = 77;
-    `)
-    version = 77
-  }
-  if (version === 77) {
-    // Agent-kept routes are recorded too, so a Revision the classification
-    // left to the Agent is never asked again.
-    applyMigration(database, `
-      CREATE TABLE issue_triage_runs_v78 (
         subject_id INTEGER NOT NULL REFERENCES subjects(id),
         revision_id TEXT NOT NULL,
         route_tag TEXT NOT NULL CHECK (route_tag IN ('NEEDS_INFO', 'WAIT_TO_IMPLEMENT', 'AGENT_TRIAGE')),
@@ -6710,29 +6681,39 @@ function installSchema(database: DatabaseSync): void {
         UNIQUE (subject_id, revision_id),
         FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
       );
-      INSERT INTO issue_triage_runs_v78 SELECT * FROM issue_triage_runs;
-      DROP TABLE issue_triage_runs;
-      ALTER TABLE issue_triage_runs_v78 RENAME TO issue_triage_runs;
-      PRAGMA user_version = 78;
+      PRAGMA user_version = ${target};
     `)
-    version = 78
-  }
-  if (version === 78) {
-    // A settled skip records its own landing, so a later poll spends no
-    // GitHub calls republishing visibility that already stands. A rewind
-    // replays this against a journal already carrying the column.
-    const settledColumn = database.prepare(`SELECT 1 AS found FROM pragma_table_info('pull_request_triage_runs') WHERE name = 'settled_at'`).get() !== undefined
-    applyMigration(database, settledColumn
-      ? 'PRAGMA user_version = 79;'
-      : 'ALTER TABLE pull_request_triage_runs ADD COLUMN settled_at TEXT; PRAGMA user_version = 79;')
-    version = 79
-=======
+    // A journal from this branch's own earlier ladder carries the table
+    // without the AGENT_TRIAGE route, so it still needs the rebuild.
+    const triageShape = database.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'issue_triage_runs'`).get() as { sql: string } | undefined
+    if (triageShape !== undefined && !triageShape.sql.includes('AGENT_TRIAGE')) {
+      applyMigration(database, `
+        CREATE TABLE issue_triage_runs_${target} (
+          subject_id INTEGER NOT NULL REFERENCES subjects(id),
+          revision_id TEXT NOT NULL,
+          route_tag TEXT NOT NULL CHECK (route_tag IN ('NEEDS_INFO', 'WAIT_TO_IMPLEMENT', 'AGENT_TRIAGE')),
+          confidence REAL NOT NULL,
+          difficulty INTEGER NOT NULL,
+          impact INTEGER NOT NULL,
+          has_reproduction INTEGER NOT NULL,
+          state_title TEXT NOT NULL,
+          state_body TEXT NOT NULL,
+          reason TEXT NOT NULL CHECK (reason != ''),
+          decided_at TEXT NOT NULL,
+          UNIQUE (subject_id, revision_id),
+          FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
+        );
+        INSERT INTO issue_triage_runs_${target} SELECT * FROM issue_triage_runs;
+        DROP TABLE issue_triage_runs;
+        ALTER TABLE issue_triage_runs_${target} RENAME TO issue_triage_runs;
+        PRAGMA user_version = ${target};
+      `)
+    }
     const settledColumn = database.prepare(`SELECT 1 AS found FROM pragma_table_info('pull_request_triage_runs') WHERE name = 'settled_at'`).get() !== undefined
     applyMigration(database, settledColumn
       ? `PRAGMA user_version = ${target};`
       : `ALTER TABLE pull_request_triage_runs ADD COLUMN settled_at TEXT; PRAGMA user_version = ${target};`)
     version = target
->>>>>>> origin/feat-jev-revision-files
   }
   if (version === 79)
     return

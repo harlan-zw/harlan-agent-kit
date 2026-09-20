@@ -364,12 +364,6 @@ describe('gitHub reconciliation', () => {
         store,
         now: () => new Date(at),
         issueClassification: {
-          listOpenItems: () => Promise.resolve(ok([pullRequestItem({ mergeState: 'clean' }), issueItem()])),
-        },
-        mutationsEnabled: false,
-        store,
-        now: () => new Date(at),
-        pullRequestTriage: {
           verdict: async () => {
             throw new Error('No verdict was asked for.')
           },
@@ -416,7 +410,7 @@ describe('gitHub reconciliation', () => {
     }
   })
 
-  it('  it('ignores issues authored by automated accounts', async () => {
+  it('ignores issues authored by automated accounts', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
     store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')

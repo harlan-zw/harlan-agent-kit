@@ -29,12 +29,9 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
-<<<<<<< HEAD
   issueClassification?: IssueClassificationController
-=======
   /** False on a read-only deployment: no classification budget, no GitHub writes. Defaults to true. */
   mutationsEnabled?: boolean
->>>>>>> origin/feat-jev-revision-files
   pullRequestTriage?: PullRequestTriageController
   refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
