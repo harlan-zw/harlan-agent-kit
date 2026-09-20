@@ -114,6 +114,7 @@ describe('live pull request base', () => {
     } as unknown as Octokit
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -168,6 +169,7 @@ describe('live pull request base', () => {
     } as unknown as Octokit
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -219,6 +221,7 @@ describe('live pull request base', () => {
     } as unknown as Octokit
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -270,6 +273,7 @@ describe('live pull request base', () => {
     } as unknown as Octokit
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -321,6 +325,7 @@ describe('live pull request base', () => {
     } as unknown as Octokit
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -374,6 +379,7 @@ describe('live pull request base', () => {
     } as unknown as Octokit
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -425,6 +431,7 @@ describe('live pull request base', () => {
     } as unknown as Octokit
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -489,6 +496,7 @@ describe('base checks behind a commit that ran no CI', () => {
     }, checkedRefs)
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -511,6 +519,7 @@ describe('base checks behind a commit that ran no CI', () => {
     }, [])
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })
@@ -531,6 +540,7 @@ describe('base checks behind a commit that ran no CI', () => {
     const client = clientReadingHistory({}, checkedRefs, [docsOnlyBaseSha, ...ancestors])
     const source = createGitHubAgentSource({
       actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
       createClient: () => client,
       tokens: tokens(),
     })

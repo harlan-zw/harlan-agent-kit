@@ -1,3 +1,4 @@
+import type { ReviewCheckRunPublisher } from './review-check-run.ts'
 import type { ReviewStatusPublicationOptions } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
 import { publishClaimedReviewStatus } from './review-status-controller.ts'
@@ -9,6 +10,7 @@ export interface ReviewStatusScheduler {
 }
 
 export interface ReviewStatusSchedulerOptions {
+  checkRuns?: ReviewCheckRunPublisher
   github: ReviewStatusPublicationOptions['github']
   intervalMilliseconds: number
   leaseMilliseconds: number
