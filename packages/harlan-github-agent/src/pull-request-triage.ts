@@ -243,6 +243,13 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       if (decision._tag !== 'Skipped')
         return ok(undefined)
 
+      // A Review can answer this head while the decision was in flight: a
+      // rerun finished, or an override landed between verdict and settle.
+      // The published verdict outranks the skip, so settling stops here
+      // rather than overwrite it.
+      if (options.store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current')
+        return ok(undefined)
+
       // The comment body carries the decision's own stored time, never the
       // clock of this poll, so a retried settle writes the identical body and
       // GitHub confirms it without a publish.

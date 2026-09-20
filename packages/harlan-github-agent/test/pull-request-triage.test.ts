@@ -433,6 +433,15 @@ describe('pull request triage controller', () => {
     expect(harness.consumedApprovalLabels).toEqual([])
   })
 
+  it('settles nothing when a Review already answered this head', async () => {
+    const harness = controller({ reviewForHead: { id: 'run-1' } as never })
+
+    await expect(harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })).resolves.toEqual(ok(undefined))
+    expect(harness.comments).toEqual([])
+    expect(harness.checkRuns).toEqual([])
+    expect(harness.stamped).toEqual([])
+  })
+
   it('reports a failed skip comment without stamping its label', async () => {
     const subject = pullRequestItem({ mergeState: 'clean' })
     const controllerInstance = createPullRequestTriageController({
