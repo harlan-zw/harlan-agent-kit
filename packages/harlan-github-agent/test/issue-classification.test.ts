@@ -208,6 +208,44 @@ describe('issue triage classification in the journal', () => {
     expect(store.claimNextIssueTriageTask('triager-1', '2026-09-18T00:02:00.000Z', 60_000)).not.toBeNull()
   })
 
+  it('records a routed decision even when a triage Task is already queued', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ issueWork: true })], '2026-09-18T00:00:00.000Z')
+    const issue = issueItem({ author: 'harlan-zw' })
+    const first = store.recordObservation({
+      externalId: 'issue-task-first',
+      observedAt: '2026-09-18T00:01:00.000Z',
+      source: 'poll',
+      subject: issue,
+    })
+    if (first._tag !== 'Inserted')
+      throw new Error('Expected one inserted Revision.')
+    expect(store.claimNextIssueTriageTask('triager-1', '2026-09-18T00:01:30.000Z', 60_000)).not.toBeNull()
+
+    const settled = routedResult({ route: 'NEEDS_INFO', difficulty: 2, impact: 3, hasReproduction: true })
+    const second = store.recordObservation({
+      externalId: 'issue-routed-later',
+      observedAt: '2026-09-18T00:02:00.000Z',
+      source: 'poll',
+      subject: issue,
+      issueTriage: {
+        _tag: 'Routed',
+        confidence: 0.95,
+        title: 'Button does nothing',
+        body: 'Steps: open the app.',
+        result: settled,
+      },
+    })
+    if (second._tag !== 'Duplicate')
+      throw new Error('Expected the same Revision.')
+
+    // The row is what makes the decision durable: without it, every later
+    // poll re-asks the classification and re-settles the comment against a
+    // task that may never answer.
+    const run = store.getLatestIssueTriageRun(issue.repository, issue.number, second.revisionId)
+    expect(run).toMatchObject({ _tag: 'Routed', confidence: 0.95 })
+  })
+
   it('queues the triage Task for an Agent decision', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping({ issueWork: true })], '2026-09-18T00:00:00.000Z')
