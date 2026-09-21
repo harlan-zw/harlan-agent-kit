@@ -8,6 +8,8 @@
 
 # Prints what the shell would run, with every heredoc body and quoted span gone.
 # Quote state carries across lines, so a multi-line string stays prose.
+# Bash joins a backslash-newline outside quotes into one command, so the
+# continuation lines merge here, before any newline becomes a separator.
 drop_prose() {
   awk '
     function strip(line,   i, c, out) {
@@ -25,13 +27,8 @@ drop_prose() {
       }
       return out
     }
-    BEGIN { quote = 0; body = 0 }
-    body == 1 {
-      if ($0 ~ "^[[:space:]]*" marker "[[:space:]]*$") body = 0
-      next
-    }
-    {
-      guarded = $0
+    function open_heredoc(line,   guarded) {
+      guarded = line
       # A here string carries no body, so it must not open one.
       gsub(/<<</, "===", guarded)
       if (match(guarded, /<<-?[[:space:]]*[\047\042]?[A-Za-z_][A-Za-z0-9_]*[\047\042]?/)) {
@@ -40,8 +37,25 @@ drop_prose() {
         gsub(/[\047\042]/, "", marker)
         body = 1
       }
-      print strip($0)
     }
+    BEGIN { quote = 0; body = 0; pending = "" }
+    body == 1 {
+      if ($0 ~ "^[[:space:]]*" marker "[[:space:]]*$") body = 0
+      next
+    }
+    {
+      open_heredoc($0)
+      pending = pending strip($0)
+      # A backslash that survives stripping sits outside quotes, so bash
+      # drops it together with the newline and the command keeps going.
+      if (pending ~ /\\$/) {
+        sub(/\\$/, "", pending)
+        next
+      }
+      print pending
+      pending = ""
+    }
+    END { if (pending != "") print pending }
   '
 }
 
