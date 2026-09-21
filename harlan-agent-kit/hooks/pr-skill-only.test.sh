@@ -36,6 +36,8 @@ expect deny "$(printf 'cd /repo \\\n&& gh pr edit 42 --body-file /tmp/pr.md')"
 expect allow "$(printf 'HARLAN_AGENT_PR_SKILL=1 gh pr edit 42 \\\n--body-file /tmp/pr.md')"
 
 expect deny "$(printf 'cat > /tmp/pr.md <<EOF \\\nignored\nEOF\ngh pr create --title t --body-file /tmp/pr.md')"
+expect deny "$(printf 'echo "see cat <<EOF notes"\ngh pr create --fill')"
+expect allow 'echo "see cat <<EOF notes"'
 expect deny 'FOO=1 gh pr create --fill'
 expect deny '`gh pr create --fill`'
 

@@ -52,5 +52,8 @@ expect allow "$(printf "cat > notes.md <<'DOC'\nwt remove feat/x --force drops w
 # A real call after a heredoc still counts.
 expect deny "$(printf 'cat > notes.md <<EOF\nharmless prose\nEOF\ngit worktree add ../foo bar\n')"
 
+# A quoted heredoc lookalike opens no body, so the next command stays visible.
+expect deny "$(printf 'echo "see cat <<EOF notes"\ngit worktree add /tmp/x b\n')"
+
 [ "$fail" -eq 0 ] && echo 'wt-only hook tests passed'
 exit "$fail"
