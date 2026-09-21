@@ -11,7 +11,13 @@ const mock = {
     confidence: 0.8,
     probabilities: { bug: 0.8, other: 0.2 },
   },
-  score: { type: 'score', score: 1.5, confidence: 0.7, legend: {}, probabilities: {} },
+  score: {
+    type: 'score',
+    score: 1.5,
+    confidence: 0.7,
+    legend: { 0: 'Cosmetic', 1: 'Workaround exists', 2: 'Blocks production' },
+    probabilities: { 0: 0, 1: 0.5, 2: 0.5 },
+  },
   severity: {
     type: 'score',
     score: 1.5,
