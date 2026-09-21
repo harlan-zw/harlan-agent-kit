@@ -41,6 +41,10 @@ fi
 
 expect allow 'HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: example" --body "right"'
 expect allow 'HARLAN_AGENT_PR_SKILL=1 gh pr edit 42 --body "right"'
+expect deny "$(printf 'cd /repo\ngh pr create --fill')"
+expect deny "$(printf 'cat > /tmp/pr.md <<EOF\nbody\nEOF\ngh pr create --body-file /tmp/pr.md')"
+expect deny "$(printf 'cd /repo\ngh pr edit 42 --body-file /tmp/pr.md')"
+expect allow "$(printf 'cd /repo\nHARLAN_AGENT_PR_SKILL=1 gh pr create --fill')"
 expect allow 'gh pr edit 42 --add-label ready'
 expect allow 'gh pr view 42 --json body'
 expect allow 'echo gh pr create'
