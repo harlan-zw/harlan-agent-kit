@@ -20,3 +20,6 @@ __pycache__/
 packages/notes-viewer/.content/
 packages/notes-viewer/.vitepress/cache/
 packages/notes-viewer/.vitepress/dist/
+
+.env
+harlan-agent-kit/evals/results/
