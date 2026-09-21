@@ -36,6 +36,7 @@ async function renderPageTemplate(path: string, setup: Record<string, unknown>):
   app.component('StateBadge', () => null)
   app.component('WorkChip', () => null)
   app.component('EntityIdentity', () => null)
+  app.component('RepositoryIdentity', () => null)
   app.component('UButton', stub)
   app.component('USkeleton', () => null)
   app.component('UDropdownMenu', stub)
@@ -76,5 +77,18 @@ describe('history page outline', () => {
   it('renders a level-1 heading named History', async () => {
     const html = await renderPageTemplate(historyPage, pageState)
     expect(html).toMatch(/<h1[^>]*>\s*History\s*<\/h1>/)
+  })
+
+  it('resolves every component the page template uses', async () => {
+    const warnings: Array<string> = []
+    const warn = console.warn
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '))
+    try {
+      await renderPageTemplate(historyPage, pageState)
+    }
+    finally {
+      console.warn = warn
+    }
+    expect(warnings.filter(w => w.includes('Failed to resolve component'))).toEqual([])
   })
 })
