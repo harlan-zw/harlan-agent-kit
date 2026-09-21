@@ -1,3 +1,6 @@
+import type { ClassificationSource } from './classification.ts'
+import { choice } from 'advocaat'
+
 /**
  * One taxonomy for every failure the controller can observe.
  *
@@ -456,4 +459,73 @@ export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureCl
   if (host !== null)
     return { _tag: 'Infrastructure', reason: `A download from ${host} failed during check "${signal.name}".` }
   return { _tag: 'Repairable' }
+}
+
+/**
+ * The classification question for one failing check the patterns could not
+ * name. Exported so tests can assert the contract without the service.
+ */
+/**
+ * Option order affects the answer distribution, so the criteria order is part
+ * of the measured contract: reorder only alongside a fresh eval of the
+ * residual classifier.
+ */
+export function checkFailureQuestions(checkName: string) {
+  return {
+    cause: choice(
+      `The state holds the final lines of one failed GitHub Actions check, "${checkName}". Decide who must fix it.`,
+      {
+        Repairable: 'The repository owns the failure: its code, its tests, its configuration, or its dependencies.',
+        Infrastructure: 'The host or the network owns the failure: the runner itself, disk, memory of the machine, or a remote download that never reached the repository.',
+      },
+    ),
+  }
+}
+
+/** Infrastructure from the classification needs this much confidence. Below it, the check stays Repairable. */
+export const CHECK_INFRASTRUCTURE_CONFIDENCE_FLOOR = 0.85
+
+/**
+ * Classifies one failing check, with the classification service answering what
+ * the patterns cannot.
+ *
+ * The patterns decide first and the service never overrides them: a runner
+ * kill or a named remote host is settled fact. Only a check the patterns left
+ * Repairable is asked about, and only a confident answer moves it, because a
+ * wrong Infrastructure answer stops the repair and asks a person to fix a
+ * host. Every other answer, and every failure, keeps the repair.
+ */
+export async function classifyCheckFailureWithResidual(input: {
+  signal: CheckFailureSignal
+  classification: ClassificationSource | null
+  abort?: AbortSignal
+}): Promise<CheckFailureClass> {
+  const classified = classifyCheckFailure(input.signal)
+  if (classified._tag === 'Infrastructure' || input.classification === null)
+    return classified
+  if (input.signal.logTail.length === 0)
+    return classified
+  const result = await input.classification.classify({
+    state: { check: input.signal.name, conclusion: input.signal.conclusion, logTail: input.signal.logTail.slice(-30) },
+    questions: checkFailureQuestions(input.signal.name),
+    ...(input.abort === undefined ? {} : { signal: input.abort }),
+  })
+  if (result._tag === 'Err')
+    return classified
+  // The boundary trust ends here: an answer that is not a typed choice with
+  // a numeric confidence reads as no answer, never as a verdict.
+  const answer = result.value.answers.cause
+  if (
+    answer === undefined || answer.type !== 'choice' || typeof answer.choice !== 'string'
+    || !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1
+  ) {
+    return classified
+  }
+  const confidence = Math.round(answer.confidence * 100) / 100
+  if (answer.choice !== 'Infrastructure' || confidence < CHECK_INFRASTRUCTURE_CONFIDENCE_FLOOR)
+    return classified
+  return {
+    _tag: 'Infrastructure',
+    reason: `The classification read check "${input.signal.name}" as infrastructure with confidence ${confidence}.`,
+  }
 }
