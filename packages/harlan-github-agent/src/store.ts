@@ -35,6 +35,7 @@ import type {
   ClaimedReviewStatusCommand,
   ClaimedRoutineReportCommand,
   ClaimedRoutineRun,
+  CodexReasoningEffort,
   ConflictResolutionTask,
   DashboardAgent,
   DashboardSnapshot,
@@ -1303,6 +1304,7 @@ interface ReviewRunRow {
   feedback_reason: string | null
   feedback_updated_at: string | null
   merge_risk: string | null
+  reasoning_effort: string | null
 }
 
 interface DashboardReviewRunRow extends ReviewRunRow {
@@ -2670,6 +2672,12 @@ function reviewPublicationFromRow(row: ReviewPublicationRow): ReviewPublication 
   }
 }
 
+/** Reads one stored Reasoning effort, treating an unknown name as absent. */
+function reasoningEffortFromRow(value: string | null | undefined): CodexReasoningEffort | null {
+  const effort = REASONING_EFFORTS.find(candidate => candidate === value)
+  return effort ?? null
+}
+
 function agentTokenUsageFromJson(value: string): AgentTokenUsage {
   const usage = JSON.parse(value) as Record<string, unknown>
   if (usage._tag === 'Unavailable')
@@ -2720,6 +2728,8 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     // repository that never asked for it. Both must read as "no verdict",
     // never as a Contained one.
     mergeRisk: row.merge_risk === null || row.merge_risk === undefined ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
+    // Null covers every run recorded before the Reasoning effort band existed.
+    reasoningEffort: reasoningEffortFromRow(row.reasoning_effort),
   }
 }
 
@@ -6715,7 +6725,18 @@ function installSchema(database: DatabaseSync): void {
       : `ALTER TABLE pull_request_triage_runs ADD COLUMN settled_at TEXT; PRAGMA user_version = ${target};`)
     version = target
   }
-  if (version === 79)
+  if (version === 79) {
+    const target = 80
+    // A rewind replays this against a journal that already carries the column,
+    // and SQLite has no ADD COLUMN IF NOT EXISTS, so ask before adding.
+    const present = database.prepare(`SELECT 1 AS found FROM pragma_table_info('review_runs') WHERE name = 'reasoning_effort'`).get() !== undefined
+    applyMigration(database, present
+      ? `PRAGMA user_version = ${target};`
+      : `ALTER TABLE review_runs ADD COLUMN reasoning_effort TEXT NULL;
+        PRAGMA user_version = ${target};`)
+    version = target
+  }
+  if (version === 80)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -6926,6 +6947,7 @@ function dashboardReviewAgents(database: DatabaseSync): Array<Extract<DashboardA
       COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
       review_runs.findings,
       review_runs.merge_risk,
+      review_runs.reasoning_effort,
       agent_feedback.kind AS feedback_tag,
       agent_feedback.reason AS feedback_reason,
       agent_feedback.updated_at AS feedback_updated_at,
@@ -8351,8 +8373,8 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, base_ref, merge_risk
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, base_ref, merge_risk, reasoning_effort
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -8373,6 +8395,7 @@ export function openJournalStore(
         usage,
         pullRequest.baseRef ?? null,
         input.mergeRisk === undefined || input.mergeRisk === null ? null : JSON.stringify(input.mergeRisk),
+        input.reasoningEffort ?? null,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -8515,8 +8538,8 @@ export function openJournalStore(
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
           confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref,
-          merge_risk
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          merge_risk, reasoning_effort
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -8538,6 +8561,7 @@ export function openJournalStore(
         input.supersedesReviewRunId,
         pullRequest.baseRef ?? null,
         parent.merge_risk,
+        input.reasoningEffort ?? null,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)

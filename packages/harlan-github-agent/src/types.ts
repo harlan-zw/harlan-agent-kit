@@ -463,6 +463,13 @@ export interface ReviewRun {
    * both as no verdict, never as a Contained one.
    */
   mergeRisk?: MergeRiskRecord | null
+  /**
+   * The Reasoning effort this Review answered at.
+   *
+   * Absent or null covers every run recorded before the Reasoning effort band
+   * existed, and every provider that names no effort.
+   */
+  reasoningEffort?: CodexReasoningEffort | null
 }
 
 /**

@@ -1,14 +1,15 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentLabelState } from './agent-label.ts'
-import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentRuntime, AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
-import type { MergeRisk } from './merge-risk.ts'
+import type { MergeRisk, PullRequestFile } from './merge-risk.ts'
 import type { Result } from './result.ts'
+import type { ReviewReasoningEffort, ReviewReasoningEffortPolicy } from './review-effort.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
 import type {
@@ -30,6 +31,7 @@ import type {
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
+import { agentProfile } from './agent-profile.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
@@ -41,6 +43,7 @@ import { repairRoundLabel } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
 
 interface ReviewResponse {
@@ -373,31 +376,76 @@ function mergeRiskClaim(response: ReviewResponse): MergeRisk {
  * A file list this cannot read is a Reviewable floor, never a Contained one:
  * the safe direction for a missing answer is always the one that asks a person.
  */
-async function resolveMergeRisk(
+/**
+ * This Revision's changed files, read once for the whole Review.
+ *
+ * The observation pass already read them and recorded them, so both readers
+ * below usually cost no GitHub call. The record is trusted only for the exact
+ * head it was read for: a list that names another head, or a Revision with no
+ * record, falls back to a fresh read.
+ */
+async function reviewChangedFiles(
   options: ReviewWorkerOptions,
   task: ClaimedAdversarialReviewTask,
-  response: ReviewResponse,
   signal: AbortSignal,
-): Promise<MergeRiskRecord | null> {
+): Promise<Result<PullRequestFile[], string>> {
+  const recorded = options.store.getRevisionFiles(task.repository, task.pullRequestNumber, task.revisionId)
+  if (recorded !== null && recorded.headSha === task.pullRequest.headSha && recorded.files !== null)
+    return ok(recorded.files)
+  return options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
+}
+
+function resolveMergeRisk(
+  task: ClaimedAdversarialReviewTask,
+  response: ReviewResponse,
+  files: Result<PullRequestFile[], string>,
+): MergeRiskRecord | null {
   const scope = task.repositoryMapping.autoMerge
   if (scope._tag !== 'Contained')
     return null
-  // The observation pass already read this Revision's files and recorded
-  // them, so the floor costs no GitHub call. The record is trusted only for
-  // the exact head it was read for: a list that names another head, or a
-  // Revision with no record, falls back to a fresh read.
-  const recorded = options.store.getRevisionFiles(task.repository, task.pullRequestNumber, task.revisionId)
-  const usable = recorded !== null && recorded.headSha === task.pullRequest.headSha && recorded.files !== null
-    ? ok(recorded.files)
-    : null
-  const files = usable !== null
-    ? usable
-    : await options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
   const floor: MergeRisk = files._tag === 'Err'
     ? { _tag: 'Reviewable', reason: `The changed files could not be read: ${files.error}` }
     : mergeRiskFloor(files.value, scope.policy)
   const claim = mergeRiskClaim(response)
   return { claim, combined: combineMergeRisk(floor, claim), floor }
+}
+
+/**
+ * The bands this repository's Reviews use.
+ *
+ * A repository that lists sensitive paths for Auto merge has already named
+ * the code a mistake in is expensive. The same list keeps those Reviews at
+ * the highest Reasoning effort, so one list serves both.
+ */
+function reviewReasoningEffortPolicy(task: ClaimedAdversarialReviewTask): ReviewReasoningEffortPolicy {
+  const scope = task.repositoryMapping.autoMerge
+  return scope._tag === 'Contained'
+    ? { ...DEFAULT_REVIEW_REASONING_EFFORT_POLICY, sensitivePaths: scope.policy.sensitivePaths }
+    : DEFAULT_REVIEW_REASONING_EFFORT_POLICY
+}
+
+/**
+ * The runtime this Review answers with, after the Reasoning effort band.
+ *
+ * The band only applies while the Agent default stands. A pinned Reasoning
+ * effort, or one the configuration names for this role, has already replaced
+ * that default, and it is a person's choice, so the band leaves it alone.
+ */
+function bandedReviewRuntime(runtime: AgentRuntime, band: ReviewReasoningEffort): AgentRuntime {
+  const role = runtime.profile.roles.adversarial_review
+  const agentDefault = agentProfile(runtime.profile.provider).roles.adversarial_review.reasoningEffort
+  if (role.reasoningEffort !== agentDefault)
+    return runtime
+  const reasoningEffort = applyReviewReasoningEffortBand(agentDefault, band)
+  if (reasoningEffort === role.reasoningEffort)
+    return runtime
+  return {
+    ...runtime,
+    profile: {
+      ...runtime.profile,
+      roles: { ...runtime.profile.roles, adversarial_review: { ...role, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) } },
+    },
+  }
 }
 
 function parseReviewResponse(text: string): Promise<Result<ReviewResponse, string>> {
@@ -1280,8 +1328,12 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         return reviewing
 
       // The Review run records which Agent provider and model answered, so the
-      // runtime is read once and reused for the whole review.
-      const reviewRuntime = options.runtime(task.repository)
+      // runtime is read once and reused for the whole review. The changed
+      // files are read once too: the Reasoning effort band needs them before
+      // the turn, and Merge risk needs the same list after it.
+      const changedFiles = await reviewChangedFiles(options, task, signal)
+      const band = reviewReasoningEffortBand(changedFiles._tag === 'Ok' ? changedFiles.value : null, reviewReasoningEffortPolicy(task))
+      const reviewRuntime = bandedReviewRuntime(options.runtime(task.repository), band.effort)
       const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess)
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       // The slug comes from the primary checkout, never from this worktree.
@@ -1329,7 +1381,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // write. A retry can now resume at the controller boundary.
       const { gates } = reviewGates(snapshot.value, response, repairsBaseline)
       const outcome = reviewOutcome(gates)
-      const mergeRisk = await resolveMergeRisk(options, task, response, signal)
+      const mergeRisk = resolveMergeRisk(task, response, changedFiles)
       const reviewRunId = randomUUID()
       const completedAt = options.now().toISOString()
       const recorded = options.store.recordReviewRun({
@@ -1341,6 +1393,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         provider: reviewRuntime.profile.provider,
         sessionId: turn.value.sessionId,
         model: reviewRuntime.profile.roles.adversarial_review.model,
+        reasoningEffort: reviewRuntime.profile.roles.adversarial_review.reasoningEffort ?? null,
         agentVersion: '0.0.0',
         skillDigest,
         startedAt,
@@ -1383,6 +1436,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         provider: reviewRuntime.profile.provider,
         sessionId: turn.value.sessionId,
         model: reviewRuntime.profile.roles.adversarial_review.model,
+        reasoningEffort: reviewRuntime.profile.roles.adversarial_review.reasoningEffort ?? null,
         agentVersion: '0.0.0',
         skillDigest,
         startedAt,
