@@ -14,11 +14,20 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 # Without this, a heredoc followed by gh pr create passes the hook unseen.
 code=$(command_code "$command")
 
-command_start='(^|[|&;\(][[:space:]]*)'
-pr_create="${command_start}gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)"
-pr_body_edit="${command_start}gh[[:space:]]+pr[[:space:]]+edit[[:space:]][^|&;]*(--body-file|--body|-b)(=|[[:space:]]|$)"
-skill_create="${command_start}HARLAN_AGENT_PR_SKILL=1[[:space:]]+gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)"
-skill_body_edit="${command_start}HARLAN_AGENT_PR_SKILL=1[[:space:]]+gh[[:space:]]+pr[[:space:]]+edit[[:space:]][^|&;]*(--body-file|--body|-b)(=|[[:space:]]|$)"
+command_start='(^|[|&;\(`][[:space:]]*)'
+# An inline assignment or an env or timeout wrapper keeps gh at the command
+# position, so the patterns must see through a leading prefix of them.
+wrap='(env|timeout([[:space:]]+[^[:space:]]+)?)'
+lead_item='[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env|timeout([[:space:]]+[^[:space:]]+)?'
+lead="((${lead_item})[[:space:]]+)*"
+# The allow patterns accept wrappers around the skill assignment, but the
+# assignment itself must be exactly HARLAN_AGENT_PR_SKILL=1.
+skill_item='HARLAN_AGENT_PR_SKILL=1|env|timeout([[:space:]]+[^[:space:]]+)?'
+skill_lead="((${skill_item})[[:space:]]+)*HARLAN_AGENT_PR_SKILL=1[[:space:]]+(${wrap}[[:space:]]+)*"
+pr_create="${command_start}${lead}gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)"
+pr_body_edit="${command_start}${lead}gh[[:space:]]+pr[[:space:]]+edit[[:space:]][^|&;]*(--body-file|--body|-b)(=|[[:space:]]|$)"
+skill_create="${command_start}${skill_lead}gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)"
+skill_body_edit="${command_start}${skill_lead}gh[[:space:]]+pr[[:space:]]+edit[[:space:]][^|&;]*(--body-file|--body|-b)(=|[[:space:]]|$)"
 
 if [[ "$code" =~ $skill_create ]] || [[ "$code" =~ $skill_body_edit ]]; then
   exit 0

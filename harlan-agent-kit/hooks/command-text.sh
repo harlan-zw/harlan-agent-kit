@@ -40,6 +40,10 @@ drop_prose() {
     }
     BEGIN { quote = 0; body = 0; pending = "" }
     body == 1 {
+      # A heredoc opener can sit in pending from a backslash continuation.
+      # Flush it, so the held line never swallows the command that follows
+      # the heredoc; pending stays empty until the body ends.
+      if (pending != "") { print pending; pending = "" }
       if ($0 ~ "^[[:space:]]*" marker "[[:space:]]*$") body = 0
       next
     }
