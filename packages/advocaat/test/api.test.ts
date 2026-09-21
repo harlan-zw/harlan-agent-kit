@@ -18,7 +18,7 @@ const answers = {
   },
   urgency: {
     type: 'score',
-    score: 1.5,
+    score: 0.5,
     confidence: 0.7,
     legend: { 0: 'low', 1: 'high' },
     probabilities: { 0: 0.5, 1: 0.5 },
@@ -195,6 +195,25 @@ describe('jev api', () => {
     expect(failure).toBeInstanceOf(APIError)
     expect(failure.status).toBe(200)
     expect(failure.message).toBe('200 cf envelope failed: [{"message":"authentication invalid"}]')
+  })
+
+  it('preserves the ray and raw body when Cloudflare marks a 2xx call failed', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({ success: false, errors: [{ message: 'authentication invalid' }] }, 200, { 'cf-ray': 'ray-9' }),
+    })
+
+    const failure = await client.systemOne({ state: null, questions: { q: noul() } }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(APIError)
+    expect(failure.status).toBe(200)
+    expect(failure.requestId).toBe('ray-9')
+    expect(failure.body).toEqual({
+      error: 'cf envelope failed: [{"message":"authentication invalid"}]',
+      body: { success: false, errors: [{ message: 'authentication invalid' }] },
+      requestId: 'ray-9',
+    })
   })
 
   it('throws APIError on a non-2xx response', async () => {

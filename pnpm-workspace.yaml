@@ -2,7 +2,7 @@ minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
   - '@iconify-json/octicon@1.2.36'
   - '@iconify-json/simple-icons@1.2.97'
-  - '@harlan-zw/jev@0.2.0'
+  - '@harlan-zw/jev@0.2.4'
 
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800

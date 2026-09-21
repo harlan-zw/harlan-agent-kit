@@ -17,7 +17,7 @@ catalogs:
       version: 0.4.0
     '@harlan-zw/jev':
       specifier: ^0.2.0
-      version: 0.2.0
+      version: 0.2.4
     '@iconify-json/octicon':
       specifier: ^1.2.36
       version: 1.2.36
@@ -125,7 +125,7 @@ importers:
     dependencies:
       '@harlan-zw/jev':
         specifier: 'catalog:'
-        version: 0.2.0
+        version: 0.2.4
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -1174,8 +1174,8 @@ packages:
   '@floating-ui/vue@1.1.11':
     resolution: {integrity: sha512-HzHKCNVxnGS35r9fCHBc3+uCnjw9IWIlCPL683cGgM9Kgj2BiAl8x1mS7vtvP6F9S/e/q4O6MApwSHj8hNLGfw==}
 
-  '@harlan-zw/jev@0.2.0':
-    resolution: {integrity: sha512-wDDpF9pgicdSNQL3LKMWieQhOTev8M9MhjGtAySylDYuTiNRtsV2yFoMsDFr8T7+6Fsjw9galwqkvt6xMs8tZA==}
+  '@harlan-zw/jev@0.2.4':
+    resolution: {integrity: sha512-67/8sxVDzxT+dbxuqI+dm8HQ8GqQ46sc3HAW+GRv+gJd5JN31P8MvKisMCwiz+fcx7owBH+pkINzd/9Afw/tNQ==}
     engines: {node: '>=20'}
 
   '@humanfs/core@0.19.1':
@@ -7959,7 +7959,7 @@ snapshots:
       - '@vue/composition-api'
       - vue
 
-  '@harlan-zw/jev@0.2.0':
+  '@harlan-zw/jev@0.2.4':
     dependencies:
       ohash: 2.0.12
 

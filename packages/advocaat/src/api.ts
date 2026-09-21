@@ -140,8 +140,19 @@ function throwOnFailure<Q extends Questions>(result: JevResult<Q>): SystemOneRes
 function failureToError(failure: JevFailure): Error {
   if (failure._tag === 'Http')
     return new APIError(failure.status, failure.details, failure.requestId ?? '')
-  if (failure._tag === 'Invalid')
-    return new APIError(200, { error: failure.message })
+  if (failure._tag === 'Invalid') {
+    // A 2xx body Cloudflare marked failed keeps its wire provenance: the raw
+    // body and the ray travel on the error, not just inside its message.
+    return new APIError(
+      200,
+      {
+        error: failure.message,
+        ...(failure.body === undefined ? {} : { body: failure.body }),
+        ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
+      },
+      failure.requestId ?? '',
+    )
+  }
   // The shared client folds a cancelled fetch and an expired request window
   // into Timeout. Both surface as AbortError, so a caller treats an expired
   // window as an ordinary cancellation, never an Incident.
