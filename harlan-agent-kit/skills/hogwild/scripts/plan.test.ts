@@ -94,22 +94,18 @@ describe('hw plan', () => {
     expect(output).not.toContain('##')
   })
 
-  it('reads the pending list on the agent account over ssh', () => {
+  it('reads the pending list from the local checkout', () => {
     const [step] = steps(['pending'])
-    expect(step?.host).toBe('agent')
-    expect(stepArgv(step!)).toEqual([
-      'ssh',
-      '-o',
-      'BatchMode=yes',
-      SSH_HOST.agent,
-      `awk '/^## Pending/{f=1;next} f && /^## /{f=0} f' ${HOST_README}`,
-    ])
+    expect(step?.host).toBe('local')
+    expect(step?.command).toContain(HOST_README)
+    expect(step?.command).not.toContain('ssh')
   })
 
-  it('diffs the live runners conf against the repo copy read on the agent account', () => {
+  it('diffs the live runners conf against the local repo copy', () => {
     const [diff] = steps(['runners'])
     expect(diff?.host).toBe('local')
-    expect(diff?.command).toContain(`ssh ${SSH_HOST.agent} cat ${RUNNER_REPO_CONF}`)
+    expect(diff?.command).toContain(`cat ${RUNNER_REPO_CONF}`)
+    expect(diff?.command).not.toContain(`ssh ${SSH_HOST.agent} cat`)
     expect(diff?.command).toContain('|| exit 1')
     expect(diff?.command).not.toContain('|| true')
   })
@@ -150,8 +146,7 @@ function runnersDiff(live: string | false, repo: string | false | undefined) {
     const [step] = steps(['runners'])
     const command = step!.command
       .replaceAll(`ssh ${SSH_HOST.admin} sudo cat /var/lib/github-runner/config/runners.conf`, live === false ? 'false' : `cat ${liveFile}`)
-      .replaceAll(`ssh ${SSH_HOST.agent} cat '${RUNNER_REPO_CONF}'`, repo === false ? 'false' : `cat ${repoFile}`)
-      .replaceAll(`ssh ${SSH_HOST.agent} cat ${RUNNER_REPO_CONF}`, repo === false ? 'false' : `cat ${repoFile}`)
+      .replaceAll(`cat ${RUNNER_REPO_CONF}`, repo === false ? 'false' : `cat ${repoFile}`)
     const { status, stdout, stderr } = spawnSync('bash', ['-o', 'pipefail', '-c', command], { encoding: 'utf8' })
     return { status: status ?? 1, output: `${stdout}${stderr}` }
   }
