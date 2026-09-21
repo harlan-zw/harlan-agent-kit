@@ -62,13 +62,42 @@ describe('classification source', () => {
     })
   })
 
-  it('maps a cancelled request to an Aborted value', async () => {
-    const source = sourceWith(async () => {
-      throw new DOMException('The request was cancelled.', 'AbortError')
+  it('maps a caller cancellation before the request to an Aborted value', async () => {
+    const source = sourceWith(async () => Response.json({}))
+
+    const result = await source.classify({ state: null, questions, signal: AbortSignal.abort() })
+
+    expect(result).toEqual({ _tag: 'Err', error: { _tag: 'Aborted' } })
+  })
+
+  it('maps a caller cancellation during the request to an Aborted value', async () => {
+    const controller = new AbortController()
+    const source = sourceWith(() => new Promise<Response>(() => {}))
+
+    const pending = source.classify({ state: null, questions, signal: controller.signal })
+    controller.abort()
+
+    expect(await pending).toEqual({ _tag: 'Err', error: { _tag: 'Aborted' } })
+  })
+
+  it('maps an expired request window to an Unavailable value', async () => {
+    const source = createClassificationSource({
+      client: jev({
+        accountId: 'acc',
+        apiToken: 'token',
+        timeoutMs: 10,
+        fetch: (_input, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal.reason), { once: true })
+          }),
+      }),
     })
 
     const result = await source.classify({ state: null, questions })
 
-    expect(result).toEqual({ _tag: 'Err', error: { _tag: 'Aborted' } })
+    expect(result).toEqual({
+      _tag: 'Err',
+      error: { _tag: 'Unavailable', message: expect.stringContaining('window expired') },
+    })
   })
 })
