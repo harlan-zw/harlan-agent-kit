@@ -46,6 +46,6 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Skill**: `skills/[name]/SKILL.md` with frontmatter (`description`, `user_invocable: true`). Keep SKILL.md to the decision-making core and push procedures, long bash blocks, and rubrics into `references/`. Add `templates/` for files the skill scaffolds, and only reference files that exist: dangling reference links cost a wasted turn mid-task.
 
-**Root docs**: every repository Harlan owns carries the same root set and `docs/` lifecycle. The contract is `harlan-agent-kit/references/root-docs.md`, and `pkg-conform` enforces it.
+**Root docs**: every repository Harlan owns carries the same root set and `docs/` lifecycle. The contract is `harlan-agent-kit/references/root-docs.md`; `pkg-conform` applies it by checklist, and nothing enforces it automatically yet.
 
 Install locally with `/plugin install /path/to/harlan-agent-kit`.

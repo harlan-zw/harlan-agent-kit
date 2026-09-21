@@ -38,3 +38,15 @@ it('publishes no skill output to the retired scratch notes path', () => {
   scan(skillsDir)
   expect(retired).toEqual([])
 })
+
+it('claims no enforcement of the root docs contract that the contract disclaims', () => {
+  const contract = readFileSync(join(repoRoot, 'harlan-agent-kit', 'references', 'root-docs.md'), 'utf8')
+  const agents = readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8')
+  const enforcement = contract.split('## Enforcement')[1] ?? ''
+  if (!/nothing enforces this contract yet/i.test(enforcement))
+    return
+  const claimants = [...agents.matchAll(/([^\s`]+)`?\s+enforces?\s+it\b/gi)]
+    .map(match => match[1])
+    .filter(subject => !/^(?:nothing|nobody|no one|none)$/i.test(subject))
+  expect(claimants).toEqual([])
+})
