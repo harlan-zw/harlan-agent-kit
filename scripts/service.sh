@@ -99,11 +99,14 @@ restart_and_verify() {
   report
 }
 
-# Reads the live configuration with the revision about to run, while the
-# running revision keeps serving. A key the new revision rejects, such as one
-# naming an Agent role it retired, fails the deploy here. Reaching the restart
-# instead leaves systemd retrying a process that can never start, which takes
-# the service down until a person edits the configuration.
+# Reads the live configuration with the revision that is about to run, while the
+# running process keeps serving. A key that revision rejects, such as one naming
+# an Agent role it retired, fails here. Starting instead leaves systemd retrying
+# a process that can never start, which takes the service down until a person
+# edits the configuration.
+#
+# Both paths that start a process run this: a deploy, where the revision is new,
+# and a restart, where the configuration is what moved.
 check_config() {
   local node_bin="$SERVICE_NODE"
   if [ ! -x "$node_bin" ]; then
@@ -166,6 +169,9 @@ case "$command" in
     ;;
   restart)
     require_checkout
+    # The configuration moves on its own, so the revision already deployed can
+    # stop accepting it between one start and the next.
+    check_config
     restart_and_verify
     ;;
   status)

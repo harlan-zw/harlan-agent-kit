@@ -119,4 +119,19 @@ if ! SERVICE_TEST_CLI_EXIT=0 PATH="$test_root/bin:/usr/bin:/bin" \
   exit 1
 fi
 
+# A restart starts the same process as a deploy, and the configuration can move
+# between the two. A restart into a configuration this revision rejects is the
+# same outage, so it stops the same way.
+if SERVICE_TEST_CLI_EXIT=1 PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/service.sh" restart >/dev/null 2>&1; then
+  printf '%s\n' 'service restarted although the deployed revision rejects the configuration' >&2
+  exit 1
+fi
+
+if ! SERVICE_TEST_CLI_EXIT=0 PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/service.sh" restart >/dev/null 2>&1; then
+  printf '%s\n' 'service refused a restart although the deployed revision accepts the configuration' >&2
+  exit 1
+fi
+
 printf '%s\n' 'service tests passed'
