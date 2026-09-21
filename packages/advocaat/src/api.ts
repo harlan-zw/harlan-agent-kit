@@ -103,7 +103,7 @@ export function jev(options: JevOptions = {}) {
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.retries === undefined ? {} : { retries: options.retries }),
         ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
-        fetcher: fetcher(options.fetch, init.headers),
+        fetcher: fetcher(options.fetch, init.headers, signal),
       })
       const sent: Promise<SystemOneResult<Q>> = client.systemOne(req).then(throwOnFailure)
       if (signal === undefined)
@@ -174,12 +174,32 @@ function within(list: unknown, min: number, max: number) {
 function fetcher(
   fetch: typeof globalThis.fetch | undefined,
   headers: Record<string, string> | undefined,
+  signal: AbortSignal | undefined,
 ) {
   const base = fetch ?? globalThis.fetch
-  if (headers === undefined)
+  if (headers === undefined && signal === undefined)
     return (input: string | URL | Request, init?: RequestInit) => base(input, init)
-  return (input: string | URL | Request, init?: RequestInit) =>
-    base(input, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...headers } })
+  return (input: string | URL | Request, init?: RequestInit) => {
+    const merged = wireSignal(init?.signal, signal)
+    return base(input, {
+      ...init,
+      // The client passes its own deadline signal. A caller's abort must
+      // cancel the request on the wire, not just stop the caller waiting,
+      // so both signals share one abort.
+      ...(merged === undefined ? {} : { signal: merged }),
+      ...(headers === undefined
+        ? {}
+        : { headers: { ...(init?.headers as Record<string, string> | undefined), ...headers } }),
+    })
+  }
+}
+
+function wireSignal(deadline: AbortSignal | null | undefined, caller: AbortSignal | undefined): AbortSignal | undefined {
+  if (caller === undefined)
+    return deadline ?? undefined
+  if (deadline === undefined || deadline === null)
+    return caller
+  return AbortSignal.any([deadline, caller])
 }
 
 // Optional: only runtimes with a Node-style `process.env` provide values. Blank values count as unset.

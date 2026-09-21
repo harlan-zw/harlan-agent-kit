@@ -331,6 +331,40 @@ describe('jev api', () => {
     expect(calls).toBe(0)
   })
 
+  it('cancels the request on the wire when an in-flight call aborts', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    let wireAborted = false
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          wireAborted = true
+          reject(new DOMException('The request was cancelled.', 'AbortError'))
+        }, { once: true })
+      }),
+    })
+    try {
+      const controller = new AbortController()
+      const pending = client.systemOne({ state: null, questions: { q: noul('Q?') } }, { signal: controller.signal })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      controller.abort()
+      const failure = await pending.catch(error => error)
+
+      expect(failure).toBeInstanceOf(DOMException)
+      expect(failure.name).toBe('AbortError')
+      expect(wireAborted).toBe(true)
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      expect(unhandled).toEqual([])
+    }
+    finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
   it('keeps an aborted call free of unhandled rejections when the request later fails', async () => {
     const unhandled: unknown[] = []
     const onUnhandled = (reason: unknown) => unhandled.push(reason)
