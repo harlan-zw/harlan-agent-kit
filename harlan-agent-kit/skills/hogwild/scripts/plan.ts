@@ -20,6 +20,9 @@ export const SSH_HOST: Record<Exclude<Host, 'local'>, string> = {
   admin: 'hogwild-admin',
 }
 
+// `hogwild-gh-runner` is checked out on the desktop only. Hogwild runs the
+// installed copies under /var/lib and /etc, and never the repository, so both
+// of these read locally. Reading them over ssh failed with "No such file".
 export const RUNNER_REPO_CONF = '~/pkg/hogwild-gh-runner/github-runner/hogwild-runners.conf'
 export const HOST_README = '~/pkg/hogwild-gh-runner/hogwild/README.md'
 const LIVE_RUNNER_CONF = '/var/lib/github-runner/config/runners.conf'
@@ -154,7 +157,7 @@ export function plan(argv: string[]): Plan {
             title: 'runners.conf: live against repo (empty means equal)',
             command: [
               `live=$(ssh ${SSH_HOST.admin} sudo cat ${LIVE_RUNNER_CONF}) || exit 1`,
-              `repo=$(ssh ${SSH_HOST.agent} cat ${RUNNER_REPO_CONF}) || exit 1`,
+              `repo=$(cat ${RUNNER_REPO_CONF}) || exit 1`,
               `diff <(printf '%s' "$live") <(printf '%s' "$repo")`,
             ].join('\n'),
           },
@@ -168,7 +171,7 @@ export function plan(argv: string[]): Plan {
     case 'pending':
       return {
         _tag: 'Ok',
-        steps: [{ host: 'agent', command: `awk '/^## Pending/{f=1;next} f && /^## /{f=0} f' ${HOST_README}` }],
+        steps: [{ host: 'local', command: `awk '/^## Pending/{f=1;next} f && /^## /{f=0} f' ${HOST_README}` }],
       }
     case 'run': {
       const [host, ...shell] = rest
