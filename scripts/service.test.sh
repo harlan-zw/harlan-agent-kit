@@ -13,9 +13,11 @@ export SERVICE_TEST_CALLS="$test_root/curl.calls"
 export SERVICE_TEST_PNPM_CALLS="$test_root/pnpm.calls"
 export SERVICE_TEST_SYNC_CALLS="$test_root/sync.calls"
 
+export HARLAN_GITHUB_AGENT_NODE="$test_root/bin/node"
+
 mkdir -p \
   "$HARLAN_GITHUB_AGENT_CHECKOUT/.git" \
-  "$HARLAN_GITHUB_AGENT_CHECKOUT/packages/harlan-github-agent" \
+  "$HARLAN_GITHUB_AGENT_CHECKOUT/packages/harlan-github-agent/src" \
   "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts" \
   "$HOME/.config/harlan-github-agent" \
   "$HOME/.local/bin" \
@@ -32,6 +34,10 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf '\''context %s\n'\'' "$*" >> "$SERVI
   > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/sync-agent-context.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'printf '\''worktrunk %s\n'\'' "$*" >> "$SERVICE_TEST_SYNC_CALLS"' \
   > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/worktrunk-config.sh"
+# Stands in for the deployed CLI. Its exit code is the configuration verdict.
+printf '%s\n' \
+  'process.exit(Number(process.env.SERVICE_TEST_CLI_EXIT || 0))' \
+  > "$HARLAN_GITHUB_AGENT_CHECKOUT/packages/harlan-github-agent/src/cli.ts"
 
 git() {
   case "$*" in
@@ -95,6 +101,21 @@ fi
 
 if ! grep -Fx -- 'worktrunk update' "$SERVICE_TEST_SYNC_CALLS" >/dev/null; then
   printf '%s\n' 'service did not install Worktrunk settings from the deployed commit' >&2
+  exit 1
+fi
+
+# A configuration the new revision rejects must stop the deploy before the
+# restart. Restarting into it leaves systemd retrying a process that cannot
+# start, which is an outage until a person edits the configuration.
+if SERVICE_TEST_CLI_EXIT=1 PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/service.sh" prepare-update >/dev/null 2>&1; then
+  printf '%s\n' 'service prepared an update although the new revision rejects the configuration' >&2
+  exit 1
+fi
+
+if ! SERVICE_TEST_CLI_EXIT=0 PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/service.sh" prepare-update >/dev/null 2>&1; then
+  printf '%s\n' 'service refused an update although the new revision accepts the configuration' >&2
   exit 1
 fi
 
