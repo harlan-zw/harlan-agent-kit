@@ -194,7 +194,7 @@ describe('jev api', () => {
 
     expect(failure).toBeInstanceOf(APIError)
     expect(failure.status).toBe(200)
-    expect(failure.message).toBe('200 [{"message":"authentication invalid"}]')
+    expect(failure.message).toBe('200 cf envelope failed: [{"message":"authentication invalid"}]')
   })
 
   it('throws APIError on a non-2xx response', async () => {
