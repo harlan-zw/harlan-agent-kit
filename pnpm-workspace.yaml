@@ -2,7 +2,7 @@ minimumReleaseAgeExclude:
   - eslint-plugin-harlanzw@0.20.0
   - '@coldtea/pr-lens-renderer@0.2.2'
   - '@coldtea/pr-lens-schema@0.2.1'
-  - '@harlan-zw/jev@0.1.0'
+  - '@harlan-zw/jev@0.2.0'
 shellEmulator: true
 
 trustPolicy: no-downgrade
@@ -16,7 +16,7 @@ catalog:
   '@antfu/eslint-config': ^9.3.0
   '@coldtea/pr-lens-renderer': ^0.2.2
   '@coldtea/pr-lens-schema': ^0.2.1
-  '@harlan-zw/jev': ^0.1.0
+  '@harlan-zw/jev': ^0.2.0
   '@iconify-json/octicon': ^1.2.20
   '@iconify-json/simple-icons': ^1.2.93
   '@nuxt/fonts': ^0.14.0
