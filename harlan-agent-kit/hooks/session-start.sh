@@ -70,8 +70,8 @@ if [ -f "package.json" ]; then
   fi
 fi
 
-# CLAUDE.md hint
-if [ ! -f ".claude/CLAUDE.md" ] && [ ! -f "CLAUDE.md" ]; then
-  dim "Tip: /init-module to add CLAUDE.md"
+# Project instructions hint
+if [ ! -f ".claude/AGENTS.md" ] && [ ! -f "AGENTS.md" ] && [ ! -f ".claude/CLAUDE.md" ] && [ ! -f "CLAUDE.md" ]; then
+  dim "Tip: /init-module to add AGENTS.md"
 fi
 

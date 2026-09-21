@@ -89,7 +89,7 @@ export default antfu(
   {
     type: 'lib',
     ignores: [
-      'CLAUDE.md',
+      'AGENTS.md',
       'test/fixtures/**',
       'playground/**',
     ],

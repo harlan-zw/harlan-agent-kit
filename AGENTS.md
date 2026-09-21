@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Agent plugin for Nuxt/Vue/TypeScript workflows. No build step: bash hooks plus markdown skills.
 
