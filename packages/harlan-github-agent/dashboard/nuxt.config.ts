@@ -38,6 +38,12 @@ export default defineNuxtConfig({
     },
   },
   nitro: {
+    // es2019 (the default) warns on BigInt literals bundled into the server chunks.
+    esbuild: {
+      options: {
+        target: 'esnext',
+      },
+    },
     prerender: {
       // `/kit` stays out on purpose. It is a dev page and nothing links to it.
       routes: ['/', '/history', '/stats', '/watching', '/routines', '/flow'],
