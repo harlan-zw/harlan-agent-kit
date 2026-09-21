@@ -36,9 +36,9 @@ export interface ReviewReasoningEffortPolicy {
 /**
  * The bands every repository starts from.
  *
- * They come from 200 recorded Review runs, labelled by whether that Review
- * found a defect. Below `medium`, 5 percent of pull requests carried one,
- * against 28 percent across the whole set.
+ * They come from 93 recorded Review runs of public repositories, labelled by
+ * whether that Review found a defect. Below `medium`, 9 percent of pull
+ * requests carried one, against 24 percent across the whole set.
  */
 export const DEFAULT_REVIEW_REASONING_EFFORT_POLICY: ReviewReasoningEffortPolicy = {
   sensitivePaths: [],

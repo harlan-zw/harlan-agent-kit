@@ -19,6 +19,18 @@ describe('review reasoning effort band', () => {
     expect(band.reason).toContain('AGENTS.md')
   })
 
+  it('reviews the glossary at high, because an agent reads it before it acts', () => {
+    const band = reviewReasoningEffortBand([file('GLOSSARY.md', 3)])
+    expect(band.effort).toBe('high')
+    expect(band.reason).toContain('GLOSSARY.md')
+  })
+
+  it('reviews the agent-context directory at high, because an agent reads it before it acts', () => {
+    const band = reviewReasoningEffortBand([file('agent-context/context.md', 3)])
+    expect(band.effort).toBe('high')
+    expect(band.reason).toContain('agent-context/context.md')
+  })
+
   it('reviews a sensitive path for this repository at high, whatever its size', () => {
     const band = reviewReasoningEffortBand(
       [file('server/auth.ts', 2)],
@@ -68,6 +80,33 @@ describe('applying the band to the agent default', () => {
 describe('the bands against recorded Review runs', () => {
   const recorded: Array<{ repository: string, number: number, findings: number, changedFiles: Array<Omit<PullRequestFile, 'previousFilename'>> }>
     = JSON.parse(readFileSync(new URL('./fixtures/recorded-review-runs.json', import.meta.url), 'utf8'))
+
+  // Verified public on GitHub at the time of recording. A private repository
+  // here would publish its pull request numbers and file tree in this public
+  // repository, so the fixture names public repositories only.
+  const publicRepositories = new Set([
+    'harlan-zw/harlan-agent-kit',
+    'harlan-zw/request-indexing',
+    'nuxt/scripts',
+    'harlan-zw/unlighthouse.dev',
+    'harlan-zw/harlan-nuxt',
+    'harlan-zw/nuxt-skew-protection',
+    'skilld-dev/skilld',
+    'harlan-zw/mdream',
+    'nuxt-modules/robots',
+    'harlan-zw/unhead.unjs.io',
+    'harlan-zw/nuxt-schema-org',
+    'harlan-zw/unlighthouse',
+    'harlan-zw/nuxt-ai-ready',
+    'harlan-zw/nuxt-seo',
+    'harlan-zw/eslint-plugin-harlanzw',
+    'harlan-zw/harlanzw.com',
+  ])
+
+  it('records runs from public repositories only', () => {
+    for (const run of recorded)
+      expect(publicRepositories.has(run.repository), `run ${run.repository}#${run.number} is not a verified public repository`).toBe(true)
+  })
 
   it('sends a fifth of pull requests to low, and few that carried a defect', () => {
     const banded = recorded.map(run => ({

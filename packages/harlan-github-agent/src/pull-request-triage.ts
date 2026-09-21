@@ -53,7 +53,7 @@ const SKIP_CONFIDENCE_FLOOR = 0.7
 const PROSE_FILE_PATTERN = /(?:^|\/)(?:[^/]+\.(?:md|mdx|txt)|LICENSE[^/]*|CHANGELOG[^/]*)$/i
 const PROSE_DIRECTORY_PATTERN = /^docs\//
 /** Agent instructions are behaviour, so they leave the prose set even when they end in `.md`. */
-const BEHAVIOUR_PATTERN = /(?:^|\/)(?:SKILL\.md|AGENTS\.md|CLAUDE\.md)$|(?:^|\/)(?:\.github|\.claude|\.codex[^/]*)\//
+const BEHAVIOUR_PATTERN = /(?:^|\/)(?:SKILL\.md|AGENTS\.md|CLAUDE\.md|GLOSSARY\.md)$|(?:^|\/)(?:\.github|\.claude|\.codex[^/]*|agent-context)\//
 
 /**
  * Whether an agent reads this file as instructions.

@@ -211,8 +211,12 @@ export function parseAgentSelection(value: unknown): Result<AgentSelection, stri
 /** A pinned Reasoning effort wins, then the configured override, then the provider default. */
 function roleWithSelection(role: RoleProfile, selection: PinnedAgentSelection, configured: CodexReasoningEffort | undefined): RoleProfile {
   const model = selection.model ?? role.model
-  const reasoningEffort = selection.reasoningEffort ?? configured ?? role.reasoningEffort
-  return reasoningEffort === undefined ? { model } : { model, reasoningEffort }
+  // A person named this effort, so the value alone cannot say it apart from
+  // the provider default it may equal. The flag carries the provenance.
+  const chosen = selection.reasoningEffort ?? configured
+  if (chosen !== undefined)
+    return { model, reasoningEffort: chosen, reasoningEffortExplicit: true }
+  return role.reasoningEffort === undefined ? { model } : { model, reasoningEffort: role.reasoningEffort }
 }
 
 /**

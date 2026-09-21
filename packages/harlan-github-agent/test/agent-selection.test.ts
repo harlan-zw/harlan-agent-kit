@@ -87,7 +87,7 @@ describe('agent profile resolution', () => {
     const profile = resolveAgentProfile({ provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'low' }, 3)
 
     for (const role of Object.values(profile.roles))
-      expect(role).toEqual({ model: 'gpt-5.6-luna', reasoningEffort: 'low' })
+      expect(role).toEqual({ model: 'gpt-5.6-luna', reasoningEffort: 'low', reasoningEffortExplicit: true })
   })
 
   it('replaces one role default with the configured Reasoning effort and keeps the others', () => {
@@ -97,8 +97,8 @@ describe('agent profile resolution', () => {
       { opencode: { review_fix: 'medium', issue_triage: 'low' } },
     )
 
-    expect(profile.roles.review_fix).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'medium' })
-    expect(profile.roles.issue_triage).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'low' })
+    expect(profile.roles.review_fix).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'medium', reasoningEffortExplicit: true })
+    expect(profile.roles.issue_triage).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'low', reasoningEffortExplicit: true })
     expect(profile.roles.adversarial_review).toEqual({ model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' })
   })
 
@@ -129,7 +129,7 @@ describe('agent profile resolution', () => {
       { opencode: { review_fix: 'medium' } },
     )
 
-    expect(profile.roles.review_fix).toEqual({ model: 'zai-coding-plan/glm-5.3', reasoningEffort: 'medium' })
+    expect(profile.roles.review_fix).toEqual({ model: 'zai-coding-plan/glm-5.3', reasoningEffort: 'medium', reasoningEffortExplicit: true })
   })
 
   it('takes agent capacity from the caller, because the service fixes it at start', () => {

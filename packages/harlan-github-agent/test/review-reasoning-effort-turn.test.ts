@@ -1,7 +1,8 @@
 import type { PullRequestFile } from '../src/merge-risk.ts'
+import type { AgentProfile } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
-import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { CODEX_AGENT_PROFILE, resolveAgentProfile } from '../src/agent-profile.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
@@ -16,12 +17,12 @@ function file(path: string, additions: number, deletions = 0): PullRequestFile {
  * Runs one Review over the given changed files and reports what the Agent
  * turn was asked for and what the Review run recorded.
  */
-async function reviewWith(files: PullRequestFile[]) {
+async function reviewWith(files: PullRequestFile[], profile: AgentProfile = CODEX_AGENT_PROFILE) {
   const pullRequest = pullRequestItem({ mergeState: 'clean' })
   const capture: ProviderCapture = { requests: [] }
   const recorded: Array<string | null | undefined> = []
   const worker = createReviewWorker({
-    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+    runtime: agentRuntime(profile, stubProvider(turnEvents({
       premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
       findings: [],
       confidence: 96,
@@ -114,5 +115,23 @@ describe('the Reasoning effort band reaches the Review turn', () => {
     const review = await reviewWith([file('AGENTS.md', 4, 2)])
     expect(review.asked).toBe(CODEX_AGENT_PROFILE.roles.adversarial_review.reasoningEffort)
     expect(review.recorded).toBe(CODEX_AGENT_PROFILE.roles.adversarial_review.reasoningEffort)
+  })
+
+  it('leaves a pinned Reasoning effort alone, even when it matches the provider default', async () => {
+    const profile = resolveAgentProfile({ provider: 'codex', model: null, reasoningEffort: 'high' }, 3)
+    const review = await reviewWith([file('src/parser.ts', 4, 2)], profile)
+    expect(review.asked).toBe('high')
+    expect(review.recorded).toBe('high')
+  })
+
+  it('leaves a configured Reasoning effort alone, even when it matches the provider default', async () => {
+    const profile = resolveAgentProfile(
+      { provider: 'codex', model: null, reasoningEffort: null },
+      3,
+      { codex: { adversarial_review: 'high' } },
+    )
+    const review = await reviewWith([file('src/parser.ts', 4, 2)], profile)
+    expect(review.asked).toBe('high')
+    expect(review.recorded).toBe('high')
   })
 })

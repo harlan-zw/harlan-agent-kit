@@ -1364,6 +1364,8 @@ export interface RoleProfile {
   model: AgentModel
   /** Omitted by models that expose no reasoning variants. */
   reasoningEffort?: CodexReasoningEffort
+  /** Set when a person named this effort, by pin or configuration, so the Reasoning effort band leaves it alone. */
+  reasoningEffortExplicit?: true
 }
 
 export interface AgentProfile {

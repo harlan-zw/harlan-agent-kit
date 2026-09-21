@@ -427,16 +427,15 @@ function reviewReasoningEffortPolicy(task: ClaimedAdversarialReviewTask): Review
 /**
  * The runtime this Review answers with, after the Reasoning effort band.
  *
- * The band only applies while the Agent default stands. A pinned Reasoning
- * effort, or one the configuration names for this role, has already replaced
- * that default, and it is a person's choice, so the band leaves it alone.
+ * The band only applies while the Agent default stands. The resolved role
+ * carries whether a person named its effort, by pin or configuration, and the
+ * band leaves such a role alone even when it equals the provider default.
  */
 function bandedReviewRuntime(runtime: AgentRuntime, band: ReviewReasoningEffort): AgentRuntime {
   const role = runtime.profile.roles.adversarial_review
-  const agentDefault = agentProfile(runtime.profile.provider).roles.adversarial_review.reasoningEffort
-  if (role.reasoningEffort !== agentDefault)
+  if (role.reasoningEffortExplicit === true)
     return runtime
-  const reasoningEffort = applyReviewReasoningEffortBand(agentDefault, band)
+  const reasoningEffort = applyReviewReasoningEffortBand(agentProfile(runtime.profile.provider).roles.adversarial_review.reasoningEffort, band)
   if (reasoningEffort === role.reasoningEffort)
     return runtime
   return {
