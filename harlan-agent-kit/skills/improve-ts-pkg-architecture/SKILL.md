@@ -8,7 +8,7 @@ effort: high
 
 Surface architectural friction in a TypeScript package (library, CLI, or pnpm monorepo) and propose **deepening opportunities** — refactors that turn shallow modules into deep ones, using the package's own publishable surface as the seam. The aim is testability and AI-navigability.
 
-Vocabulary, principles, and forbidden patterns live in their canonical files; this file references them. Use the terms in [LANGUAGE.md](LANGUAGE.md) exactly. This skill is _informed_ by the project's domain model (`CONTEXT.md`, `docs/adr/`).
+Vocabulary, principles, and forbidden patterns live in their canonical files; this file references them. Use the terms in [LANGUAGE.md](LANGUAGE.md) exactly. This skill is _informed_ by the project's domain model (`GLOSSARY.md`, `docs/arch/`, `docs/adr/`).
 
 ## Worktree isolation
 
@@ -55,7 +55,7 @@ Per-candidate, before listing (`scan` is rg-driven — use `--glob` here):
 
 Cite numbers when presenting.
 
-**Read the package's published surface first**: `package.json` `exports`, `bin`, `peerDependencies`, `sideEffects`, `engines`. The `exports` map is the contract. Then read `CONTEXT.md` and `docs/adr/` if present.
+**Read the package's published surface first**: `package.json` `exports`, `bin`, `peerDependencies`, `sideEffects`, `engines`. The `exports` map is the contract. Then read `GLOSSARY.md`, `docs/arch/`, and `docs/adr/` if present.
 
 Orient on the package shape:
 
@@ -86,7 +86,7 @@ Present a numbered list of deepening opportunities. For each candidate:
 - **Solution** — plain English description of what would change, named in TS-pkg terms (e.g. *"collapse these five files into a single `createPipeline(opts)` factory exported from a new `./pipeline` subpath; the existing files become private implementation under `src/pipeline/`, and the factory exposes a `hookable` hook bus for the three current extension points"*)
 - **Benefits** — explained in terms of locality and leverage, and also in how tests would improve (e.g. *"the factory can be tested directly with vitest; today the three hooks fire from three different files and the only way to observe them is to import each privately"*)
 
-**Use CONTEXT.md for the domain, [LANGUAGE.md](LANGUAGE.md) for the architecture, [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) for the framework seam, and the relevant convention section from [PKG-CONVENTIONS.md](PKG-CONVENTIONS.md) when the candidate is a convention gap.** Example phrasings: *"the Order intake module exposed as a `./intake` subpath"*, *"establish PKG-CONVENTIONS.md §Hook bus for the build pipeline"* — not *"the FooBarHandler"*, not *"the Order service"*.
+**Use GLOSSARY.md for the domain, [LANGUAGE.md](LANGUAGE.md) for the architecture, [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) for the framework seam, and the relevant convention section from [PKG-CONVENTIONS.md](PKG-CONVENTIONS.md) when the candidate is a convention gap.** Example phrasings: *"the Order intake module exposed as a `./intake` subpath"*, *"establish PKG-CONVENTIONS.md §Hook bus for the build pipeline"* — not *"the FooBarHandler"*, not *"the Order service"*.
 
 **Reject before listing.** Validate caller-count thresholds with `scan <symbol> --kind identifier-reference,import-specifier`; no guesswork.
 
@@ -110,8 +110,8 @@ Once the user picks a candidate, drop into a grilling conversation. Walk the des
 
 Side effects happen inline as decisions crystallize:
 
-- **Naming a deepened module after a concept not in `CONTEXT.md`?** Add the term to `CONTEXT.md` as a short glossary entry: the term, one sentence of meaning in this codebase, and where it lives. Create the file lazily if it doesn't exist.
-- **Sharpening a fuzzy term during the conversation?** Update `CONTEXT.md` right there.
+- **Naming a deepened module after a concept not in `GLOSSARY.md`?** Read the [glossary skill](../glossary/SKILL.md) and add the term there: the term, one sentence of meaning in this codebase, and where it lives.
+- **Sharpening a fuzzy term during the conversation?** Update `GLOSSARY.md` right there.
 - **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing — skip ephemeral reasons ("not worth it right now") and self-evident ones. Write it to `docs/adr/NNNN-slug.md` with context, decision, and consequences.
 - **Want to explore alternative interfaces for the deepened module?** See [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md). Sub-agents are pre-seeded with TS-pkg-native shapes (single factory, factory + hook bus, subpath-exposed surface, ports & adapters) so the design space is grounded in what the ecosystem already offers.
 - **Need to know the true blast radius of a rename/move before committing?** `npx -y @ripast/cli scan <symbol>` (counts) or `npx -y @ripast/cli scan <symbol> --graph mermaid` (importer graph). Quote numbers before promising scope.

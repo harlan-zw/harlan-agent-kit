@@ -213,27 +213,27 @@ See `references/` for detailed templates:
 When `@nuxt/module-builder` detected, also check (extends Package checklist):
 
 **Structure:**
-15. [ ] `src/module.ts` - main module entry exists
-16. [ ] `src/runtime/app/` - client/SSR code directory
-17. [ ] `src/runtime/server/` - Nitro server code directory
-18. [ ] `src/types.ts` - module options types
-19. [ ] `playground/` - nuxt.config.ts, app.vue, pages/
-20. [ ] `test/fixtures/basic/` - nuxt.config.ts
+17. [ ] `src/module.ts` - main module entry exists
+18. [ ] `src/runtime/app/` - client/SSR code directory
+19. [ ] `src/runtime/server/` - Nitro server code directory
+20. [ ] `src/types.ts` - module options types
+21. [ ] `playground/` - nuxt.config.ts, app.vue, pages/
+22. [ ] `test/fixtures/basic/` - nuxt.config.ts
 
 **Config:**
-21. [ ] `pnpm-workspace.yaml` - add `nuxt:` catalog
-22. [ ] `package.json` - nuxt module exports, peerDependencies
-23. [ ] `tsconfig.json` - extends `.nuxt/tsconfig.json`
-24. [ ] `vitest.config.ts` - use `defineVitestProject` for e2e
-25. [ ] `build.config.ts` - nuxt externals including `#imports`
-26. [ ] `eslint.config.mjs` - ignore fixtures/playground
-27. [ ] `.gitignore` - nuxt build dirs
+23. [ ] `pnpm-workspace.yaml` - add `nuxt:` catalog
+24. [ ] `package.json` - nuxt module exports, peerDependencies
+25. [ ] `tsconfig.json` - extends `.nuxt/tsconfig.json`
+26. [ ] `vitest.config.ts` - use `defineVitestProject` for e2e
+27. [ ] `build.config.ts` - nuxt externals including `#imports`
+28. [ ] `eslint.config.mjs` - ignore fixtures/playground
+29. [ ] `.gitignore` - nuxt build dirs
 
 **Scripts:**
-28. [ ] `typecheck` - uses `nuxt typecheck` (not `tsc`)
-29. [ ] `dev:prepare` - prepares module + playground
-30. [ ] `prepare:fixtures` - prepares test fixtures
-31. [ ] `.github/workflows/test.yml` - includes the prepare step and Markdown path filtering
+30. [ ] `typecheck` - uses `nuxt typecheck` (not `tsc`)
+31. [ ] `dev:prepare` - prepares module + playground
+32. [ ] `prepare:fixtures` - prepares test fixtures
+33. [ ] `.github/workflows/test.yml` - includes the prepare step and Markdown path filtering
 
 ## Sync Process
 

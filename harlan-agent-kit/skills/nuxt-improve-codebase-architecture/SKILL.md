@@ -31,7 +31,7 @@ Load-bearing principles (full list in LANGUAGE.md):
 - **Prefer Nuxt-native seams** over hand-rolled equivalents.
 - **Default feature-local, promote on evidence.** New `composables/useFoo.ts` or `components/Foo.vue` is a claim of app-wide ownership; the rename blast radius and naming-collision risk make global auto-import the most expensive seam decision. Colocate + `_`-prefix until ≥2 unrelated features consume it.
 
-This skill is _informed_ by the project's domain model (`CONTEXT.md`, `docs/adr/`): the domain language names good seams; ADRs record decisions not to re-litigate.
+This skill is _informed_ by the project's domain model (`GLOSSARY.md`, `docs/arch/`, `docs/adr/`): the domain language names good seams; ADRs record decisions not to re-litigate.
 
 ## Companion files
 
@@ -103,7 +103,7 @@ Present a numbered list of deepening opportunities. For each candidate:
 - **Solution** — plain English description of what would change, named in Nuxt terms (e.g. *"collapse these three plugins and two composables into a single Nuxt module that registers `addImports` for the public composables and an `app:created` hook for the singleton wiring"*)
 - **Benefits** — explained in terms of locality and leverage, and also in how tests would improve (e.g. *"the module can be tested with `@nuxt/test-utils` against a fixture; today the plugin's behaviour can only be observed through a full app boot"*)
 
-**Use CONTEXT.md for the domain, [LANGUAGE.md](LANGUAGE.md) for the architecture, [NUXT-SEAMS.md](NUXT-SEAMS.md) for the framework seam, and the relevant convention file + section number when the candidate is a convention gap.** Example phrasings: *"the Order intake module exposed as a Nuxt layer"*, *"establish NITRO-CONVENTIONS.md §1 for the Order create handler"* — not *"the FooBarHandler"*, not *"the Order service"*.
+**Use GLOSSARY.md for the domain, [LANGUAGE.md](LANGUAGE.md) for the architecture, [NUXT-SEAMS.md](NUXT-SEAMS.md) for the framework seam, and the relevant convention file + section number when the candidate is a convention gap.** Example phrasings: *"the Order intake module exposed as a Nuxt layer"*, *"establish NITRO-CONVENTIONS.md §1 for the Order create handler"* — not *"the FooBarHandler"*, not *"the Order service"*.
 
 **Reject before listing.** Bias toward fewer, sharper candidates. Validate caller counts with `scan --kind identifier-reference,import-specifier` scoped to the **whole project** (no `--glob` narrowing to the candidate's own layer/dir), and confirm the shape they consume — a uniform interface for the wrapper is a precondition for collapsing it. Cross-layer callers with a different state shape break the candidate. No guesswork.
 
@@ -134,8 +134,8 @@ Once the user picks a candidate, drop into a grilling conversation. Walk the des
 
 Side effects happen inline as decisions crystallize:
 
-- **Naming a deepened module after a concept not in `CONTEXT.md`?** Add the term to `CONTEXT.md` as a short glossary entry: the term, one sentence of meaning in this codebase, and where it lives. Create the file lazily if it doesn't exist.
-- **Sharpening a fuzzy term during the conversation?** Update `CONTEXT.md` right there.
+- **Naming a deepened module after a concept not in `GLOSSARY.md`?** Read the [glossary skill](../glossary/SKILL.md) and add the term there: the term, one sentence of meaning in this codebase, and where it lives.
+- **Sharpening a fuzzy term during the conversation?** Update `GLOSSARY.md` right there.
 - **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing — skip ephemeral reasons ("not worth it right now") and self-evident ones. Write it to `docs/adr/NNNN-slug.md` with context, decision, and consequences.
 - **Want to explore alternative interfaces for the deepened module?** See [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md). Sub-agents are pre-seeded with Nuxt-native shapes (module + hooks, layer, plugin + composable, nitro plugin) so the design space is grounded in what Nuxt already offers.
 - **Need to know the true blast radius of a rename/move before committing?** `npx -y @ripast/cli scan <symbol>` (counts) or `npx -y @ripast/cli scan <symbol> --graph mermaid` (importer graph). Quote numbers before promising scope.

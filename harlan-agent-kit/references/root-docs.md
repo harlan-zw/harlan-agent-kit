@@ -116,10 +116,16 @@ Use [templates/AGENTS.md](../skills/pkg-conform/templates/AGENTS.md) to start on
 
 ## Enforcement
 
-`eslint-plugin-harlanzw` carries these rules. `AGENTS.md` is already in its
-`PROMPT_MARKERS` and `PROMPT_FILES`, so `harlanzw()` turns them on by itself.
+Nothing enforces this contract yet. Read it and apply it by hand.
 
-| Rule | Catches |
+`AGENTS.md` is already in `eslint-plugin-harlanzw`'s `PROMPT_MARKERS` and
+`PROMPT_FILES`, so its 41 existing prompt and deslop rules fire on the file as
+soon as a repository stops ignoring it. Those rules catch wording. They do not
+check anything below.
+
+Planned, none of them shipped:
+
+| Rule | Will catch |
 | --- | --- |
 | `prompt-dangling-path` | a backticked repository path that does not exist |
 | `prompt-orphan-doc` | a root filter document `AGENTS.md` never links to |
@@ -127,8 +133,11 @@ Use [templates/AGENTS.md](../skills/pkg-conform/templates/AGENTS.md) to start on
 | `docs-work-brief-contract` | a brief missing a field above |
 | `docs-reference-no-status` | a `Status:` line in a reference document |
 
-ADR number uniqueness stays in a repository script. It compares files, and
-ESLint reads one file at a time.
+When a rule ships, drop its row and say here that it is enforced.
 
-A repository config that ignores `AGENTS.md` turns every one of these off. Never
-add that ignore.
+ADR number uniqueness stays in a repository script. It compares files, and
+ESLint reads one file at a time. `nuxtseo.com` and `gscdump.com` already run one
+at `scripts/tools/docs-structure.mjs`.
+
+A repository config that ignores `AGENTS.md` turns off every rule the plugin
+already has. Never add that ignore.
