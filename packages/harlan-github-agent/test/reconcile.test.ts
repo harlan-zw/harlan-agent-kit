@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { routedResult } from '../src/issue-classification.ts'
 import { reconcileRepository } from '../src/reconcile.ts'
 import { err, ok } from '../src/result.ts'
 import { AGENT_ACTOR_LOGIN } from '../src/review-comment.ts'
+import { routineReportCommand } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -195,6 +197,173 @@ describe('gitHub reconciliation', () => {
         store,
         now: () => new Date(at),
         pullRequestTriage: {
+          verdict: async () => {
+            throw new Error('No verdict was asked for.')
+          },
+          settle: async () => {
+            throw new Error('No settle was asked for.')
+          },
+        },
+      })
+      expect(result._tag).toBe('Ok')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('never classifies or settles a dismissed issue', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping({ issueWork: true })
+    const at = '2026-09-18T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    const issue = issueItem()
+    store.recordObservation({
+      externalId: 'dismissed-issue',
+      observedAt: '2026-09-18T00:59:00.000Z',
+      source: 'poll',
+      subject: issue,
+    })
+    if (store.dismissItem({ repository: repository.github, itemNumber: issue.number, at: '2026-09-18T00:59:30.000Z' })._tag !== 'Dismissed')
+      throw new Error('Expected the issue to be dismissed.')
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          listOpenItems: () => Promise.resolve(ok([issue])),
+        },
+        store,
+        now: () => new Date(at),
+        issueClassification: {
+          verdict: async () => {
+            throw new Error('No verdict was asked for.')
+          },
+          settle: async () => {
+            throw new Error('No settle was asked for.')
+          },
+        },
+      })
+      expect(result._tag).toBe('Ok')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('a failed routed settle records the failure without stopping the pass', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping({ issueWork: true })
+    const at = '2026-09-18T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    let merges = 0
+    let settles = 0
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          listOpenItems: () => Promise.resolve(ok([issueItem()])),
+        },
+        store,
+        now: () => new Date(at),
+        issueClassification: {
+          verdict: async () => ({
+            _tag: 'Routed' as const,
+            confidence: 0.95,
+            title: 'Button does nothing',
+            body: 'Steps: open the app.',
+            result: routedResult({ route: 'NEEDS_INFO', difficulty: 2, impact: 3, hasReproduction: true }),
+          }),
+          settle: async () => {
+            settles++
+            return err('GitHub refused the routed comment.')
+          },
+        },
+        autoMerge: { reconcile: async () => { merges++ } },
+      })
+      expect(result._tag).toBe('Ok')
+      expect(merges).toBe(1)
+      // The failure is transient by design: the stored decision retries the
+      // settle on the next poll, which needs the pass to have continued.
+      expect(settles).toBe(1)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('never classifies a routine tracking issue the table knows', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping({ issueWork: true })
+    const at = '2026-09-18T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    const tracking = issueItem({ number: 42 })
+    const [routine] = store.syncRoutines({
+      repository: repository.github,
+      specSha: 'abc123',
+      entries: [{
+        name: 'sentry-checkin',
+        crons: ['0 7 * * *'],
+        timeZone: 'Australia/Melbourne',
+        mode: 'report',
+        enabled: true,
+      }],
+      at: '2026-09-18T00:00:00.000Z',
+    })
+    if (routine === undefined)
+      throw new Error('Expected a stored Routine.')
+    const run = store.openRoutineRun({
+      routineId: routine.id,
+      scheduledFor: '2026-09-18T07:00:00.000Z',
+      specSha: routine.specSha,
+      at: '2026-09-18T07:00:00.000Z',
+    })
+    if (run === null)
+      throw new Error('Expected a Routine run.')
+    {
+      const task = store.claimNextRoutineRun('scanner', '2026-09-18T07:00:00.500Z', 45 * 60_000)
+      if (task === null)
+        throw new Error('Expected a queued Routine run.')
+      store.completeRoutineRun({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: '2026-09-18T07:00:01.000Z',
+        evidence: 'No open Sentry issues.',
+      })
+    }
+    store.stageRoutineReport({
+      command: routineReportCommand({
+        repository: routine.repository,
+        routineId: routine.id,
+        routineName: routine.name,
+        run: { id: run.id, scheduledFor: run.scheduledFor },
+        report: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
+      }),
+      at: '2026-09-18T07:00:02.000Z',
+    })
+    const command = store.claimNextRoutineReport('reporter-1', '2026-09-18T07:00:03.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected a claimed Routine report.')
+    store.completeRoutineReport({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-09-18T07:00:04.000Z',
+      commentId: 1234,
+      trackingIssueNumber: tracking.number,
+    })
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          listOpenItems: () => Promise.resolve(ok([tracking])),
+        },
+        store,
+        now: () => new Date(at),
+        issueClassification: {
           verdict: async () => {
             throw new Error('No verdict was asked for.')
           },

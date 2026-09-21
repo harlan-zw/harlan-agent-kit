@@ -45,6 +45,7 @@ import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitH
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createHostAgentPool } from './host-capacity.ts'
 import { agentSlotLine, agentSlotSizing, localAgentMemoryBytes } from './host-memory.ts'
+import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
@@ -472,6 +473,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     github: workerGithub,
     now,
     store,
+  })
+  // Issue triage classification runs only when the configuration sets a band:
+  // without one the Agent turn keeps every route, and evaluate-issue-triage
+  // names the band worth trying.
+  const issueClassification = createIssueClassificationController({
+    classification,
+    band: config.classification._tag === 'Enabled' ? config.classification.issueTriageBand : null,
+    github: workerGithub,
   })
   const mutationSchedulers = await (async () => {
     if (!config.mutationsEnabled)
@@ -1205,6 +1214,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           // A read-only deployment runs no classification and settles nothing.
           mutationsEnabled: config.mutationsEnabled,
           ...(pullRequestTriage === null ? {} : { pullRequestTriage }),
+          issueClassification,
           github,
           store,
           now,

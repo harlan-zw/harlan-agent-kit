@@ -1,6 +1,7 @@
 import type { ApprovalController } from './approval-controller.ts'
 import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
+import type { IssueClassificationController, IssueClassificationDecision } from './issue-classification.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PullRequestTriageController, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
@@ -9,6 +10,7 @@ import type { RepositoryMapping } from './types.ts'
 import { createHash } from 'node:crypto'
 import { isEligibleGitHubSubjectAuthor } from './github.ts'
 import { err, ok } from './result.ts'
+import { revisionIdFor } from './store.ts'
 
 export interface ReconciliationSummary {
   repository: string
@@ -27,6 +29,7 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
+  issueClassification?: IssueClassificationController
   /** False on a read-only deployment: no classification budget, no GitHub writes. Defaults to true. */
   mutationsEnabled?: boolean
   pullRequestTriage?: PullRequestTriageController
@@ -131,8 +134,49 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
         triageVerdicts.set(subject.number, verdict)
     })
   }
+  // Issue triage classification decides at observation time too. A Revision
+  // with a stored route needs no second decision, so only new content pays
+  // for the read and the classification.
+  const issueDecisions = new Map<number, IssueClassificationDecision>()
+  /** Routed decisions to settle: fresh ones, plus stored ones a failed settle left behind. */
+  const settleResults = new Map<number, Extract<IssueClassificationDecision, { _tag: 'Routed' }>['result']>()
+  if (writesEnabled && dependencies.issueClassification !== undefined) {
+    await Promise.all(eligibleItems.map(async (subject) => {
+      // An external repository is watched, never acted in: its issues carry
+      // no local decision row, so classifying them would publish comments
+      // there and repeat the ask forever.
+      if (subject.kind !== 'issue' || subject.state !== 'open' || !repository.issueWork || !repository.enabled || repository.ownership === 'external' || subject.routineTracking)
+        return
+      // A Dismissal outranks every planner and every classifier: a dismissed
+      // issue must not be classified, and a stored route must not settle
+      // again, on every poll.
+      if (dependencies.store.isItemDismissed(repository.github, 'issue', subject.number))
+        return
+      // The payload heuristic can miss an issue the routines table already
+      // registered as a Routine's tracking issue. The planner would discard
+      // the verdict, so asking would burn the classification every poll.
+      if (dependencies.store.isRoutineTrackingIssue(repository.github, subject.number))
+        return
+      const revisionId = revisionIdFor(subject)
+      const stored = dependencies.store.getLatestIssueTriageRun(repository.github, subject.number, revisionId)
+      if (stored !== null) {
+        // A stored routed decision settles again until its comment and label
+        // land; an Agent-kept Revision needs nothing here, and an Agent
+        // answer outranks both.
+        if (stored._tag === 'Routed' && !dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
+          settleResults.set(subject.number, stored.result)
+        return
+      }
+      if (dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
+        return
+      const decision = await dependencies.issueClassification?.verdict(repository, subject, dependencies.signal ?? AbortSignal.timeout(30_000))
+      if (decision !== undefined)
+        issueDecisions.set(subject.number, decision)
+    }))
+  }
   const eligibleWrites = eligibleItems.map((subject) => {
     const verdict = subject.kind === 'pull_request' ? triageVerdicts.get(subject.number) : undefined
+    const issueDecision = subject.kind === 'issue' ? issueDecisions.get(subject.number) : undefined
     return dependencies.store.recordObservation({
       externalId: observationId(repository.github, subject),
       observedAt,
@@ -144,6 +188,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
             pullRequestTriage: verdict.decision,
             ...(verdict.files === null ? {} : { pullRequestFiles: verdict.files }),
           }),
+      ...(issueDecision === undefined ? {} : { issueTriage: issueDecision }),
     })
   })
   const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordObservation({
@@ -203,6 +248,37 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const failedSettle = settled.find(result => result._tag === 'Err')
     if (failedSettle?._tag === 'Err' && dependencies.signal?.aborted !== true)
       dependencies.store.recordPollFailure(repository.github, observedAt, failedSettle.error)
+  }
+
+  // A routed Issue triage decision publishes its comment and label after the
+  // row landed with the observation. A fresh decision settles only when its
+  // observation landed: a Stale or Conflicting write recorded no row, so
+  // publishing its comment would put a verdict on GitHub the journal never
+  // held. A stored row settles by definition, because the row is what
+  // retries.
+  if (writesEnabled && dependencies.issueClassification !== undefined) {
+    eligibleItems.forEach((subject, index) => {
+      if (subject.kind !== 'issue')
+        return
+      const decision = issueDecisions.get(subject.number)
+      const write = eligibleWrites[index]
+      if (decision !== undefined && decision._tag === 'Routed' && (write?._tag === 'Inserted' || write?._tag === 'Duplicate'))
+        settleResults.set(subject.number, decision.result)
+    })
+    const settledIssues = await Promise.all(eligibleItems.map((subject) => {
+      if (subject.kind !== 'issue')
+        return Promise.resolve(ok(undefined))
+      const result = settleResults.get(subject.number)
+      if (result === undefined)
+        return Promise.resolve(ok(undefined))
+      return dependencies.issueClassification?.settle(repository, subject, result, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
+    }))
+    const failedIssueSettle = settledIssues.find(result => result._tag === 'Err')
+    // A failed settle records the failure and lets the pass continue: the
+    // stored decision retries on the next poll, and Approvals and Auto
+    // merge must not starve behind one refused comment.
+    if (failedIssueSettle?._tag === 'Err' && dependencies.signal?.aborted !== true)
+      dependencies.store.recordPollFailure(repository.github, observedAt, failedIssueSettle.error)
   }
 
   if (writesEnabled && dependencies.approvals !== undefined) {

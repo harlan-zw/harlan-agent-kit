@@ -63,6 +63,10 @@ storage:
 #   token_path: /home/harlan/.config/harlan-github-agent/classification-token
 #   gateway_id: harlan-github-agent
 #   model: typesafe/jev
+#   # The confidence an Issue triage route needs before it skips the Agent
+#   # turn, from 0.5 to 0.99. Leave it out and the Agent turn keeps every
+#   # route. Run evaluate-issue-triage first and set what it measures.
+#   issue_triage_band: 0.9
 # What may start work on this machine. Defaults to every trigger.
 # An always-on second machine runs [routine] while the desktop keeps [github].
 # The two sets never overlap, so neither machine can claim the other's task and
