@@ -9,12 +9,12 @@ import { consola } from 'consola'
 import { createClassificationSource } from './classification.ts'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
-import { loadClassificationToken, loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateRepositoryMappings } from './config.ts'
+import { loadClassificationToken, loadConfig } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
-import { loadGitIdentity } from './git-identity.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { err } from './result.ts'
+import { describePreflightIssues, loadServiceInputs } from './service-preflight.ts'
 import { combineServiceState } from './service-state.ts'
 import { createGitServiceUpdateSource } from './service-update.ts'
 import { startAgentService } from './service.ts'
@@ -452,7 +452,25 @@ const evaluateIssueTriage = defineCommand({
   },
 })
 
-const rootSubCommandNames = ['combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage', 'evaluate-issue-triage']
+const checkConfig = defineCommand({
+  meta: {
+    name: 'check-config',
+    description: 'Read the configuration and every secret it names, without starting the service.',
+  },
+  args: rootArguments,
+  async run({ args }) {
+    const configPath = resolve(args.config)
+    const inputs = await loadServiceInputs(configPath)
+    if (inputs._tag === 'Err') {
+      consola.error(`This revision rejects ${configPath}:\n${describePreflightIssues(inputs.error)}`)
+      process.exitCode = 1
+      return
+    }
+    consola.success(`This revision accepts ${configPath}.`)
+  },
+})
+
+const rootSubCommandNames = ['check-config', 'combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage', 'evaluate-issue-triage']
 
 const command = defineCommand({
   meta: {
@@ -462,6 +480,7 @@ const command = defineCommand({
   },
   args: rootArguments,
   subCommands: {
+    'check-config': checkConfig,
     'combine-service-state': combineState,
     'sweep-worktrees': sweepWorktrees,
     'control': controlCommand,
@@ -475,35 +494,13 @@ const command = defineCommand({
     if (invokesSubCommand(rawArgs, rootSubCommandNames, rootArguments))
       return
     const configPath = resolve(args.config)
-    const parsed = await loadConfig(configPath)
-    if (parsed._tag === 'Err')
-      throw new Error(parsed.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+    const inputs = await loadServiceInputs(configPath)
+    if (inputs._tag === 'Err')
+      throw new Error(describePreflightIssues(inputs.error))
 
-    const validated = await validateRepositoryMappings(parsed.value)
-    if (validated._tag === 'Err')
-      throw new Error(validated.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
-
-    const privateKey = await loadGitHubAppPrivateKey(validated.value.github.privateKeyPath)
-    if (privateKey._tag === 'Err')
-      throw new Error(privateKey.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
-
-    const dashboardPassword = await loadDashboardPassword(join(dirname(configPath), 'dashboard-password'))
-    if (dashboardPassword._tag === 'Err')
-      throw new Error(dashboardPassword.error)
-
-    const webhook = validated.value.webhook
-    const webhookSecret = webhook._tag === 'Enabled' ? await loadWebhookSecret(webhook.secretPath) : null
-    if (webhookSecret?._tag === 'Err')
-      throw new Error(webhookSecret.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
-
-    const classification = validated.value.classification
-    const classificationToken = classification._tag === 'Enabled' ? await loadClassificationToken(classification.tokenPath) : null
-    if (classificationToken?._tag === 'Err')
-      throw new Error(classificationToken.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
-
-    const gitIdentity = await loadGitIdentity()
-    if (gitIdentity._tag === 'Err')
-      throw new Error(gitIdentity.error)
+    const { classificationToken, config, dashboardPassword, gitIdentity, githubPrivateKey, webhookSecret } = inputs.value
+    const classification = config.classification
+    const webhook = config.webhook
 
     const serviceUpdate = createGitServiceUpdateSource({
       repositoryRoot: process.cwd(),
@@ -512,17 +509,17 @@ const command = defineCommand({
     })
     const service = await startAgentService({
       ...(classification._tag === 'Enabled' && classificationToken !== null
-        ? { classification: { accountId: classification.accountId, apiToken: classificationToken.value, ...(classification.gatewayId === undefined ? {} : { gatewayId: classification.gatewayId }), model: classification.model } }
+        ? { classification: { accountId: classification.accountId, apiToken: classificationToken, ...(classification.gatewayId === undefined ? {} : { gatewayId: classification.gatewayId }), model: classification.model } }
         : {}),
-      config: validated.value,
-      dashboardPassword: dashboardPassword.value,
-      gitIdentity: gitIdentity.value,
-      githubPrivateKey: privateKey.value,
-      ...(webhookSecret === null ? {} : { webhookSecret: webhookSecret.value }),
+      config,
+      dashboardPassword,
+      gitIdentity,
+      githubPrivateKey,
+      ...(webhookSecret === null ? {} : { webhookSecret }),
       logger: consola,
       serviceUpdate,
     })
-    consola.success(`Dashboard: ${validated.value.server.allowedOrigin}`)
+    consola.success(`Dashboard: ${config.server.allowedOrigin}`)
     if (webhook._tag === 'Enabled')
       consola.success(`Webhooks: http://${webhook.host}:${webhook.port}/webhook`)
     await Promise.race([waitForShutdown(), service.waitForRestart()])

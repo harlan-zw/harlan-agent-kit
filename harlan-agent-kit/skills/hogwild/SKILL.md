@@ -70,6 +70,8 @@ Public routes go internet, Cloudflare tunnel, Caddy `:8080`, then the loopback p
 | Status site | `harlan-zw/hogwild.harlanzw.com` | `~/pkg/hogwild.harlanzw.com` | GitHub Actions deploy job to `hogwild-deploy` |
 | Caddy routes | `scripts/30-agent.caddy` for the agent route; others live only on the host | | `sudo systemctl reload caddy` |
 
+A deploy reads `~/.config/harlan-github-agent/config.yml` with the new revision before it restarts anything. If the new revision rejects the file, the deploy stops and the running revision keeps serving. Run the same check by hand with `harlan-github-agent check-config --config <path>`.
+
 The live `runners.conf` is `/var/lib/github-runner/config/runners.conf`. Change it in the repo first, then install it.
 
 ## Agent checkouts on the host
