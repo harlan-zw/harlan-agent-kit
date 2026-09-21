@@ -25,6 +25,7 @@ export HOGWILD_SERVICE_TEST_STATE_POLLS="$test_root/state-polls"
 # Present once this deploy files its own Restart request. Before that, the
 # controller reports whatever restart an earlier deploy left behind.
 export HOGWILD_SERVICE_TEST_RESTART_FILED="$test_root/restart-filed"
+export HOGWILD_SERVICE_TEST_DEPLOYED_SHA=1c2b3a49f5d60e7b8a9c0d1e2f3a4b5c6d7e8f90
 export HOGWILD_SERVICE_TEST_LEGACY=false
 export HOGWILD_SERVICE_TEST_LEGACY_SAFE_AFTER=1
 export HOGWILD_SERVICE_TEST_LEGACY_STATE="$test_root/legacy-state"
@@ -74,6 +75,13 @@ printf '%s\n' \
   'if [[ "$*" == *mktemp*-d* ]]; then printf '\''%s\n'\'' "$HOGWILD_SERVICE_TEST_ENV_STAGE"; exit; fi' \
   'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; elif [[ "$*" == *sha256sum*SITES.md.next* ]]; then printf '\''%s  SITES.md.next\n'\'' "$HOGWILD_SERVICE_TEST_SITES_HASH"; fi' \
   > "$test_root/bin/ssh"
+cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
+# Hogwild reports the commit it landed on, so the desktop can be pinned to it.
+if [[ "$*" == *"-- 'revision'"* ]]; then
+  printf '%s\n' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"
+  exit
+fi
+FAKE_SSH
 cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
 # Context sync also verifies the commit hook and the installed opencode files.
 if [[ "$*" == *sha256sum* && ( "$*" == *commit-msg.next* || "$*" == *harlan-hooks.ts.next* ) ]]; then
@@ -193,6 +201,13 @@ fi
 if ! grep -q "^service prepare-update" "$HOGWILD_SERVICE_TEST_CALLS" \
   || ! grep -q "^systemctl --user restart" "$HOGWILD_SERVICE_TEST_CALLS"; then
   printf '%s\n' 'The deploy did not update the desktop client.' >&2
+  exit 1
+fi
+# A merge landing mid-deploy moves origin/main, so the desktop takes the commit
+# Hogwild reported rather than resolving the name a second time.
+if ! grep -qx "service prepare-update $HOGWILD_SERVICE_TEST_DEPLOYED_SHA" "$HOGWILD_SERVICE_TEST_CALLS"; then
+  printf '%s\n' 'The desktop client did not move to the commit Hogwild deployed.' >&2
+  grep '^service prepare-update' "$HOGWILD_SERVICE_TEST_CALLS" >&2
   exit 1
 fi
 if [ ! -f "$XDG_CONFIG_HOME/systemd/user/$HARLAN_GITHUB_AGENT_DESKTOP_UNIT.service" ]; then
