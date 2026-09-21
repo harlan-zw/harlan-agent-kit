@@ -1,149 +1,31 @@
 // Typed Jev client over the Cloudflare AI /ai/run endpoint.
-// Question and answer shapes mirror github.com/typesafe-ai/typesafe-sdk-js;
-// the fork of pithings/advocaat replaced the transport.
+// The transport, question shapes, and answer validation live in @harlan-zw/jev.
+// This module is the throwing surface the agent stack consumes: `systemOne`
+// resolves a SystemOneResult or throws, and question limits throw a TypeError
+// before any request is sent.
 
-/** A JSON-serializable value. */
-export type Json = string | number | boolean | null | Json[] | { [key: string]: Json }
+import type { JevFailure, JevResult, Questions, SystemOneRequest, SystemOneResult } from '@harlan-zw/jev'
+import { createJevHttpClient } from '@harlan-zw/jev'
 
-/** Text, a JSON object or array, or `null` for state, instructions, and criteria. */
-export type Entry = string | Json[] | { [key: string]: Json } | null
-
-// --- questions ---
-
-/** A yes/no question answered with a probability. */
-export interface NoulQuestion {
-  type: 'noul'
-  /** A question or statement to judge as true. */
-  instructions?: Entry
-  /** Optional descriptions of what counts as true or false. */
-  criteria?: { true?: Entry, false?: Entry } | null
-}
-
-/** Option labels mapped to their descriptions; requires 2 to 255 options. */
-export interface ChoiceCriteria { [label: string]: Entry }
-
-/** A question that selects one labeled option. */
-export interface ChoiceQuestion<T extends ChoiceCriteria = ChoiceCriteria> {
-  type: 'choice'
-  /** What to decide from the state. */
-  instructions?: Entry
-  /** 2 to 255 option labels and descriptions; both are sent to the model. */
-  criteria: T
-}
-
-/** At least two descriptions indexed by score from zero. */
-export type ScoreCriteria = readonly [Entry, Entry, ...Entry[]]
-
-/** A question rated against 2 to 10 ordered score levels. */
-export interface ScoreQuestion<T extends ScoreCriteria = ScoreCriteria> {
-  type: 'score'
-  /** What to rate in the state. */
-  instructions?: Entry
-  /** 2 to 10 level descriptions, numbered by array position from zero. */
-  criteria: T
-}
-
-/** A supported evaluation question. */
-export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion
-
-/** Named questions evaluated together against the same state. */
-export interface Questions { [name: string]: Question }
-
-export function noul(instructions: Entry = null, criteria?: NoulQuestion['criteria']): NoulQuestion {
-  return {
-    type: 'noul',
-    instructions,
-    ...(criteria === undefined ? {} : { criteria }),
-  }
-}
-
-export function choice<const T extends ChoiceCriteria>(instructions: Entry, criteria: T): ChoiceQuestion<T> {
-  return {
-    type: 'choice',
-    instructions,
-    criteria,
-  }
-}
-
-export function score<const T extends ScoreCriteria>(instructions: Entry, criteria: T): ScoreQuestion<T> {
-  return {
-    type: 'score',
-    instructions,
-    criteria,
-  }
-}
-
-// --- answers ---
-
-/** The probability that a yes/no question is true. */
-export interface NoulAnswer {
-  readonly type: 'noul'
-  /** Probability of a yes answer, from zero to one. */
-  readonly noul: number
-}
-
-/** The selected option and probability of each choice. */
-export interface ChoiceAnswer<T extends ChoiceCriteria = ChoiceCriteria> {
-  readonly type: 'choice'
-  /** The label of the highest-probability option. */
-  readonly choice: keyof T & string
-  /** How much the top option stands out, from zero to one. */
-  readonly confidence: number
-  /** Probability of each option, keyed by its label. */
-  readonly probabilities: { readonly [label in keyof T]: number }
-}
-
-/** Score keys inferred from the rubric; a fixed-length tuple yields its indices, otherwise `number`. */
-export type ScoreOf<T extends ScoreCriteria> = number extends T['length']
-  ? number
-  : Extract<keyof T, `${number}`>
-
-/** The expected score, rubric, and probability of each level. */
-export interface ScoreAnswer<T extends ScoreCriteria = ScoreCriteria> {
-  readonly type: 'score'
-  /** Sum of each level number times its probability; may fall between levels. */
-  readonly score: number
-  /** How much the top level stands out, from zero to one. */
-  readonly confidence: number
-  /** Level descriptions keyed by zero-based level number, e.g. { "0": "Calm" }. */
-  readonly legend: { readonly [score in ScoreOf<T>]: T[score] }
-  /** Probability of each level, keyed by level number. */
-  readonly probabilities: { readonly [score in ScoreOf<T>]: number }
-}
-
-/** The answer type inferred from a question and its criteria. */
-export type AnswerFor<T extends Question> = T extends NoulQuestion
-  ? NoulAnswer
-  : T extends ScoreQuestion<infer S>
-    ? ScoreAnswer<S>
-    : T extends ChoiceQuestion<infer C>
-      ? ChoiceAnswer<C>
-      : never
-
-/** Shared state and questions, with an optional model override. */
-export interface SystemOneRequest<Q extends Questions = Questions> {
-  /** Content to evaluate, shared by all questions. */
-  state: Entry
-  /** Questions keyed by your own names; these names are not sent to the model. */
-  questions: Q
-  /** Overrides the client's default model for this request. */
-  model?: string
-}
-
-/** Answers keyed by question name, with the model used and token usage. */
-export interface SystemOneResult<Q extends Questions> {
-  /** The model used for this evaluation. */
-  readonly model: string
-  /** Answers under the same keys as the request's questions. */
-  readonly answers: { readonly [K in keyof Q]: AnswerFor<Q[K]> }
-  /** Token counts; missing counts default to zero. */
-  readonly usage: { readonly input_tokens: number, readonly output_tokens: number }
-}
-
-// --- client ---
-
-const DEFAULT_BASE_URL = 'https://api.cloudflare.com/client/v4'
-const DEFAULT_MODEL = 'typesafe/jev'
+export { choice, noul, score } from '@harlan-zw/jev'
+export type {
+  AnswerFor,
+  ChoiceAnswer,
+  ChoiceCriteria,
+  ChoiceQuestion,
+  Entry,
+  Json,
+  NoulAnswer,
+  NoulQuestion,
+  Question,
+  Questions,
+  ScoreAnswer,
+  ScoreCriteria,
+  ScoreOf,
+  ScoreQuestion,
+  SystemOneRequest,
+  SystemOneResult,
+} from '@harlan-zw/jev'
 
 /**
  * Explicit options win over `CLOUDFLARE_*` environment variables, then
@@ -200,177 +82,141 @@ export function jev(options: JevOptions = {}) {
       'Pass accountId and apiToken to jev() or set the CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN environment variables.',
     )
   }
-  const baseURL = (options.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, '')
-  const model = options.model ?? DEFAULT_MODEL
-  const retries = options.retries ?? 2
   const gatewayId = options.gatewayId ?? env('CLOUDFLARE_AI_GATEWAY_ID')
-  const fetch = options.fetch ?? globalThis.fetch
-  const url = `${baseURL}/accounts/${accountId}/ai/run`
-
-  async function attempt(
-    body: string,
-    init: RequestOptions,
-    headers: Record<string, string>,
-  ): Promise<Response> {
-    return fetch(url, {
-      method: 'POST',
-      ...(init.signal === undefined ? {} : { signal: init.signal }),
-      headers: { ...headers, ...init.headers },
-      body,
-    })
-  }
 
   return {
     /** Evaluates every question against the shared state in one request. */
     systemOne<const Q extends Questions>(req: SystemOneRequest<Q>, init: RequestOptions = {}): Promise<SystemOneResult<Q>> {
-      if (Object.keys(req.questions).length === 0)
-        throw new TypeError('At least one question is required.')
-      for (const [name, q] of Object.entries(req.questions)) {
-        if (q.type === 'score' && !within(q.criteria, 2, 10))
-          throw new TypeError(`Score question "${name}" needs 2 to 10 levels.`)
-        if (q.type === 'choice' && !within(Object.keys(q.criteria ?? {}), 2, 255))
-          throw new TypeError(`Choice question "${name}" needs 2 to 255 options.`)
-      }
-      return send(req, init).then(validate(req.questions))
+      validateQuestions(req.questions)
+      const signal = init.signal
+      // A pre-aborted signal must reject before the client exists: invoking it
+      // would send the request and leave its promise orphaned, so a later
+      // failure of that request would surface as an unhandled rejection.
+      if (signal?.aborted)
+        return Promise.reject(cancelled())
+      // One client per call, so per-request headers reach its fetcher. The
+      // client is pure configuration, so this costs nothing.
+      const client = createJevHttpClient({
+        accountId,
+        apiToken,
+        ...(gatewayId === undefined ? {} : { gatewayId }),
+        ...(options.model === undefined ? {} : { model: options.model }),
+        ...(options.retries === undefined ? {} : { retries: options.retries }),
+        ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
+        fetcher: fetcher(options.fetch, init.headers, signal),
+      })
+      const sent: Promise<SystemOneResult<Q>> = client.systemOne(req).then(throwOnFailure)
+      if (signal === undefined)
+        return sent
+      return new Promise<SystemOneResult<Q>>((resolve, reject) => {
+        const abort = () => reject(cancelled())
+        signal.addEventListener('abort', abort, { once: true })
+        sent.then(
+          (result) => {
+            signal.removeEventListener('abort', abort)
+            resolve(result)
+          },
+          (error: unknown) => {
+            signal.removeEventListener('abort', abort)
+            reject(error)
+          },
+        )
+      })
     },
-  }
-
-  // Every answer is parsed against its question: a choice names one of its
-  // own criteria with a finite confidence in zero to one, a score and a noul
-  // are finite numbers. Anything else failed, so no caller can crash on, or
-  // act on, an answer it trusted.
-  function validate<Q extends Questions>(questions: Q): (result: SystemOneResult<Q>) => SystemOneResult<Q> {
-    return (result) => {
-      const answers = result.answers as Record<string, unknown>
-      for (const [name, question] of Object.entries(questions)) {
-        const answer = answers[name]
-        if (typeof answer !== 'object' || answer === null || typeof (answer as { type?: unknown }).type !== 'string')
-          throw new APIError(200, { error: `Answer "${name}" is not a typed answer.` })
-        if (question.type === 'choice') {
-          const { choice, confidence } = answer as { choice?: unknown, confidence?: unknown }
-          if (typeof choice !== 'string' || !(choice in question.criteria))
-            throw new APIError(200, { error: `Answer "${name}" does not name one of its criteria.` })
-          if (!Number.isFinite(confidence) || (confidence as number) < 0 || (confidence as number) > 1)
-            throw new APIError(200, { error: `Answer "${name}" carries no confidence between zero and one.` })
-        }
-        else if (question.type === 'score') {
-          if (!Number.isFinite((answer as { score?: unknown }).score))
-            throw new APIError(200, { error: `Answer "${name}" carries no numeric score.` })
-        }
-        else if (!Number.isFinite((answer as { noul?: unknown }).noul)) {
-          throw new APIError(200, { error: `Answer "${name}" carries no numeric probability.` })
-        }
-      }
-      return result
-    }
-  }
-
-  async function send<Q extends Questions>(req: SystemOneRequest<Q>, init: RequestOptions): Promise<SystemOneResult<Q>> {
-    const headers: Record<string, string> = {
-      'Authorization': `Bearer ${apiToken}`,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      ...(gatewayId === undefined ? {} : { 'cf-aig-gateway-id': gatewayId }),
-    }
-    const body = JSON.stringify({
-      model: req.model ?? model,
-      input: { state: req.state, questions: req.questions },
-    })
-
-    let res = await attempt(body, init, headers)
-    for (let attempted = 0; (res.status === 429 || res.status === 529) && attempted < retries; attempted++) {
-      await sleep(backoffMilliseconds(res, attempted), init.signal)
-      res = await attempt(body, init, headers)
-    }
-    const parsed = await parse(res)
-    if (!res.ok)
-      throw new APIError(res.status, parsed, res.headers.get('cf-ray') ?? '')
-    const result = unwrap(parsed, res)
-    return result as SystemOneResult<Q>
   }
 }
 
 /** A client for evaluating questions against Jev. */
 export type JevClient = ReturnType<typeof jev>
 
+// The shared client reports failures as values. This is the one place they
+// become throws again, so the stack's catch paths keep working.
+function throwOnFailure<Q extends Questions>(result: JevResult<Q>): SystemOneResult<Q> {
+  if (result._tag === 'Ok')
+    return result.result
+  throw failureToError(result.failure)
+}
+
+function failureToError(failure: JevFailure): Error {
+  if (failure._tag === 'Http')
+    return new APIError(failure.status, failure.details, failure.requestId ?? '')
+  if (failure._tag === 'Invalid') {
+    // A 2xx body Cloudflare marked failed keeps its wire provenance: the raw
+    // body and the ray travel on the error, not just inside its message.
+    return new APIError(
+      200,
+      {
+        error: failure.message,
+        ...(failure.body === undefined ? {} : { body: failure.body }),
+        ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
+      },
+      failure.requestId ?? '',
+    )
+  }
+  // The shared client folds a cancelled fetch and an expired request window
+  // into Timeout. Both surface as AbortError, so a caller treats an expired
+  // window as an ordinary cancellation, never an Incident.
+  if (failure._tag === 'Timeout')
+    return new DOMException(failure.message, 'AbortError')
+  return new Error(failure.message)
+}
+
+function cancelled(): DOMException {
+  return new DOMException('The classification request was cancelled.', 'AbortError')
+}
+
+// The shared client answers invalid questions with a failure value; the
+// throwing surface rejects them before any request is sent.
+function validateQuestions(questions: Questions): void {
+  if (Object.keys(questions).length === 0)
+    throw new TypeError('At least one question is required.')
+  for (const [name, q] of Object.entries(questions)) {
+    if (q.type === 'score' && !within(q.criteria, 2, 10))
+      throw new TypeError(`Score question "${name}" needs 2 to 10 levels.`)
+    if (q.type === 'choice' && !within(Object.keys(q.criteria ?? {}), 2, 255))
+      throw new TypeError(`Choice question "${name}" needs 2 to 255 options.`)
+  }
+}
+
 function within(list: unknown, min: number, max: number) {
   return Array.isArray(list) && list.length >= min && list.length <= max
 }
 
-// Cloudflare answers REST calls with `{ success, errors, result }` and, on
-// `/ai/run`, wraps the model answer once more inside `{ state, result,
-// gatewayMetadata }`. Whatever shape arrives, the System One result with its
-// `answers` must come out, or the call failed.
-function unwrap(parsed: unknown, res: Response): unknown {
-  let value = parsed
-  if (isEnvelope(value)) {
-    const envelope = value as { success: boolean, errors?: unknown, result?: unknown }
-    if (!envelope.success)
-      throw new APIError(res.status, envelope.errors ?? parsed, res.headers.get('cf-ray') ?? '')
-    value = envelope.result ?? parsed
+function fetcher(
+  fetch: typeof globalThis.fetch | undefined,
+  headers: Record<string, string> | undefined,
+  signal: AbortSignal | undefined,
+) {
+  const base = fetch ?? globalThis.fetch
+  if (headers === undefined && signal === undefined)
+    return (input: string | URL | Request, init?: RequestInit) => base(input, init)
+  return (input: string | URL | Request, init?: RequestInit) => {
+    const merged = wireSignal(init?.signal, signal)
+    return base(input, {
+      ...init,
+      // The client passes its own deadline signal. A caller's abort must
+      // cancel the request on the wire, not just stop the caller waiting,
+      // so both signals share one abort.
+      ...(merged === undefined ? {} : { signal: merged }),
+      ...(headers === undefined
+        ? {}
+        : { headers: { ...(init?.headers as Record<string, string> | undefined), ...headers } }),
+    })
   }
-  // `/ai/run` wraps the model answer once more: `{ state, result, gatewayMetadata }`.
-  if (isRunWrapper(value))
-    value = (value as { result: unknown }).result
-  // The System One result must carry an answers object. Anything else,
-  // including `answers: null`, failed: a caller reading a question's answer
-  // off it must never crash on the shape it trusted.
-  if (
-    typeof value !== 'object' || value === null || !('answers' in value)
-    || typeof (value as { answers: unknown }).answers !== 'object'
-    || (value as { answers: unknown }).answers === null
-  ) {
-    throw new APIError(res.status, parsed, res.headers.get('cf-ray') ?? '')
-  }
-  return value
 }
 
-function isEnvelope(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && 'success' in value
-}
-
-function isRunWrapper(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && 'state' in value && 'result' in value
-}
-
-function backoffMilliseconds(res: Response, attempted: number): number {
-  const retryAfter = res.headers.get('retry-after')
-  if (retryAfter !== null && Number.isFinite(Number(retryAfter)))
-    return Math.max(0, Number(retryAfter)) * 1000
-  return 500 * 2 ** attempted
-}
-
-// A sleep that ends early when the caller cancels, so a retried request
-// cannot outlive its own signal.
-function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted)
-    return Promise.reject(new DOMException('The classification request was cancelled.', 'AbortError'))
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, milliseconds)
-    signal?.addEventListener('abort', () => {
-      clearTimeout(timer)
-      reject(new DOMException('The classification request was cancelled.', 'AbortError'))
-    }, { once: true })
-  })
+function wireSignal(deadline: AbortSignal | null | undefined, caller: AbortSignal | undefined): AbortSignal | undefined {
+  if (caller === undefined)
+    return deadline ?? undefined
+  if (deadline === undefined || deadline === null)
+    return caller
+  return AbortSignal.any([deadline, caller])
 }
 
 // Optional: only runtimes with a Node-style `process.env` provide values. Blank values count as unset.
 function env(name: string): string | undefined {
   const g = globalThis as { process?: { env?: Record<string, string | undefined> } }
   return g.process?.env?.[name]?.trim() || undefined
-}
-
-// Servers and proxies don't always set content-type, so always try JSON first.
-async function parse(res: Response): Promise<unknown> {
-  const text = await res.text()
-  if (!text)
-    return undefined
-  try {
-    return JSON.parse(text)
-  }
-  catch {
-    return text
-  }
 }
 
 function describe(body: unknown): string {
