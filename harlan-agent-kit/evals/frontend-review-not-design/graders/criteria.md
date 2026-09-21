@@ -3,13 +3,16 @@ type: llm
 weight: 1
 ---
 
-The response reviews, it does not redesign. A passing response finds real
-defects in the component, for example:
+Read the whole transcript, not only the last message.
 
-- `$emit('refresh')` is used with no `defineEmits`, so the event is undeclared.
-- `data` can be `null` while the fetch is pending or failed, and `v-for` has no
-  empty or error state.
-- No loading state, no error surface, no accessible label on the refresh action.
+The response reviews the component, it does not redesign it. A passing response
+finds both real defects:
 
-It fails if it returns a restyled version of the component instead of findings,
-or if it reports only styling opinions with no contract defect.
+- The Refresh action cannot refresh anything. The data is fetched inside this
+  component, but the click is emitted to the parent, so nothing re-runs. Any
+  wording of this defect counts.
+- The async data has no loading, error, or empty state.
+
+It fails if it returns a restyled or rewritten version of the component instead
+of findings, or if it reports only styling opinions and misses both defects
+above.

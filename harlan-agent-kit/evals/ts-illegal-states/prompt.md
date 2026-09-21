@@ -1,6 +1,6 @@
 ---
 max_turns: 8
-allowed_tools: [Read, Glob, Grep, Skill]
+allowed_tools: [Read, Glob, Grep, Skill, Bash]
 ---
 
 Is this type any good?

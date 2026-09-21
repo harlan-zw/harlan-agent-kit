@@ -3,14 +3,18 @@ type: llm
 weight: 1
 ---
 
-The rewrite removes the AI tells and reads like a person wrote it. A passing
-rewrite:
+Read the whole transcript, not only the last message.
 
-- Drops "thrilled to announce", "dive in", "seamless", "cutting-edge",
-  "fast-paced digital landscape", and the exclamation marks.
-- Removes the "This isn't just X, it's Y" construction entirely.
-- Uses no em dashes and no hyphens as dashes.
-- Says what actually changed instead of how exciting it is.
+The skill lists the tells first, then gives the rewrite. Both parts must appear.
 
-It fails if it keeps the "not just X, it's Y" pattern, keeps any of the listed
-filler phrases, or introduces an em dash.
+A passing response:
+
+- Names the tells, including "thrilled to announce", "dive in", "seamless",
+  "cutting-edge", "fast-paced digital landscape", and the "This isn't just X,
+  it's Y" construction.
+- Then supplies rewritten release-note text.
+- The rewrite drops every tell it named, keeps the "not X, it's Y" pattern out,
+  and uses no em dashes and no hyphens as dashes.
+
+It fails if no rewritten text is ever produced, or if the rewrite still carries
+the "not X, it's Y" pattern, a listed filler phrase, or an em dash.

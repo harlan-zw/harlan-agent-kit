@@ -3,6 +3,8 @@ type: llm
 weight: 1
 ---
 
+Read the whole transcript, not only the last message.
+
 The response applies the `nuxt-frontend-design` skill. A passing response:
 
 - Names concrete design moves: type scale, spacing rhythm, hierarchy, tokens, motion.

@@ -1,6 +1,6 @@
 ---
 max_turns: 10
-allowed_tools: [Read, Glob, Grep, Skill]
+allowed_tools: [Read, Glob, Grep, Skill, Bash]
 ---
 
 Here is a Nuxt UI v4 dashboard header I wrote. It looks generic and flat.
@@ -15,5 +15,5 @@ Here is a Nuxt UI v4 dashboard header I wrote. It looks generic and flat.
 </template>
 ```
 
-Make it look designed. You have no shell in this run, so give me the rewritten
-template and say what you changed.
+Make it look designed. Give me the rewritten template and say what you
+changed.

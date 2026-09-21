@@ -3,6 +3,8 @@ type: llm
 weight: 1
 ---
 
+Read the whole transcript, not only the last message.
+
 The response rejects both tests as tautological. A passing response:
 
 - Says asserting a symbol exists, or counting module keys, tests nothing.

@@ -1,6 +1,6 @@
 ---
 max_turns: 10
-allowed_tools: [Read, Glob, Grep, Skill]
+allowed_tools: [Read, Glob, Grep, Skill, Bash]
 ---
 
 Review this Nuxt UI v4 component before I merge it. Pick apart the contract and
@@ -19,4 +19,7 @@ const { data } = await useFetch('/api/sites')
 </template>
 ```
 
-You have no shell in this run. List the findings.
+List the findings.
+
+Finish with a short numbered list of the blocking defects, so your last
+message carries the findings.

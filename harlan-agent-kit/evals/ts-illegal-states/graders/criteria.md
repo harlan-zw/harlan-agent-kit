@@ -3,6 +3,8 @@ type: llm
 weight: 1
 ---
 
+Read the whole transcript, not only the last message.
+
 The response applies the Effect-inspired design principles. A passing response:
 
 - Replaces the optional-field plus boolean shape with a `_tag` discriminated

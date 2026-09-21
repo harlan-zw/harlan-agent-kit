@@ -1,6 +1,6 @@
 ---
 max_turns: 8
-allowed_tools: [Read, Glob, Grep, Skill]
+allowed_tools: [Read, Glob, Grep, Skill, Bash]
 ---
 
 Review this test file for me.
