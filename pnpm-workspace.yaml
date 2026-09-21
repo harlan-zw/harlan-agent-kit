@@ -2,6 +2,7 @@ minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
   - '@iconify-json/octicon@1.2.36'
   - '@iconify-json/simple-icons@1.2.97'
+  - '@harlan-zw/jev@0.2.4'
 
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800
@@ -18,6 +19,7 @@ catalog:
   '@antfu/eslint-config': ^9.5.1
   '@coldtea/pr-lens-renderer': ^0.2.6
   '@coldtea/pr-lens-schema': ^0.4.0
+  '@harlan-zw/jev': ^0.2.0
   '@iconify-json/octicon': ^1.2.36
   '@iconify-json/simple-icons': ^1.2.97
   '@nuxt/fonts': ^0.14.0

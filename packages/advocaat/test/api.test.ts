@@ -18,7 +18,7 @@ const answers = {
   },
   urgency: {
     type: 'score',
-    score: 1.5,
+    score: 0.5,
     confidence: 0.7,
     legend: { 0: 'low', 1: 'high' },
     probabilities: { 0: 0.5, 1: 0.5 },
@@ -194,7 +194,26 @@ describe('jev api', () => {
 
     expect(failure).toBeInstanceOf(APIError)
     expect(failure.status).toBe(200)
-    expect(failure.message).toBe('200 [{"message":"authentication invalid"}]')
+    expect(failure.message).toBe('200 cf envelope failed: [{"message":"authentication invalid"}]')
+  })
+
+  it('preserves the ray and raw body when Cloudflare marks a 2xx call failed', async () => {
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => json({ success: false, errors: [{ message: 'authentication invalid' }] }, 200, { 'cf-ray': 'ray-9' }),
+    })
+
+    const failure = await client.systemOne({ state: null, questions: { q: noul() } }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(APIError)
+    expect(failure.status).toBe(200)
+    expect(failure.requestId).toBe('ray-9')
+    expect(failure.body).toEqual({
+      error: 'cf envelope failed: [{"message":"authentication invalid"}]',
+      body: { success: false, errors: [{ message: 'authentication invalid' }] },
+      requestId: 'ray-9',
+    })
   })
 
   it('throws APIError on a non-2xx response', async () => {
@@ -309,5 +328,88 @@ describe('jev api', () => {
         questions: { c: { type: 'choice', criteria: { a: null } } },
       }),
     ).toThrow(/2 to 255 options/)
+  })
+
+  it('rejects a pre-aborted signal without sending the request', async () => {
+    let calls = 0
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => {
+        calls++
+        return json({ model: 'jev-1.13.0', answers: { q: { type: 'noul', noul: 0.5 } }, usage: { input_tokens: 0, output_tokens: 0 } })
+      },
+    })
+    const controller = new AbortController()
+    controller.abort()
+
+    const failure = await client.systemOne({ state: null, questions: { q: noul('Q?') } }, { signal: controller.signal }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(DOMException)
+    expect(failure.name).toBe('AbortError')
+    expect(calls).toBe(0)
+  })
+
+  it('cancels the request on the wire when an in-flight call aborts', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    let wireAborted = false
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          wireAborted = true
+          reject(new DOMException('The request was cancelled.', 'AbortError'))
+        }, { once: true })
+      }),
+    })
+    try {
+      const controller = new AbortController()
+      const pending = client.systemOne({ state: null, questions: { q: noul('Q?') } }, { signal: controller.signal })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      controller.abort()
+      const failure = await pending.catch(error => error)
+
+      expect(failure).toBeInstanceOf(DOMException)
+      expect(failure.name).toBe('AbortError')
+      expect(wireAborted).toBe(true)
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      expect(unhandled).toEqual([])
+    }
+    finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('keeps an aborted call free of unhandled rejections when the request later fails', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    let fail: ((error: unknown) => void) | undefined
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: () => new Promise<Response>((_resolve, reject) => {
+        fail = reject
+      }),
+    })
+    try {
+      const controller = new AbortController()
+      const pending = client.systemOne({ state: null, questions: { q: noul('Q?') } }, { signal: controller.signal })
+      controller.abort()
+      const failure = await pending.catch(error => error)
+      expect(failure.name).toBe('AbortError')
+
+      fail!(new Error('connection reset'))
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      expect(unhandled).toEqual([])
+    }
+    finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })
