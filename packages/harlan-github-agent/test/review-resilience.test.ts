@@ -132,7 +132,6 @@ function harness(input: {
       },
       getWorkerSession: () => null,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
-      recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,

@@ -84,7 +84,6 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       storedReviewForHead: () => ({ _tag: 'None' }),
       supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: () => { throw new Error('Unexpected Incident.') },
-      recordPullRequestTriageRun: () => { throw new Error('Unexpected pull request triage record.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,

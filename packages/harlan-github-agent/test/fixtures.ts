@@ -87,6 +87,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     selectionMode: 'auto',
     openPullRequests: 0,
     maxOpenPullRequests: 8,
+    triageDecisions: { reviewRequired: 0, reviewSkipped: 0, couldNotDecide: 0 },
     agentProfile: CODEX_AGENT_PROFILE,
     agentSelection: { _tag: 'FollowsConfiguration' },
     agentStart: { _tag: 'WritesDisabled' },

@@ -1,6 +1,7 @@
 import type { ApprovalController } from './approval-controller.ts'
 import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
+import type { PullRequestTriageController, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
@@ -25,6 +26,9 @@ export interface ReconciliationError {
 export interface ReconciliationDependencies {
   approvals?: ApprovalController
   autoMerge?: AutoMergeController
+  /** False on a read-only deployment: no classification budget, no GitHub writes. Defaults to true. */
+  mutationsEnabled?: boolean
+  pullRequestTriage?: PullRequestTriageController
   refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
   store: JournalStore
@@ -50,7 +54,9 @@ function countResults(results: RecordObservationResult[]): Pick<ReconciliationSu
 
 export async function reconcileRepository(repository: RepositoryMapping, dependencies: ReconciliationDependencies): Promise<Result<ReconciliationSummary, ReconciliationError>> {
   const observedAt = dependencies.now().toISOString()
-  const writesEnabled = dependencies.store.mayWriteRepository(repository.github)
+  // Repository writes are per-repository; mutations are per-deployment. A
+  // read-only deployment owns neither, whatever a repository row claims.
+  const writesEnabled = dependencies.store.mayWriteRepository(repository.github) && dependencies.mutationsEnabled !== false
   dependencies.store.recordPollAttempt(repository.github, observedAt)
   const result = await dependencies.github.listOpenItems(repository, dependencies.signal)
   if (result._tag === 'Err') {
@@ -87,12 +93,53 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   const finalIssues = finalIssueReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const finalPullRequests = finalPullRequestReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const observedItems = [...eligibleItems, ...finalIssues, ...finalPullRequests]
-  const eligibleWrites = eligibleItems.map(subject => dependencies.store.recordObservation({
-    externalId: observationId(repository.github, subject),
-    observedAt,
-    source: 'poll',
-    subject,
-  }))
+  // Pull request triage decides before the observation is recorded, so the
+  // planner never queues a Review Task it would skip. Only an open, writable,
+  // review-enabled repository is worth a decision.
+  const triageSignal = dependencies.signal ?? AbortSignal.timeout(30_000)
+  const triageDecisions = new Map<number, PullRequestTriageDecision>()
+  if (writesEnabled && dependencies.pullRequestTriage !== undefined) {
+    const decisions = await Promise.all(eligibleItems.map(async (subject) => {
+      if (subject.kind !== 'pull_request' || subject.state !== 'open' || !repository.pullRequestReview || !repository.enabled)
+        return null
+      // A Dismissal outranks every planner and every classifier: a dismissed
+      // pull request must not be read, classified, or settled on every poll
+      // for a decision that can never land.
+      if (dependencies.store.isItemDismissed(repository.github, 'pull_request', subject.number))
+        return null
+      // The planner queues a Review only for a clean, non-draft pull request
+      // from a trusted author or one the manual label approves. The verdict
+      // asks only those, so an ineligible head is never read or classified
+      // on every poll for a decision that cannot land.
+      if (subject.draft || subject.mergeState !== 'clean')
+        return null
+      // Match the planner's own approval rule: Manual Selection or an
+      // untrusted author needs Approval before a Review is planned, so no
+      // decision could land and asking would re-pay the classification and
+      // re-settle the comment on every poll. The manual Review label is the
+      // exception: it carries its own override decision.
+      const trustedAuthor = repository.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
+      const approvalRequired = dependencies.store.getSelectionMode() === 'manual' || !trustedAuthor
+      if (approvalRequired && !subject.approvalLabels.includes('review'))
+        return null
+      return dependencies.pullRequestTriage?.verdict(repository, subject, triageSignal)
+    }))
+    eligibleItems.forEach((subject, index) => {
+      const decision = decisions[index]
+      if (decision !== null && decision !== undefined)
+        triageDecisions.set(subject.number, decision)
+    })
+  }
+  const eligibleWrites = eligibleItems.map((subject) => {
+    const decision = subject.kind === 'pull_request' ? triageDecisions.get(subject.number) : undefined
+    return dependencies.store.recordObservation({
+      externalId: observationId(repository.github, subject),
+      observedAt,
+      source: 'poll',
+      subject,
+      ...(decision === undefined ? {} : { pullRequestTriage: decision }),
+    })
+  })
   const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordObservation({
     externalId: observationId(repository.github, subject),
     observedAt,
@@ -129,6 +176,27 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const message = 'The final pull request state could not be saved.'
     dependencies.store.recordPollFailure(repository.github, observedAt, message)
     return err({ repository: repository.github, message })
+  }
+
+  // The decision rows landed with the observations above, so the visible half
+  // of each decision can follow. A failure here retries on the next poll,
+  // because the stored decision is reused and settled again.
+  if (writesEnabled && dependencies.pullRequestTriage !== undefined) {
+    const settled = await Promise.all(eligibleItems.map((subject, index) => {
+      if (subject.kind !== 'pull_request')
+        return Promise.resolve(ok(undefined))
+      const decision = triageDecisions.get(subject.number)
+      const write = eligibleWrites[index]
+      if (decision === undefined || write === undefined || (write._tag !== 'Inserted' && write._tag !== 'Duplicate'))
+        return Promise.resolve(ok(undefined))
+      return dependencies.pullRequestTriage?.settle(repository, subject, decision, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
+    }))
+    // A failed settle records the failure and lets the pass continue: the
+    // decision row landed with the observation, the settle retries from it on
+    // the next poll, and Approvals and Auto merge are independent of it.
+    const failedSettle = settled.find(result => result._tag === 'Err')
+    if (failedSettle?._tag === 'Err' && dependencies.signal?.aborted !== true)
+      dependencies.store.recordPollFailure(repository.github, observedAt, failedSettle.error)
   }
 
   if (writesEnabled && dependencies.approvals !== undefined) {

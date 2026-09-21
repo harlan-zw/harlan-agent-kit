@@ -1,7 +1,7 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, AgentRole, CodexReasoningEffort, ExternalRepositoryWatch, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, AgentRole, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -45,6 +45,17 @@ function requiredRecord(source: UnknownRecord, key: string, path: string, issues
 
 function requiredString(source: UnknownRecord, key: string, path: string, issues: ConfigIssue[]): string | undefined {
   const value = source[key]
+  if (typeof value === 'string' && value.trim().length > 0)
+    return value.trim()
+
+  issues.push({ path: `${path}.${key}`, message: 'Expected a non-empty string.' })
+}
+
+/** A string that may be absent. `null` means absent; `undefined` means invalid. */
+function optionalString(source: UnknownRecord, key: string, path: string, issues: ConfigIssue[]): string | null | undefined {
+  const value = source[key]
+  if (value === undefined)
+    return null
   if (typeof value === 'string' && value.trim().length > 0)
     return value.trim()
 
@@ -500,6 +511,54 @@ export async function loadWebhookSecret(path: string): Promise<Result<string, Co
     }]))
 }
 
+/** The classification service is off unless the configuration turns it on. */
+function classificationConfig(source: UnknownRecord, issues: ConfigIssue[]): ClassificationConfig | undefined {
+  const value = source.classification
+  if (value === undefined)
+    return { _tag: 'Disabled' }
+  if (!isRecord(value)) {
+    issues.push({ path: '$.classification', message: 'Expected an object.' })
+    return undefined
+  }
+  const accountId = requiredString(value, 'account_id', '$.classification', issues)
+  const tokenPath = requiredString(value, 'token_path', '$.classification', issues)
+  if (tokenPath !== undefined && !isAbsolute(tokenPath))
+    issues.push({ path: '$.classification.token_path', message: 'Expected an absolute path.' })
+  const gatewayId = optionalString(value, 'gateway_id', '$.classification', issues)
+  const model = requiredString(value, 'model', '$.classification', issues)
+  if (accountId === undefined || tokenPath === undefined || model === undefined || gatewayId === undefined)
+    return undefined
+  return { _tag: 'Enabled', accountId, tokenPath, ...(gatewayId === null ? {} : { gatewayId }), model }
+}
+
+/**
+ * Reads the Cloudflare API token for the classification service, with the same
+ * file checks as the webhook secret.
+ */
+export async function loadClassificationToken(path: string): Promise<Result<string, ConfigIssue[]>> {
+  const issuePath = '$.classification.token_path'
+  return lstat(path)
+    .then(async (linkMetadata) => {
+      if (linkMetadata.isSymbolicLink())
+        return err([{ path: issuePath, message: 'Classification token path must not be a symbolic link.' }])
+      const metadata = await stat(path)
+      if (!metadata.isFile())
+        return err([{ path: issuePath, message: 'Classification token path is not a file.' }])
+      if (process.getuid !== undefined && metadata.uid !== process.getuid())
+        return err([{ path: issuePath, message: 'Classification token has the wrong owner.' }])
+      if ((metadata.mode & 0o077) !== 0)
+        return err([{ path: issuePath, message: 'Classification token must use mode 0600.' }])
+      const token = (await readFile(path, 'utf8')).trim()
+      if (token.length < 32)
+        return err([{ path: issuePath, message: 'Classification token must be at least 32 characters.' }])
+      return ok(token)
+    })
+    .catch((error: unknown) => err([{
+      path: issuePath,
+      message: error instanceof Error ? error.message : 'Classification token could not be read.',
+    }]))
+}
+
 const SERVICE_TRIGGERS: readonly ServiceTrigger[] = ['github', 'routine']
 
 /**
@@ -672,6 +731,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   const issues: ConfigIssue[] = []
   const agent = agentSettings(document.value, issues)
   const webhook = webhookConfig(document.value, issues)
+  const classification = classificationConfig(document.value, issues)
   const triggers = serviceTriggers(document.value, issues)
   const github = requiredRecord(document.value, 'github', '$', issues)
   const server = requiredRecord(document.value, 'server', '$', issues)
@@ -781,6 +841,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     issues.length > 0
     || agent === undefined
     || webhook === undefined
+    || classification === undefined
     || triggers === undefined
     || host === undefined
     || appId === undefined
@@ -807,6 +868,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     github: { appId, privateKeyPath, allowedOwners },
     server: { host, port, allowedOrigin, frameAncestors },
     webhook,
+    classification,
     triggers,
     storage: { path: storagePath },
     trustedCheckoutRoots,

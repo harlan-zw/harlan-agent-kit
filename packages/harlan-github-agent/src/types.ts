@@ -83,6 +83,17 @@ export type WebhookConfig
   = | { _tag: 'Disabled' }
     | { _tag: 'Enabled', host: string, port: number, secretPath: string }
 
+/** The Jev classification service, reached through the Cloudflare AI endpoint. */
+export type ClassificationConfig
+  = | { _tag: 'Disabled' }
+    | {
+      _tag: 'Enabled'
+      accountId: string
+      tokenPath: string
+      gatewayId?: string
+      model: string
+    }
+
 /**
  * What may start work on this machine.
  *
@@ -159,6 +170,8 @@ export interface AgentConfig {
    * cannot reach the control API on the dashboard port.
    */
   webhook: WebhookConfig
+  /** The Jev classification service, reached through Cloudflare. Off unless the configuration turns it on. */
+  classification: ClassificationConfig
   storage: {
     path: string
   }
@@ -311,9 +324,15 @@ export type ItemDismissalResult
     | { _tag: 'Duplicate' }
     | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }
 
+type PullRequestItemSummary = GitHubPullRequestItem & ItemSummaryBase & {
+  approval: PullRequestApprovalState
+  /** The Pull request triage decision for this exact Revision, when one is recorded. */
+  triage?: { outcome: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure', reason: string }
+}
+
 export type ItemSummary
   = | GitHubIssueItem & ItemSummaryBase
-    | GitHubPullRequestItem & ItemSummaryBase & { approval: PullRequestApprovalState }
+    | PullRequestItemSummary
 
 export interface ReviewEvidence {
   label: string
@@ -688,7 +707,7 @@ export type AgentTask = ConflictResolutionTask | ReviewFixTask | BaselineRepairT
 export type ClaimedAgentTask = ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedAdversarialReviewTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask
 /** A Task as shown by the dashboard, including its last durable phase. */
 export type DashboardTask = AgentTask & { progress: AgentProgress }
-export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'pull_request_triage' | 'issue_triage' | 'issue_work' | 'batch_plan' | 'routine_scan' | 'routine_fix'
+export type AgentRole = 'conflict_resolution' | 'review_fix' | 'baseline_repair' | 'adversarial_review' | 'issue_triage' | 'issue_work' | 'batch_plan' | 'routine_scan' | 'routine_fix'
 
 /**
  * Every Routine the service knows how to run.
@@ -1526,6 +1545,10 @@ export interface DashboardSnapshot {
   openPullRequests: number
   /** Issue work stops when open pull requests reach this limit. */
   maxOpenPullRequests: number
+  /** Classification service facts, present when the configuration enables it. */
+  classification?: { model: string, gatewayId: string }
+  /** Pull request triage decisions over the last 24 hours. */
+  triageDecisions: { reviewRequired: number, reviewSkipped: number, couldNotDecide: number }
   agentProfile: AgentProfile
   agentSelection: AgentSelection
   agentStart: AgentStartState

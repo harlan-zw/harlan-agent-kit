@@ -7,7 +7,7 @@ import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
-import { loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateRepositoryMappings } from './config.ts'
+import { loadClassificationToken, loadConfig, loadGitHubAppPrivateKey, loadWebhookSecret, validateRepositoryMappings } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { loadGitIdentity } from './git-identity.ts'
@@ -400,6 +400,11 @@ const command = defineCommand({
     if (webhookSecret?._tag === 'Err')
       throw new Error(webhookSecret.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
 
+    const classification = validated.value.classification
+    const classificationToken = classification._tag === 'Enabled' ? await loadClassificationToken(classification.tokenPath) : null
+    if (classificationToken?._tag === 'Err')
+      throw new Error(classificationToken.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+
     const gitIdentity = await loadGitIdentity()
     if (gitIdentity._tag === 'Err')
       throw new Error(gitIdentity.error)
@@ -410,6 +415,9 @@ const command = defineCommand({
       onError: error => consola.error(error),
     })
     const service = await startAgentService({
+      ...(classification._tag === 'Enabled' && classificationToken !== null
+        ? { classification: { accountId: classification.accountId, apiToken: classificationToken.value, ...(classification.gatewayId === undefined ? {} : { gatewayId: classification.gatewayId }), model: classification.model } }
+        : {}),
       config: validated.value,
       dashboardPassword: dashboardPassword.value,
       gitIdentity: gitIdentity.value,

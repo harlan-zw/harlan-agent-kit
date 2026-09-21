@@ -45,6 +45,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: pnpm typecheck
+      - run: pnpm --filter advocaat typecheck
 
   build:
     runs-on: ubuntu-latest
@@ -121,6 +122,9 @@ jobs:
 
       - name: Service scripts
         run: pnpm test:service
+
+      - name: Classification package
+        run: pnpm --filter advocaat test:run
 
       - name: Service package
         run: pnpm --filter harlan-github-agent test:run

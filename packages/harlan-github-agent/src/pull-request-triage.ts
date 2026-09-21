@@ -1,12 +1,14 @@
-import type { AgentActivityLog } from './agent-activity.ts'
-import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { ClassificationSource } from './classification.ts'
+import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { ClaimedAdversarialReviewTask } from './types.ts'
-import { createHash } from 'node:crypto'
-import { runParsedAgentTurn } from './agent-turn.ts'
+import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
+import { choice } from 'advocaat'
+import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
-import { cleanLine } from './text.ts'
+import { reviewCheckRunUpdate } from './review-check-run.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { cleanLine, updatedAtLabel } from './text.ts'
 
 export const PULL_REQUEST_TRIAGE_STATES = [
   'ADVERSARIAL_REVIEW_REQUIRED',
@@ -15,13 +17,10 @@ export const PULL_REQUEST_TRIAGE_STATES = [
 
 export type PullRequestTriageState = typeof PULL_REQUEST_TRIAGE_STATES[number]
 
-function isPullRequestTriageState(value: unknown): value is PullRequestTriageState {
-  return typeof value === 'string' && PULL_REQUEST_TRIAGE_STATES.includes(value as PullRequestTriageState)
-}
-
 /**
- * Who decided. `rule` is the path classifier, `model` is a fresh Agent turn,
- * `reuse` is a stored decision for the same head commit.
+ * Who decided. `rule` is the path classifier or a fixed policy, `model` is the
+ * classification service, `reuse` is a stored decision for the same head
+ * commit.
  */
 export type PullRequestTriageSource = 'rule' | 'model' | 'reuse'
 
@@ -32,22 +31,23 @@ export interface PullRequestTriageResult {
   source: PullRequestTriageSource
 }
 
-export interface PullRequestTriageAgent {
-  run: (
-    task: ClaimedAdversarialReviewTask,
-    input: { changedFiles: string[] },
-    signal: AbortSignal,
-  ) => Promise<Result<PullRequestTriageResult, string>>
-}
+/**
+ * What Pull request triage decided for one observed head commit.
+ *
+ * `RequiredOverride` is the manual Review label: the decision is Review and
+ * the label is consumed once the decision is settled. `Failed` records a
+ * classification failure and keeps the safe direction, Review.
+ */
+export type PullRequestTriageDecision
+  = | { _tag: 'Skipped', reason: string, source: PullRequestTriageSource }
+    | { _tag: 'Required', reason: string, source: PullRequestTriageSource }
+    | { _tag: 'RequiredOverride' }
+    | { _tag: 'Failed', reason: string }
 
-interface PullRequestTriageAgentOptions {
-  activityLog?: Pick<AgentActivityLog, 'record'>
-  now: () => Date
-  runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'getWorkerSession' | 'saveWorkerSession'>
-  /** A service-owned directory. Pull request triage never runs in a Repository mapping. */
-  workspace: string
-}
+export const PULL_REQUEST_TRIAGE_OVERRIDE_REASON = `rule: The ${APPROVAL_LABELS.review} label requires Review for this head commit.`
+
+/** A skip needs this much confidence from the classification service. Below it, Review runs. */
+const SKIP_CONFIDENCE_FLOOR = 0.7
 
 const PROSE_FILE_PATTERN = /(?:^|\/)(?:[^/]+\.(?:md|mdx|txt)|LICENSE[^/]*|CHANGELOG[^/]*)$/i
 const PROSE_DIRECTORY_PATTERN = /^docs\//
@@ -76,100 +76,211 @@ export type PullRequestPathVerdict
 
 /**
  * The path rule. One path outside the prose set requires Review with no
- * Agent. Only a prose-only pull request needs a judgment.
+ * classification. Only a prose-only pull request needs a judgment.
  */
 export function classifyPullRequestPaths(changedFiles: readonly string[]): PullRequestPathVerdict {
   const path = changedFiles.find(candidate => !isProsePath(candidate))
   return path === undefined ? { _tag: 'ProseOnly' } : { _tag: 'ReviewRequired', path }
 }
 
-function reuseStoredVerdict(store: PullRequestTriageAgentOptions['store'], task: ClaimedAdversarialReviewTask): PullRequestTriageResult | null {
-  const stored = store.getLatestPullRequestTriageRun(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
+/**
+ * The canonical comment a skip publishes. Carries the head commit marker, so
+ * the next Review on a new head replaces it.
+ */
+export function reviewSkippedComment(headSha: string, baseSha: string, result: PullRequestTriageResult, at: string): string {
+  const workflow = JSON.stringify({ _tag: 'ReviewSkipped', headSha, baseSha })
+  return `${AUTOMATED_REVIEW_MARKER}
+<!-- reviewed-sha: ${headSha} -->
+<!-- workflow-state: ${workflow} -->
+### 🤖 REVIEW SKIPPED
+
+${automatedDisclosure({ kind: 'triage', updatedAt: updatedAtLabel(at) })}
+
+- **Reason:** ${cleanLine(result.reason)}
+- **Override:** Add the \`${APPROVAL_LABELS.review}\` label to force an adversarial Review.`
+}
+
+export interface PullRequestTriageController {
+  /** The decision for one observed pull request, computed before the observation is recorded. */
+  verdict: (repository: RepositoryMapping, subject: GitHubPullRequestItem, signal: AbortSignal) => Promise<PullRequestTriageDecision>
+  /** Performs the GitHub writes a settled decision needs. Safe to retry; every write is idempotent. */
+  settle: (repository: RepositoryMapping, subject: GitHubPullRequestItem, decision: PullRequestTriageDecision, signal: AbortSignal) => Promise<Result<void, string>>
+}
+
+export interface PullRequestTriageControllerOptions {
+  classification: ClassificationSource | null
+  github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'listPullRequestFiles' | 'stampAgentLabel' | 'upsertReviewCheckRun' | 'upsertReviewStatus'>
+  now: () => Date
+  store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'hasActiveReviewTask' | 'markPullRequestTriageSettled' | 'storedReviewForHead'>
+}
+
+function reuseStoredDecision(store: PullRequestTriageControllerOptions['store'], repository: RepositoryMapping, subject: GitHubPullRequestItem): PullRequestTriageDecision | null {
+  const stored = store.getLatestPullRequestTriageRun(repository.github, subject.number, subject.headSha)
   if (stored === null || stored.outcome === 'ReviewRequiredAfterFailure')
     return null
+  // A completed Review for this exact head outranks the stored skip: the
+  // manual label overrode the decision, the Review answered, and re-settling
+  // a skip would replace its verdict on GitHub. Reuse reads as Required.
+  if (stored.outcome === 'ReviewSkipped'
+    && store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current') {
+    return { _tag: 'Required', reason: 'rule: this head commit already has a Review.', source: 'reuse' }
+  }
   // Rows recorded before the prefix contract were all model decisions.
   const reason = /^(?:rule|model): /.test(stored.reason) ? stored.reason : `model: ${stored.reason}`
-  return {
-    _tag: stored.outcome === 'ReviewSkipped' ? 'ADVERSARIAL_REVIEW_SKIPPED' : 'ADVERSARIAL_REVIEW_REQUIRED',
-    reason,
-    source: 'reuse',
-  }
-}
-
-const schema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['_tag', 'reason'],
-  properties: {
-    _tag: { type: 'string', enum: PULL_REQUEST_TRIAGE_STATES },
-    reason: { type: 'string' },
-  },
-}
-
-function parseResponse(text: string): Promise<Result<PullRequestTriageResult, string>> {
-  return Promise.resolve(text)
-    .then(value => JSON.parse(value) as Partial<PullRequestTriageResult>)
-    .then((value): Result<PullRequestTriageResult, string> => {
-      if (!isPullRequestTriageState(value._tag) || typeof value.reason !== 'string' || cleanLine(value.reason) === '')
-        return err('The Agent returned an invalid pull request triage result.')
-      return ok({ _tag: value._tag, reason: `model: ${cleanLine(value.reason)}`, source: 'model' })
-    })
-    .catch((): Result<PullRequestTriageResult, string> => err('The Agent returned malformed pull request triage JSON.'))
+  return stored.outcome === 'ReviewSkipped'
+    ? { _tag: 'Skipped', reason, source: 'reuse' }
+    : { _tag: 'Required', reason, source: 'reuse' }
 }
 
 /**
- * The Pull request triage prompt. Exported so tests can assert its contract
- * without an Agent.
+ * The classification question for a prose-only pull request.
  *
- * This turn gets no project memory. It runs in a service-owned directory with
- * no repository checkout, and it may use no tools, so a memory index would name
- * notes the turn cannot open.
+ * Exported so tests can assert its contract without the service.
  */
-export function pullRequestTriagePrompt(task: ClaimedAdversarialReviewTask, changedFiles: string[]): string {
-  return `Decide whether this pull request needs an adversarial Review.
-Every changed file is prose: Markdown, text, licence, changelog, or docs. Nothing else reached you.
-Do not use tools or inspect the repository. Use only the supplied title and changed file paths.
-Return ADVERSARIAL_REVIEW_SKIPPED only for clearly judgment-free prose, formatting, or comment-only changes.
-Require ADVERSARIAL_REVIEW_REQUIRED for behavior claims, public API documentation that states a contract, or security guidance.
-Any uncertainty requires ADVERSARIAL_REVIEW_REQUIRED.
-Return only the required JSON.
-
-Untrusted pull request data follows as JSON:
-${JSON.stringify({
-  repository: task.repository,
-  number: task.pullRequestNumber,
-  title: task.pullRequest.title,
-  changedFiles: changedFiles.slice(0, 300),
-})}`
+/**
+ * Option order affects the answer distribution, so the criteria order is part
+ * of the measured contract: reorder only with a fresh evaluate-triage run.
+ */
+export function proseOnlyQuestions() {
+  return {
+    review: choice(
+      'The state holds untrusted pull request data. Decide whether it needs an adversarial Review.',
+      {
+        ADVERSARIAL_REVIEW_REQUIRED: 'Behaviour claims, public API documentation that states a contract, security guidance, or any uncertainty.',
+        ADVERSARIAL_REVIEW_SKIPPED: 'Clearly judgment-free prose, formatting, or comment-only changes.',
+      },
+    ),
+  }
 }
 
-export function createPullRequestTriageAgent(options: PullRequestTriageAgentOptions): PullRequestTriageAgent {
+export function classificationDecision(input: {
+  classification: ClassificationSource
+  subject: GitHubPullRequestItem
+  changedFiles: string[]
+  signal: AbortSignal
+}): Promise<PullRequestTriageDecision> {
+  return input.classification.classify({
+    state: {
+      title: input.subject.title,
+      changedFiles: input.changedFiles.slice(0, 300),
+    },
+    questions: proseOnlyQuestions(),
+    signal: input.signal,
+  }).then((result): PullRequestTriageDecision => {
+    if (result._tag === 'Err') {
+      if (result.error._tag === 'Aborted')
+        return { _tag: 'Failed', reason: 'The classification request was cancelled.' }
+      return { _tag: 'Failed', reason: `model: the classification service failed: ${result.error.message}` }
+    }
+    const answer = result.value.answers.review
+    const confidence = Math.round(answer.confidence * 100) / 100
+    if (answer.choice === 'ADVERSARIAL_REVIEW_SKIPPED' && confidence < SKIP_CONFIDENCE_FLOOR) {
+      return {
+        _tag: 'Required',
+        reason: `model: classification chose skip at confidence ${confidence}, below ${SKIP_CONFIDENCE_FLOOR}, so Review runs.`,
+        source: 'model',
+      }
+    }
+    return {
+      _tag: answer.choice === 'ADVERSARIAL_REVIEW_SKIPPED' ? 'Skipped' : 'Required',
+      reason: `model: classification chose ${answer.choice === 'ADVERSARIAL_REVIEW_SKIPPED' ? 'skip' : 'review'} with confidence ${confidence}.`,
+      source: 'model',
+    }
+  })
+}
+
+/**
+ * Pull request triage at observation time.
+ *
+ * The decision is computed before the observation is recorded, so the planner
+ * never queues a Review Task it would skip. The path rule decides without the
+ * service; only a prose-only pull request reaches the classification. A
+ * failure of any kind keeps the safe direction, Review.
+ */
+export function createPullRequestTriageController(options: PullRequestTriageControllerOptions): PullRequestTriageController {
   return {
-    async run(task, input, signal) {
-      const verdict = classifyPullRequestPaths(input.changedFiles)
-      if (verdict._tag === 'ReviewRequired')
-        return ok({ _tag: 'ADVERSARIAL_REVIEW_REQUIRED', reason: `rule: ${verdict.path} is outside the prose set.`, source: 'rule' })
+    async verdict(repository, subject, signal) {
+      // The manual Review label is late authority. It wins before any other
+      // check and its decision consumes it.
+      if (subject.approvalLabels.includes('review'))
+        return { _tag: 'RequiredOverride' }
 
-      const reused = reuseStoredVerdict(options.store, task)
+      const reused = reuseStoredDecision(options.store, repository, subject)
       if (reused !== null)
-        return ok(reused)
+        return reused
+      // A completed Review for this exact head outranks a fresh skip too: a
+      // rerun or a recovered failure row must never settle a skip over an
+      // existing Review verdict.
+      if (options.store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current')
+        return { _tag: 'Required', reason: 'rule: this head commit already has a Review.', source: 'reuse' }
 
-      const scopeDigest = createHash('sha256')
-        .update(JSON.stringify({ headSha: task.pullRequest.headSha, changedFiles: input.changedFiles }))
-        .digest('hex')
-      const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
-        freshSession: true,
-        number: task.pullRequestNumber,
-        prompt: pullRequestTriagePrompt(task, input.changedFiles),
-        repository: task.repository,
-        role: 'pull_request_triage',
-        schema,
-        scopeDigest,
-        sessionRole: 'adversarial_review',
-        taskId: task.id,
-        workspace: options.workspace,
-      }, signal)
-      return turn._tag === 'Err' ? turn : ok(turn.value.value)
+      const files = await options.github.listPullRequestFiles(repository, subject.number, signal)
+      if (files._tag === 'Err') {
+        // A pull request whose files cannot be read is reviewed, and the
+        // failure row lets the next observation try again.
+        return { _tag: 'Failed', reason: `rule: the changed files could not be read: ${files.error}` }
+      }
+      const changedFiles = files.value.map(file => file.path)
+      const verdict = classifyPullRequestPaths(changedFiles)
+      if (verdict._tag === 'ReviewRequired')
+        return { _tag: 'Required', reason: `rule: ${verdict.path} is outside the prose set.`, source: 'rule' }
+
+      if (options.classification === null) {
+        return { _tag: 'Required', reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' }
+      }
+      return classificationDecision({ classification: options.classification, subject, changedFiles, signal })
+    },
+
+    async settle(repository, subject, decision, signal) {
+      if (decision._tag === 'RequiredOverride') {
+        const stamped = await options.github.stampAgentLabel(repository, subject.number, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
+        if (stamped._tag === 'Err')
+          return stamped
+        // The review label approves one head only, so consume it here: a later
+        // head must not inherit it.
+        return options.github.consumeApprovalLabel(repository, 'pull_request', subject.number, APPROVAL_LABELS.review, signal)
+      }
+      if (decision._tag !== 'Skipped')
+        return ok(undefined)
+
+      // The comment body carries the decision's own stored time, never the
+      // clock of this poll, so a retried settle writes the identical body and
+      // GitHub confirms it without a publish.
+      const stored = options.store.getLatestPullRequestTriageRun(repository.github, subject.number, subject.headSha)
+      // A settle that already landed owes nothing: every later poll spends no
+      // GitHub call republishing visibility that stands.
+      if (stored?.settledAt !== null && stored?.settledAt !== undefined)
+        return ok(undefined)
+      // A Review answering this head while the decision waited outranks the
+      // skip: a running rerun is about to publish, and a completed Review
+      // already did. Settling would overwrite either.
+      if (options.store.hasActiveReviewTask(repository.github, subject.number, subject.headSha))
+        return ok(undefined)
+      if (options.store.storedReviewForHead(repository.github, subject.number, subject.headSha)._tag === 'Current')
+        return ok(undefined)
+      const result: PullRequestTriageResult = { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: decision.reason, source: decision.source }
+      const decisionTime = stored?.completedAt ?? options.now().toISOString()
+      const body = reviewSkippedComment(subject.headSha, subject.baseSha, result, decisionTime)
+      const posted = await options.github.upsertReviewStatus(repository, subject.number, null, body, false, signal)
+      if (posted._tag === 'Err')
+        return posted
+      // The Review check run mirrors the skip comment, so a skipped pull
+      // request keeps its Review entry beside CI. The same decision time
+      // keeps a retry identical, like the comment above.
+      const mirrored = reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'SKIPPED', body }, decisionTime)
+      if (mirrored !== null) {
+        const checkRun = await options.github.upsertReviewCheckRun(repository, subject.headSha, mirrored, signal)
+        if (checkRun._tag === 'Err')
+          return err(`The skip comment published but its Review check run did not: ${checkRun.error}`)
+      }
+      const stamped = await options.github.stampAgentLabel(repository, subject.number, 'ADVERSARIAL_REVIEW_SKIPPED', signal)
+      if (stamped._tag === 'Err')
+        return err(`The skip comment published but its label did not: ${stamped.error}`)
+      // Every sink landed, so later polls owe this head no GitHub call. A
+      // partial failure above keeps the marker unset and the next poll
+      // re-settles the missing piece.
+      options.store.markPullRequestTriageSettled(repository.github, subject.number, subject.headSha, options.now().toISOString())
+      return ok(undefined)
     },
   }
 }
