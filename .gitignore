@@ -20,3 +20,8 @@ __pycache__/
 packages/notes-viewer/.content/
 packages/notes-viewer/.vitepress/cache/
 packages/notes-viewer/.vitepress/dist/
+
+# Local secrets, e.g. CF_TOKEN for the Jev classification service
+.env
+.env.*
+!.env.example
