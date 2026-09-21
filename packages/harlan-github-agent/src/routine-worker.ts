@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
+import type { ClassificationSource } from './classification.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedRoutineRun } from './types.ts'
@@ -9,10 +10,13 @@ import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
+import { worthFiling } from './routines/candidates.ts'
 import { getRoutine } from './routines/index.ts'
 
 export interface RoutineScanWorkerOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
+  /** When present, each proposed Candidate must earn its issue: the classification drops only a confident no. */
+  classification?: ClassificationSource | null
   logger: { error: (message: string) => void, info: (message: string) => void }
   maximumChangedFiles?: number
   now: () => Date
@@ -144,10 +148,36 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         : inScope.filter(candidate => candidate.estimatedChangedFiles <= maximumChangedFiles)
       const outsideScope = response.candidates.length - inScope.length
       const oversized = inScope.length - withinSize.length
+      // The ledger decides before the gate does: a fingerprint it already
+      // holds can only re-record as a no-op, so a worth call on it buys
+      // nothing and its drop would mislabel prior knowledge as this run's
+      // judgement. It stays in the recording set, where the ledger's own
+      // conflict rule turns it into the no-op it is.
+      const knownFingerprints = new Set(options.store.listCandidates(task.routineId).map(entry => entry.fingerprint))
+      const unclassified = withinSize.filter(candidate => !knownFingerprints.has(candidate.fingerprint))
+      // The worth gate files on every doubt, so a dropped Candidate is the
+      // classification saying no with confidence. Nothing else drops here.
+      const worthRecording = options.classification === undefined || options.classification === null
+        ? withinSize
+        : withinSize.filter(candidate => knownFingerprints.has(candidate.fingerprint))
+      for (const candidate of unclassified) {
+        if (options.classification === undefined || options.classification === null)
+          break
+        const worth = await worthFiling({
+          classification: options.classification,
+          routineName: task.routineId,
+          candidate,
+          signal,
+        })
+        if (worth)
+          worthRecording.push(candidate)
+        else
+          options.logger.info(`${task.routineId}: the classification dropped Candidate ${candidate.fingerprint}.`)
+      }
       const fresh = options.store.recordCandidates({
         routineId: task.routineId,
         runId: task.id,
-        candidates: withinSize,
+        candidates: worthRecording,
         at: options.now().toISOString(),
       })
 
@@ -166,13 +196,17 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           })
         : 0
 
+      // A gate drop is a judgement this run made, not prior knowledge: the run
+      // line names it as its own count so the ledger and the report agree.
+      const droppedByGate = withinSize.length - worthRecording.length
       const evidence = [
         `${task.name} on ${task.repository}`,
         `${response.candidates.length} ${definition.findingsLabel}`,
         `${fresh.length} new`,
-        `${withinSize.length - fresh.length} already known`,
+        `${withinSize.length - fresh.length - droppedByGate} already known`,
         `${outsideScope} outside allowed scope`,
         maximumChangedFiles === null ? 'no file limit' : `${oversized} over ${maximumChangedFiles} files`,
+        ...(droppedByGate === 0 ? [] : [`${droppedByGate} dropped by the classification gate`]),
         `${requested} issues requested`,
       ].join(' | ')
       // Every run writes its line, including the ones that found nothing. A
