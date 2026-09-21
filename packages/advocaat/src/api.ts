@@ -88,6 +88,12 @@ export function jev(options: JevOptions = {}) {
     /** Evaluates every question against the shared state in one request. */
     systemOne<const Q extends Questions>(req: SystemOneRequest<Q>, init: RequestOptions = {}): Promise<SystemOneResult<Q>> {
       validateQuestions(req.questions)
+      const signal = init.signal
+      // A pre-aborted signal must reject before the client exists: invoking it
+      // would send the request and leave its promise orphaned, so a later
+      // failure of that request would surface as an unhandled rejection.
+      if (signal?.aborted)
+        return Promise.reject(cancelled())
       // One client per call, so per-request headers reach its fetcher. The
       // client is pure configuration, so this costs nothing.
       const client = createJevHttpClient({
@@ -100,11 +106,8 @@ export function jev(options: JevOptions = {}) {
         fetcher: fetcher(options.fetch, init.headers),
       })
       const sent: Promise<SystemOneResult<Q>> = client.systemOne(req).then(throwOnFailure)
-      const signal = init.signal
       if (signal === undefined)
         return sent
-      if (signal.aborted)
-        return Promise.reject(cancelled())
       return new Promise<SystemOneResult<Q>>((resolve, reject) => {
         const abort = () => reject(cancelled())
         signal.addEventListener('abort', abort, { once: true })

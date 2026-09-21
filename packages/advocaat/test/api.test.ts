@@ -310,4 +310,53 @@ describe('jev api', () => {
       }),
     ).toThrow(/2 to 255 options/)
   })
+
+  it('rejects a pre-aborted signal without sending the request', async () => {
+    let calls = 0
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: async () => {
+        calls++
+        return json({ model: 'jev-1.13.0', answers: { q: { type: 'noul', noul: 0.5 } }, usage: { input_tokens: 0, output_tokens: 0 } })
+      },
+    })
+    const controller = new AbortController()
+    controller.abort()
+
+    const failure = await client.systemOne({ state: null, questions: { q: noul('Q?') } }, { signal: controller.signal }).catch(error => error)
+
+    expect(failure).toBeInstanceOf(DOMException)
+    expect(failure.name).toBe('AbortError')
+    expect(calls).toBe(0)
+  })
+
+  it('keeps an aborted call free of unhandled rejections when the request later fails', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    let fail: ((error: unknown) => void) | undefined
+    const client = jev({
+      accountId: 'acc-1',
+      apiToken: 'k',
+      fetch: () => new Promise<Response>((_resolve, reject) => {
+        fail = reject
+      }),
+    })
+    try {
+      const controller = new AbortController()
+      const pending = client.systemOne({ state: null, questions: { q: noul('Q?') } }, { signal: controller.signal })
+      controller.abort()
+      const failure = await pending.catch(error => error)
+      expect(failure.name).toBe('AbortError')
+
+      fail!(new Error('connection reset'))
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      expect(unhandled).toEqual([])
+    }
+    finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
 })
