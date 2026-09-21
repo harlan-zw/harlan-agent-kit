@@ -4,6 +4,7 @@ import type { TransientKind } from './failure.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type { IssueTriageState } from './issue-triage.ts'
+import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
@@ -866,6 +867,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     subject: GitHubPullRequestItem
     /** The Pull request triage decision computed for this observation, when one was. */
     pullRequestTriage?: PullRequestTriageDecision
+    /** The changed files read while deciding, recorded once per Revision. */
+    pullRequestFiles?: readonly PullRequestFile[]
   }) => RecordObservationResult
   /** Records one exact closed pull request read from GitHub. */
   recordVerifiedPullRequestClosure: (input: {
@@ -1098,7 +1101,14 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     subject: GitHubItem
     /** The Pull request triage decision computed for this observation, when one was. */
     pullRequestTriage?: PullRequestTriageDecision
+    /** The changed files read while deciding, recorded once per Revision. */
+    pullRequestFiles?: readonly PullRequestFile[]
   }) => RecordObservationResult
+  /**
+   * The changed files recorded for one Revision at observation time, with the
+   * head they were read for, or null when none were.
+   */
+  getRevisionFiles: (repository: string, pullRequestNumber: number, revisionId: string) => { files: PullRequestFile[], headSha: string } | null
   recordPollAttempt: (github: string, at: string) => void
   recordPollFailure: (github: string, at: string, message: string, status?: number) => void
   recordPollSuccess: (github: string, at: string) => void
@@ -4428,6 +4438,52 @@ function insertTriageRun(
   `).run(at)
 }
 
+/**
+ * Records one Revision's changed files inside the caller's transaction.
+ *
+ * The first read for a Revision stays: a later observation of the same content
+ * needs no second read from GitHub.
+ */
+function insertRevisionFiles(
+  database: DatabaseSync,
+  subjectId: number,
+  revisionId: string,
+  headSha: string,
+  files: readonly PullRequestFile[],
+  at: string,
+): void {
+  database.prepare(`
+    INSERT OR IGNORE INTO revision_files (subject_id, revision_id, head_sha, files_json, fetched_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(subjectId, revisionId, headSha, JSON.stringify(files), at)
+}
+
+/** Parses one stored file list. Anything unexpected reads as absent, so the caller refetches. */
+function parseRevisionFiles(filesJson: string): PullRequestFile[] | null {
+  const parsed = JSON.parse(filesJson) as unknown
+  if (!Array.isArray(parsed))
+    return null
+  const files: PullRequestFile[] = []
+  for (const entry of parsed) {
+    if (typeof entry !== 'object' || entry === null)
+      return null
+    const file = entry as Partial<PullRequestFile>
+    if (typeof file.path !== 'string' || typeof file.additions !== 'number' || typeof file.deletions !== 'number')
+      return null
+    const statuses = ['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged'] as const
+    if (file.status === undefined || !statuses.includes(file.status))
+      return null
+    files.push({
+      path: file.path,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      previousFilename: typeof file.previousFilename === 'string' ? file.previousFilename : null,
+    })
+  }
+  return files
+}
+
 function planAdversarialReview(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -6509,17 +6565,28 @@ function installSchema(database: DatabaseSync): void {
   if (version >= 75) {
     // Stacked sibling branches ship their own v75+ migrations, so the
     // journal's version number cannot name which schema it carries. This
-    // step is content-addressed: it adds exactly the column that is
-    // missing, whatever route the journal took here, and never lowers the
-    // recorded version.
-    const target = Math.max(version, 76)
+    // step is content-addressed: it adds exactly what is missing, whatever
+    // route the journal took here, and never lowers the recorded version.
+    const target = Math.max(version, 77)
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS revision_files (
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        revision_id TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        files_json TEXT NOT NULL CHECK (json_valid(files_json)),
+        fetched_at TEXT NOT NULL,
+        UNIQUE (subject_id, revision_id),
+        FOREIGN KEY (revision_id, subject_id) REFERENCES revisions(id, subject_id)
+      );
+      PRAGMA user_version = ${target};
+    `)
     const settledColumn = database.prepare(`SELECT 1 AS found FROM pragma_table_info('pull_request_triage_runs') WHERE name = 'settled_at'`).get() !== undefined
     applyMigration(database, settledColumn
       ? `PRAGMA user_version = ${target};`
       : `ALTER TABLE pull_request_triage_runs ADD COLUMN settled_at TEXT; PRAGMA user_version = ${target};`)
     version = target
   }
-  if (version === 76)
+  if (version === 77)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7368,6 +7435,8 @@ export function openJournalStore(
           WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
         `).get(subject.id, revisionId) !== undefined
         planConflictResolution(database, input.subject, subject.id, revisionId, input.observedAt, mapping, reviewApproved)
+        if (input.subject.kind === 'pull_request' && input.pullRequestFiles !== undefined)
+          insertRevisionFiles(database, subject.id, revisionId, input.subject.headSha, input.pullRequestFiles, input.observedAt)
         planAdversarialReview(
           database,
           input.subject,
@@ -7946,6 +8015,28 @@ export function openJournalStore(
       recovery: failure._tag === 'Transient' ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: at } : { _tag: 'ActionRequired' },
       at,
     })
+  }
+
+  const getRevisionFiles: JournalStore['getRevisionFiles'] = (repository, pullRequestNumber, revisionId) => {
+    const row = database.prepare(`
+      SELECT revision_files.files_json, revision_files.head_sha
+      FROM revision_files
+      JOIN subjects ON subjects.id = revision_files.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND revision_files.revision_id = ?
+    `).get(repository, pullRequestNumber, revisionId) as { files_json: string, head_sha: string } | undefined
+    if (row === undefined)
+      return null
+    try {
+      const files = parseRevisionFiles(row.files_json)
+      // A row that no longer parses reads as absent, so the caller refetches
+      // from GitHub rather than trusting a broken list.
+      return files === null ? null : { files, headSha: row.head_sha }
+    }
+    catch {
+      return null
+    }
   }
 
   const getLatestPullRequestTriageRun: JournalStore['getLatestPullRequestTriageRun'] = (repository, pullRequestNumber, headSha) => {
@@ -14893,6 +14984,7 @@ export function openJournalStore(
     cancelTask,
     cancelReviewForHead,
     getLatestPullRequestTriageRun,
+    getRevisionFiles,
     hasActiveReviewTask,
     markPullRequestTriageSettled,
     hasPriorityAgentTask: () => hasHigherPriorityTask(0, 'adversarial_review'),

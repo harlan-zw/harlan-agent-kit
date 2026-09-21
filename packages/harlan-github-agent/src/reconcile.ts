@@ -1,6 +1,7 @@
 import type { ApprovalController } from './approval-controller.ts'
 import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
+import type { PullRequestFile } from './merge-risk.ts'
 import type { PullRequestTriageController, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
@@ -97,9 +98,9 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   // planner never queues a Review Task it would skip. Only an open, writable,
   // review-enabled repository is worth a decision.
   const triageSignal = dependencies.signal ?? AbortSignal.timeout(30_000)
-  const triageDecisions = new Map<number, PullRequestTriageDecision>()
+  const triageVerdicts = new Map<number, { decision: PullRequestTriageDecision, files: PullRequestFile[] | null }>()
   if (writesEnabled && dependencies.pullRequestTriage !== undefined) {
-    const decisions = await Promise.all(eligibleItems.map(async (subject) => {
+    const verdicts = await Promise.all(eligibleItems.map(async (subject) => {
       if (subject.kind !== 'pull_request' || subject.state !== 'open' || !repository.pullRequestReview || !repository.enabled)
         return null
       // A Dismissal outranks every planner and every classifier: a dismissed
@@ -125,19 +126,24 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       return dependencies.pullRequestTriage?.verdict(repository, subject, triageSignal)
     }))
     eligibleItems.forEach((subject, index) => {
-      const decision = decisions[index]
-      if (decision !== null && decision !== undefined)
-        triageDecisions.set(subject.number, decision)
+      const verdict = verdicts[index]
+      if (verdict !== null && verdict !== undefined)
+        triageVerdicts.set(subject.number, verdict)
     })
   }
   const eligibleWrites = eligibleItems.map((subject) => {
-    const decision = subject.kind === 'pull_request' ? triageDecisions.get(subject.number) : undefined
+    const verdict = subject.kind === 'pull_request' ? triageVerdicts.get(subject.number) : undefined
     return dependencies.store.recordObservation({
       externalId: observationId(repository.github, subject),
       observedAt,
       source: 'poll',
       subject,
-      ...(decision === undefined ? {} : { pullRequestTriage: decision }),
+      ...(verdict === undefined
+        ? {}
+        : {
+            pullRequestTriage: verdict.decision,
+            ...(verdict.files === null ? {} : { pullRequestFiles: verdict.files }),
+          }),
     })
   })
   const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordObservation({
@@ -185,11 +191,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     const settled = await Promise.all(eligibleItems.map((subject, index) => {
       if (subject.kind !== 'pull_request')
         return Promise.resolve(ok(undefined))
-      const decision = triageDecisions.get(subject.number)
+      const verdict = triageVerdicts.get(subject.number)
       const write = eligibleWrites[index]
-      if (decision === undefined || write === undefined || (write._tag !== 'Inserted' && write._tag !== 'Duplicate'))
+      if (verdict === undefined || write === undefined || (write._tag !== 'Inserted' && write._tag !== 'Duplicate'))
         return Promise.resolve(ok(undefined))
-      return dependencies.pullRequestTriage?.settle(repository, subject, decision, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
+      return dependencies.pullRequestTriage?.settle(repository, subject, verdict.decision, dependencies.signal ?? AbortSignal.timeout(30_000)) ?? Promise.resolve(ok(undefined))
     }))
     // A failed settle records the failure and lets the pass continue: the
     // decision row landed with the observation, the settle retries from it on

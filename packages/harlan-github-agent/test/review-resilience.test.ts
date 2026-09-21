@@ -130,6 +130,7 @@ function harness(input: {
         const run = (input.reviewRuns ?? []).find(candidate => candidate.headSha === headSha)
         return run === undefined ? { _tag: 'None' } : { _tag: 'Current', run }
       },
+      getRevisionFiles: () => null,
       getWorkerSession: () => null,
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },

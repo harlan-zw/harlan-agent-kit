@@ -82,6 +82,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       getRepairedHeadFindings: () => [],
       getWorkerSession: () => null,
       storedReviewForHead: () => ({ _tag: 'None' }),
+      getRevisionFiles: () => null,
       supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },

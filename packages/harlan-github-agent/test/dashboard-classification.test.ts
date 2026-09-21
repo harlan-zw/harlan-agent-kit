@@ -72,4 +72,34 @@ describe('classification on the dashboard snapshot', () => {
     })
     expect(issueSummary?.kind === 'issue' && 'triage' in issueSummary).toBe(false)
   })
+
+  it('records the changed files once per Revision and hands them back', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-09-17T00:00:00.000Z')
+    const subject = pullRequestItem({ mergeState: 'clean' })
+    const files = [{ path: 'README.md', status: 'modified' as const, additions: 3, deletions: 1, previousFilename: null }]
+    const inserted = store.recordObservation({
+      externalId: 'files-first',
+      observedAt: '2026-09-18T00:00:00.000Z',
+      source: 'poll',
+      subject,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.99.', source: 'model' },
+      pullRequestFiles: files,
+    })
+    if (inserted._tag !== 'Inserted')
+      throw new Error('Expected one inserted Revision.')
+
+    // A later observation of the same Revision cannot replace the first list.
+    store.recordObservation({
+      externalId: 'files-second',
+      observedAt: '2026-09-18T01:00:00.000Z',
+      source: 'poll',
+      subject,
+      pullRequestTriage: { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.99.', source: 'model' },
+      pullRequestFiles: [{ path: 'OTHER.md', status: 'modified', additions: 9, deletions: 9, previousFilename: null }],
+    })
+
+    expect(store.getRevisionFiles(subject.repository, subject.number, inserted.revisionId)).toEqual({ files, headSha: subject.headSha })
+    expect(store.getRevisionFiles(subject.repository, subject.number, 'missing-revision')).toBeNull()
+  })
 })
