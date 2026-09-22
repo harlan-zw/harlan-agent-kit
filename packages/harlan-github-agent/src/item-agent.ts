@@ -591,8 +591,12 @@ function checksGate(
       state: { _tag: failedTag, reason: `${base ? 'Base branch CI: ' : ''}${cleanLine(failed.name)} failed.`, evidence: checkEvidence },
       reported: [],
       // A failed head check run is a verdict, so only a red base branch leaves
-      // the gate with nothing left to answer it.
-      cause: failedTag === 'Pending' ? { _tag: 'BaseBranchFailed', check: cleanLine(failed.name) } : { _tag: 'Settled' },
+      // the gate with nothing left to answer it. Both name the check, because
+      // both feed work: a red base queues Baseline repair, a red head queues
+      // Repair.
+      cause: failedTag === 'Pending'
+        ? { _tag: 'BaseBranchFailed', check: cleanLine(failed.name) }
+        : { _tag: 'HeadCheckFailed', check: cleanLine(failed.name) },
     }
   }
   const pending = checks.checks.find(checkUndecided)
@@ -652,7 +656,7 @@ function headChecksGate(checks: PullRequestReviewSnapshot['checks'], required: R
   const requiredChecks = checks.checks.filter(isRequired)
   const failed = requiredChecks.find(checkFailed)
   if (failed !== undefined)
-    return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported, cause: { _tag: 'Settled' } }
+    return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported, cause: { _tag: 'HeadCheckFailed', check: cleanLine(failed.name) } }
   const running = requiredChecks.find(checkUndecided)
   if (running !== undefined)
     return { state: { _tag: 'Pending', reason: undecidedReason(running), evidence: checkEvidence }, reported, cause: undecidedCause(running) }

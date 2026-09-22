@@ -26,6 +26,14 @@ export type CiGateCause
   = | { _tag: 'Settled' }
     /** The base branch is broken, so no head check run can clear the gate. */
     | { _tag: 'BaseBranchFailed', check: string }
+    /**
+     * A check run failed on the head commit, and the base branch is green.
+     *
+     * The gate is decided, so nothing here is overdue. The tag exists because
+     * the sweep must repair this failure, and it cannot read that intent out
+     * of the gate's prose.
+     */
+    | { _tag: 'HeadCheckFailed', check: string }
     /** GitHub owes a check run it has never reported. */
     | { _tag: 'NoCheckRun', detail: string }
     /** A check run started and has not reported a conclusion. */
