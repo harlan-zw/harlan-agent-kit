@@ -777,6 +777,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     fence: number
     at: string
   }) => ReviewFixQueueResult
+  /**
+   * Appends one controller-written finding to a completed Review run.
+   *
+   * Only the head CI finding uses it. A Review Agent owns every other finding,
+   * and this write never removes or edits one it wrote.
+   */
+  recordCiRepairFinding: (input: { reviewRunId: string, finding: ReviewFinding }) => boolean
   /** Queues a completed Review's deferred Repair once its current base permits it. */
   queueReviewFixForGate: (input: {
     reviewRunId: string
@@ -9242,6 +9249,26 @@ export function openJournalStore(
     }
   }
 
+  const recordCiRepairFinding: JournalStore['recordCiRepairFinding'] = (input) => {
+    const row = database.prepare(`
+      SELECT findings FROM review_runs WHERE id = ?
+    `).get(input.reviewRunId) as { findings: string } | undefined
+    if (row === undefined)
+      return false
+    const findings = JSON.parse(row.findings) as ReviewFinding[]
+    const fingerprint = input.finding._tag === 'Open' ? input.finding.details?.fingerprint : undefined
+    // A repeat pass reads the same red check, so the write must be idempotent.
+    if (fingerprint === undefined || findings.some(finding => finding._tag === 'Open' && finding.details?.fingerprint === fingerprint))
+      return false
+    // A Review that recommends Dismissal wants no Repair at all, and adding a
+    // finding beside that recommendation would argue with it.
+    if (findings.some(finding => finding._tag === 'Open' && finding.resolution === 'Dismissal'))
+      return false
+    return database.prepare(`
+      UPDATE review_runs SET findings = ? WHERE id = ? AND findings = ?
+    `).run(JSON.stringify([...findings, input.finding]), input.reviewRunId, row.findings).changes === 1
+  }
+
   const queueReviewFixForGate: JournalStore['queueReviewFixForGate'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -15178,6 +15205,7 @@ export function openJournalStore(
     claimNextReviewFixTask,
     queueReviewFixTaskForReview,
     queueReviewFixForGate,
+    recordCiRepairFinding,
     recordRepairReport,
     queueBaselineRepairForReview,
     queueBaselineRepairForGate,

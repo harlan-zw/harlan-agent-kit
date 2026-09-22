@@ -1,6 +1,6 @@
-import type { GitHubCheck } from '../src/github-agent-source.ts'
+import type { GitHubCheck, PullRequestReviewSnapshot } from '../src/github-agent-source.ts'
 import type { RecordIncidentInput, ReviewGateRefresh } from '../src/store.ts'
-import type { Incident, ReviewGates } from '../src/types.ts'
+import type { Incident, ReviewFinding, ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
@@ -75,7 +75,11 @@ function check(overrides: Partial<GitHubCheck> = {}): GitHubCheck {
   } as GitHubCheck
 }
 
-function snapshot(baseChecks: GitHubCheck[], headChecks: GitHubCheck[] = [check({ name: 'code' })]) {
+function snapshot(
+  baseChecks: GitHubCheck[],
+  headChecks: GitHubCheck[] = [check({ name: 'code' })],
+  requiredChecks: PullRequestReviewSnapshot['requiredChecks'] = { _tag: 'None' },
+) {
   return ok({
     baseChecks: { _tag: 'Available' as const, checks: baseChecks },
     body: '',
@@ -83,7 +87,7 @@ function snapshot(baseChecks: GitHubCheck[], headChecks: GitHubCheck[] = [check(
     comments: [],
     priorAutomatedReview: { _tag: 'None' as const },
     pullRequest: pullRequestItem({ headSha: 'abc123', mergeState: 'clean' }),
-    requiredChecks: { _tag: 'None' as const },
+    requiredChecks,
     reviews: [],
   })
 }
@@ -191,6 +195,8 @@ interface Recorded {
   staged: Array<{ reviewRunId: string, outcome: string, ci: string, reconciliationId?: string, body: string }>
   stamped: string[]
   baselineQueued: Array<{ repository: string, pullRequestNumber: number, revisionId: string, baseSha: string }>
+  fixQueued: Array<{ reviewRunId: string, revisionId: string, headSha: string, baseSha: string }>
+  ciFindings: Array<{ reviewRunId: string, finding: ReviewFinding }>
 }
 
 function harness(options: {
@@ -199,7 +205,7 @@ function harness(options: {
   edit?: () => Promise<any>
   repairAccess?: string
 }) {
-  const recorded: Recorded = { baselineQueued: [], failed: [], incidents: [], resolved: [], staged: [], stamped: [] }
+  const recorded: Recorded = { baselineQueued: [], ciFindings: [], failed: [], fixQueued: [], incidents: [], resolved: [], staged: [], stamped: [] }
   const run = async () => refreshReviewGates({
     preflightRepair: () => Promise.resolve(options.repairAccess === undefined ? ok(undefined) : err(options.repairAccess)),
     github: {
@@ -221,7 +227,14 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
-      queueReviewFixForGate: () => { throw new Error('A passing Review needs no Repair.') },
+      queueReviewFixForGate: ({ at: _at, ...input }) => {
+        recorded.fixQueued.push(input)
+        return { _tag: 'Queued', taskId: 'fix-1', rounds: { number: 1, limit: 3 } }
+      },
+      recordCiRepairFinding: (input) => {
+        recorded.ciFindings.push({ reviewRunId: input.reviewRunId, finding: input.finding })
+        return true
+      },
       queueBaselineRepairForGate: ({ at: _at, ...input }) => {
         recorded.baselineQueued.push(input)
         return { _tag: 'Queued', taskId: 'baseline-1' }
@@ -302,6 +315,122 @@ describe('refreshControllerGates', () => {
 
     expect(refreshed.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'Base branch CI: test failed.' })
     expect(refreshed.ciCause).toEqual({ _tag: 'BaseBranchFailed', check: 'test' })
+  })
+
+  it('names the failed head check so the sweep can repair it', () => {
+    const live = snapshot([check()], [check({ name: 'test', conclusion: 'failure' })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+
+    expect(refreshed.gates.ci).toMatchObject({ _tag: 'Failed', reason: 'test failed.' })
+    expect(refreshed.ciCause).toEqual({ _tag: 'HeadCheckFailed', check: 'test' })
+  })
+
+  it('names the failed required head check apart from every other red check', () => {
+    const live = snapshot(
+      [check()],
+      [check({ name: 'lint', conclusion: 'failure' }), check({ name: 'test', conclusion: 'failure' })],
+      { _tag: 'Declared', contexts: ['test'] },
+    )
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+
+    expect(refreshed.ciCause).toEqual({ _tag: 'HeadCheckFailed', check: 'test' })
+  })
+})
+
+describe('refreshReviewGates head CI repair', () => {
+  function redHead() {
+    return snapshot([check()], [check({ name: 'test', conclusion: 'failure' })])
+  }
+
+  it('queues Repair when head CI fails under a settled Review', async () => {
+    const { recorded, run } = harness({ live: redHead(), review: gateRefresh({ gates: passedControllerGates() }) })
+
+    const results = await run()
+
+    expect(recorded.ciFindings).toEqual([{
+      reviewRunId: 'run-1',
+      finding: {
+        _tag: 'Open',
+        summary: 'Required check "test" fails on the pull request head commit.',
+        nextAction: 'Read the failing "test" job logs on the pull request, fix the cause, and run only the focused check.',
+        resolution: 'Repair',
+        details: {
+          fingerprint: 'head-check-failed:test',
+          identity: 'test',
+          location: { path: '.github/workflows', line: null },
+          proof: 'GitHub reports check run "test" as failed on the head commit, and the same check does not fail on the base commit.',
+          regressionTest: null,
+        },
+      },
+    }])
+    expect(recorded.fixQueued).toEqual([{
+      reviewRunId: 'run-1',
+      revisionId: 'revision-1',
+      headSha: 'abc123',
+      baseSha: 'base123',
+    }])
+    expect(results.map(result => result._tag)).toEqual(['Ok'])
+  })
+
+  it('names the queued Repair round in the published comment', async () => {
+    const { recorded, run } = harness({ live: redHead(), review: gateRefresh({ gates: passedControllerGates() }) })
+
+    await run()
+
+    expect(recorded.staged[0]?.outcome).toBe('BLOCKED')
+    expect(recorded.staged[0]?.body).toContain('Repair round 1 of 3 starts.')
+  })
+
+  it('records the finding once, however many passes read the same red head', async () => {
+    const finding: ReviewFinding = {
+      _tag: 'Open',
+      summary: 'Required check "test" fails on the pull request head commit.',
+      nextAction: 'Read the failing "test" job logs on the pull request, fix the cause, and run only the focused check.',
+      resolution: 'Repair',
+      details: {
+        fingerprint: 'head-check-failed:test',
+        identity: 'test',
+        location: { path: '.github/workflows', line: null },
+        proof: 'GitHub reports check run "test" as failed on the head commit, and the same check does not fail on the base commit.',
+        regressionTest: null,
+      },
+    }
+    const { recorded, run } = harness({ live: redHead(), review: gateRefresh({ gates: passedControllerGates(), findings: [finding] }) })
+
+    await run()
+
+    expect(recorded.ciFindings).toEqual([])
+    expect(recorded.fixQueued).toHaveLength(1)
+  })
+
+  it('leaves a red base branch to Baseline repair', async () => {
+    const live = snapshot([check({ name: 'test', conclusion: 'failure' })], [check({ name: 'test', conclusion: 'failure' })])
+    const { recorded, run } = harness({ live, review: gateRefresh({ gates: passedControllerGates() }) })
+
+    await run()
+
+    expect(recorded.ciFindings).toEqual([])
+    expect(recorded.fixQueued).toEqual([])
+    expect(recorded.baselineQueued).toHaveLength(1)
+  })
+
+  it('records the permission boundary instead of Repair when writes are refused', async () => {
+    const { recorded, run } = harness({
+      live: redHead(),
+      repairAccess: 'The repository does not permit controller writes.',
+      review: gateRefresh({ gates: passedControllerGates() }),
+    })
+
+    await run()
+
+    expect(recorded.fixQueued).toEqual([])
+    expect(recorded.staged[0]?.body).toContain('The repository does not permit controller writes.')
   })
 })
 
@@ -446,7 +575,7 @@ describe('refreshReviewGates', () => {
     expect(recorded.stamped).toEqual(['PENDING'])
   })
 
-  it('keeps an unchanged BLOCKED label when the Review remains authorized', async () => {
+  it('queues Repair for a Review that already published BLOCKED for the same red head', async () => {
     const live = snapshot([check()], [check({ name: 'code', conclusion: 'failure' })])
     if (live._tag !== 'Ok')
       throw new Error('Expected a Review snapshot.')
@@ -457,8 +586,9 @@ describe('refreshReviewGates', () => {
       }),
     })
 
-    expect(await run()).toEqual([ok(expect.objectContaining({ _tag: 'Unchanged', outcome: 'BLOCKED' }))])
-    expect(recorded.stamped).toEqual(['BLOCKED'])
+    expect(await run()).toEqual([ok(expect.objectContaining({ _tag: 'PublicationQueued', outcome: 'BLOCKED' }))])
+    expect(recorded.fixQueued).toHaveLength(1)
+    expect(recorded.staged[0]?.body).toContain('Repair round 1 of 3 starts.')
   })
 
   it('reports BLOCKED when the fresh CI read fails', async () => {
