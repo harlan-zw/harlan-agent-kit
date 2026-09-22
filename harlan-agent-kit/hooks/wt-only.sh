@@ -14,6 +14,7 @@
 # inline environment assignment before the binary is not matched, which is the
 # known gap in this shape. A quoted real path is not matched either.
 source "$(dirname "$0")/check-config.sh"
+source "$(dirname "$0")/command-text.sh"
 is_hook_disabled "wt-only" && exit 0
 
 input=$(cat)
@@ -26,47 +27,7 @@ block() {
   exit 0
 }
 
-# Prints what the shell would run, with every heredoc body and quoted span gone.
-# Quote state carries across lines, so a multi-line string stays prose.
-drop_prose() {
-  awk '
-    function strip(line,   i, c, out) {
-      out = ""
-      for (i = 1; i <= length(line); i++) {
-        c = substr(line, i, 1)
-        if (quote == 0) {
-          if (c == "\047") { quote = 1; continue }
-          if (c == "\042") { quote = 2; continue }
-          out = out c
-          continue
-        }
-        if (quote == 1 && c == "\047") quote = 0
-        else if (quote == 2 && c == "\042") quote = 0
-      }
-      return out
-    }
-    BEGIN { quote = 0; body = 0 }
-    body == 1 {
-      if ($0 ~ "^[[:space:]]*" marker "[[:space:]]*$") body = 0
-      next
-    }
-    {
-      guarded = $0
-      # A here string carries no body, so it must not open one.
-      gsub(/<<</, "===", guarded)
-      if (match(guarded, /<<-?[[:space:]]*[\047\042]?[A-Za-z_][A-Za-z0-9_]*[\047\042]?/)) {
-        marker = substr(guarded, RSTART, RLENGTH)
-        sub(/^<<-?[[:space:]]*/, "", marker)
-        gsub(/[\047\042]/, "", marker)
-        body = 1
-      }
-      print strip($0)
-    }
-  '
-}
-
-# Each line starts a command, so a newline reads as a separator.
-code=$(printf '%s\n' "$command" | drop_prose | tr '\n' ';')
+code=$(command_code "$command")
 
 command_start='(^|[|&;\(][[:space:]]*)'
 command_end='([[:space:]]|;|$)'

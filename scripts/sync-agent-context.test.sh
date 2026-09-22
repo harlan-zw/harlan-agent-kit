@@ -66,9 +66,16 @@ if rg -F 'Once work turns long with no name assigned' "$test_home/.claude/CLAUDE
   exit 1
 fi
 
-# Every hook plugin.json registers, plus the loader they source. The sync
-# script derives this list, so a hook missing here never deployed.
-opencode_hooks=(check-config.sh session-start.sh pnpm-only.sh wt-only.sh himalaya-read-only.sh pr-skill-only.sh merged-branch-guard.sh pre-commit-push.sh eslint.sh command-not-found.sh)
+# Every hook plugin.json registers, plus the files they source. The list comes
+# from the same derivation the sync script uses, so a new hook needs no edit
+# here and can never deploy unverified.
+source "$repo_root/scripts/agent-context-hooks.sh"
+mapfile -t opencode_hooks < <(agent_context_installed_hooks \
+  "$repo_root/harlan-agent-kit/hooks" "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json")
+if [ "${#opencode_hooks[@]}" -lt 2 ]; then
+  printf '%s\n' 'The hook derivation returned no hooks.' >&2
+  exit 1
+fi
 for hook_file in "${opencode_hooks[@]}"; do
   cmp "$repo_root/harlan-agent-kit/hooks/$hook_file" "$test_home/.local/share/harlan-agent-kit/hooks/$hook_file"
   if [ ! -x "$test_home/.local/share/harlan-agent-kit/hooks/$hook_file" ]; then
@@ -225,7 +232,6 @@ fi
 cmp "$fixture/harlan-agent-kit/.claude-plugin/plugin.json" \
   "$fixture_home/.local/share/harlan-agent-kit/.claude-plugin/plugin.json"
 
-source "$repo_root/scripts/agent-context-hooks.sh"
 mapfile -t fixture_hook_files < <(agent_context_installed_hooks \
   "$fixture/harlan-agent-kit/hooks" "$fixture/harlan-agent-kit/.claude-plugin/plugin.json")
 fixture_hashes="$test_root/fixture-hashes"
