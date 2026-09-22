@@ -42,7 +42,7 @@ Spawn 3 sub-agents, each designing a different *interface shape* for the chosen 
 
 Each sub-agent's brief includes the convention file's "Gap" + "Seam" entries plus the constraints from Step 1.
 
-Include [LANGUAGE.md](LANGUAGE.md) vocabulary, [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) vocabulary, the relevant convention section, and CONTEXT.md vocabulary in each brief so every sub-agent names things consistently.
+Include [LANGUAGE.md](LANGUAGE.md) vocabulary, [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) vocabulary, the relevant convention section, and `GLOSSARY.md` vocabulary in each brief so every sub-agent names things consistently.
 
 Each sub-agent outputs: (1) interface — options + return / subpath surface / port type / hook map, plus invariants, ordering, error modes, runtime targets; (2) usage example with realistic import specifiers; (3) what hides behind the seam (which files become private, resulting `exports` map); (4) dependency strategy and adapters (see [DEEPENING.md](DEEPENING.md)); (5) trade-offs and SemVer impact.
 

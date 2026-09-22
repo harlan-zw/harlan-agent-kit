@@ -47,7 +47,7 @@ Spawn 3 sub-agents, each designing a different *interface shape* for the chosen 
 
 Each sub-agent's brief includes the convention file's "Gap" + "Seam" entries plus the constraints from Step 1.
 
-Include [LANGUAGE.md](LANGUAGE.md) vocabulary, [NUXT-SEAMS.md](NUXT-SEAMS.md) vocabulary, the relevant convention file, and CONTEXT.md vocabulary in each brief so every sub-agent names things consistently.
+Include [LANGUAGE.md](LANGUAGE.md) vocabulary, [NUXT-SEAMS.md](NUXT-SEAMS.md) vocabulary, the relevant convention file, and `GLOSSARY.md` vocabulary in each brief so every sub-agent names things consistently.
 
 Each sub-agent outputs:
 
