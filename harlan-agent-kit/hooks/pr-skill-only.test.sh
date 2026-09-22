@@ -58,5 +58,16 @@ expect allow 'gh pr edit 42 --add-label ready'
 expect allow 'gh pr view 42 --json body'
 expect allow 'echo gh pr create'
 
+# A quoted heredoc marker opens no body, so the next line is still a call.
+expect deny "$(printf 'echo \"<<EOF\"\ngh pr create --fill')"
+# An escaped quote is a literal, so it must not open a quoted span.
+expect deny "$(printf 'echo hi\\\"\ngh pr create --fill')"
+# A continuation line after a heredoc opener is command text, not body.
+expect deny "$(printf 'cat <<EOF \\\n&& gh pr create --fill\nbody\nEOF')"
+# A call split across a continuation is still one call.
+expect deny "$(printf 'gh \\\npr create --fill')"
+# A heredoc body that names the call is still prose.
+expect allow "$(printf 'cat > /tmp/pr.md <<EOF\ngh pr create --fill\nEOF')"
+
 [ "$fail" -eq 0 ] && echo 'pr-skill-only hook tests passed'
 exit "$fail"
