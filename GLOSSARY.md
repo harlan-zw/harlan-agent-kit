@@ -90,10 +90,19 @@ more Skills share it.
 **Is:** the fixed set of Markdown files a repository root carries, and the `docs/`
 lifecycle beneath it. The contract is `harlan-agent-kit/references/root-docs.md`.
 **Use for:** `README.md`, `AGENTS.md`, `GLOSSARY.md`, `VISION.md`, `DESIGN.md`,
-`CONTRIBUTING.md`, and the `docs/` folders.
+`COPY.md`, `CONTRIBUTING.md`, and the `docs/` folders.
 **Never:** CONTEXT.md, root ARCHITECTURE.md where the repository has a `docs/`
 directory, project docs, repo docs.
 **Casing:** `root docs` in prose. Each file keeps its own upper-case name.
+
+### Copy
+**Is:** `COPY.md` at a site's root, the verbal filter: the canonical strings and
+the voice that writes them. The contract is `harlan-agent-kit/references/root-docs.md`.
+**Use for:** every user-visible string on a site, and the voice that writes them.
+Read before writing copy. `DESIGN.md` defers voice to it. `VISION.md` owns what
+may be claimed at all.
+**Never:** brand guidelines, voice guide, tone doc, messaging doc, verbal identity.
+**Casing:** `Copy` in prose, `COPY.md` as the file. Sites only.
 
 ### Brief
 **Is:** one Markdown file tracking one open initiative, in `docs/work/`.
