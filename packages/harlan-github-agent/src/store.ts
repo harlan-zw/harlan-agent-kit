@@ -8829,7 +8829,8 @@ export function openJournalStore(
         agent_feedback.kind AS feedback_tag,
         agent_feedback.reason AS feedback_reason,
         agent_feedback.updated_at AS feedback_updated_at,
-        review_runs.merge_risk
+        review_runs.merge_risk,
+        review_runs.reasoning_effort
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN revisions ON revisions.id = review_runs.revision_id

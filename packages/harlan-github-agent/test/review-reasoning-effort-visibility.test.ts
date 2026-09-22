@@ -15,7 +15,7 @@ function passedGates(): ReviewGates {
   }
 }
 
-function reviewAt(effort: 'low' | undefined) {
+function reviewStoreAt(effort: 'low' | undefined) {
   const store = openJournalStore(':memory:')
   stores.push(store)
   store.syncRepositories([repositoryMapping()], '2026-09-22T00:00:00.000Z')
@@ -56,7 +56,11 @@ function reviewAt(effort: 'low' | undefined) {
     evidence: 'attempt-banded',
     resolution: { _tag: 'Reviewed', reviewRunId: 'attempt-banded' },
   })
-  return store.getDashboardSnapshot('2026-09-22T00:04:00.000Z').agents.find(candidate => candidate._tag === 'ReviewAgent' && candidate.id === 'attempt-banded')
+  return store
+}
+
+function reviewAt(effort: 'low' | undefined) {
+  return reviewStoreAt(effort).getDashboardSnapshot('2026-09-22T00:04:00.000Z').agents.find(candidate => candidate._tag === 'ReviewAgent' && candidate.id === 'attempt-banded')
 }
 
 describe('the Reasoning effort a Review answered at stays visible', () => {
@@ -66,5 +70,9 @@ describe('the Reasoning effort a Review answered at stays visible', () => {
 
   it('reads as absent for a run recorded without one', () => {
     expect(reviewAt(undefined)).toMatchObject({ reasoningEffort: null })
+  })
+
+  it('reaches the stored review attempts for one pull request', () => {
+    expect(reviewStoreAt('low').listReviewRuns('harlan-zw/example', 24)[0]?.reasoningEffort).toBe('low')
   })
 })
