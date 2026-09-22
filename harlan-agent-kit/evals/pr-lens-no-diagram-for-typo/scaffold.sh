@@ -17,4 +17,5 @@ git config user.email eval@example.com
 git config user.name Eval
 git add -A
 git commit -qm "chore: add the d1 http client"
-sed -i 's/recieved/received/' server/utils/d1-http.ts
+sed 's/recieved/received/' server/utils/d1-http.ts > server/utils/d1-http.ts.tmp
+mv server/utils/d1-http.ts.tmp server/utils/d1-http.ts

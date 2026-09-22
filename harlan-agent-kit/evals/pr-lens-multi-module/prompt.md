@@ -30,7 +30,11 @@ export async function provisionUserDb(userId, env) {
   return { _tag: 'Ok', value: r.id }
 }
 TS
-git init -q -b main && git add -A && git commit -qm "chore: add the sync path"
+git init -q -b main
+git config user.email eval@example.com
+git config user.name Eval
+git add -A
+git commit -qm "chore: add the sync path"
 ```
 
 I am opening a pull request for that change. It moves the queue consumer, the
