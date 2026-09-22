@@ -1,6 +1,7 @@
 import type { ReviewCheckRunUpdate } from '../src/review-check-run.ts'
 import type { ClaimedReviewFixTask } from '../src/types.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { agentPhase } from '../src/agent-progress.ts'
 import { err, ok } from '../src/result.ts'
 import { createReviewStatusController } from '../src/review-status-controller.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -87,7 +88,7 @@ describe('review status controller', () => {
   it('replaces the blocked review comment with repair progress', async () => {
     const { controller, task, read } = harness()
 
-    expect(await controller.publishRepair(task, { percent: 35, label: 'Git worktree ready' }, new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)).toEqual(ok(undefined))
 
     expect(read().replaced).toBe(true)
     expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 35% · Git worktree ready')
@@ -95,7 +96,7 @@ describe('review status controller', () => {
 
   it.each([false, true])('offers a checkbox only with webhook controls enabled: %s', async (enabled) => {
     const { controller, task, read } = harness(enabled)
-    await controller.publishRepair(task, { percent: 35, label: 'Reviewing' }, new AbortController().signal)
+    await controller.publishRepair(task, agentPhase('WorktreeReady', 'Reviewing'), new AbortController().signal)
     expect(read().body.includes('- [ ] Stop Review and any follow-up repair')).toBe(enabled)
   })
 
@@ -105,11 +106,11 @@ describe('review status controller', () => {
     // The clock reads 01:00, so this phase started 35 minutes ago.
     expect(await controller.publishRepair(
       task,
-      { percent: 70, label: 'Editing files', since: '2026-08-13T00:25:00.000Z' },
+      { ...agentPhase('Editing', 'Editing files'), since: '2026-08-13T00:25:00.000Z' },
       new AbortController().signal,
     )).toEqual(ok(undefined))
 
-    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 70% · Editing files for 35 min')
+    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 65% · Editing files for 35 min')
   })
 
   it('leaves a phase that just started without a duration', async () => {
@@ -117,11 +118,11 @@ describe('review status controller', () => {
 
     expect(await controller.publishRepair(
       task,
-      { percent: 70, label: 'Editing files', since: '2026-08-13T00:59:40.000Z' },
+      { ...agentPhase('Editing', 'Editing files'), since: '2026-08-13T00:59:40.000Z' },
       new AbortController().signal,
     )).toEqual(ok(undefined))
 
-    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 70% · Editing files\n')
+    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 65% · Editing files\n')
   })
 })
 
@@ -211,7 +212,7 @@ describe('review status check run sink', () => {
   it('publishes the check run beside the comment, on the reviewed head', async () => {
     const { controller, deferred, task, upsert } = harness()
 
-    expect(await controller.publishRepair(task, { percent: 35, label: 'Git worktree ready' }, new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)).toEqual(ok(undefined))
 
     expect(upsert).toHaveBeenCalledWith(
       repositoryMapping(),
@@ -225,7 +226,7 @@ describe('review status check run sink', () => {
 
   it('defers the publication when the check run write fails', async () => {
     const { controller, deferred, task } = harness(() => Promise.resolve(err('GitHub refused the check run write.')))
-    const result = await controller.publishRepair(task, { percent: 35, label: 'Git worktree ready' }, new AbortController().signal)
+    const result = await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)
 
     expect(result).toEqual(err('GitHub refused the check run write.'))
     expect(deferred).toEqual(['GitHub refused the check run write.'])

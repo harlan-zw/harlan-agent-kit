@@ -1,14 +1,16 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentPhase } from './agent-progress.ts'
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
+import type { ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
 import type { ReviewFixWorktreeManager } from './worktree.ts'
 import { createHash } from 'node:crypto'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
@@ -160,20 +162,20 @@ function disputeRequestId(taskId: string, findings: ReviewFinding[]): string {
 export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFixWorker {
   return {
     async run(task, signal) {
-      const progress = async (value: AgentProgress): Promise<Result<void, string>> => {
+      const progress = async (phase: AgentPhase): Promise<Result<void, string>> => {
         const saved = options.store.updateAgentProgress({
           taskId: task.id,
           taskKind: task.kind,
           workerId: task.state.workerId,
           fence: task.state.fence,
-          progress: value,
+          progress: phase,
           at: options.now().toISOString(),
         })
         if (!saved)
           return err('This Agent is no longer assigned to the current pull request.')
         if (task.pullRequest.state === 'closed' && task.pullRequest.mergedAt !== null)
           return ok(undefined)
-        const published = await options.status.publishRepair(task, value, signal)
+        const published = await options.status.publishRepair(task, phase, signal)
         if (published._tag === 'Err' && !signal.aborted)
           options.onProgressPublishFailure?.(task, published.error)
         return ok(undefined)
@@ -211,7 +213,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value, pullRequest: current }, signal)
       if (prepared._tag === 'Err')
         return prepared
-      const ready = await progress({ percent: 35, label: 'Repair worktree ready' })
+      const ready = await progress(agentPhase('WorktreeReady', 'Repair worktree ready'))
       if (ready._tag === 'Err')
         return ready
       const instructionFiles = await listInstructionFiles(prepared.value.path)
@@ -224,7 +226,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         freshSession: true,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
-        progress: { current: { percent: 35, label: 'Repair worktree ready' }, report: progress, work: 'fix' },
+        progress: { current: agentPhase('WorktreeReady', 'Repair worktree ready'), report: progress, work: 'fix' },
         prompt: reviewFixPrompt({ task, findings, instructionFiles, memory }),
         repository: task.repository,
         role: 'review_fix',
@@ -302,7 +304,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
           usage: turn.value.usage,
         })
       }
-      const checked = await progress({ percent: 90, label: 'Repair checked' })
+      const checked = await progress(agentPhase('Checked', 'Repair checked'))
       if (checked._tag === 'Err')
         return checked
 
@@ -318,7 +320,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const committed = await options.worktrees.commit(task, prepared.value, verified.value, turn.value.value.commitMessage, signal)
       if (committed._tag === 'Err')
         return committed
-      const committedProgress = await progress({ percent: 95, label: 'Repair ready to publish' })
+      const committedProgress = await progress(agentPhase('Committed', 'Repair ready to publish'))
       if (committedProgress._tag === 'Err')
         return committedProgress
       if (merged) {

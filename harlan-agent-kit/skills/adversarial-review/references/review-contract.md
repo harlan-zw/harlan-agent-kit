@@ -101,6 +101,8 @@ Next: SHORT_ACTION
 
 Use the controller's phase percentage. Update only at a phase transition or changed blocker. Keep findings out until verified.
 
+The controller reads the Agent's own `▓▓▓░░ NN% next-step` line and publishes that text as the phase. So the line a review prints during its work becomes the line a reader sees on the pull request. Without one, the controller guesses the phase from the shape of each shell command.
+
 Keep the reviewed SHA in hidden metadata. Render one robot emoji. Put disclosure,
 policy, waiting state, and human ownership in one blockquoted line. The visible
 review body only reports material issues found or fixed.

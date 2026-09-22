@@ -1,13 +1,13 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
-import type { AgentProgressWork } from './agent-progress.ts'
+import type { AgentPhase, AgentProgressWork } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, AgentRole } from './types.ts'
+import type { AgentRole } from './types.ts'
 import { agentActivityFromEvent } from './agent-activity.ts'
 import { roleProfile } from './agent-profile.ts'
-import { agentEventProgress } from './agent-progress.ts'
+import { advancedPhase, agentEventPhase } from './agent-progress.ts'
 import { addAgentTokenUsage } from './agent-provider.ts'
 import { contextBudgetExhaustedReason } from './failure.ts'
 import { err, ok } from './result.ts'
@@ -39,8 +39,8 @@ export interface AgentTurnInput {
   number: number
   progress?: {
     /** The phase the caller already reported, which the turn continues from. */
-    current: AgentProgress
-    report: (progress: AgentProgress) => Promise<Result<void, string>> | Result<void, string>
+    current: AgentPhase
+    report: (phase: AgentPhase) => Promise<Result<void, string>> | Result<void, string>
     work: AgentProgressWork
   }
   prompt: string
@@ -176,17 +176,17 @@ export async function runAgentTurn(
     const activity = agentActivityFromEvent(event, options.now().toISOString())
     if (activity !== undefined)
       options.activityLog?.record(input.taskId, activity)
-    if (input.progress !== undefined) {
+    if (input.progress !== undefined && current !== undefined) {
       const at = options.now().toISOString()
-      const next = agentEventProgress(event, input.progress.work)
+      const next = agentEventPhase(event, input.progress.work)
       // A new phase restates the line. Otherwise the same phase restates it on
       // a slow beat, so a reader can see the agent is alive without a comment
       // for every file it touches.
-      const advanced = next !== undefined && current !== undefined && next.percent > current.percent
+      const advanced = next === undefined ? undefined : advancedPhase(current, next)
       const stale = new Date(at).getTime() - new Date(reportedAt).getTime() >= PROGRESS_HEARTBEAT_MILLISECONDS
-      if (advanced || stale) {
-        const phase = advanced ? next as AgentProgress : current as AgentProgress
-        if (advanced)
+      if (advanced !== undefined || stale) {
+        const phase = advanced ?? current
+        if (advanced !== undefined)
           phaseSince = at
         const reported = await input.progress.report({ ...phase, since: phaseSince })
         if (reported._tag === 'Err') {
@@ -240,11 +240,11 @@ export async function runRepairedAgentTurn<Value>(
   if (parsed._tag === 'Ok')
     return ok({ _tag: 'Parsed', value: parsed.value, sessionId: turn.value.sessionId, usage: turn.value.usage })
 
+  // The work is done, so this turn reports no progress of its own.
+  const { progress: _reported, ...withoutProgress } = input
   const repaired = await runAgentTurn(frozen, {
-    ...input,
+    ...withoutProgress,
     prompt: repairPrompt(input.schema, turn.value.response, parsed.error),
-    // The work is done, so this turn reports no progress of its own.
-    ...(input.progress === undefined ? {} : { progress: { ...input.progress, current: { percent: 100, label: input.progress.current.label } } }),
   }, signal)
   if (repaired._tag === 'Err')
     return ok({ _tag: 'Unparsed', reason: parsed.error, response: turn.value.response, sessionId: turn.value.sessionId, usage: turn.value.usage })
