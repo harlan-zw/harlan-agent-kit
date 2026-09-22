@@ -257,8 +257,8 @@ function harness(options: {
 
 describe('refreshControllerGates', () => {
   it('names a queued check run no runner accepted, apart from one that runs', () => {
-    const queued = snapshot([check({ name: 'test', status: 'queued', conclusion: null })])
-    const running = snapshot([check({ name: 'test', status: 'in_progress', conclusion: null })])
+    const queued = snapshot([check()], [check({ name: 'test', status: 'queued', conclusion: null })])
+    const running = snapshot([check()], [check({ name: 'test', status: 'in_progress', conclusion: null })])
     if (queued._tag !== 'Ok' || running._tag !== 'Ok')
       throw new Error('Expected Review snapshots.')
 
@@ -266,9 +266,42 @@ describe('refreshControllerGates', () => {
     const runningGates = refreshControllerGates(pendingControllerGates(), running.value, repositoryMapping())
 
     expect(queuedGates.ciCause).toEqual({ _tag: 'CheckQueued', check: 'test' })
-    expect(queuedGates.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'Base branch CI: test is queued, and no runner has accepted the job.' })
+    expect(queuedGates.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'test is queued, and no runner has accepted the job.' })
     expect(runningGates.ciCause).toEqual({ _tag: 'CheckRunning', check: 'test' })
-    expect(runningGates.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'Base branch CI: test is still running.' })
+    expect(runningGates.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'test is still running.' })
+  })
+
+  it('holds a settled CI gate while the base branch runs its checks again', () => {
+    const live = snapshot([check({ name: 'test', status: 'in_progress', conclusion: null })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+
+    expect(refreshed.gates.ci._tag).toBe('Passed')
+    expect(refreshed.ciCause).toEqual({ _tag: 'Settled' })
+  })
+
+  it('holds a settled merge gate while GitHub recomputes mergeability', () => {
+    const live = snapshot([check()])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+    live.value.pullRequest.mergeState = 'unknown'
+
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+
+    expect(refreshed.gates.merge).toEqual(passedControllerGates().merge)
+  })
+
+  it('takes a red base branch over the settled gate', () => {
+    const live = snapshot([check({ name: 'test', conclusion: 'failure' })])
+    if (live._tag !== 'Ok')
+      throw new Error('Expected a Review snapshot.')
+
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+
+    expect(refreshed.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'Base branch CI: test failed.' })
+    expect(refreshed.ciCause).toEqual({ _tag: 'BaseBranchFailed', check: 'test' })
   })
 })
 
@@ -384,8 +417,8 @@ describe('refreshReviewGates', () => {
     }])
   })
 
-  it('leaves the comment alone while base branch CI is still running', async () => {
-    const live = snapshot([check({ status: 'in_progress', conclusion: null })])
+  it('leaves the comment alone while head CI is still running', async () => {
+    const live = snapshot([check()], [check({ name: 'code', status: 'in_progress', conclusion: null })])
     if (live._tag !== 'Ok')
       throw new Error('Expected a Review snapshot.')
     const { recorded, run } = harness({
@@ -402,7 +435,7 @@ describe('refreshReviewGates', () => {
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
       outcome: 'PENDING',
-      reason: 'Base branch CI: deploy (pro-admin) is still running.',
+      reason: 'code is still running.',
     })])
     expect(recorded.edited).toEqual({
       commentId: 42,
@@ -488,7 +521,7 @@ describe('refreshReviewGates', () => {
   })
 
   it('queues reconciliation when the canonical comment is missing', async () => {
-    const live = snapshot([check({ status: 'in_progress', conclusion: null })])
+    const live = snapshot([check()], [check({ name: 'code', status: 'in_progress', conclusion: null })])
     if (live._tag !== 'Ok')
       throw new Error('Expected a Review snapshot.')
     const { recorded, run } = harness({
