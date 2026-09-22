@@ -1,0 +1,17 @@
+schema_version: '1.0'
+name: pr-ship-it
+description: The pr skill fires on "ship it" and delivers on a branch with a Conventional Commits subject.
+context:
+  scaffold_script: ./scaffold.sh
+execution:
+  max_turns: 25
+  allowed_tools: [Read, Glob, Grep, Skill, Bash, Edit, Write]
+  prompt: |
+    This repo has one uncommitted change: `hooks/session-start.sh` now prints the
+    branch name under the repo name. Ship it.
+
+    There is no `origin` remote. When you reach the push, stop and tell me the
+    exact command and the pull request title you would use.
+
+    End with a short summary that names the branch you used and quotes the exact
+    commit subject, so your last message carries both.

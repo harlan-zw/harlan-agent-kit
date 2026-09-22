@@ -1,6 +1,6 @@
 ---
 name: ts-design-patterns
-description: "Apply Harlan's Effect-inspired TypeScript design principles. Use for non-trivial state, errors, dependencies, module boundaries, or API design."
+description: "Apply Harlan's Effect-inspired TypeScript design principles. Use for non-trivial state, errors, dependencies, module boundaries, or API design, and after a production error, where a guard at the failure site would leave the category open."
 user_invocable: true
 ---
 

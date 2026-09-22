@@ -25,3 +25,6 @@ packages/notes-viewer/.vitepress/dist/
 .env
 .env.*
 !.env.example
+
+# Eval runs write results here. They are reproduced by rerunning the suite.
+harlan-agent-kit/evals/results/
