@@ -76,7 +76,8 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
       getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
       getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
-      listPullRequestFiles: () => Promise.reject(new Error('Unexpected file listing.')),
+      // Every Review reads the changed files: the Reasoning effort band needs them.
+      listPullRequestFiles: () => Promise.resolve(ok([{ path: 'src/parser.ts', status: 'modified' as const, additions: 4, deletions: 2, previousFilename: null }])),
       getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
       getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot)),
       upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),

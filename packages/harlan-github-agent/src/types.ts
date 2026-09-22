@@ -463,6 +463,13 @@ export interface ReviewRun {
    * both as no verdict, never as a Contained one.
    */
   mergeRisk?: MergeRiskRecord | null
+  /**
+   * The Reasoning effort this Review answered at.
+   *
+   * Absent or null covers every run recorded before the Reasoning effort band
+   * existed, and every provider that names no effort.
+   */
+  reasoningEffort?: CodexReasoningEffort | null
 }
 
 /**
@@ -1357,6 +1364,8 @@ export interface RoleProfile {
   model: AgentModel
   /** Omitted by models that expose no reasoning variants. */
   reasoningEffort?: CodexReasoningEffort
+  /** Set when a person named this effort, by pin or configuration, so the Reasoning effort band leaves it alone. */
+  reasoningEffortExplicit?: true
 }
 
 export interface AgentProfile {

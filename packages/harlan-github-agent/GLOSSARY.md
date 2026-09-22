@@ -184,6 +184,18 @@ How hard a model reasons before it answers: `none`, `low`, `medium`, `high`, `xh
 
 Use Reasoning effort. Do not use reasoning variant, thinking level, or effort level.
 
+### Reasoning effort band
+
+The Reasoning effort one Review run answers at, chosen from the changed paths and counts.
+
+A small, ordinary change reviews at `low`, a middling one at `medium`, and a wide, sensitive,
+or unreadable one at `high`. A file an agent reads as instructions is always `high`.
+
+The band only lowers the Agent default. A pinned Reasoning effort, or one the configuration
+names for `adversarial_review`, replaces the default, and the band then leaves it alone.
+
+Use Reasoning effort band. Do not use review depth, review tier, or effort level.
+
 ### Repository mapping
 
 One explicit connection between a GitHub repository and its trusted local checkout.

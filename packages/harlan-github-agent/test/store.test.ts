@@ -6469,7 +6469,7 @@ describe('agent selection', () => {
     const profile = store.getDashboardSnapshot('2026-08-18T01:00:01.000Z').agentProfile
 
     expect(profile.provider).toBe('opencode')
-    expect(profile.roles.adversarial_review).toEqual({ model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low' })
+    expect(profile.roles.adversarial_review).toEqual({ model: 'opencode-go/deepseek-v4-pro', reasoningEffort: 'low', reasoningEffortExplicit: true })
     expect(profile.maximumActiveAgents).toBe(CODEX_AGENT_PROFILE.maximumActiveAgents)
   })
 

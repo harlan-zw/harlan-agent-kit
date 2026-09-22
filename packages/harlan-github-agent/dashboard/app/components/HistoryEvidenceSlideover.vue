@@ -118,6 +118,7 @@ const details = computed<DetailItem[]>(() => {
     const comment = reviewCommentUrl(agent)
     return [
       { term: 'Agent', value: `${agent.provider} · ${agent.model} · ${agent.agentVersion}` },
+      ...(agent.reasoningEffort ? [{ term: 'Reasoning effort', value: agent.reasoningEffort }] : []),
       { term: 'Review usage', value: agent.usage._tag === 'Unavailable' ? 'Unavailable' : reviewUsageLabel(agent.usage) },
       { term: 'Session', value: agent.sessionId, mono: true },
       { term: 'Head commit', value: agent.headSha.slice(0, 7), mono: true, href: agent.commitUrl },

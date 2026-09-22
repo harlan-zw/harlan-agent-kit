@@ -106,6 +106,8 @@ const details = computed<DetailItem[]>(() => {
       const { agent } = card.record
       items.push({ term: 'Head commit', value: agent.headSha.slice(0, 7), mono: true, href: agent.commitUrl })
       items.push({ term: 'Agent provider', value: `${agent.provider} · ${agent.model}` })
+      if (agent.reasoningEffort)
+        items.push({ term: 'Reasoning effort', value: agent.reasoningEffort })
       items.push({ term: 'Finished', value: relativeTime(agent.completedAt) })
       items.push({ term: 'Took', value: duration(agent.startedAt, agent.completedAt), mono: true })
     }
