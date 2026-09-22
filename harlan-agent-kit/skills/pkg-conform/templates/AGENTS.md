@@ -11,6 +11,7 @@ build-time resolver.">
 - [`GLOSSARY.md`](GLOSSARY.md) — every product concept. Read before any user-visible string, public API name, doc heading, or route segment.
 - [`VISION.md`](VISION.md) — the product filter. Read before non-trivial feature work; it exists to reject ideas.
 - [`DESIGN.md`](DESIGN.md) — the visual filter. Read before UI work.
+- [`COPY.md`](COPY.md) — the verbal filter. Read before writing any user-visible string.
 - `docs/arch/` — how the code is shaped. Present tense, no status.
 - `docs/work/` — open briefs. One per initiative. `ls docs/work/` shows everything unfinished.
 - `docs/adr/` — decisions, numbered and immutable.
