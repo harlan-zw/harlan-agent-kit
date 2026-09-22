@@ -678,7 +678,7 @@ function githubCiAbsent(snapshot: PullRequestReviewSnapshot): boolean {
 
 /**
  * A Baseline repair pull request exists because the default branch CI fails, so
- * its own review reads head CI alone. Every other review waits for a green base.
+ * its own review reads head CI alone. Every other review stops at a red base.
  * If GitHub names no required checks and reports none for both commits, no
  * future CI result can resolve the gate. The Agent report owns the local proof
  * in that repository.
@@ -700,8 +700,12 @@ function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): 
       cause: { _tag: 'Settled' },
     }
   }
+  // Only a red base holds this gate. A base branch whose checks are still
+  // running says nothing about this change, and every push to the default
+  // branch starts those checks again. Blocking on them sent every open pull
+  // request from READY to PENDING and back on each push to main.
   const base = checksGate(snapshot.baseChecks, 'base-ci', 'Pending')
-  if (base.state._tag !== 'Passed')
+  if (base.cause._tag === 'BaseBranchFailed')
     return base
   const head = headChecksGate(snapshot.checks, snapshot.requiredChecks)
   return {
@@ -806,7 +810,22 @@ export function refreshControllerGates(
     || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
   const ci = ciGate(snapshot, repairsBaseline)
   const merge = mergeGate(snapshot.pullRequest)
-  return { gates: { ...gates, ci: ci.state, merge }, reportedChecks: ci.reported, ciCause: ci.cause }
+  return {
+    gates: { ...gates, ci: ci.state, merge: settledMergeGate(gates.merge, merge) },
+    reportedChecks: ci.reported,
+    ciCause: ci.cause,
+  }
+}
+
+/**
+ * The merge gate a fresh mergeability read leaves behind.
+ *
+ * GitHub drops mergeability to unknown while it recomputes the merge commit,
+ * which every push to the base branch starts. That unknown is not news, so a
+ * gate that already answered keeps its answer until GitHub answers again.
+ */
+function settledMergeGate(previous: ReviewGateState, current: ReviewGateState): ReviewGateState {
+  return current._tag === 'Pending' && previous._tag !== 'Pending' ? previous : current
 }
 
 /**
