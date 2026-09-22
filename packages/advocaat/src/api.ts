@@ -46,6 +46,8 @@ export interface JevOptions {
   fetch?: typeof globalThis.fetch
   /** Overrides the API base URL. Tests use this. */
   baseURL?: string
+  /** Request window in milliseconds. Default: the shared client's 8 seconds. */
+  timeoutMs?: number
 }
 
 /** Per-request cancellation and additional HTTP headers. */
@@ -103,6 +105,7 @@ export function jev(options: JevOptions = {}) {
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.retries === undefined ? {} : { retries: options.retries }),
         ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         fetcher: fetcher(options.fetch, init.headers, signal),
       })
       const sent: Promise<SystemOneResult<Q>> = client.systemOne(req).then(throwOnFailure)
@@ -153,11 +156,12 @@ function failureToError(failure: JevFailure): Error {
       failure.requestId ?? '',
     )
   }
-  // The shared client folds a cancelled fetch and an expired request window
-  // into Timeout. Both surface as AbortError, so a caller treats an expired
-  // window as an ordinary cancellation, never an Incident.
+  // The shared client folds an expired request window into Timeout. It
+  // surfaces as TimeoutError, so a caller records a service failure, never an
+  // operator cancellation: a caller abort travels on the signal instead and
+  // rejects above as AbortError.
   if (failure._tag === 'Timeout')
-    return new DOMException(failure.message, 'AbortError')
+    return new DOMException(failure.message, 'TimeoutError')
   return new Error(failure.message)
 }
 
