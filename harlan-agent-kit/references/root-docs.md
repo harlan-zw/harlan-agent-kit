@@ -31,6 +31,14 @@ its architecture is `docs/arch/`.
 `ARCHITECTURE.md` is reference, so it belongs in `docs/arch/`. A package with no
 `docs/` directory may keep it at the root.
 
+Moving a document under `docs/` changes which lint rules reach it.
+`eslint-plugin-harlanzw` globs its prose rules at `**/content/**/*.md`,
+`**/docs/**/*.md` and `**/README.md`, so root Markdown other than `README.md`
+never met them. A file that has sat at the root for a year will fail on em
+dashes, adverbs and buzzwords the moment it moves. Fix the prose; it breaks
+Harlan's own writing rules either way. Budget for it: skilld.dev's five moved
+files produced 58 errors.
+
 `ROADMAP.md` is aggregate status, so it belongs in `docs/work/README.md` where a
 repository generates one. Two repositories keep it at the root today; leave
 those until their index generator lands.

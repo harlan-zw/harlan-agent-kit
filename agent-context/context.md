@@ -31,6 +31,7 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - No em dashes, no hyphens as dashes. Use commas, semicolons, colons, or new sentences.
 - Never the "it's not X, it's Y" pattern.
 - Simplified Technical English, in replies and in error messages, CLI output, validation copy, docs, runbooks: one idea per sentence, under 20 words, active voice, condition before command ("If the token expired, run X"), one word one meaning.
+- Never write a checkable status into prose. "NOT committed", "migration NOT applied", "needs deploy", "not published": query git, CI, or production instead. Prose status rots silently and is read as true months later.
 - Exception: blog posts, landing pages, social copy keep their own voice.
 
 ## Vocabulary
@@ -48,6 +49,8 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - Browser testing and automation: `dev-browser` (`--help`). If `$DISPLAY` is empty, pass `--headless`; a headed launch exits with "launched a headed browser without having a XServer".
 - Wait for CI with `gh run watch <run-id>` or `gh pr checks <number> --watch`. Never poll with `sleep`; the shell tool times out first.
 - Give each task its own `dev-browser` name. Close every named page when browser work ends. Never run `dev-browser stop`; it stops shared browsers.
+- Scratch output stays out of the repository. Screenshots, one-off reports, and exploratory notes go to the session scratchpad. A one-off script goes in a gitignored `scripts/scratchpad/`; only durable, referenced tooling lives in `scripts/` proper.
+- Run a repository binary with `pnpm exec`, never `npx`. npm's npx does not read pnpm's layout as a local install, falls back to a cached copy in `~/.npm/_npx`, and fails with resolution errors that read as a broken tree. If `pnpm exec <bin>` works where `npx <bin>` fails, purge the matching `~/.npm/_npx` entry.
 
 ## Worktrees
 
@@ -124,6 +127,7 @@ Every commit subject follows Conventional Commits: `type(scope): description`.
 - Ship the smallest thing that solves it. Add structure when it fails.
 - A pull request that crosses three or more modules, a boundary, or a sequence carries a PR Lens diagram in its description. Smaller ones do not. Read the `pr-lens` skill.
 - Production error: fix the category, not the instance.
+- Where a repository has a production deploy workflow, that workflow is the only path to production. Build-time configuration comes from Actions secrets, so a local build can bake the wrong identity into a valid artifact. Use the CLI for inspection and rollback, never for the deploy.
 - Refactors and architecture audits: finish the whole change before stopping (imports updated, old code removed, tests pass).
 
 ## Reference material
