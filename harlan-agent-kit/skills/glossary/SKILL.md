@@ -194,4 +194,6 @@ Then place the term in the map, and treat that as part of adding it rather than 
 
 ## Scope
 
-Glossary governs **nouns for product concepts**: what a thing is called. It does not govern voice, tone, or sentence style. If the project also has `.claude/context/writing-style.md` from the `site-setup` skill, that owns prose style and this owns terminology. When they disagree on a product noun, the glossary wins.
+Glossary governs **nouns for product concepts**: what a thing is called. It does not govern voice, tone, or sentence style. `COPY.md` owns those, and the [`copywriting` skill](../copywriting/SKILL.md) creates and audits it. When they disagree on a product noun, the glossary wins; on the sentence around it, `COPY.md` wins.
+
+A term list found inside a `COPY.md` belongs here, not there. Step 0 of `init` already greps for one; fold it in and leave a pointer behind.

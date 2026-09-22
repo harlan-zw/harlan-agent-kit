@@ -60,6 +60,16 @@ Never invent experience or turn an observation into a guarantee.
 After rewriting, compare material claims and examples with their verified evidence.
 For a collection refresh, use [content-refresh](../content-refresh/SKILL.md) for source and review coordination.
 
+## Product copy
+
+For a user-visible string in a product, this skill is the second pass, not the first.
+[`copywriting`](../copywriting/SKILL.md) decides what the sentence has to say: which register the
+surface writes in, which canonical asset already exists, and which words the product bans. Draft
+against that, humanize the draft, then re-check the result against `COPY.md`.
+
+That last step is not optional. This skill rewrites structure and knows nothing about a project's
+canonical assets, so it will sometimes paraphrase a tagline while genuinely improving the sentence.
+
 ## Output
 
 1. List the tells you found, grouped by pass, quoting the offending phrase.

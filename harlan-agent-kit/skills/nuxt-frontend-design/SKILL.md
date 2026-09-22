@@ -148,6 +148,21 @@ Emit `DESIGN.md` at the project root after writing `app.config.ts`, `main.css`, 
 
 Modifying an existing design system: update `DESIGN.md` in place.
 
+### After Setup: COPY.md is the other half
+
+`DESIGN.md` owns the pixels. It does not own the words, and a page built with no decision about
+its words ships whatever sentence each agent liked that day.
+
+After emitting `DESIGN.md`, check for `COPY.md` at the project root. If the project has
+user-visible strings and no `COPY.md`, say so and offer to run the
+[`copywriting` skill](../copywriting/SKILL.md) `init` workflow. Do not write one from inside
+this skill: it bootstraps from the strings that already ship, and that is a different harvest
+from the one done here.
+
+When `COPY.md` exists, read it before writing a single label, heading, empty state or error, and
+keep `DESIGN.md` pointing at it rather than restating voice rules. `DESIGN.md`'s Voice section
+is one line: which file owns this.
+
 ### Setup Recovery
 
 Phase 1 failing mid-setup (build error, malformed config) means fixing the config before anything else. Verify all three indicators pass (`colors:` in app.config.ts, `@theme` in main.css, `DESIGN.md` with no placeholders) before moving to Phase 2. A `DESIGN.md` with unfilled template sections is worse than none.
@@ -174,10 +189,16 @@ If not already in context from Phase 1:
 
 ```
 DESIGN.md                 -> aesthetic intent, component rules, avoid list, custom utilities
+COPY.md                   -> canonical strings, register per surface, banned language
+GLOSSARY.md               -> what each product concept is called
 app/assets/css/main.css   -> @theme tokens, --ui-* overrides, custom classes
 app.config.ts             -> colors, component theme overrides, defaultVariants
 nuxt.config.ts            -> fonts, colorMode, ui.theme.colors
 ```
+
+Every string the page renders comes from `COPY.md` and `GLOSSARY.md`, in that order: the noun
+from the glossary, the sentence around it from the copy file. Inventing either while building a
+component is how a product ends up describing itself four ways.
 
 Use the project's semantic tokens, fonts, and component overrides. Never hardcode colors, shadows, or radii that bypass the design system. For a design variation, override an existing Nuxt UI token rather than introducing a new one.
 
