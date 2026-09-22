@@ -262,6 +262,61 @@ describe('listQueuedReviewStatuses', () => {
     ])
   })
 
+  it('answers the Approval prompt per head commit, not per Revision', () => {
+    const store = createStore()
+    const contributorPullRequest = (headSha: string, title: string) => pullRequestItem({
+      number: 30,
+      author: 'contributor',
+      headRef: 'fix/from-contributor',
+      headSha,
+      mergeState: 'clean',
+      title,
+      url: 'https://github.com/harlan-zw/example/pull/30',
+    })
+    const observed = store.recordObservation({
+      externalId: 'approval-prompt-head30',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: contributorPullRequest('head30', 'Bound a start tag'),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    expect(store.hasApprovalPromptComment('harlan-zw/example', 30, observed.revisionId)).toBe(false)
+    expect(store.recordApprovalPromptComment({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 30,
+      revisionId: observed.revisionId,
+      commentId: 900,
+      body: '### 🤖 REVIEW PAUSED',
+      at: '2026-08-13T01:00:01.000Z',
+    })).toBe(true)
+    expect(store.hasApprovalPromptComment('harlan-zw/example', 30, observed.revisionId)).toBe(true)
+
+    // An edit that leaves the head commit alone keeps the prompt, so a later
+    // poll asks GitHub for nothing.
+    const edited = store.recordObservation({
+      externalId: 'approval-prompt-head30-edited',
+      observedAt: '2026-08-13T02:00:00.000Z',
+      source: 'poll',
+      subject: contributorPullRequest('head30', 'Bound a start tag by the bytes it retains'),
+    })
+    if (edited._tag !== 'Inserted')
+      throw new Error('Expected the edit to create a new Revision.')
+    expect(store.hasApprovalPromptComment('harlan-zw/example', 30, edited.revisionId)).toBe(true)
+
+    // A force push is a new head commit. No prompt answers it, so the prompt
+    // path clears the verdict label the old head left behind.
+    const forcePushed = store.recordObservation({
+      externalId: 'approval-prompt-head31',
+      observedAt: '2026-08-13T03:00:00.000Z',
+      source: 'poll',
+      subject: contributorPullRequest('head31', 'Bound a start tag by the bytes it retains'),
+    })
+    if (forcePushed._tag !== 'Inserted')
+      throw new Error('Expected the force push to create a new Revision.')
+    expect(store.hasApprovalPromptComment('harlan-zw/example', 30, forcePushed.revisionId)).toBe(false)
+  })
+
   it('reports the pause for a Task no agent can claim, so the comment stops claiming progress', () => {
     const store = createStore()
     queuedRepair(store, 24, '2026-08-13T01:00:00.000Z')

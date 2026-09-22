@@ -121,6 +121,7 @@ describe('selection mode approval controller', () => {
   function controllerWith(mode: 'auto' | 'manual', approvalLabels: Array<'review'>, calls: string[], author = 'harlan-zw') {
     return createApprovalController({
       github: {
+        clearAgentLabels: () => Promise.resolve(ok(undefined)),
         consumeApprovalLabel: () => {
           calls.push('consume')
           return Promise.resolve(ok(undefined))
@@ -138,6 +139,7 @@ describe('selection mode approval controller', () => {
       store: {
         approveIssue: () => { throw new Error('Unexpected issue Approval.') },
         isIssueApprovalPending: () => false,
+        hasApprovalPromptComment: () => false,
         recordApprovalPromptComment: () => true,
         getSelectionMode: () => mode,
         hasPullRequestApproval: () => false,

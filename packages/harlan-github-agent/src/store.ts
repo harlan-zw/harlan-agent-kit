@@ -1025,6 +1025,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     body: string
     at: string
   }) => boolean
+  /**
+   * True when the Approval prompt for this Revision is already published.
+   *
+   * The prompt follows the head commit across Revisions, so this answers
+   * whether the head is new to the prompt, not whether the Revision is new.
+   */
+  hasApprovalPromptComment: (repository: string, pullRequestNumber: number, revisionId: string) => boolean
   /** Records the Queue position this service published on the canonical comment. */
   recordQueuedReviewStatus: (input: {
     taskId: string
@@ -13130,6 +13137,15 @@ export function openJournalStore(
     WHERE worker_tasks.state_tag = 'Running'
   `).all() as unknown as Array<{ repository: string, itemNumber: number }>
 
+  const hasApprovalPromptComment: JournalStore['hasApprovalPromptComment'] = (repository, pullRequestNumber, revisionId) => database.prepare(`
+    SELECT 1
+    FROM approval_prompt_comments
+    JOIN subjects ON subjects.id = approval_prompt_comments.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+      AND approval_prompt_comments.revision_id = ?
+  `).get(repository, pullRequestNumber, revisionId) !== undefined
+
   const recordApprovalPromptComment: JournalStore['recordApprovalPromptComment'] = (input) => {
     const subject = database.prepare(`
       SELECT subjects.id
@@ -15202,6 +15218,7 @@ export function openJournalStore(
     listActiveTaskLeases,
     listRunningTaskItems,
     listQueuedReviewStatuses,
+    hasApprovalPromptComment,
     recordApprovalPromptComment,
     listReviewGateRefreshes,
     listStoppedReviews,
