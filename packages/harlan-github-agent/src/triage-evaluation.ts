@@ -49,6 +49,8 @@ export async function replayTriage(input: TriageReplayInput, classification: Cla
 
 export interface TriageBandSummary {
   band: number
+  /** Replays the classification answered. The only sample a band choice may read. */
+  classified: number
   /** Classified replays whose replayed decision equals the stored one. */
   agreed: number
   /** Replays the path rule answers. They carry no evidence about the band, because the rule can drift after a decision was stored. */
@@ -105,6 +107,7 @@ export function summariseBand(replays: Array<{ replay: TriageReplay, stored: Tri
   }
   return {
     band,
+    classified: agreed + reviewsAdded + skipsAdded,
     agreed,
     ruleRequired,
     unavailable,
@@ -137,6 +140,8 @@ export function suggestBand(replays: Array<{ replay: TriageReplay, stored: Triag
 
 export interface StoredTriageReplaySummary {
   replayed: number
+  /** Replays the classification answered. The rule answers the rest, so they say nothing about a band. */
+  classified: number
   /** Recorded decisions whose Revision has no changed-file list. They replay once a later observation records one. */
   skippedWithoutFiles: number
   suggestion: TriageBandSummary
@@ -212,12 +217,14 @@ export async function replayStoredTriage(input: {
     }
     for (const [bucket, entry] of [...buckets.entries()].sort(([left], [right]) => left.localeCompare(right)))
       input.log(`Confidence ${bucket}: ${entry.correct}/${entry.total} agreed with the stored decision.`)
-    if (replays.length < 100)
-      input.log(`Only ${replays.length} replays: below the 100-150 example floor, so treat the suggested band as provisional.`)
+    const suggestion = suggestBand(replays)
+    if (suggestion.classified < 100)
+      input.log(`Only ${suggestion.classified} of ${replays.length} replays reached the classification: below the 100-150 example floor, so treat the suggested band as provisional.`)
     return {
       replayed: replays.length,
+      classified: suggestion.classified,
       skippedWithoutFiles: withoutFiles.count,
-      suggestion: suggestBand(replays),
+      suggestion,
     }
   }
   finally {
@@ -287,6 +294,8 @@ export function suggestIssueBand(replays: IssueTriageReplay[]): IssueBandSummary
 
 export interface StoredIssueTriageReplaySummary {
   replayed: number
+  /** Replays the classification answered. A failed call says nothing about a band. */
+  answered: number
   suggestion: IssueBandSummary
 }
 
@@ -339,9 +348,15 @@ export async function replayStoredIssueTriage(input: {
       const summary = summariseIssueBand(replays, band)
       input.log(`Band ${band}: ${summary.agreed}/${replays.length} agreed, ${summary.readyStalled} ready issues stalled, ${summary.routedAsStored} routed as stored, ${summary.unavailable} unavailable.`)
     }
-    if (replays.length < 100)
-      input.log(`Only ${replays.length} replays: below the 100-150 example floor, so treat the suggested band as provisional.`)
-    return { replayed: replays.length, suggestion: suggestIssueBand(replays) }
+    const suggestion = suggestIssueBand(replays)
+    const answered = replays.length - suggestion.unavailable
+    if (answered < 100)
+      input.log(`Only ${answered} of ${replays.length} replays reached the classification: below the 100-150 example floor, so treat the suggested band as provisional.`)
+    // Agreement counts every kept Agent turn, so a band that bypasses nothing
+    // scores a perfect run. Say so, or the no-op reads as a result.
+    if (suggestion.routedAsStored === 0)
+      input.log(`Band ${suggestion.band} bypasses no Issue, so it changes nothing. Read routed as stored, never agreement.`)
+    return { replayed: replays.length, answered, suggestion }
   }
   finally {
     database.close()

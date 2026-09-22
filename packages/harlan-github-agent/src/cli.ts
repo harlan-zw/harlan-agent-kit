@@ -401,8 +401,8 @@ const evaluateTriage = defineCommand({
       }),
       log: line => consola.info(line),
     })
-    consola.success(`Replayed ${summary.replayed} decisions. ${summary.skippedWithoutFiles} recorded decisions carry no changed-file list and are excluded from every replay; only decisions recorded after this change replay.`)
-    consola.info(`Suggested skip band: ${summary.suggestion.band}, ${summary.suggestion.agreed}/${summary.replayed} agreed, ${summary.suggestion.skipsAdded} would skip what Review read.`)
+    consola.success(`Replayed ${summary.replayed} decisions, of which ${summary.classified} reached the classification. ${summary.skippedWithoutFiles} recorded decisions carry no changed-file list and are excluded from every replay; only decisions recorded after this change replay.`)
+    consola.info(`Suggested skip band: ${summary.suggestion.band}, ${summary.suggestion.agreed}/${summary.classified} agreed, ${summary.suggestion.skipsAdded} would skip what Review read.`)
   },
 })
 
@@ -447,8 +447,8 @@ const evaluateIssueTriage = defineCommand({
       classification: source,
       log: line => consola.info(line),
     })
-    consola.success(`Replayed ${summary.replayed} Agent triage decisions from titles alone; bodies are not in the journal.`)
-    consola.info(`Suggested issue_triage_band: ${summary.suggestion.band}, ${summary.suggestion.agreed}/${summary.replayed} agreed, ${summary.suggestion.readyStalled} ready issues would stall.`)
+    consola.success(`Replayed ${summary.replayed} Agent triage decisions from titles alone; bodies are not in the journal. ${summary.answered} reached the classification.`)
+    consola.info(`Suggested issue_triage_band: ${summary.suggestion.band}, ${summary.suggestion.routedAsStored}/${summary.answered} routed as stored, ${summary.suggestion.readyStalled} ready issues would stall.`)
   },
 })
 

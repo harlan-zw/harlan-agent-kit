@@ -2,7 +2,7 @@ import type { Questions, SystemOneResult } from 'advocaat'
 import type { ClassificationSource } from '../src/classification.ts'
 import type { TriageReplay } from '../src/triage-evaluation.ts'
 import { describe, expect, it } from 'vitest'
-import { replayTriage, suggestBand, summariseBand } from '../src/triage-evaluation.ts'
+import { replayTriage, suggestBand, summariseBand, summariseIssueBand } from '../src/triage-evaluation.ts'
 
 const file = (path: string) => ({ additions: 1, deletions: 0, path, previousFilename: null, status: 'modified' as const })
 
@@ -71,15 +71,15 @@ describe('summariseBand', () => {
   ]
 
   it('counts agreement, extra Reviews, and skips of read Reviews per band', () => {
-    expect(summariseBand(rows, 0.5)).toEqual({ band: 0.5, agreed: 2, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 1, skipPrecision: 0.5 })
-    expect(summariseBand(rows, 0.9)).toEqual({ band: 0.9, agreed: 3, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
+    expect(summariseBand(rows, 0.5)).toEqual({ band: 0.5, classified: 3, agreed: 2, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 1, skipPrecision: 0.5 })
+    expect(summariseBand(rows, 0.9)).toEqual({ band: 0.9, classified: 3, agreed: 3, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
   })
 
   it('counts a rule-required replay in its own bucket, because the rule can drift', () => {
     expect(summariseBand([
       { replay: { _tag: 'RuleRequired' }, stored: 'ReviewRequired' },
       { replay: { _tag: 'Classified', skip: true, confidence: 0.9 }, stored: 'ReviewSkipped' },
-    ], 0.7)).toEqual({ band: 0.7, agreed: 1, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
+    ], 0.7)).toEqual({ band: 0.7, classified: 1, agreed: 1, ruleRequired: 1, unavailable: 0, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
   })
 
   it('counts an unavailable replay nowhere, so a broken run cannot inflate agreement', () => {
@@ -87,14 +87,14 @@ describe('summariseBand', () => {
       { replay: { _tag: 'Unavailable' }, stored: 'ReviewSkipped' },
       { replay: { _tag: 'Unavailable' }, stored: 'ReviewRequired' },
       { replay: { _tag: 'Classified', skip: true, confidence: 0.9 }, stored: 'ReviewSkipped' },
-    ], 0.7)).toEqual({ band: 0.7, agreed: 1, ruleRequired: 0, unavailable: 2, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
+    ], 0.7)).toEqual({ band: 0.7, classified: 1, agreed: 1, ruleRequired: 0, unavailable: 2, reviewsAdded: 0, skipsAdded: 0, skipPrecision: 1 })
   })
 
   it('counts an over-confident skip as an added Review, never a lost one', () => {
     expect(summariseBand([
       { replay: { _tag: 'Classified', skip: true, confidence: 0.99 }, stored: 'ReviewSkipped' },
       { replay: { _tag: 'Classified', skip: false, confidence: 0.6 }, stored: 'ReviewSkipped' },
-    ], 0.7)).toEqual({ band: 0.7, agreed: 1, ruleRequired: 0, unavailable: 0, reviewsAdded: 1, skipsAdded: 0, skipPrecision: 1 })
+    ], 0.7)).toEqual({ band: 0.7, classified: 2, agreed: 1, ruleRequired: 0, unavailable: 0, reviewsAdded: 1, skipsAdded: 0, skipPrecision: 1 })
   })
 })
 
@@ -124,5 +124,44 @@ describe('suggestBand', () => {
     const suggestion = suggestBand(rows)
     expect(suggestion.skipsAdded).toBe(2)
     expect(suggestion.agreed).toBe(0)
+  })
+})
+
+describe('classified replay counts', () => {
+  it('counts only the replays the classification answered, so the rule cannot inflate the sample', () => {
+    const rows: Array<{ replay: TriageReplay, stored: 'ReviewRequired' | 'ReviewSkipped' }> = [
+      { replay: { _tag: 'RuleRequired' }, stored: 'ReviewRequired' },
+      { replay: { _tag: 'RuleRequired' }, stored: 'ReviewRequired' },
+      { replay: { _tag: 'Unavailable' }, stored: 'ReviewRequired' },
+      { replay: { _tag: 'Classified', skip: true, confidence: 0.95 }, stored: 'ReviewSkipped' },
+    ]
+    expect(summariseBand(rows, 0.7).classified).toBe(1)
+  })
+
+  it('counts a skip, an added Review, and a lost Review as classified', () => {
+    const rows: Array<{ replay: TriageReplay, stored: 'ReviewRequired' | 'ReviewSkipped' }> = [
+      { replay: { _tag: 'Classified', skip: true, confidence: 0.95 }, stored: 'ReviewSkipped' },
+      { replay: { _tag: 'Classified', skip: false, confidence: 0.9 }, stored: 'ReviewSkipped' },
+      { replay: { _tag: 'Classified', skip: true, confidence: 0.95 }, stored: 'ReviewRequired' },
+    ]
+    expect(summariseBand(rows, 0.7).classified).toBe(3)
+  })
+})
+
+describe('summariseIssueBand', () => {
+  it('reports no routed issues when the band bypasses nothing', () => {
+    const summary = summariseIssueBand([
+      { stored: 'READY_TO_IMPLEMENT', route: 'AGENT_TRIAGE', confidence: 0.99 },
+      { stored: 'NEEDS_INFO', route: 'NEEDS_INFO', confidence: 0.6 },
+    ], 0.9)
+    expect(summary.agreed).toBe(2)
+    expect(summary.routedAsStored).toBe(0)
+  })
+
+  it('counts a bypass the Agent agreed with as routed as stored', () => {
+    const summary = summariseIssueBand([
+      { stored: 'NEEDS_INFO', route: 'NEEDS_INFO', confidence: 0.95 },
+    ], 0.9)
+    expect(summary.routedAsStored).toBe(1)
   })
 })
