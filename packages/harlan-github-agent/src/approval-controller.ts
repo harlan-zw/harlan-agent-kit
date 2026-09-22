@@ -11,9 +11,9 @@ export interface ApprovalController {
 }
 
 export interface ApprovalControllerOptions {
-  github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
+  github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
   now: () => Date
-  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'getSelectionMode' | 'hasPullRequestApproval' | 'isIssueApprovalPending' | 'recordApprovalPromptComment'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'getSelectionMode' | 'hasApprovalPromptComment' | 'hasPullRequestApproval' | 'isIssueApprovalPending' | 'recordApprovalPromptComment'>
 }
 
 function approvalPrompt(label: string, headSha: string): string {
@@ -72,6 +72,17 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
         const available = await options.github.ensureApprovalLabel(repository, label, signal)
         if (available._tag === 'Err')
           return available
+        // A verdict label answers for one head commit, and this prompt says no
+        // Review has answered this one. No Task exists here to clear it later,
+        // so a READY from the previous head would sit on the pull request until
+        // somebody approves the new one. The prompt follows the head across
+        // Revisions, so an unrecorded prompt means the head is new, and the
+        // clear runs once per head rather than once per poll.
+        if (!options.store.hasApprovalPromptComment(repository.github, pullRequest.number, revisionId)) {
+          const cleared = await options.github.clearAgentLabels(repository, pullRequest.number, signal)
+          if (cleared._tag === 'Err')
+            return cleared
+        }
         const body = approvalPrompt(label, pullRequest.headSha)
         const posted = await options.github.upsertReviewStatus(repository, pullRequest.number, null, body, false, signal)
         if (posted._tag === 'Err')
