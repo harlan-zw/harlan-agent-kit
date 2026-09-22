@@ -118,9 +118,12 @@ components:
 
 ## Voice & Tone
 
-- **Button labels**: {{e.g. "verb-object pairs: 'Save changes', 'Delete project', never 'OK' or 'Submit'"}}
-- **Error style**: {{e.g. "empathetic, 3-part (what/why/fix): 'Email isn't valid — include an @ symbol'"}}
-- **Empty states**: {{e.g. "acknowledge → explain value → provide action"}}
+`COPY.md` owns every user-facing string: the canonical assets, the register per surface, and the
+banned language. Read it before writing a label, heading, empty state or error.
+
+{{If this project has no COPY.md, delete the line above and run the copywriting skill's init
+workflow instead. Do not start a second voice guide here: two of them is the failure that file
+exists to prevent.}}
 
 ## Avoid
 

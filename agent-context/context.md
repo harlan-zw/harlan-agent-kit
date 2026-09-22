@@ -42,6 +42,12 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - Unnamed concept: propose the term, say which synonyms it displaces, confirm.
 - Bootstrap, audit, drift: read the `glossary` skill.
 
+`COPY.md` at the root of a site owns every user-visible string: the canonical assets, the register per surface, and the banned language. Read it before writing one.
+
+- Never paraphrase a canonical asset. Change it there first, then propagate.
+- Bootstrap, audit, or write a string against it: read the `copywriting` skill.
+- `GLOSSARY.md` wins on a product noun; `COPY.md` wins on the sentence around it; `VISION.md` wins on whether the claim may be made at all.
+
 ## Tools
 
 - Find and search files: ripgrep (`rg`).
