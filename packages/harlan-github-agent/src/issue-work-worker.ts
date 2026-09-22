@@ -1,15 +1,17 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentPhase } from './agent-progress.ts'
 import type { GitHubAgentSource, PullRequestTemplate } from './github-agent-source.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
 import type { PullRequestDiagramReference } from './pull-request-diagram.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedIssueWorkTask, MutationWorkerOutcome, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
+import type { ClaimedIssueWorkTask, MutationWorkerOutcome, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
 import type { IssueWorktreeManager } from './worktree.ts'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, PULL_REQUEST_BODY_LINES, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { agentPhase } from './agent-progress.ts'
 import { runRepairedAgentTurn, unwrapJsonResponse } from './agent-turn.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { issueSnapshotDigest } from './item-agent.ts'
@@ -373,12 +375,12 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
     async run(task, signal, unit) {
       const combinedIssues = unit?.combinedIssues ?? []
       const issueNumbers = [task.issueNumber, ...combinedIssues.map(issue => issue.number)]
-      const reportProgress = (progress: AgentProgress): Result<void, string> => options.store.updateAgentProgress({
+      const reportProgress = (phase: AgentPhase): Result<void, string> => options.store.updateAgentProgress({
         taskId: task.id,
         taskKind: task.kind,
         workerId: task.state.workerId,
         fence: task.state.fence,
-        progress,
+        progress: phase,
         at: options.now().toISOString(),
       })
         ? ok(undefined)
@@ -409,7 +411,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, preparedBase, signal)
       if (prepared._tag === 'Err')
         return prepared
-      const ready = reportProgress({ percent: 35, label: 'Git worktree ready' })
+      const ready = reportProgress(agentPhase('WorktreeReady', 'Git worktree ready'))
       if (ready._tag === 'Err')
         return ready
       const instructionFiles = await listInstructionFiles(prepared.value.path)
@@ -439,7 +441,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.issueNumber,
-        progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'fix' },
+        progress: { current: agentPhase('WorktreeReady', 'Git worktree ready'), report: reportProgress, work: 'fix' },
         prompt: issueWorkPrompt({
           task,
           body: snapshot.value.body,
@@ -512,7 +514,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         if (scope._tag === 'Err')
           return scope
       }
-      const checked = reportProgress({ percent: 90, label: 'Issue work checked' })
+      const checked = reportProgress(agentPhase('Checked', 'Issue work checked'))
       if (checked._tag === 'Err')
         return checked
       const frozen = await options.github.getIssueTriageSnapshot(validated.value, task.issueNumber, signal)

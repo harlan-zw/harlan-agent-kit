@@ -1,8 +1,9 @@
+import type { AgentPhase, AgentPhaseTag } from './agent-progress.ts'
 import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunPublisher } from './review-check-run.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
@@ -14,7 +15,7 @@ import { updatedAtLabel } from './text.ts'
 export interface ReviewStatusController {
   publish: (task: ClaimedAdversarialReviewTask, phase: 'snapshot' | 'review' | 'terminal', body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
   stageTerminal?: (task: ClaimedAdversarialReviewTask, body: string, desiredOutcome: ReviewDesiredOutcome, reviewRunId?: string, gates?: ReviewGates) => Result<{ commandId: string }, string>
-  publishRepair: (task: ClaimedReviewFixTask, progress: AgentProgress, signal: AbortSignal) => Promise<Result<void, string>>
+  publishRepair: (task: ClaimedReviewFixTask, phase: AgentPhase, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
 export interface ReviewStatusControllerOptions {
@@ -296,26 +297,35 @@ export async function publishClaimedReviewStatus(
     : err('GitHub accepted the review comment, but the local review changed. Refresh before retrying.')
 }
 
-function repairProgressComment(task: ClaimedReviewFixTask, progress: AgentProgress, at: string): string {
-  // Declarative, and about the Repair rather than the reader. These lines read
-  // as instructions to whoever opened the pull request when they are imperative,
-  // and every other automated comment states what the work does next.
-  const next = progress.percent >= 90
-    ? 'Repair pushes its commit, then a new Review reads the new head.'
-    : progress.percent >= 70
-      ? 'Repair verifies its fix.'
-      : progress.percent >= 55
-        ? 'Repair finishes its fix.'
-        : progress.percent >= 35
-          ? 'Repair fixes the Review findings.'
-          : 'Repair creates its Git worktree.'
+/**
+ * What the Repair does after each phase.
+ *
+ * Declarative, and about the Repair rather than the reader. These lines read
+ * as instructions to whoever opened the pull request when they are imperative,
+ * and every other automated comment states what the work does next. Keyed on
+ * the phase, never on its percentage.
+ */
+const repairNextAction: Record<AgentPhaseTag, string> = {
+  Loaded: 'Repair creates its Git worktree.',
+  WorktreeReady: 'Repair fixes the Review findings.',
+  ReadingDiff: 'Repair fixes the Review findings.',
+  CheckingDocs: 'Repair finishes its fix.',
+  Editing: 'Repair finishes its fix.',
+  Verifying: 'Repair verifies its fix.',
+  Reported: 'Repair finishes its fix.',
+  Reporting: 'Repair verifies its fix.',
+  Checked: 'Repair pushes its commit, then a new Review reads the new head.',
+  Committed: 'Repair pushes its commit, then a new Review reads the new head.',
+}
+
+function repairProgressComment(task: ClaimedReviewFixTask, phase: AgentPhase, at: string): string {
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${task.pullRequest.headSha} -->
-### 🤖 REPAIR · ${repairRoundLabel(task.rounds)} · ${progress.percent}% · ${progress.label}${formatPhaseDuration(progress.since, at)}
+### 🤖 REPAIR · ${repairRoundLabel(task.rounds)} · ${phase.percent}% · ${phase.label}${formatPhaseDuration(phase.since, at)}
 
 ${automatedDisclosure({ kind: 'repair update', updatedAt: updatedAtLabel(at) })}
 
-Next: ${next}`
+Next: ${repairNextAction[phase._tag]}`
 }
 
 export function createReviewStatusController(options: ReviewStatusControllerOptions): ReviewStatusController {

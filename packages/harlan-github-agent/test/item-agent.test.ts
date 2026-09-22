@@ -140,12 +140,14 @@ describe('subject Workers', () => {
     }, new AbortController().signal)
 
     expect(result._tag).toBe('Ok')
-    expect(comments).toHaveLength(6)
+    // Five, not six. The phase before the verdict is saved and never published,
+    // because the terminal comment replaces it within seconds.
+    expect(comments).toHaveLength(5)
     expect(comments[0]).toContain('REVIEWING · 10% · Pull request loaded')
-    expect(comments[2]).toContain('REVIEWING · 70% · Running tests and checks')
+    expect(comments[2]).toContain('REVIEWING · 75% · Running tests and checks')
     expect(comments[3]).toContain('REVIEWING · 85% · Preparing the review comment')
-    expect(comments[5]).toContain('READY · 96/100')
-    expect(comments.join('\n')).toMatch(/\b(?:10|35|55|70|90)%/)
+    expect(comments[4]).toContain('READY · 96/100')
+    expect(comments.join('\n')).not.toContain('Head commit and CI checked')
     expect(stamped).toEqual(['READY'])
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-5.6-sol', confidence: 96 }))
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-5.6-sol', reasoningEffort: 'medium' })])

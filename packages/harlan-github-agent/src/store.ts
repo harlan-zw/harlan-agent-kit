@@ -114,6 +114,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
+import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { createBatchStore } from './batch-store.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
@@ -3156,7 +3157,7 @@ function dashboardQueue(
     const review = currentReviews.get(key)
     if (
       reviewTask?.kind === 'adversarial_review'
-      && (review === undefined || (reviewTask.updatedAt > review.completedAt && reviewTask.progress.percent < 90))
+      && (review === undefined || (reviewTask.updatedAt > review.completedAt && reviewTask.progress.percent < RESULT_PHASE_RANK))
     ) {
       if (reviewTask.state._tag === 'Running')
         return [{ ...pullRequest, state: { _tag: 'Active', work: 'adversarial_review' } }]
