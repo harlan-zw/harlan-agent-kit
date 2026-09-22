@@ -27,6 +27,8 @@ Where the two files disagree about a service word, the package glossary wins.
 | Hook | `harlan-agent-kit/hooks/*.sh` | Claude Code, Codex, per event | N per event, disabled by `.claude/hooks.json` | "hook" |
 | Git hook | `agent-context/git-hooks/commit-msg` | git, for every Agent provider | 1 per commit, under `~/pkg` and `~/sites` | "commit hook" |
 | Agent instructions | `agent-context/CLAUDE.md`, `AGENTS.md`, `context.md` | Claude Code, Codex, at session start | 1 tracked source, 2 installed copies | "Agent instructions" |
+| Root docs | every repository root, `references/root-docs.md` | every Agent, on demand | 1 set per repository | "root docs" |
+| Brief | `docs/work/EXECUTE-<topic>.md` | every Agent, Harlan | 1 per open initiative | "brief" |
 | Check | `bin/check`, `harlan-agent-kit/hooks/check.sh` | `pre-commit-push.sh`, Harlan | 1 per commit or push | "`check`" |
 | Worktree | `<parent>/<repo>.<branch-slug>` | `wt`, `scripts/worktree-sweep.sh` | 1 per task-owned branch | "worktree" |
 | Commit scope | the `type(scope):` subject prefix | `agent-context/git-hooks/commit-msg` | 1 per commit, retired spellings in `## Scopes` | "scope" |
@@ -83,6 +85,23 @@ Claude Code and Codex both load Skills by directory.
 more Skills share it.
 **Never:** doc, guide, appendix, addendum, sub-skill.
 **Casing:** `Reference` in prose, `references/` as the directory.
+
+### Root docs
+**Is:** the fixed set of Markdown files a repository root carries, and the `docs/`
+lifecycle beneath it. The contract is `harlan-agent-kit/references/root-docs.md`.
+**Use for:** `README.md`, `AGENTS.md`, `GLOSSARY.md`, `VISION.md`, `DESIGN.md`,
+`CONTRIBUTING.md`, and the `docs/` folders.
+**Never:** CONTEXT.md, root ARCHITECTURE.md where the repository has a `docs/`
+directory, project docs, repo docs.
+**Casing:** `root docs` in prose. Each file keeps its own upper-case name.
+
+### Brief
+**Is:** one Markdown file tracking one open initiative, in `docs/work/`.
+**Use for:** `docs/work/EXECUTE-<topic>.md`, carrying `Status:`, `**Next move:**`,
+`Done means:`, `## Ledger`, and `## Log`. It moves to `docs/work/shipped/` when
+`Done means:` is verified end to end.
+**Never:** plan, ticket, progress file, PROGRESS.md, initiative doc, spec.
+**Casing:** `Brief` in prose, `EXECUTE-<topic>.md` as the file.
 
 ### Hook
 **Is:** one bash file in `harlan-agent-kit/hooks/`, run by Claude Code or Codex on an event.

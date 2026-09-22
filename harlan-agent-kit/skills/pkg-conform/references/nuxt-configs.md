@@ -89,7 +89,6 @@ export default antfu(
   {
     type: 'lib',
     ignores: [
-      'AGENTS.md',
       'test/fixtures/**',
       'playground/**',
     ],
@@ -97,6 +96,10 @@ export default antfu(
   ...harlanzw({ link: true, nuxt: true, vue: true }),
 )
 ```
+
+Never add `AGENTS.md` to `ignores`. A global ignore beats the prompt config's
+`files`, so one line there turns off every rule in
+[root-docs.md](../../../references/root-docs.md).
 
 ## build.config.ts
 

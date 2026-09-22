@@ -49,6 +49,21 @@ The diff or code is represented as one JSON document (lanes, nodes, edges, order
 
    Render dark as the default theme unless explicitly requested. The SVGs, the manifest and `drawn.graph.json` land in `.pr-lens/`, which the CLI adds to the repository's .gitignore. Do not commit any of it. These files are rebuilt from the diff whenever anyone wants them again. Each SVG is named after its view, the theme and a content hash; `manifest.json` lists them by lens and view, so read the names from there or from the directory.
 
+   **If the CLI cannot run, never fake the diagram.** `pnpm dlx` needs the
+   network. If it fails to fetch, or validate and render both fail for a reason
+   the document cannot explain, stop the loop there.
+
+   Say in one line that the render failed, and give the reason. Keep
+   `.pr-lens/graph.json`, and say it is ready to render when the CLI is
+   reachable. Write the description without the diagram, and say the diagram is
+   missing.
+
+   Never write a placeholder in place of a diagram. `[architecture diagram goes
+   here]`, an image link to a file that was never written, and an empty figure
+   all read as a finished description to a reviewer. A description that says it
+   has no diagram is honest. A description that promises one it does not have is
+   not.
+
    If the user asked for a diagram and nothing more, this is the end of the loop. If working in an environment that supports a visual way to display the image e.g., an in-app browser, an artifact, do so. Otherwise, tell them where the SVGs are and which one is the top view.
 
 5. **Attach, when there is a pull request to attach to.** That means the user asked you to open a PR, asked for a diagram on one that exists, or you are opening a PR as part of changes made. Otherwise skip this step.

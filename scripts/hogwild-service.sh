@@ -393,11 +393,19 @@ case "$command" in
     sync_worktrunk
     sync_repository_environment
     remote_service prepare-update "$ref"
+    # Hogwild resolved the ref minutes ago. Reading back the commit it landed
+    # on keeps the desktop on that one, because a merge that lands during the
+    # deploy moves origin/main and would leave the two halves a commit apart.
+    deployed_revision=$(remote_service revision | tr -d '[:space:]')
+    if [[ ! "$deployed_revision" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "Hogwild did not report the commit it deployed." >&2
+      exit 1
+    fi
     safe_restart
     remote_service status
     # After Hogwild, because a desktop ahead of the controller stands itself
     # down and the work simply stays on Hogwild until this finishes.
-    update_desktop_client "$ref"
+    update_desktop_client "$deployed_revision"
     ;;
   restart)
     sync_context

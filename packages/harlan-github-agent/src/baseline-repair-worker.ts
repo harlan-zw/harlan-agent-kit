@@ -1,16 +1,18 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentPhase } from './agent-progress.ts'
 import type { ClassificationSource } from './classification.ts'
 import type { FailedJobContext, GitHubAgentSource, GitHubCheck, PullRequestReviewSnapshot, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
+import type { ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { BaselineRepairWorktreeManager } from './worktree.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { agentPhase } from './agent-progress.ts'
 import { runRepairedAgentTurn } from './agent-turn.ts'
 import { withBaselineRepairMarker } from './baseline-repair-state.ts'
 import { classifyCheckFailureWithResidual } from './failure.ts'
@@ -280,12 +282,12 @@ Return blocked only when you cannot safely complete the fix.`
 export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions): BaselineRepairWorker {
   return {
     async run(task, signal) {
-      const progress = (value: AgentProgress): Result<void, string> => options.store.updateAgentProgress({
+      const progress = (phase: AgentPhase): Result<void, string> => options.store.updateAgentProgress({
         taskId: task.id,
         taskKind: task.kind,
         workerId: task.state.workerId,
         fence: task.state.fence,
-        progress: value,
+        progress: phase,
         at: options.now().toISOString(),
       })
         ? ok(undefined)
@@ -357,7 +359,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         return prepared
       if (prepared.value.headSha !== task.pullRequest.baseSha)
         return ok({ _tag: 'Superseded', reason: `The default branch moved to ${prepared.value.headSha}. This repair targeted ${task.pullRequest.baseSha}.` })
-      const ready = progress({ percent: 35, label: 'Git worktree ready' })
+      const ready = progress(agentPhase('WorktreeReady', 'Git worktree ready'))
       if (ready._tag === 'Err')
         return ready
       const workspace = await options.inspectWorkspace(prepared.value.path)
@@ -369,7 +371,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
-        progress: { current: { percent: 35, label: 'Git worktree ready' }, report: progress, work: 'baseline' },
+        progress: { current: agentPhase('WorktreeReady', 'Git worktree ready'), report: progress, work: 'baseline' },
         prompt: baselineRepairPrompt({
           repository: task.repository,
           baseSha: task.pullRequest.baseSha,

@@ -2,6 +2,7 @@ import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentLabelState } from './agent-label.ts'
 import type { AgentRuntime, AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentPhase, AgentPhaseTag } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
@@ -13,7 +14,6 @@ import type { ReviewReasoningEffort, ReviewReasoningEffortPolicy } from './revie
 import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
 import type {
-  AgentProgress,
   ClaimedAdversarialReviewTask,
   ClaimedAgentTask,
   ClaimedIssueTriageTask,
@@ -32,7 +32,7 @@ import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { agentProfile } from './agent-profile.ts'
-import { formatPhaseDuration } from './agent-progress.ts'
+import { agentPhase, formatPhaseDuration } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
@@ -638,8 +638,12 @@ function checksGate(
       state: { _tag: failedTag, reason: `${base ? 'Base branch CI: ' : ''}${cleanLine(failed.name)} failed.`, evidence: checkEvidence },
       reported: [],
       // A failed head check run is a verdict, so only a red base branch leaves
-      // the gate with nothing left to answer it.
-      cause: failedTag === 'Pending' ? { _tag: 'BaseBranchFailed', check: cleanLine(failed.name) } : { _tag: 'Settled' },
+      // the gate with nothing left to answer it. Both name the check, because
+      // both feed work: a red base queues Baseline repair, a red head queues
+      // Repair.
+      cause: failedTag === 'Pending'
+        ? { _tag: 'BaseBranchFailed', check: cleanLine(failed.name) }
+        : { _tag: 'HeadCheckFailed', check: cleanLine(failed.name) },
     }
   }
   const pending = checks.checks.find(checkUndecided)
@@ -699,7 +703,7 @@ function headChecksGate(checks: PullRequestReviewSnapshot['checks'], required: R
   const requiredChecks = checks.checks.filter(isRequired)
   const failed = requiredChecks.find(checkFailed)
   if (failed !== undefined)
-    return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported, cause: { _tag: 'Settled' } }
+    return { state: { _tag: 'Failed', reason: `${cleanLine(failed.name)} failed.`, evidence: checkEvidence }, reported, cause: { _tag: 'HeadCheckFailed', check: cleanLine(failed.name) } }
   const running = requiredChecks.find(checkUndecided)
   if (running !== undefined)
     return { state: { _tag: 'Pending', reason: undecidedReason(running), evidence: checkEvidence }, reported, cause: undecidedCause(running) }
@@ -725,7 +729,7 @@ function githubCiAbsent(snapshot: PullRequestReviewSnapshot): boolean {
 
 /**
  * A Baseline repair pull request exists because the default branch CI fails, so
- * its own review reads head CI alone. Every other review waits for a green base.
+ * its own review reads head CI alone. Every other review stops at a red base.
  * If GitHub names no required checks and reports none for both commits, no
  * future CI result can resolve the gate. The Agent report owns the local proof
  * in that repository.
@@ -747,8 +751,12 @@ function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): 
       cause: { _tag: 'Settled' },
     }
   }
+  // Only a red base holds this gate. A base branch whose checks are still
+  // running says nothing about this change, and every push to the default
+  // branch starts those checks again. Blocking on them sent every open pull
+  // request from READY to PENDING and back on each push to main.
   const base = checksGate(snapshot.baseChecks, 'base-ci', 'Pending')
-  if (base.state._tag !== 'Passed')
+  if (base.cause._tag === 'BaseBranchFailed')
     return base
   const head = headChecksGate(snapshot.checks, snapshot.requiredChecks)
   return {
@@ -853,7 +861,22 @@ export function refreshControllerGates(
     || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
   const ci = ciGate(snapshot, repairsBaseline)
   const merge = mergeGate(snapshot.pullRequest)
-  return { gates: { ...gates, ci: ci.state, merge }, reportedChecks: ci.reported, ciCause: ci.cause }
+  return {
+    gates: { ...gates, ci: ci.state, merge: settledMergeGate(gates.merge, merge) },
+    reportedChecks: ci.reported,
+    ciCause: ci.cause,
+  }
+}
+
+/**
+ * The merge gate a fresh mergeability read leaves behind.
+ *
+ * GitHub drops mergeability to unknown while it recomputes the merge commit,
+ * which every push to the base branch starts. That unknown is not news, so a
+ * gate that already answered keeps its answer until GitHub answers again.
+ */
+function settledMergeGate(previous: ReviewGateState, current: ReviewGateState): ReviewGateState {
+  return current._tag === 'Pending' && previous._tag !== 'Pending' ? previous : current
 }
 
 /**
@@ -869,16 +892,36 @@ export function reviewOutcome(gates: ReviewGates): ReviewOutcomeName {
   return states.includes('Failed') ? 'BLOCKED' : states.includes('Pending') ? 'PENDING' : 'READY'
 }
 
-function progressComment(headSha: string, baseSha: string, progress: AgentProgress, at: string): string {
-  const workflow = JSON.stringify({ _tag: 'Reviewing', headSha, baseSha, progress: progress.percent })
+/**
+ * What the Review does after each phase.
+ *
+ * Keyed on the phase, never on its percentage. Reading a phase back out of a
+ * number needed thresholds that drifted from the ladder, and an unlisted
+ * percentage silently picked the wrong line.
+ */
+const reviewNextAction: Record<AgentPhaseTag, string> = {
+  Loaded: 'Create a Git worktree.',
+  WorktreeReady: 'Review the diff.',
+  ReadingDiff: 'Finish checking the changed files and docs.',
+  CheckingDocs: 'Finish checking the changed files and docs.',
+  Editing: 'Verify findings or fixes.',
+  Verifying: 'Finish the checks, then write up the findings.',
+  Reported: 'Finish the review.',
+  Reporting: 'Check the head commit and CI.',
+  Checked: 'Post the review comment.',
+  Committed: 'Post the review comment.',
+}
+
+function progressComment(headSha: string, baseSha: string, phase: AgentPhase, at: string): string {
+  const workflow = JSON.stringify({ _tag: 'Reviewing', headSha, baseSha, progress: phase.percent })
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->
 <!-- workflow-state: ${workflow} -->
-### 🤖 REVIEWING · ${progress.percent}% · ${progress.label}${formatPhaseDuration(progress.since, at)}
+### 🤖 REVIEWING · ${phase.percent}% · ${phase.label}${formatPhaseDuration(phase.since, at)}
 
 ${automatedDisclosure({ kind: 'review', updatedAt: updatedAtLabel(at) })}
 
-Next: ${progress.percent >= 90 ? 'Post the review comment.' : progress.percent >= 85 ? 'Check the head commit and CI.' : progress.percent >= 70 ? 'Verify findings or fixes.' : progress.percent >= 55 ? 'Finish checking the changed files and docs.' : progress.percent >= 35 ? 'Review the diff.' : 'Create a Git worktree.'}`
+Next: ${reviewNextAction[phase._tag]}`
 }
 
 function baselineWaitingComment(headSha: string, baseSha: string, at: string): string {
@@ -950,13 +993,13 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
   ].join('\n')
 }
 
-function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, progress: AgentProgress): Result<void, string> {
+function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, phase: AgentPhase): Result<void, string> {
   return options.store.updateAgentProgress({
     taskId: task.id,
     taskKind: task.kind,
     workerId: task.state.workerId,
     fence: task.state.fence,
-    progress,
+    progress: phase,
     at: options.now().toISOString(),
   })
     ? ok(undefined)
@@ -975,14 +1018,14 @@ function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, pr
 async function reportReviewProgress(
   options: ItemAgentOptions,
   task: ClaimedAdversarialReviewTask,
-  phase: 'snapshot' | 'review',
-  progress: AgentProgress,
+  publicationPhase: 'snapshot' | 'review',
+  phase: AgentPhase,
   signal: AbortSignal,
 ): Promise<Result<void, string>> {
-  const saved = saveAgentProgress(options, task, progress)
+  const saved = saveAgentProgress(options, task, phase)
   if (saved._tag === 'Err')
     return saved
-  const posted = await options.status.publish(task, phase, progressComment(task.pullRequest.headSha, task.pullRequest.baseSha, progress, options.now().toISOString()), signal)
+  const posted = await options.status.publish(task, publicationPhase, progressComment(task.pullRequest.headSha, task.pullRequest.baseSha, phase, options.now().toISOString()), signal)
   if (posted._tag === 'Err' && !signal.aborted)
     options.onProgressPublishFailure?.(task, posted.error)
   else
@@ -1316,13 +1359,13 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       }
 
       const startedAt = options.now().toISOString()
-      const started = await reportReviewProgress(options, task, 'snapshot', { percent: 10, label: 'Pull request loaded' }, signal)
+      const started = await reportReviewProgress(options, task, 'snapshot', agentPhase('Loaded', 'Pull request loaded'), signal)
       if (started._tag === 'Err')
         return started
       const workspace = await options.workspaces.prepareReview(task, signal)
       if (workspace._tag === 'Err')
         return workspace
-      const reviewing = await reportReviewProgress(options, task, 'review', { percent: 35, label: 'Git worktree ready' }, signal)
+      const reviewing = await reportReviewProgress(options, task, 'review', agentPhase('WorktreeReady', 'Git worktree ready'), signal)
       if (reviewing._tag === 'Err')
         return reviewing
 
@@ -1345,8 +1388,8 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         number: task.pullRequestNumber,
         prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings, memory),
         progress: {
-          current: { percent: 35, label: 'Git worktree ready' },
-          report: progress => reportReviewProgress(options, task, 'review', progress, signal),
+          current: agentPhase('WorktreeReady', 'Git worktree ready'),
+          report: phase => reportReviewProgress(options, task, 'review', phase, signal),
           work: 'review',
         },
         repository: task.repository,
@@ -1415,7 +1458,9 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // stored report remains valid history if this head moved meanwhile.
       if (frozen.value.pullRequest.headSha !== snapshot.value.pullRequest.headSha || frozen.value.pullRequest.baseRef !== snapshot.value.pullRequest.baseRef || (frozen.value.pullRequest.state !== 'open' && frozen.value.pullRequest.mergedAt === null))
         return err('The pull request changed before the review completed.')
-      const checked = await reportReviewProgress(options, task, 'review', { percent: 90, label: 'Head commit and CI checked' }, signal)
+      // Saved, never published. The terminal comment replaces this line within
+      // seconds, so publishing it spent a GitHub write nobody read.
+      const checked = saveAgentProgress(options, task, agentPhase('Checked', 'Head commit and CI checked'))
       if (checked._tag === 'Err')
         return checked
 
@@ -1482,7 +1527,7 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
       )
       if (workspace._tag === 'Err')
         return workspace
-      const started = saveAgentProgress(options, task, { percent: 35, label: 'Git worktree ready' })
+      const started = saveAgentProgress(options, task, agentPhase('WorktreeReady', 'Git worktree ready'))
       if (started._tag === 'Err')
         return started
       const scopeDigest = issueSnapshotDigest(snapshot.value)
@@ -1496,8 +1541,8 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
         number: task.issueNumber,
         prompt: issuePrompt(task, snapshot.value, workspace.value.path, memory),
         progress: {
-          current: { percent: 35, label: 'Git worktree ready' },
-          report: progress => Promise.resolve(saveAgentProgress(options, task, progress)),
+          current: agentPhase('WorktreeReady', 'Git worktree ready'),
+          report: phase => Promise.resolve(saveAgentProgress(options, task, phase)),
           work: 'issue',
         },
         repository: task.repository,
@@ -1509,7 +1554,7 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
       }, signal)
       if (turn._tag === 'Err')
         return turn
-      const completed = saveAgentProgress(options, task, { percent: 95, label: 'Issue triage complete' })
+      const completed = saveAgentProgress(options, task, agentPhase('Committed', 'Issue triage complete'))
       if (completed._tag === 'Err')
         return completed
       const response = turn.value.value

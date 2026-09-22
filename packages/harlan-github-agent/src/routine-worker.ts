@@ -1,11 +1,13 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentPhase } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { ClassificationSource } from './classification.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedRoutineRun } from './types.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
+import { agentPhase } from './agent-progress.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { err, ok } from './result.ts'
@@ -63,7 +65,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           taskId: task.id,
           workerId: task.state.workerId,
           fence: task.state.fence,
-          progress: { percent: 85, label: progressLabel },
+          progress: agentPhase('Reporting', progressLabel),
           at: options.now().toISOString(),
         })
         options.store.stageRoutineReport({
@@ -83,16 +85,16 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       if (workspace._tag === 'Err')
         return workspace
 
-      const reportProgress = (progress: { percent: number, label: string }): Result<void, string> => options.store.updateRoutineRunProgress({
+      const reportProgress = (phase: AgentPhase): Result<void, string> => options.store.updateRoutineRunProgress({
         taskId: task.id,
         workerId: task.state.workerId,
         fence: task.state.fence,
-        progress,
+        progress: phase,
         at: options.now().toISOString(),
       })
         ? ok(undefined)
         : err('The Routine lease ended before progress could be saved.')
-      const ready = reportProgress({ percent: 35, label: 'Git worktree ready' })
+      const ready = reportProgress(agentPhase('WorktreeReady', 'Git worktree ready'))
       if (ready._tag === 'Err')
         return ready
 
@@ -120,7 +122,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           schema: definition.schema,
           taskId: task.id,
           workspace: workspace.value.path,
-          progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'routine' },
+          progress: { current: agentPhase('WorktreeReady', 'Git worktree ready'), report: reportProgress, work: 'routine' },
         },
         signal,
       )

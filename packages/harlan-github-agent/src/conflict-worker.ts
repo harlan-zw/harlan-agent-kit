@@ -1,12 +1,14 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
+import type { AgentPhase } from './agent-progress.ts'
 import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { AgentProgress, ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
+import type { ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
 import type { ConflictWorktreeManager, PreparedConflictWorktree } from './worktree.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
+import { agentPhase } from './agent-progress.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
 import { err, ok } from './result.ts'
@@ -108,12 +110,12 @@ function parseAgentResponse(text: string): Result<AgentResponse, string> {
 export function createConflictWorker(options: ConflictWorkerOptions): ConflictWorker {
   return {
     async run(task, signal) {
-      const reportProgress = (progress: AgentProgress): Result<void, string> => options.store.updateAgentProgress({
+      const reportProgress = (phase: AgentPhase): Result<void, string> => options.store.updateAgentProgress({
         taskId: task.id,
         taskKind: task.kind,
         workerId: task.state.workerId,
         fence: task.state.fence,
-        progress,
+        progress: phase,
         at: options.now().toISOString(),
       })
         ? ok(undefined)
@@ -137,7 +139,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       ) {
         return err('The pull request no longer matches the claimed head and base commit SHAs.')
       }
-      const loaded = reportProgress({ percent: 10, label: 'Pull request loaded' })
+      const loaded = reportProgress(agentPhase('Loaded', 'Pull request loaded'))
       if (loaded._tag === 'Err')
         return loaded
 
@@ -153,7 +155,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         return ok({ _tag: 'Completed', evidence: JSON.stringify(prepared.value) })
       }
       const worktree = prepared.value.worktree
-      const worktreeReady = reportProgress({ percent: 35, label: 'Git worktree ready' })
+      const worktreeReady = reportProgress(agentPhase('WorktreeReady', 'Git worktree ready'))
       if (worktreeReady._tag === 'Err')
         return worktreeReady
 
@@ -166,7 +168,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
-        progress: { current: { percent: 35, label: 'Git worktree ready' }, report: reportProgress, work: 'conflict' },
+        progress: { current: agentPhase('WorktreeReady', 'Git worktree ready'), report: reportProgress, work: 'conflict' },
         prompt: conflictResolutionPrompt(currentTask, worktree, memory),
         repository: task.repository,
         role: 'conflict_resolution',
@@ -192,7 +194,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       const verified = await options.worktrees.verify(currentTask, worktree, signal)
       if (verified._tag === 'Err')
         return verified
-      const checksPassed = reportProgress({ percent: 90, label: 'Conflict fix checked' })
+      const checksPassed = reportProgress(agentPhase('Checked', 'Conflict fix checked'))
       if (checksPassed._tag === 'Err')
         return checksPassed
 
@@ -219,7 +221,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       )
       if (committed._tag === 'Err')
         return committed
-      const commitReady = reportProgress({ percent: 95, label: 'Fix committed' })
+      const commitReady = reportProgress(agentPhase('Committed', 'Fix committed'))
       if (commitReady._tag === 'Err')
         return commitReady
       return ok({

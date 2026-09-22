@@ -1,0 +1,14 @@
+schema_version: '1.0'
+name: pr-lens-no-diagram-for-typo
+description: A one-file typo fix is below the diagram threshold, so no diagram is drawn.
+context:
+  scaffold_script: ./scaffold.sh
+execution:
+  max_turns: 15
+  allowed_tools: [Read, Glob, Grep, Skill, Bash]
+  prompt: |
+    This repo has one uncommitted change: a typo fix in a single error message
+    in `server/utils/d1-http.ts`.
+
+    Write the pull request description. Do not push anything and do not open
+    anything, I just want the description text.

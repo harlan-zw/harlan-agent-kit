@@ -33,6 +33,23 @@ Set `REVIEW_ROOT` to the selected absolute checkout path. Set `JOB_DIR` to the a
 
 After resolving these paths, discover state at runtime. Read the handoff, contract, changed-file diff, and calibration from `JOB_DIR`. Allocate `REVIEW_PORT` against active listeners. Detect `DEV_BROWSER` from `REVIEW_ROOT`. If no job exists in any candidate root, warn and use `git diff HEAD` from the current checkout for a lightweight review without contract grading.
 
+### Pasted code, no repository
+
+Sometimes there is no job, no checkout, and no dev server. The user pastes a
+component and asks for a review. Review it.
+
+Lead with the defects you can find by reading. A contract defect is visible in
+source: a handler that cannot do what it claims, async data with no loading,
+error, or empty state, an undeclared emit, a missing key. Those are the findings
+worth the review, and they do not need a browser.
+
+Do not refuse a snippet, and do not open with what you could not run. A list of
+unavailable tooling is not a review. Put the unrun checks in one short list at
+the end, so the reader learns the defects first and the gaps second.
+
+The verdict is PARTIAL at best. Runtime checks did not run, so nothing is
+cleared by positive evidence. Say that in one line and stop there.
+
 Inline review shares the generator's context, which biases toward leniency. For high-stakes reviews, start a fresh conversation.
 
 ## Step 0: Calibration

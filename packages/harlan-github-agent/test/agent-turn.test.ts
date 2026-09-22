@@ -1,8 +1,9 @@
+import type { AgentPhase } from '../src/agent-progress.ts'
 import type { AgentEvent, AgentProvider } from '../src/agent-provider.ts'
 import type { Result } from '../src/result.ts'
-import type { AgentProgress } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { agentPhase } from '../src/agent-progress.ts'
 import { runAgentTurn, runParsedAgentTurn, runRepairedAgentTurn } from '../src/agent-turn.ts'
 import { mayRetryFailure } from '../src/failure.ts'
 import { err, ok } from '../src/result.ts'
@@ -227,13 +228,13 @@ describe('agent turn progress', () => {
     return { provider, now: () => new Date(nowMilliseconds) }
   }
 
-  function reportingInput(reported: AgentProgress[]) {
+  function reportingInput(reported: AgentPhase[]) {
     return {
       ...input,
       progress: {
-        current: { percent: 35, label: 'Git worktree ready' },
-        report: (progress: AgentProgress) => {
-          reported.push(progress)
+        current: agentPhase('WorktreeReady', 'Git worktree ready'),
+        report: (phase: AgentPhase) => {
+          reported.push(phase)
           return ok(undefined)
         },
         work: 'fix' as const,
@@ -242,7 +243,7 @@ describe('agent turn progress', () => {
   }
 
   it('restates one unchanged phase on a slow beat and keeps its start time', async () => {
-    const reported: AgentProgress[] = []
+    const reported: AgentPhase[] = []
     const { provider, now } = scriptedTurn([
       { afterMilliseconds: 0, event: { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent },
       { afterMilliseconds: 1_000, event: { _tag: 'FileChanged', changes: [{ path: 'a.ts', kind: 'update' }] } as AgentEvent },
@@ -257,13 +258,46 @@ describe('agent turn progress', () => {
     // The first edit advances the phase. The second is inside the beat, so it
     // stays quiet. The third restates the same phase, from the same start.
     expect(reported).toEqual([
-      { percent: 70, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
-      { percent: 70, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
+      { _tag: 'Editing', percent: 65, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
+      { _tag: 'Editing', percent: 65, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
+    ])
+  })
+
+  it('names the phase the agent goes back to, so a long turn never freezes its label', async () => {
+    const reported: AgentPhase[] = []
+    const { provider, now } = scriptedTurn([
+      { afterMilliseconds: 0, event: { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'CommandStarted', command: 'pnpm test' } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'FileChanged', changes: [{ path: 'a.ts', kind: 'update' }] } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'Message', text: '{"outcome":"resolved"}' } as AgentEvent },
+    ])
+
+    await runAgentTurn({ ...options(provider), now }, reportingInput(reported), new AbortController().signal)
+
+    // Editing ranks below the checks, so the rank holds while the label moves.
+    expect(reported.map(phase => [phase.label, phase.percent])).toEqual([
+      ['Running tests and checks', 75],
+      ['Editing files', 75],
+    ])
+  })
+
+  it('reports the phase the agent named over one guessed from its commands', async () => {
+    const reported: AgentPhase[] = []
+    const { provider, now } = scriptedTurn([
+      { afterMilliseconds: 0, event: { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'Progress', percent: 40, text: 'disproving the retry path' } as AgentEvent },
+      { afterMilliseconds: 1_000, event: { _tag: 'Message', text: '{"outcome":"resolved"}' } as AgentEvent },
+    ])
+
+    await runAgentTurn({ ...options(provider), now }, reportingInput(reported), new AbortController().signal)
+
+    expect(reported).toEqual([
+      { _tag: 'Reported', percent: 55, label: 'disproving the retry path', since: '2026-08-16T00:00:01.000Z' },
     ])
   })
 
   it('says nothing extra while one phase stays inside the beat', async () => {
-    const reported: AgentProgress[] = []
+    const reported: AgentPhase[] = []
     const { provider, now } = scriptedTurn([
       { afterMilliseconds: 0, event: { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent },
       { afterMilliseconds: 1_000, event: { _tag: 'FileChanged', changes: [{ path: 'a.ts', kind: 'update' }] } as AgentEvent },

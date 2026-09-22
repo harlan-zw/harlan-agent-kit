@@ -5,6 +5,7 @@ import type { BaselineRepairQueueResult, JournalStore, ReviewGateRefresh } from 
 import type { RepositoryMapping, ReviewGates, ReviewOutcomeName } from './types.ts'
 import { createHash } from 'node:crypto'
 import { ciGatePendingMessage, readCiGate } from './ci-gate-pending.ts'
+import { hasHeadCiFinding, headCiFinding } from './head-ci-finding.ts'
 import { refreshControllerGates, repairPreflight, reviewOutcome, terminalComment } from './item-agent.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
@@ -25,7 +26,7 @@ export interface ReviewGateSweepOptions {
   /** Proves the controller may publish Repair commits in this repository. */
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordIncident' | 'recordReviewPublication' | 'resolveIncidents' | 'stageReviewGateStatus'>
+  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordCiRepairFinding' | 'recordIncident' | 'recordReviewPublication' | 'resolveIncidents' | 'stageReviewGateStatus'>
 }
 
 /**
@@ -72,7 +73,18 @@ export async function refreshReviewGates(
     const outcome = reviewOutcome(gates)
     const confidence = outcome === 'READY' ? review.confidence : undefined
     let findings = review.findings
-    const repairable = gates.review._tag === 'Failed'
+    // A red head check the Review Agent never saw. It reads the failing check
+    // while it runs and hands it to Repair, but CI that turns red after the
+    // Review settles reaches no agent, so this sweep is the only place that
+    // can write that finding. Without it the sweep published BLOCKED and
+    // queued nothing.
+    const redHeadCheck = gates.ci._tag === 'Failed' && ciCause._tag === 'HeadCheckFailed' ? ciCause.check : undefined
+    if (redHeadCheck !== undefined && !hasHeadCiFinding(findings, redHeadCheck)) {
+      const finding = headCiFinding(redHeadCheck)
+      if (options.store.recordCiRepairFinding({ reviewRunId: review.reviewRunId, finding }))
+        findings = [...findings, finding]
+    }
+    const repairable = (gates.review._tag === 'Failed' || redHeadCheck !== undefined)
       && findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
       && !findings.some(finding => finding._tag === 'Open' && finding.resolution === 'Dismissal')
     if (repairable) {

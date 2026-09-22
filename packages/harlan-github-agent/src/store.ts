@@ -115,6 +115,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
+import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { createBatchStore } from './batch-store.ts'
 import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
@@ -777,6 +778,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
     fence: number
     at: string
   }) => ReviewFixQueueResult
+  /**
+   * Appends one controller-written finding to a completed Review run.
+   *
+   * Only the head CI finding uses it. A Review Agent owns every other finding,
+   * and this write never removes or edits one it wrote.
+   */
+  recordCiRepairFinding: (input: { reviewRunId: string, finding: ReviewFinding }) => boolean
   /** Queues a completed Review's deferred Repair once its current base permits it. */
   queueReviewFixForGate: (input: {
     reviewRunId: string
@@ -3166,7 +3174,7 @@ function dashboardQueue(
     const review = currentReviews.get(key)
     if (
       reviewTask?.kind === 'adversarial_review'
-      && (review === undefined || (reviewTask.updatedAt > review.completedAt && reviewTask.progress.percent < 90))
+      && (review === undefined || (reviewTask.updatedAt > review.completedAt && reviewTask.progress.percent < RESULT_PHASE_RANK))
     ) {
       if (reviewTask.state._tag === 'Running')
         return [{ ...pullRequest, state: { _tag: 'Active', work: 'adversarial_review' } }]
@@ -9266,6 +9274,26 @@ export function openJournalStore(
     }
   }
 
+  const recordCiRepairFinding: JournalStore['recordCiRepairFinding'] = (input) => {
+    const row = database.prepare(`
+      SELECT findings FROM review_runs WHERE id = ?
+    `).get(input.reviewRunId) as { findings: string } | undefined
+    if (row === undefined)
+      return false
+    const findings = JSON.parse(row.findings) as ReviewFinding[]
+    const fingerprint = input.finding._tag === 'Open' ? input.finding.details?.fingerprint : undefined
+    // A repeat pass reads the same red check, so the write must be idempotent.
+    if (fingerprint === undefined || findings.some(finding => finding._tag === 'Open' && finding.details?.fingerprint === fingerprint))
+      return false
+    // A Review that recommends Dismissal wants no Repair at all, and adding a
+    // finding beside that recommendation would argue with it.
+    if (findings.some(finding => finding._tag === 'Open' && finding.resolution === 'Dismissal'))
+      return false
+    return database.prepare(`
+      UPDATE review_runs SET findings = ? WHERE id = ? AND findings = ?
+    `).run(JSON.stringify([...findings, input.finding]), input.reviewRunId, row.findings).changes === 1
+  }
+
   const queueReviewFixForGate: JournalStore['queueReviewFixForGate'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -15202,6 +15230,7 @@ export function openJournalStore(
     claimNextReviewFixTask,
     queueReviewFixTaskForReview,
     queueReviewFixForGate,
+    recordCiRepairFinding,
     recordRepairReport,
     queueBaselineRepairForReview,
     queueBaselineRepairForGate,
