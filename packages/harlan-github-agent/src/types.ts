@@ -1540,6 +1540,27 @@ export interface Incident {
   lastSeenAt: string
 }
 
+/**
+ * One pull request the Agent decided needed no Review.
+ *
+ * A skip queues no Task and produces no Review run, so History has nothing
+ * else to record it with. The decider and its confidence come from the stored
+ * reason, parsed once here rather than read as prose on the page.
+ */
+export interface TriageSkip {
+  key: string
+  repository: string
+  pullRequestNumber: number
+  title: string
+  /** The pull request on GitHub. */
+  url: string
+  decidedBy: 'rule' | 'model'
+  /** The confidence the Classification answered with, absent when the rule decided. */
+  confidence: number | null
+  reason: string
+  decidedAt: string
+}
+
 export interface DashboardSnapshot {
   hostTasks?: Array<{ taskId: string | null, host: 'hogwild' | 'desktop' }>
   hostCapacity?: HostCapacity
@@ -1560,6 +1581,8 @@ export interface DashboardSnapshot {
   classification?: { model: string, gatewayId: string }
   /** Pull request triage decisions over the last 24 hours. */
   triageDecisions: { reviewRequired: number, reviewSkipped: number, couldNotDecide: number }
+  /** Pull requests the Agent decided needed no Review, newest first. */
+  triageSkips: TriageSkip[]
   agentProfile: AgentProfile
   agentSelection: AgentSelection
   agentStart: AgentStartState

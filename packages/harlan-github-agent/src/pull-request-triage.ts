@@ -164,6 +164,26 @@ export function proseOnlyQuestions() {
   }
 }
 
+/** Who reached one recorded triage decision, read back from its stored reason. */
+export type TriageDecider
+  = | { _tag: 'Rule' }
+    | { _tag: 'Model', confidence: number | null }
+
+/**
+ * Reads a stored triage reason back into its decider.
+ *
+ * The reason carries its own prefix and, for a classification answer, the
+ * confidence that answer arrived with. Anything else is a model decision
+ * without a confidence: rows recorded before the prefix contract were all
+ * model decisions, which is what the stored-decision reuse already assumes.
+ */
+export function triageDecider(reason: string): TriageDecider {
+  if (reason.startsWith('rule: '))
+    return { _tag: 'Rule' }
+  const match = /confidence (\d+(?:\.\d+)?)/.exec(reason)
+  return { _tag: 'Model', confidence: match?.[1] === undefined ? null : Number(match[1]) }
+}
+
 export function classificationDecision(input: {
   classification: ClassificationSource
   subject: GitHubPullRequestItem

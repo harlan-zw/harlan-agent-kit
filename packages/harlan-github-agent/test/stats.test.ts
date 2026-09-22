@@ -61,7 +61,7 @@ describe('stats aggregation', () => {
         { _tag: 'Publication', repository: other, at, itemNumber: 1, work: 'conflict_resolution', changedFiles: 1 },
         { _tag: 'Review', repository, at, startedAt: at, outcome: 'Ready', findings: 3 },
         { _tag: 'Task', repository, at, startedAt: at, work: 'review_fix', outcome: 'Completed' },
-        { _tag: 'PullRequestTriage', repository, at, startedAt: at, outcome: 'ReviewRequired' },
+        { _tag: 'PullRequestTriage', repository, at, startedAt: at, outcome: 'ReviewRequired', decidedBy: 'rule' },
         { _tag: 'Routine', repository: other, at, startedAt: null, outcome: 'Completed', candidates: 2 },
         { _tag: 'Publication', repository: other, at, itemNumber: 2, work: 'issue_work', changedFiles: 1 },
         { _tag: 'Review', repository: 'harlan-zw/previous', at: '2026-07-31T00:00:00.000Z', startedAt: at, outcome: 'Ready', findings: 9 },
@@ -94,7 +94,7 @@ describe('stats aggregation', () => {
         { _tag: 'Review', repository: 'harlan-zw/example', at: '2026-08-02T16:00:00.000Z', startedAt: '2026-08-02T15:50:00.000Z', outcome: 'Blocked', findings: 2 },
         { _tag: 'Task', repository: 'harlan-zw/example', at: '2026-08-02T15:10:00.000Z', startedAt: '2026-08-02T15:00:00.000Z', work: 'review_fix', outcome: 'Completed' },
         { _tag: 'Task', repository: 'harlan-zw/example', at: '2026-08-03T15:10:00.000Z', startedAt: null, work: 'conflict_resolution', outcome: 'ActionRequired' },
-        { _tag: 'PullRequestTriage', repository: 'harlan-zw/example', at: '2026-08-02T12:00:00.000Z', startedAt: '2026-08-02T11:59:55.000Z', outcome: 'ReviewSkipped' },
+        { _tag: 'PullRequestTriage', repository: 'harlan-zw/example', at: '2026-08-02T12:00:00.000Z', startedAt: '2026-08-02T11:59:55.000Z', outcome: 'ReviewSkipped', decidedBy: 'model' },
       ],
     })
 
@@ -118,6 +118,7 @@ describe('stats aggregation', () => {
       reviewRequired: 0,
       reviewSkipped: 1,
       reviewRequiredAfterFailure: 0,
+      classified: 1,
       medianDurationMs: 5_000,
     })
     expect(snapshot.coverage.pullRequestTriage).toEqual({
@@ -404,5 +405,23 @@ describe('journal Stats evidence', () => {
     }, '2026-08-14T00:00:00.000Z')
     expect(stats.repositories).toEqual([expect.objectContaining({ repository: task.repository, runs: 1 })])
     expect(stats.work.find(work => work._tag === 'Review')).toEqual(expect.objectContaining({ runs: 1 }))
+  })
+})
+
+describe('pull request triage work stats', () => {
+  it('counts the decisions the classification answered apart from the rule ones', () => {
+    const at = '2026-08-02T12:00:00.000Z'
+    const snapshot = buildStats({
+      generatedAt: at,
+      range: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-03T00:00:00.000Z', timeZone: 'UTC' },
+      triageCoverageStartedAt: '2026-07-01T00:00:00.000Z',
+      facts: [
+        { _tag: 'PullRequestTriage', repository: 'harlan-zw/example', at, startedAt: at, outcome: 'ReviewRequired', decidedBy: 'rule' },
+        { _tag: 'PullRequestTriage', repository: 'harlan-zw/example', at, startedAt: at, outcome: 'ReviewRequired', decidedBy: 'rule' },
+        { _tag: 'PullRequestTriage', repository: 'harlan-zw/example', at, startedAt: at, outcome: 'ReviewSkipped', decidedBy: 'model' },
+      ],
+    })
+    const triage = snapshot.work.find(entry => entry._tag === 'PullRequestTriage')
+    expect(triage).toMatchObject({ runs: 3, reviewRequired: 2, reviewSkipped: 1, classified: 1 })
   })
 })

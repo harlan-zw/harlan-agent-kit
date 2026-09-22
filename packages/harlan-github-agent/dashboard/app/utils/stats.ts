@@ -181,7 +181,10 @@ function countList(parts: Array<[number, string, boolean?]>): string {
 export function workResultText(entry: StatsWork): string {
   switch (entry._tag) {
     case 'PullRequestTriage':
-      return countList([[entry.reviewRequired, 'sent to Review'], [entry.reviewSkipped, 'skipped'], [entry.reviewRequiredAfterFailure, 'could not decide']])
+      // The classified count says how often the model was asked at all. Without
+      // it the row reads as if the model judged every pull request; the path
+      // rule answers nearly all of them without a call.
+      return countList([[entry.reviewRequired, 'sent to Review'], [entry.reviewSkipped, 'skipped'], [entry.reviewRequiredAfterFailure, 'could not decide'], [entry.classified, 'decided by the model', true]])
     case 'Review':
       return countList([[entry.ready, 'READY'], [entry.pending, 'PENDING'], [entry.blocked, 'BLOCKED']])
 

@@ -45,6 +45,8 @@ export type StatsFact = { repository: string } & (
     at: string
     startedAt: string
     outcome: PullRequestTriageStatsOutcome
+    /** The path rule answers most decisions alone. Only a model one says anything about the Classification. */
+    decidedBy: 'rule' | 'model'
   }
   | {
     _tag: 'Review'
@@ -95,6 +97,8 @@ export interface PullRequestTriageWorkStats {
   reviewRequired: number
   reviewSkipped: number
   reviewRequiredAfterFailure: number
+  /** Decisions the Classification answered. The path rule answered the rest without a call. */
+  classified: number
   medianDurationMs: number | null
 }
 
@@ -345,6 +349,7 @@ export function buildStats(input: {
         reviewRequired: triageFacts.filter(fact => fact.outcome === 'ReviewRequired').length,
         reviewSkipped: triageFacts.filter(fact => fact.outcome === 'ReviewSkipped').length,
         reviewRequiredAfterFailure: triageFacts.filter(fact => fact.outcome === 'ReviewRequiredAfterFailure').length,
+        classified: triageFacts.filter(fact => fact.decidedBy === 'model').length,
         medianDurationMs: median(durations(triageFacts)),
       },
       {
