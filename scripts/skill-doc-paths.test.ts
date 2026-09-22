@@ -51,6 +51,11 @@ it('claims no enforcement of the root docs contract that the contract disclaims'
   expect(claimants).toEqual([])
 })
 
+it('never orders the design template filler to run the copywriting init workflow', () => {
+  const template = readFileSync(join(repoRoot, 'harlan-agent-kit', 'skills', 'nuxt-frontend-design', 'templates', 'DESIGN.md'), 'utf8')
+  expect(template.replace(/\s+/g, ' ')).not.toMatch(/run the copywriting skill's init/)
+})
+
 function rootSetRows(contract: string) {
   const section = contract.split('## Root set')[1]?.split('\n## ')[0] ?? ''
   const rows: { files: string[], readers: string }[] = []

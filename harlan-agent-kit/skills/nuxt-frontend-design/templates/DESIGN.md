@@ -121,9 +121,9 @@ components:
 `COPY.md` owns every user-facing string: the canonical assets, the register per surface, and the
 banned language. Read it before writing a label, heading, empty state or error.
 
-{{If this project has no COPY.md, delete the line above and run the copywriting skill's init
-workflow instead. Do not start a second voice guide here: two of them is the failure that file
-exists to prevent.}}
+{{If this project has no COPY.md, delete the line above and tell the user. The copywriting
+skill's init workflow owns bootstrap: say so and offer it rather than running it here. Do not
+start a second voice guide, because two of them is the failure that file exists to prevent.}}
 
 ## Avoid
 
