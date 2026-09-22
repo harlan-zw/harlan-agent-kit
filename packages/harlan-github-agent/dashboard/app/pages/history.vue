@@ -58,6 +58,7 @@ function rowName(row: HistoryRow): string {
     case 'Review': return `${row.agent.repository} pull request ${row.agent.pullRequestNumber}`
     case 'Task': return `${row.task.repository} number ${taskNumber(row.task)}`
     case 'Routine': return `${row.run.name} on ${row.run.repository}`
+    case 'TriageSkip': return `${row.skip.repository} pull request ${row.skip.pullRequestNumber}`
   }
 }
 
@@ -66,6 +67,7 @@ function rowDuration(row: HistoryRow): string | undefined {
     case 'Review': return duration(row.agent.startedAt, row.agent.completedAt)
     case 'Routine': return duration(row.run.createdAt, row.run.updatedAt)
     case 'Task': return undefined
+    case 'TriageSkip': return undefined
   }
 }
 
@@ -180,6 +182,10 @@ useHead({
             <p v-else-if="row._tag === 'Task'" class="flex min-w-0 flex-wrap items-baseline gap-x-2">
               <a :href="taskSubjectUrl(row.task)" target="_blank" rel="noreferrer" class="entity-link shrink-0 font-mono text-sm"><RepositoryIdentity :repository="row.task.repository"> #{{ taskNumber(row.task) }}</RepositoryIdentity></a>
               <span v-if="taskRowSummary(row.task)" class="min-w-0 flex-1 truncate text-sm text-muted">{{ taskRowSummary(row.task) }}</span>
+            </p>
+            <p v-else-if="row._tag === 'TriageSkip'" class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+              <a :href="row.skip.url" target="_blank" rel="noreferrer" class="entity-link shrink-0 font-mono text-sm"><RepositoryIdentity :repository="row.skip.repository"> #{{ row.skip.pullRequestNumber }}</RepositoryIdentity></a>
+              <span v-if="row.skip.title" class="min-w-0 flex-1 truncate text-sm text-muted">{{ row.skip.title }}</span>
             </p>
             <p v-else class="flex min-w-0 flex-wrap items-baseline gap-x-2">
               <span class="text-sm font-medium text-highlighted">{{ row.run.name }}</span>

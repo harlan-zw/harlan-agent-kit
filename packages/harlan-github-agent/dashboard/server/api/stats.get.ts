@@ -61,7 +61,7 @@ function work(days: StatsDay[]): StatsWork[] {
     return []
   const reviews = active + Math.floor(findings / 3)
   return [
-    { _tag: 'PullRequestTriage', runs: reviews + 4, reviewRequired: reviews, reviewSkipped: 3, reviewRequiredAfterFailure: 1, medianDurationMs: 42_000 },
+    { _tag: 'PullRequestTriage', runs: reviews + 4, reviewRequired: reviews, reviewSkipped: 3, reviewRequiredAfterFailure: 1, classified: 5, medianDurationMs: 42_000 },
     { _tag: 'Review', runs: reviews, ready: Math.floor(reviews * 0.6), pending: Math.floor(reviews * 0.25), blocked: reviews - Math.floor(reviews * 0.6) - Math.floor(reviews * 0.25), findings, medianDurationMs: 8 * 60_000 },
     { _tag: 'Task', work: 'review_fix', runs: fixCommits, completed: fixCommits - 1, actionRequired: 1, failed: 0, superseded: 0, publishedCommits: fixCommits, changedFiles: fixCommits * 3, medianDurationMs: 11 * 60_000 },
     { _tag: 'Task', work: 'conflict_resolution', runs: conflicts, completed: conflicts, actionRequired: 0, failed: 0, superseded: 0, publishedCommits: conflicts, changedFiles: conflicts * 2, medianDurationMs: conflicts === 0 ? null : 5 * 60_000 },

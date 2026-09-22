@@ -18,6 +18,7 @@ import type {
   Routine,
   RoutineRun,
   SelectionMode,
+  TriageSkip,
 } from '../../../src/types.ts'
 import { hasSpendableCapacity } from '../../../src/capacity.ts'
 import { queueAttention } from './attention.ts'
@@ -646,7 +647,7 @@ function parseJson(text: string): unknown {
   }
 }
 
-export type HistoryCategory = 'ready' | 'issues' | 'pending' | 'failed' | 'superseded'
+export type HistoryCategory = 'ready' | 'issues' | 'pending' | 'failed' | 'superseded' | 'skipped'
 
 export function taskHistoryCategory(task: AgentTask): HistoryCategory {
   if (task.state._tag === 'Completed')
@@ -669,8 +670,11 @@ export type HistoryRecord
   = | { _tag: 'Review', key: string, at: string, agent: ReviewAgent }
     | { _tag: 'Task', key: string, at: string, task: DashboardTask }
     | { _tag: 'Routine', key: string, at: string, run: DashboardRoutineRun }
+    | { _tag: 'TriageSkip', key: string, at: string, skip: TriageSkip }
 
 export function historyCategory(record: HistoryRecord): HistoryCategory {
+  if (record._tag === 'TriageSkip')
+    return 'skipped'
   if (record._tag === 'Task')
     return taskHistoryCategory(record.task)
   if (record._tag === 'Routine') {
@@ -692,6 +696,8 @@ export function historyOutcomeDetail(record: HistoryRecord): string | undefined 
     return reviewOutcomeDetail(record.agent)
   if (record._tag === 'Routine')
     return routineRunPresentation(record.run).detail
+  if (record._tag === 'TriageSkip')
+    return record.skip.reason
   if (record.task.state._tag === 'Completed')
     return 'Completed successfully.'
   return taskStateDetail(record.task)
@@ -702,7 +708,7 @@ export function historyOutcomeDetail(record: HistoryRecord): string | undefined 
  * Terminal tasks cover the work that produces no review, which would otherwise
  * finish and vanish without ever being recorded on screen.
  */
-export function buildHistory(reviewAgents: ReviewAgent[], tasks: DashboardTask[], routineRuns: DashboardRoutineRun[] = []): HistoryRecord[] {
+export function buildHistory(reviewAgents: ReviewAgent[], tasks: DashboardTask[], routineRuns: DashboardRoutineRun[] = [], triageSkips: TriageSkip[] = []): HistoryRecord[] {
   const reviewed = new Set(reviewAgents.map(agent => `${agent.repository}#${agent.pullRequestNumber}@${agent.revisionId}`))
   const reviews = reviewAgents.map((agent): HistoryRecord => ({ _tag: 'Review', key: agent.id, at: agent.completedAt, agent }))
   const settled = tasks
@@ -712,7 +718,10 @@ export function buildHistory(reviewAgents: ReviewAgent[], tasks: DashboardTask[]
   const routines = routineRuns
     .filter(run => run.state._tag !== 'Queued' && run.state._tag !== 'Running')
     .map((run): HistoryRecord => ({ _tag: 'Routine', key: run.id, at: run.updatedAt, run }))
-  return [...reviews, ...settled, ...routines].sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
+  // A skipped pull request queues no Task, so it would finish and vanish
+  // without this row. Its Review never ran, so nothing else can record it.
+  const skips = triageSkips.map((skip): HistoryRecord => ({ _tag: 'TriageSkip', key: skip.key, at: skip.decidedAt, skip }))
+  return [...reviews, ...settled, ...routines, ...skips].sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
 }
 
 /**
@@ -963,7 +972,7 @@ export function boardCardIdentity(card: BoardCard, snapshot: DashboardSnapshot):
     const { agent } = card.record
     return { author: agent.author, title: agent.title, url: agent.subjectUrl, repository: agent.repository, kind: 'pull_request', number: agent.pullRequestNumber }
   }
-  if (card.record._tag === 'Routine')
+  if (card.record._tag === 'Routine' || card.record._tag === 'TriageSkip')
     return undefined
   const { task } = card.record
   const number = taskNumber(task)
@@ -1023,6 +1032,8 @@ export function boardCardBadge(card: BoardCard): CardBadge {
         const presentation = routineRunPresentation(card.record.run)
         return { label: presentation.label, tone: presentation.tone === 'primary' ? 'neutral' : presentation.tone, uppercase: false }
       }
+      if (card.record._tag === 'TriageSkip')
+        return { label: 'Skipped', tone: 'neutral', confidence: card.record.skip.confidence ?? undefined, uppercase: false }
       return { label: card.record.task.state._tag, tone: taskStateTone(card.record.task), uppercase: false }
   }
 }

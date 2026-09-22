@@ -26,7 +26,7 @@ import {
 export type HistoryRow = HistoryRecord
 
 /** The outcome chips, in chip order. Names follow the GLOSSARY, not the internal category. */
-export type OutcomeFilter = 'all' | 'ready' | 'findings' | 'pending' | 'blocked' | 'superseded'
+export type OutcomeFilter = 'all' | 'ready' | 'findings' | 'pending' | 'blocked' | 'skipped' | 'superseded'
 
 export const outcomeFilters: ReadonlyArray<{ label: string, value: OutcomeFilter }> = [
   { label: 'All', value: 'all' },
@@ -34,6 +34,7 @@ export const outcomeFilters: ReadonlyArray<{ label: string, value: OutcomeFilter
   { label: 'Findings', value: 'findings' },
   { label: 'Pending', value: 'pending' },
   { label: 'Blocked', value: 'blocked' },
+  { label: 'Skipped', value: 'skipped' },
   { label: 'Superseded', value: 'superseded' },
 ]
 
@@ -42,6 +43,7 @@ const filterCategories: Record<Exclude<OutcomeFilter, 'all'>, HistoryCategory> =
   findings: 'issues',
   pending: 'pending',
   blocked: 'failed',
+  skipped: 'skipped',
   superseded: 'superseded',
 }
 
@@ -90,6 +92,7 @@ export function historyRowWork(row: HistoryRow): WorkKey {
   switch (row._tag) {
     case 'Review': return 'adversarial_review'
     case 'Routine': return 'routine_scan'
+    case 'TriageSkip': return 'pull_request_triage'
     case 'Task': return taskWork(row.task)
   }
 }
@@ -115,7 +118,7 @@ function rangeMatches(row: HistoryRow, range: HistoryRange): boolean {
 /** Everything finished, newest first, after both filters. */
 export function historyRows(snapshot: DashboardSnapshot, filter: OutcomeFilter = 'all', range: HistoryRange = { _tag: 'All' }): HistoryRow[] {
   const reviews = snapshot.agents.filter((agent): agent is ReviewAgent => agent._tag === 'ReviewAgent')
-  return buildHistory(reviews, snapshot.tasks, snapshot.routineRuns)
+  return buildHistory(reviews, snapshot.tasks, snapshot.routineRuns, snapshot.triageSkips)
     .filter(row => outcomeFilterMatches(row, filter) && rangeMatches(row, range))
 }
 
@@ -129,6 +132,14 @@ export function historyRowBadge(row: HistoryRow): CardBadge {
       uppercase: true,
     }
     case 'Task': return { label: row.task.state._tag, tone: taskStateTone(row.task), uppercase: false }
+    // The confidence is the decision. A rule skip has none, and the badge says
+    // so by carrying the word alone.
+    case 'TriageSkip': return {
+      label: 'Skipped',
+      tone: 'neutral',
+      confidence: row.skip.confidence ?? undefined,
+      uppercase: false,
+    }
     case 'Routine': {
       const presentation = routineRunPresentation(row.run)
       return { label: presentation.label, tone: presentation.tone === 'primary' ? 'neutral' : presentation.tone, uppercase: false }
@@ -223,6 +234,7 @@ export function reviewCommentUrl(agent: ReviewAgent): string | undefined {
 export function historyRowUrl(row: HistoryRow, snapshot: DashboardSnapshot): string {
   switch (row._tag) {
     case 'Review': return row.agent.subjectUrl
+    case 'TriageSkip': return row.skip.url
     case 'Task': return taskSubjectUrl(row.task)
     case 'Routine': {
       const routine = snapshot.routines.find(candidate => candidate.id === row.run.routineId)

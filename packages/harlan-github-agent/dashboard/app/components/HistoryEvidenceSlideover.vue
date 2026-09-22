@@ -71,6 +71,8 @@ const title = computed(() => {
     return `${row.agent.repository}#${row.agent.pullRequestNumber}`
   if (row._tag === 'Task')
     return `${row.task.repository}#${taskNumber(row.task)}`
+  if (row._tag === 'TriageSkip')
+    return `${row.skip.repository}#${row.skip.pullRequestNumber}`
   return row.run.name
 })
 
@@ -81,6 +83,8 @@ const description = computed(() => {
     return row.agent.title
   if (row._tag === 'Task')
     return taskKindLabel(row.task)
+  if (row._tag === 'TriageSkip')
+    return row.skip.title
   return row.run.repository
 })
 
@@ -92,6 +96,8 @@ const outcome = computed(() => {
     return reviewOutcomeDetail(row.agent)
   if (row._tag === 'Task')
     return taskStateDetail(row.task)
+  if (row._tag === 'TriageSkip')
+    return row.skip.reason
   return routineRunPresentation(row.run).detail
 })
 
@@ -140,6 +146,15 @@ const details = computed<DetailItem[]>(() => {
     items.push({ term: 'Finished', value: relativeTime(task.updatedAt) })
     items.push({ term: 'Task', value: task.id, mono: true })
     return items
+  }
+  if (row._tag === 'TriageSkip') {
+    const { skip } = row
+    return [
+      { term: 'Repository', value: `${skip.repository}#${skip.pullRequestNumber}`, mono: true, href: skip.url },
+      { term: 'Decided by', value: skip.decidedBy === 'rule' ? 'Path rule' : 'Classification' },
+      ...(skip.confidence === null ? [] : [{ term: 'Confidence', value: String(skip.confidence), mono: true }]),
+      { term: 'Finished', value: relativeTime(skip.decidedAt) },
+    ]
   }
   const { run } = row
   return [

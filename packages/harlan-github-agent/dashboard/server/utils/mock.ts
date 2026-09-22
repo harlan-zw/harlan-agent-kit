@@ -323,4 +323,35 @@ function historyReviewAgents(): MockReviewAgent[] {
   ]
 }
 
-state = { ...state, agents: [...state.agents, ...historyReviewAgents()] }
+/*
+ * Pull requests triage skipped. They queue no Task and run no Review, so
+ * History is the only place they appear and the mock needs its own.
+ */
+function historyTriageSkips(): DashboardSnapshot['triageSkips'] {
+  return [
+    {
+      key: 'triage-skip:harlan-zw/nuxt-seo#601@rev-skip-1',
+      repository: 'harlan-zw/nuxt-seo',
+      pullRequestNumber: 601,
+      title: 'docs: rework the README header and pitch',
+      url: 'https://github.com/harlan-zw/nuxt-seo/pull/601',
+      decidedBy: 'model',
+      confidence: 0.95,
+      reason: 'model: classification chose skip with confidence 0.95.',
+      decidedAt: minutesAgo(90),
+    },
+    {
+      key: 'triage-skip:unjs/unhead#318@rev-skip-2',
+      repository: 'unjs/unhead',
+      pullRequestNumber: 318,
+      title: 'docs: fix a broken link in the migration guide',
+      url: 'https://github.com/unjs/unhead/pull/318',
+      decidedBy: 'rule',
+      confidence: null,
+      reason: 'rule: every changed path is inside the prose set.',
+      decidedAt: minutesAgo(260),
+    },
+  ]
+}
+
+state = { ...state, agents: [...state.agents, ...historyReviewAgents()], triageSkips: historyTriageSkips() }

@@ -240,3 +240,53 @@ describe('reviewCommentUrl', () => {
     expect(reviewCommentUrl(reviewAgent())).toBeUndefined()
   })
 })
+
+describe('skipped pull requests on History', () => {
+  const skip = {
+    key: 'triage-skip:harlan-zw/nuxt-seo#500@rev-z',
+    repository: 'harlan-zw/nuxt-seo',
+    pullRequestNumber: 500,
+    title: 'docs: fix a typo',
+    url: 'https://github.com/harlan-zw/nuxt-seo/pull/500',
+    decidedBy: 'model' as const,
+    confidence: 0.95,
+    reason: 'model: classification chose skip with confidence 0.95.',
+    decidedAt: '2026-08-20T13:00:00.000Z',
+  }
+
+  it('records a skip that queued no Task and ran no Review', () => {
+    const rows = historyRows(dashboardSnapshot({ triageSkips: [skip] }))
+    expect(rows.map(row => row.key)).toContain(skip.key)
+  })
+
+  it('carries the confidence the classification answered with', () => {
+    const rows = historyRows(dashboardSnapshot({ triageSkips: [skip] }))
+    const row = rows.find(candidate => candidate.key === skip.key)
+    expect(row === undefined ? undefined : historyRowBadge(row)).toEqual({
+      label: 'Skipped',
+      tone: 'neutral',
+      confidence: 0.95,
+      uppercase: false,
+    })
+  })
+
+  it('carries no confidence when the path rule decided', () => {
+    const ruled = { ...skip, decidedBy: 'rule' as const, confidence: null, reason: 'rule: README.md is inside the prose set.' }
+    const rows = historyRows(dashboardSnapshot({ triageSkips: [ruled] }))
+    const row = rows.find(candidate => candidate.key === skip.key)
+    expect(row === undefined ? undefined : historyRowBadge(row).confidence).toBeUndefined()
+  })
+
+  it('opens the pull request on GitHub', () => {
+    const snapshot = dashboardSnapshot({ triageSkips: [skip] })
+    const row = historyRows(snapshot).find(candidate => candidate.key === skip.key)
+    expect(row === undefined ? undefined : historyRowUrl(row, snapshot)).toBe(skip.url)
+  })
+
+  it('answers the Skipped filter and no other', () => {
+    const snapshot = dashboardSnapshot({ triageSkips: [skip] })
+    const row = historyRows(snapshot).find(candidate => candidate.key === skip.key)
+    expect(row === undefined ? undefined : outcomeFilterMatches(row, 'skipped')).toBe(true)
+    expect(row === undefined ? undefined : outcomeFilterMatches(row, 'ready')).toBe(false)
+  })
+})

@@ -4,7 +4,7 @@ import type { PullRequestTriageDecision, PullRequestTriageVerdict } from '../src
 import type { LatestPullRequestTriageRun } from '../src/store.ts'
 import type { GitHubPullRequestItem, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { classifyPullRequestPaths, createPullRequestTriageController, proseOnlyQuestions } from '../src/pull-request-triage.ts'
+import { classifyPullRequestPaths, createPullRequestTriageController, proseOnlyQuestions, triageDecider } from '../src/pull-request-triage.ts'
 import { err, ok } from '../src/result.ts'
 import { updatedAtLabel } from '../src/text.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -510,5 +510,20 @@ describe('pull request triage controller', () => {
     const settled = await controllerInstance.settle(repositoryMapping(), subject, { _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' }, new AbortController().signal)
 
     expect(settled).toEqual(err('GitHub refused the comment.'))
+  })
+})
+
+describe('triageDecider', () => {
+  it('reads the path rule from its prefix', () => {
+    expect(triageDecider('rule: src/module.ts is outside the prose set.')).toEqual({ _tag: 'Rule' })
+  })
+
+  it('reads the confidence a classification answered with', () => {
+    expect(triageDecider('model: classification chose skip with confidence 0.95.')).toEqual({ _tag: 'Model', confidence: 0.95 })
+    expect(triageDecider('model: classification chose skip at confidence 0.59, below 0.7, so Review runs.')).toEqual({ _tag: 'Model', confidence: 0.59 })
+  })
+
+  it('reads a model decision that carries no confidence', () => {
+    expect(triageDecider('model: All changed files are docs prose.')).toEqual({ _tag: 'Model', confidence: null })
   })
 })

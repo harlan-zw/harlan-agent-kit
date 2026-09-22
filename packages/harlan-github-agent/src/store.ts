@@ -105,6 +105,7 @@ import type {
   SupersedeReviewRunInput,
   SupersedeReviewRunResult,
   TaskState,
+  TriageSkip,
   WorkflowEvent,
   WorkflowEventStream,
 } from './types.ts'
@@ -122,7 +123,7 @@ import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
-import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON } from './pull-request-triage.ts'
+import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
@@ -12668,7 +12669,7 @@ export function openJournalStore(
     const facts: StatsFact[] = []
 
     const triageRows = database.prepare(`
-      SELECT started_at, completed_at, outcome_tag, repositories.github AS repository
+      SELECT started_at, completed_at, outcome_tag, reason, repositories.github AS repository
       FROM pull_request_triage_runs
       JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
@@ -12678,6 +12679,7 @@ export function openJournalStore(
       started_at: string
       completed_at: string
       outcome_tag: 'ReviewRequired' | 'ReviewSkipped' | 'ReviewRequiredAfterFailure'
+      reason: string
     }>
     facts.push(...triageRows.map(row => ({
       _tag: 'PullRequestTriage' as const,
@@ -12685,6 +12687,7 @@ export function openJournalStore(
       at: row.completed_at,
       startedAt: row.started_at,
       outcome: row.outcome_tag,
+      decidedBy: triageDecider(row.reason)._tag === 'Rule' ? 'rule' as const : 'model' as const,
     })))
 
     const reviewRows = database.prepare(`
@@ -13060,6 +13063,47 @@ export function openJournalStore(
       GROUP BY outcome_tag
     `).all(new Date(Date.parse(generatedAt) - 24 * 60 * 60 * 1000).toISOString()) as unknown as Array<{ outcome_tag: string, count: number }>
     const triageDecisionCount = (tag: string) => triageDecisionRows.find(row => row.outcome_tag === tag)?.count ?? 0
+    // A skip queues no Task and writes no Review run, so this is the only
+    // record History can build a row from. Newest first, capped: History is a
+    // list of what happened, not the whole journal.
+    const triageSkipRows = database.prepare(`
+      SELECT
+        pull_request_triage_runs.revision_id,
+        pull_request_triage_runs.reason,
+        pull_request_triage_runs.completed_at,
+        subjects.github_number,
+        repositories.github AS repository,
+        json_extract(revisions.payload, '$.title') AS title
+      FROM pull_request_triage_runs
+      JOIN subjects ON subjects.id = pull_request_triage_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = pull_request_triage_runs.revision_id
+        AND revisions.subject_id = subjects.id
+      WHERE pull_request_triage_runs.outcome_tag = 'ReviewSkipped'
+      ORDER BY pull_request_triage_runs.completed_at DESC
+      LIMIT 100
+    `).all() as unknown as Array<{
+      revision_id: string
+      reason: string
+      completed_at: string
+      github_number: number
+      repository: string
+      title: string | null
+    }>
+    const triageSkips: TriageSkip[] = triageSkipRows.map((row) => {
+      const decider = triageDecider(row.reason)
+      return {
+        key: `triage-skip:${row.repository}#${row.github_number}@${row.revision_id}`,
+        repository: row.repository,
+        pullRequestNumber: row.github_number,
+        title: row.title ?? '',
+        url: `https://github.com/${row.repository}/pull/${row.github_number}`,
+        decidedBy: decider._tag === 'Rule' ? 'rule' as const : 'model' as const,
+        confidence: decider._tag === 'Rule' ? null : decider.confidence,
+        reason: row.reason,
+        decidedAt: row.completed_at,
+      }
+    })
 
     return {
       generatedAt,
@@ -13076,6 +13120,7 @@ export function openJournalStore(
         reviewSkipped: triageDecisionCount('ReviewSkipped'),
         couldNotDecide: triageDecisionCount('ReviewRequiredAfterFailure'),
       },
+      triageSkips,
       agentProfile: resolveAgentProfile(activeSelection(), profile.maximumActiveAgents, roleReasoningEfforts),
       agentSelection: getAgentSelection(),
       agentStart: !mutationsEnabled
