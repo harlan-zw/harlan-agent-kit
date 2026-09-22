@@ -20,9 +20,16 @@ Nothing else may sit at the root. A new root Markdown file is an error.
 | `AGENTS.md` | the router plus the rules an agent gets wrong | every agent, every turn |
 | `GLOSSARY.md` | every product concept, and the `## Scopes` table | agents before naming anything, the `commit-msg` hook |
 | `VISION.md` | the product filter: what to reject | agents before non-trivial feature work |
-| `DESIGN.md` | the visual filter: how it must look and read | sites only |
+| `DESIGN.md` | the visual filter: how it must look | sites only |
+| `COPY.md` | the verbal filter: the canonical strings and the voice that writes them | sites only |
 | `CONTRIBUTING.md` | how a human contributes | humans |
 | `LICENSE.md`, `SECURITY.md`, `CHANGELOG.md` | the usual | humans, tooling |
+
+`COPY.md` owns the words on screen. `DESIGN.md` owns the pixels and defers voice
+to it. `GLOSSARY.md` owns what a concept is called; `COPY.md` owns how a
+sentence says it. `VISION.md` owns what may be claimed at all, so positioning
+belongs there, not in `COPY.md`. Displaced names: brand guidelines, voice guide,
+tone doc, messaging doc, verbal identity.
 
 Retired: `CONTEXT.md`. It did three different jobs across the repositories that
 had one. Its router content is now `AGENTS.md`, its vocabulary is `GLOSSARY.md`,
