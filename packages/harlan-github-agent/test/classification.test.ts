@@ -88,7 +88,8 @@ describe('classification source', () => {
         timeoutMs: 10,
         fetch: (_input, init) =>
           new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () => reject(init.signal.reason), { once: true })
+            const signal = init?.signal
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
           }),
       }),
     })
