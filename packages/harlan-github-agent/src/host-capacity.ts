@@ -1,4 +1,5 @@
 import type { AgentProvider, AgentTurnRequest } from './agent-provider.ts'
+import { desktopTurnMayMove } from './desktop-protocol.ts'
 
 export interface HostCapacity {
   localActive: number
@@ -148,7 +149,7 @@ export function createHostAgentPool(options: {
           catch (error) {
             // Nothing reached the caller yet, so the other host may still run
             // this turn from the start.
-            if (!started && error instanceof Error && error.cause === 'desktop-unsupported') {
+            if (!started && error instanceof Error && desktopTurnMayMove(error)) {
               refused.add(host)
               refusal = error
               continue

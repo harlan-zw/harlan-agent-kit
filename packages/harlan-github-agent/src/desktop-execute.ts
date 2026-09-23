@@ -8,12 +8,11 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
 import { createCodexProvider } from './codex-provider.ts'
-import { parseDesktopWorktree } from './desktop-protocol.ts'
+import { desktopErrorCause, parseDesktopWorktree } from './desktop-protocol.ts'
 import { desktopRepositoryPath, exportDesktopWorktree, prepareDesktopWorktree } from './desktop-worktree.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 
-/** Run a provider in an isolated desktop Worktree and return its exact changes. */
-export async function executeDesktopTurn(options: {
+export interface DesktopTurnOptions {
   turn: DesktopTurn
   directory: string
   /** Where cached control checkouts live, one per repository, across every task. */
@@ -22,11 +21,29 @@ export async function executeDesktopTurn(options: {
   signal: AbortSignal
   emit: (event: AgentEvent) => void
   capture?: (worktree: DesktopWorktree) => Promise<void>
-}): Promise<DesktopWorktree> {
-  const { turn, directory, provider, signal } = options
+}
+
+/** Run a provider in an isolated desktop Worktree and return its exact changes. */
+export async function executeDesktopTurn(options: DesktopTurnOptions): Promise<DesktopWorktree> {
+  const { turn, directory, signal } = options
   const snapshot = parseDesktopWorktree(turn.worktree)
-  const cache = desktopRepositoryPath(options.repositories, snapshot.origin)
-  const workspace = await prepareDesktopWorktree(snapshot, cache, join(directory, 'worktree'), turn.request.taskId ?? turn.id, signal)
+  // Everything before the provider starts leaves the turn untouched, so a
+  // failure here lets Hogwild run it instead of spending a Task attempt.
+  const lease = await Promise.resolve()
+    .then(() => prepareDesktopWorktree(snapshot, desktopRepositoryPath(options.repositories, snapshot.origin), join(directory, 'worktree'), turn.request.taskId ?? turn.id, signal))
+    .catch((error: unknown) => {
+      throw new Error(error instanceof Error ? error.message : 'The desktop Worktree setup failed.', { cause: desktopErrorCause(error) ?? 'desktop-setup' })
+    })
+  try {
+    return await runDesktopProvider(options, snapshot, lease.workspace)
+  }
+  finally {
+    await lease.release()
+  }
+}
+
+async function runDesktopProvider(options: DesktopTurnOptions, snapshot: DesktopWorktree, workspace: string): Promise<DesktopWorktree> {
+  const { turn, directory, provider, signal } = options
   const request = {
     ...turn.request,
     workspace,
@@ -73,6 +90,13 @@ async function main(): Promise<void> {
   if (environment._tag === 'Err')
     throw new Error(environment.error)
   const provider = turn.provider === 'codex' ? createCodexProvider() : createOpencodeProvider({ environment: environment.value })
+  const setupFailed = (error: unknown): never => {
+    // The desktop client reads this line and tells the controller that no
+    // provider started. See `DesktopFailure`.
+    if (desktopErrorCause(error) === 'desktop-setup')
+      process.stdout.write(`${JSON.stringify({ _tag: 'SetupFailed', reason: error instanceof Error ? error.message : String(error) })}\n`)
+    throw error
+  }
   await executeDesktopTurn({
     turn,
     directory: dirname(input),
@@ -83,7 +107,7 @@ async function main(): Promise<void> {
     signal: controller.signal,
     emit: event => process.stdout.write(`${JSON.stringify(event)}\n`),
     capture: result => writeFile(join(dirname(input), 'result.json'), JSON.stringify(result), { mode: 0o600 }),
-  })
+  }).catch(setupFailed)
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { createError, createEventStream, H3, setResponseStatus } from 'h3'
 import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
-import { parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
+import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseAgentSlots } from './host-capacity.ts'
 import { parseStatsRange } from './stats.ts'
 
@@ -404,7 +404,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   app.post('/api/desktop/complete', async (event) => {
     const body = await desktopBody(event)
     const result = body.result === null ? null : desktopInput(parseDesktopWorktree, body.result)
-    const failure = typeof body.failure === 'string' ? body.failure : null
+    const failure = desktopInput(parseDesktopFailure, body.failure ?? null)
     return { accepted: typeof body.id === 'string' && options.desktop?.complete(body.id, result, failure) === true }
   })
 
