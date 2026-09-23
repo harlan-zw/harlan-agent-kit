@@ -2577,6 +2577,7 @@ describe('journal store', () => {
         },
       },
       now: () => new Date('2026-08-13T01:08:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         recordReviewClosure: (input) => {

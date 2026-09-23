@@ -249,4 +249,50 @@ describe('review status scheduler', () => {
       'Published',
     ]))
   })
+
+  // Production, September 2026: the App installation lacked Checks write. Every
+  // terminal command deferred on the check run, retried every two seconds, and
+  // no READY or BLOCKED label reached GitHub for two and a half days.
+  it.each([
+    ['Refused', 'The level of access for permissions requested are not granted to this installation.'],
+    ['Failed', 'GitHub timed out.'],
+  ])('stamps the label and settles when the check run write is %s', async (outcome, reason) => {
+    const test = stagedTerminalStatus()
+    const reports: string[] = []
+    const labels: string[] = []
+    const failures: string[] = []
+    const published: string[] = []
+    const scheduler = createReviewStatusScheduler({
+      checkRuns: {
+        publisher: { upsertReviewCheckRun: () => Promise.resolve(err(reason)) },
+        report: (_repository, report) => reports.push(report._tag),
+      },
+      github: {
+        readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
+        upsertReviewStatus: () => Promise.resolve(ok({ commentId: 42, url: `${test.pullRequest.url}#issuecomment-42` })),
+        stampAgentLabel: (_repository, _number, label) => {
+          labels.push(label)
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      intervalMilliseconds: 5_000,
+      leaseMilliseconds: 60_000,
+      now: () => new Date('2026-08-13T01:01:30.000Z'),
+      onError: (error) => { throw error },
+      onFailure: (_repository, _number, failure) => failures.push(failure),
+      onPublished: (repository, number) => published.push(`${repository}#${number}`),
+      store: test.store,
+      workerId: 'status-publisher-1',
+    })
+
+    await scheduler.runNow()
+
+    expect(labels).toEqual(['READY'])
+    expect(reports).toEqual([outcome])
+    expect(failures).toEqual([])
+    expect(published).toEqual([`harlan-zw/example#${test.pullRequest.number}`])
+    // Settled, so the two second scheduler has nothing left to retry.
+    expect(test.store.claimNextTerminalReviewStatus('status-publisher-2', '2026-08-13T01:05:00.000Z', 60_000)).toBeNull()
+  })
 })

@@ -1,4 +1,4 @@
-import type { ReviewCheckRunUpdate } from '../src/review-check-run.ts'
+import type { ReviewCheckRunOutcome, ReviewCheckRunUpdate } from '../src/review-check-run.ts'
 import type { ClaimedReviewFixTask } from '../src/types.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { agentPhase } from '../src/agent-progress.ts'
@@ -146,8 +146,10 @@ describe('review status check run sink', () => {
     const deferred: string[] = []
     const upsert = vi.fn((_repository: unknown, _headSha: string, _update: ReviewCheckRunUpdate, _signal: AbortSignal) =>
       failing === undefined ? Promise.resolve(ok(undefined)) : failing())
+    const reports: ReviewCheckRunOutcome[] = []
     const checkRuns = {
-      upsertReviewCheckRun: (...args: Parameters<typeof upsert>) => upsert(...args),
+      publisher: { upsertReviewCheckRun: (...args: Parameters<typeof upsert>) => upsert(...args) },
+      report: (_repository: string, outcome: ReviewCheckRunOutcome) => reports.push(outcome),
     }
     const controller = createReviewStatusController({
       checkRuns,
@@ -206,7 +208,7 @@ describe('review status check run sink', () => {
       workerId: 'status-worker',
     })
 
-    return { controller, deferred, upsert, task }
+    return { controller, deferred, reports, upsert, task }
   }
 
   it('publishes the check run beside the comment, on the reviewed head', async () => {
@@ -224,11 +226,12 @@ describe('review status check run sink', () => {
     expect(deferred).toEqual([])
   })
 
-  it('defers the publication when the check run write fails', async () => {
-    const { controller, deferred, task } = harness(() => Promise.resolve(err('GitHub refused the check run write.')))
+  it('publishes and reports when the check run write fails', async () => {
+    const { controller, deferred, reports, task } = harness(() => Promise.resolve(err('GitHub timed out.')))
     const result = await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)
 
-    expect(result).toEqual(err('GitHub refused the check run write.'))
-    expect(deferred).toEqual(['GitHub refused the check run write.'])
+    expect(result).toEqual(ok(undefined))
+    expect(deferred).toEqual([])
+    expect(reports).toEqual([{ _tag: 'Failed', message: 'GitHub timed out.' }])
   })
 })

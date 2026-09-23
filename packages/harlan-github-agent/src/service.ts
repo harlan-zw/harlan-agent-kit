@@ -7,6 +7,7 @@ import type { GitHubUserAccess } from './github-user-access.ts'
 import type { AgentSlotLimits } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
 import type { Result } from './result.ts'
+import type { ReviewCheckRunReport } from './review-check-run.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
 import type { JournalStore } from './store.ts'
@@ -163,6 +164,42 @@ function recordServiceIncident(
     at,
   })
 }
+
+/**
+ * Files every Review check run write against its repository.
+ *
+ * A refusal names the missing permission and asks a person to grant it. Any
+ * other failure warns, and the next publication on the head writes the check
+ * run again. A write that lands clears both.
+ */
+export function createReviewCheckRunReport(
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
+  now: () => Date,
+): ReviewCheckRunReport {
+  return (repository, outcome) => {
+    const at = now().toISOString()
+    const scope: IncidentScope = { _tag: 'Repository', repository }
+    if (outcome._tag === 'Written') {
+      store.resolveIncidents(scope, at, REVIEW_CHECK_RUN_OPERATION)
+      return
+    }
+    if (outcome._tag === 'Failed') {
+      recordServiceIncident(store, at, REVIEW_CHECK_RUN_OPERATION, outcome.message, scope)
+      return
+    }
+    store.recordIncident({
+      scope,
+      kind: 'installation_access',
+      severity: 'error',
+      operation: REVIEW_CHECK_RUN_OPERATION,
+      message: `The GitHub App installation does not grant ${outcome.permission}. The Review check run is not written. Grant ${outcome.permission} to the App installation.`,
+      recovery: { _tag: 'ActionRequired' },
+      at,
+    })
+  }
+}
+
+const REVIEW_CHECK_RUN_OPERATION = 'review_check_run'
 
 /**
  * Records one poll pass's failures, unless the pass was aborted.
@@ -468,10 +505,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           model: options.classification.model,
         }),
       })
+  const reportCheckRun = createReviewCheckRunReport(store, now)
   const pullRequestTriage = createPullRequestTriageController({
     classification,
     github: workerGithub,
     now,
+    reportCheckRun,
     store,
   })
   // Issue triage classification runs only when the configuration sets a band:
@@ -598,7 +637,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
     })
     const reviewStatus = createReviewStatusController({
-      checkRuns: workerGithub,
+      checkRuns: { publisher: workerGithub, report: reportCheckRun },
       commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
       github: workerGithub,
       leaseMilliseconds: 2 * 60_000,
@@ -775,7 +814,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
-        checkRuns: workerGithub,
+        checkRuns: { publisher: workerGithub, report: reportCheckRun },
         github: workerGithub,
         intervalMilliseconds: 2_000,
         leaseMilliseconds: 2 * 60_000,
@@ -1146,6 +1185,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         const stopped = await guarded('Stopped review comments', () => publishStoppedReviews({
           github: workerGithub,
           now,
+          reportCheckRun,
           repositories: config.repositories,
           store,
         }, signal), { results: [], remaining: 0 })

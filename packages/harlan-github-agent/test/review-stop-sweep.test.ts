@@ -1,3 +1,4 @@
+import type { ReviewCheckRunOutcome } from '../src/review-check-run.ts'
 import type { JournalStore, StoppedReview } from '../src/store.ts'
 import { describe, expect, it } from 'vitest'
 import { err, ok } from '../src/result.ts'
@@ -98,6 +99,7 @@ describe('publishStoppedReviews', () => {
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -123,6 +125,7 @@ describe('publishStoppedReviews', () => {
         },
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -152,6 +155,7 @@ describe('publishStoppedReviews', () => {
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Foreign', reason })),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -182,6 +186,7 @@ describe('publishStoppedReviews', () => {
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -219,6 +224,7 @@ describe('publishStoppedReviews', () => {
         },
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -247,6 +253,7 @@ describe('publishStoppedReviews', () => {
         },
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         recordReviewClosure: (input) => {
@@ -283,6 +290,7 @@ describe('publishStoppedReviews', () => {
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         recordReviewClosure: () => {
@@ -325,6 +333,7 @@ describe('publishStoppedReviews', () => {
         },
       },
       now: () => new Date(clock),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -348,6 +357,7 @@ describe('publishStoppedReviews', () => {
         editReviewStatus: () => Promise.reject(new Error('The budget was spent before any row ran.')),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -372,6 +382,7 @@ describe('publishStoppedReviews', () => {
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -407,6 +418,7 @@ describe('publishStoppedReviews', () => {
         },
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -435,6 +447,7 @@ describe('publishStoppedReviews', () => {
         },
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -447,16 +460,18 @@ describe('publishStoppedReviews', () => {
     expect(checkRuns).toEqual([{ headSha: 'abc123', conclusion: 'neutral' }])
   })
 
-  it('keeps a stopped review eligible when the check run write fails', async () => {
+  it('settles a stopped review when the installation refuses its check run', async () => {
     let recorded = 0
+    const reports: ReviewCheckRunOutcome[] = []
     const { results } = await publishStoppedReviews({
       github: {
         ...githubStatus,
         getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
-        upsertReviewCheckRun: () => Promise.resolve(err('GitHub refused the check run write.')),
+        upsertReviewCheckRun: () => Promise.resolve(err('The permissions requested are not granted to this installation.')),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: (_repository, outcome) => reports.push(outcome),
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -469,8 +484,9 @@ describe('publishStoppedReviews', () => {
       },
     }, new AbortController().signal)
 
-    expect(results[0]?._tag).toBe('Err')
-    expect(recorded).toBe(0)
+    expect(results[0]?._tag).toBe('Ok')
+    expect(recorded).toBe(1)
+    expect(reports.map(report => report._tag)).toEqual(['Refused'])
   })
 
   it('retires a stale publication after another Task replaces its comment', async () => {
@@ -482,6 +498,7 @@ describe('publishStoppedReviews', () => {
         editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
@@ -510,6 +527,7 @@ describe('publishStoppedReviews', () => {
         },
       },
       now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
       repositories: [repositoryMapping()],
       store: {
         ...reviewClosureStore,
