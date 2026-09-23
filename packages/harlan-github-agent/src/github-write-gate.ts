@@ -43,6 +43,7 @@ export function createGitHubWriteGate(options: GitHubWriteGateOptions): GitHubTo
       }))
     },
     invalidate: (repository, access) => options.source.invalidate(repository, access),
+    rateLimited: (repository, limit) => options.source.rateLimited?.(repository, limit),
   }
 }
 

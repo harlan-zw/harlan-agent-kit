@@ -4,6 +4,7 @@ import { readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { App, Octokit } from 'octokit'
 import { normalizeGitHubRemote } from './config.ts'
+import { failFastThrottle } from './github-rate-limit.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 
 export interface InstalledRepository {
@@ -76,7 +77,7 @@ export async function discoverGitHubAppRepositories(options: GitHubAppRepository
   const app = new App({
     appId: options.appId,
     privateKey: options.privateKey,
-    Octokit: Octokit.defaults({ userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0' }),
+    Octokit: Octokit.defaults({ userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0', throttle: failFastThrottle }),
   })
   const repositories: InstalledRepository[] = []
   for await (const { repository } of app.eachRepository.iterator()) {
