@@ -35,7 +35,7 @@ Read the stored Measurements on the repository's notes ref and decide which Benc
 Return a Markdown report within ${MAXIMUM_REPORT_DETAIL_LENGTH} characters, even when the series is too short to judge or no Measurement exists.
 Name every Benchmark you judged, every Benchmark you refused to judge, and why.
 Return one Candidate for each confirmed Regression, and none for a Suspect.
-Also return a Candidate for each Opportunity the stored series supports: a Benchmark that drifted without any single commit clearing its Threshold, one whose count keeps growing, or the one that costs the most.
+Also return a Candidate for each Opportunity the stored series supports: a Benchmark that drifted without any single commit clearing its Threshold, one whose count growth meets the Skill's growing count rule, or the one that costs the most.
 Never propose an Opportunity the series does not point at. A pull request proves it later; the series is what earns the attempt.
 Keep repository files and GitHub read only.
 Do not duplicate work already owned by an open issue or pull request.`),

@@ -39,6 +39,14 @@ done
 
 Each Measurement carries, for each Benchmark, `head`, `parent` and `control` minimums, `deltaPercent`, `controlPercent`, and `verified`.
 
+A Measurement does not carry the Threshold. Read each Benchmark's `thresholdPercent` from the manifest on the default branch:
+
+```bash
+git show origin/main:perf/benchmarks.json
+```
+
+A Benchmark without `thresholdPercent` has a `thresholdPercent` of 0.
+
 Discard a Measurement that is missing a side, carries a `harness` version other than the one the repository declares, or reports `verified: false`. Say how many you discarded and why.
 
 ### Decide
@@ -46,7 +54,9 @@ Discard a Measurement that is missing a side, carries a `harness` version other 
 Apply these in order, for each Benchmark separately.
 
 1. **Refuse a short series.** With fewer than 10 usable Measurements for that Benchmark, judge nothing. Name the Benchmark, give the count, and move on. This is not a failure. A repository that has just adopted the harness will report only this for weeks.
-2. **Clear the Threshold.** A `time` or `memory` Benchmark needs `|deltaPercent|` above both 5 percent and twice its own `controlPercent`. A `count` Benchmark has no measurement noise, so any non-zero delta clears.
+2. **Clear the Threshold.** A `time` or `memory` Benchmark needs `|deltaPercent|` above both 5 percent and twice its own `controlPercent`. A `count` Benchmark has no measurement noise, so it needs `|deltaPercent|` above its `thresholdPercent` only. With the default of 0, any non-zero delta clears.
+
+   A site sets `thresholdPercent` on its bundle counts, because most feature commits add some bytes. That growth is expected. Only a step above the declared percentage is a Regression.
 3. **Require persistence.** The Benchmark's value must stay up across the next 3 usable Measurements. Count Measurements, never commits: a cancelled workflow run leaves a gap, and a gap is not evidence.
 4. **Below persistence, it is a Suspect.** Name it in the report. File nothing.
 5. **Attribute.** The commit whose Measurement first cleared the Threshold owns the Regression. Name the pull request that merged it.
@@ -59,8 +69,11 @@ A Regression says something broke. An Opportunity says something is worth attack
 
 Three things earn an Opportunity. Read them from the series, never from an impression of the code.
 
-1. **Drift.** The Benchmark slid across the window while no single commit ever cleared its Threshold. Compare the oldest and newest usable Measurement. Death by a thousand cuts is invisible to the per-commit rule, and it is the most valuable thing this Routine can find.
-2. **Growing count.** A `count` Benchmark carries no noise, so a steady climb is real however small each step was.
+1. **Drift.** The Benchmark slid across the window while no single commit ever cleared its Threshold. Compare the oldest and newest usable Measurement. Death by a thousand cuts is invisible to the per-commit rule, and it is the most valuable thing this Routine can find. A `count` Benchmark uses the next rule instead.
+2. **Growing count.** A `count` Benchmark carries no noise, so a steady climb is real however small each step was. Take the oldest and the newest usable Measurement in the window, and compute the growth of `head.min` between them as a percentage of the oldest.
+   - If `thresholdPercent` is 0, any growth is an Opportunity. Each step already cleared the Threshold on its own.
+   - If `thresholdPercent` is above 0, the growth must be above 5 times `thresholdPercent`. For a 2 percent Threshold, that is 10 percent across the window.
+   - Below that, the growth is normal feature work. Name it in the report as drift, and file nothing.
 3. **The largest cost.** The Benchmark with the highest absolute value, when nothing else is outstanding. Say plainly that this one rests on size alone.
 
 One Opportunity per scan at most. This is the part of the report a reader learns to skim, and the way to keep it read is to keep it rare.
