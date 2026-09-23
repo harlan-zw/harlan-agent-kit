@@ -6,6 +6,7 @@ import { perfReview } from './perf-review.ts'
 import { prTriage } from './pr-triage.ts'
 import { sentryCheckin } from './sentry-checkin.ts'
 import { seoReview } from './seo-review.ts'
+import { vitalsReview } from './vitals-review.ts'
 
 // Only compiled definitions grant Routine authority. YAML selects a name from this table.
 const routines = {
@@ -17,6 +18,7 @@ const routines = {
   'ci-review': ciReview,
   'perf-review': perfReview,
   'seo-review': seoReview,
+  'vitals-review': vitalsReview,
 }
 
 export type RoutineName = keyof typeof routines

@@ -383,6 +383,30 @@ Actions that need an operational change or a person's decision stay in the repor
 Issue work repairs the cause and names the action IDs to resolve after deploy. It never resolves an action itself.
 The usual Review and merge policies apply. Repositories enable `seo-review` through their own Routine spec.
 
+## Weekly vitals review
+
+The `vitals-review` Routine reads one Site's performance from [NuxtSEO](https://nuxtseo.com) and files one issue per page defect.
+It reads two datasets and never mixes them. Field findings say what real users feel. Lab Scans say what Lighthouse measured.
+It matches the repository to its Site the same way `seo-review` does, and needs the same `nuxtseo` CLI and `NUXTSEO_TOKEN`.
+
+A field finding files when NuxtSEO rates it Poor and at least 200 estimated views saw it.
+Its fingerprint is the page, the metric, and the element selector.
+A lab series is one page on one strategy. `scans list` interleaves mobile and desktop, so the Routine never compares across them.
+A lab series files when its last 2 Scans are Poor, or when its last 2 or more Scans are worse than the Scans before them.
+Its fingerprint is the page, the strategy, and the metric.
+A single worse Scan is a Suspect. A series whose earlier Scans already swing is Unstable. Neither files anything.
+
+The Agent returns the CLI rows it relied on, and the controller makes both decisions itself: whether a proposal files, and its fingerprint.
+Each refusal appears in the report under "Controller decisions", so a person sees what the rule turned away.
+A lab drop must name the commit range deployed between its last good Scan and its first worse one.
+
+Issue work fixes the cause. It verifies with local [Unlighthouse](https://unlighthouse.dev) on that route only when the metric reproduces in the lab: LCP, FCP, and TBT, and CLS only when lab CLS is not near zero. INP never does.
+After a fix merges and deploys, the next scan starts a `nuxtseo page scan` for that page and later reports the fix as confirmed or not holding.
+A fix that is not holding names its issue for Harlan to reopen, because the ledger never files one fingerprint twice.
+
+When a repository runs `vitals-review` in `propose` mode, the `seo-review` Routine leaves NuxtSEO's performance actions to it. In `report` mode `seo-review` still files them.
+The usual Review and merge policies apply. Repositories enable `vitals-review` through their own Routine spec.
+
 ## Adding a Routine
 
 Built-in definitions live in `src/routines/`. Each definition owns its scan and downstream issue policy.

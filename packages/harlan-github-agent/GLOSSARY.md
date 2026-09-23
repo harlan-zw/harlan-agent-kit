@@ -670,7 +670,7 @@ A Regression is not an Incident, because an Incident is a failure of the control
 
 ### Suspect
 
-A delta that cleared its Threshold but has not persisted across three later Measurements. A Suspect appears in the Routine report and files nothing.
+A delta that cleared its Threshold but has not persisted yet: across three later Measurements for a Benchmark, or across a second consecutive Scan for a Lab series. A Suspect appears in the Routine report and files nothing.
 
 ### Opportunity
 
@@ -680,9 +680,31 @@ An Opportunity is proven by the pull request that answers it. Its automated perf
 
 ### Threshold
 
-What a delta must clear before it counts as a Regression: a relative floor, and a multiple of the noise the same Measurement recorded.
+What a delta must clear before it counts. For a Regression: a relative floor, and a multiple of the noise the same Measurement recorded. For a Lab drop: a fixed floor per metric, and a share of the reference Scans' median.
 
 Use Threshold. Do not use budget, which is a banned synonym for Reserve.
+
+### Vitals finding
+
+One row of NuxtSEO's `vitals findings`: a field Core Web Vital failing for real users on one route, attributed to one element selector.
+
+NuxtSEO names it a finding, so this keeps its word. Always qualify it: a bare finding is ambiguous with Review finding and Process finding.
+
+### Lab series
+
+The completed Lighthouse Scans of one page on one strategy, mobile or desktop, oldest first.
+
+Scan is NuxtSEO's word and stays. A Lab series never mixes strategies, because NuxtSEO scans each on its own day and a mixed list reads a schedule as a drop.
+
+### Poor series
+
+A Lab series whose last two Scans sit above the Poor line for one metric. It files an issue whether or not the page was ever better.
+
+### Lab drop
+
+A Lab series whose last two or more Scans each clear the Threshold against the median of the Scans before them, attributed to the commit range deployed in between.
+
+A Lab drop is not a Regression, because a Regression belongs to a Benchmark and one commit. When the Scans before the drop disagree with each other, the series is Unstable and files nothing.
 
 ### Process finding
 
