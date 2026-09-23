@@ -13,13 +13,7 @@ never uses.
 
 ## Worktree isolation
 
-Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Before mutation, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md).
 
 ## The failure mode this exists to stop
 
@@ -37,20 +31,7 @@ a public export.
 
 ## Boundaries
 
-Four filters govern what a user sees. Each owns one question, and they are not
-interchangeable:
-
-| File | Owns | The question |
-| --- | --- | --- |
-| `VISION.md` | claims | May we say this at all? |
-| `GLOSSARY.md` | nouns | What is this thing called? |
-| `COPY.md` | sentences | How does a sentence say it? |
-| `DESIGN.md` | pixels | How does it look? |
-
-So a headline that claims something `VISION.md` rejects is a vision problem, not a copy problem.
-A label that invents a synonym for a named concept is a glossary problem. `COPY.md` owns what is
-left: the exact wording, the register, and the banned language.
-
+The [root docs contract](../../references/root-docs.md#root-set) says which filter owns what.
 When they disagree: `VISION.md` wins over everything, `GLOSSARY.md` wins on a product noun, and
 `COPY.md` wins on the sentence around it.
 
@@ -184,7 +165,8 @@ Do not invent the voice. Recover the one already in the product, then pick winne
    `BRAND.md`, `CONTEXT.md`, `STYLE.md`, `DESIGN.md`, `CONTRIBUTING.md`, `README.md`, the docs
    tree, or `.claude/context/`. A project that cares about wording usually wrote one down
    without calling it `COPY.md`. Missing this ships a second competing voice guide, which is the
-   worst outcome this skill can produce.
+   worst outcome this skill can produce. If `DESIGN.md` states a copy ban, move it to `COPY.md`
+   and delete it from `DESIGN.md`. A ban lives in one file.
 
    **0.5. Decide how you relate to what you found, and record the decision.** Same three
    outcomes as the `glossary` skill, and it will not choose for you: **point to it**, **fold it
@@ -226,6 +208,7 @@ Do not invent the voice. Recover the one already in the product, then pick winne
    stored enum value, a route segment, a published export, or a CLI flag. A word the product
    persists is not a synonym to be replaced; the ban is the defect. Report those first, as copy
    bugs rather than code bugs, because every hit they generate downstream is noise.
+   Also check each Banned row's "Use instead" term. It must not be banned in `GLOSSARY.md`.
 3. **Search for near-misses of each canonical asset, not exact matches.** An exact match is
    correct by definition; the drift is the paraphrase. Take the distinctive 3 or 4 words of each
    asset and search for those, then read each hit against the recorded string.

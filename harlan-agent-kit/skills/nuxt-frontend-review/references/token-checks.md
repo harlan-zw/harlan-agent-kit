@@ -20,7 +20,7 @@ npx --yes @google/design.md lint DESIGN.md 2>/dev/null
 
 Parse the JSON. Hard rejects:
 - any `severity: "error"` (broken refs, invalid hex, section-order violations)
-- contrast-ratio warnings on `components.*` pairs below 4.5:1, unless `## Design Decisions` explicitly accepts that pairing (e.g. "button-primary contrast 3.96:1 accepted: large text only, signature purple is theme-defining")
+- contrast-ratio warnings on `components.*` pairs below 4.5:1, unless the decisions log explicitly accepts that pairing (e.g. "button-primary contrast 3.96:1 accepted: large text only, signature purple is theme-defining")
 
 Informational, not rejects: unknown component property warnings (`shadow`, `border`, `boxShadow`, `transform`), and orphaned-token warnings on palette colors that exist for theming without a specific component reference.
 
