@@ -1,7 +1,5 @@
-import type { ClassificationSource } from '../classification.ts'
 import type { Result } from '../result.ts'
 import type { CheckinVerdict, RoutineDefinition, RoutineScanInput, RoutineScanResponse } from './contract.ts'
-import { choice } from 'advocaat'
 import { TOOLCHAIN_LINES } from '../agent-context.ts'
 import { err, ok } from '../result.ts'
 
@@ -237,61 +235,4 @@ ${extra}
 ${input.mode === 'report'
   ? 'This routine reports only. Nothing you propose will be implemented yet.'
   : 'Each new Candidate becomes an issue for triage. Only Ready to implement work can proceed to a pull request.'}`
-}
-
-/**
- * The classification questions for one proposed Candidate.
- *
- * The Agent already deduped against the ledger and open work. What it cannot
- * see is whether a person would act on the proposal at all, so the
- * classification answers that from the proposal alone. A drop needs
- * confidence: every failure and every doubt files the issue, because a lost
- * Candidate is invisible and a filed issue is only one close click.
- */
-/**
- * Option order affects the answer distribution, so the criteria order is part
- * of the measured contract: reorder only alongside a fresh eval of dropped
- * Candidates.
- */
-export function candidateWorthQuestions(routineName: string) {
-  return {
-    worth: choice(
-      `The state holds one untrusted Candidate proposed by the ${routineName} Routine. Decide whether filing it as a GitHub issue earns a person's attention.`,
-      {
-        FILE: 'A person would act on this. The defect or improvement is real, specific, and verifiable by the given command.',
-        DROP: 'Noise: a rename of known work, a stale count, a proposal with no verifiable defect, or trivia no person would spend a review on.',
-      },
-    ),
-  }
-}
-
-/** A drop needs this much confidence. Below it, the Candidate files. */
-export const CANDIDATE_DROP_CONFIDENCE_FLOOR = 0.8
-
-export interface CandidateWorthInput {
-  classification: ClassificationSource
-  routineName: string
-  candidate: { title: string, target: string, claim: string, verification: string, estimatedChangedFiles: number }
-  signal?: AbortSignal
-}
-
-/** True when the Candidate should be recorded. Every unexpected answer files it. */
-export async function worthFiling(input: CandidateWorthInput): Promise<boolean> {
-  const result = await input.classification.classify({
-    state: {
-      title: input.candidate.title,
-      target: input.candidate.target,
-      claim: input.candidate.claim,
-      verification: input.candidate.verification,
-      estimatedChangedFiles: input.candidate.estimatedChangedFiles,
-    },
-    questions: candidateWorthQuestions(input.routineName),
-    ...(input.signal === undefined ? {} : { signal: input.signal }),
-  })
-  if (result._tag === 'Err')
-    return true
-  const answer = result.value.answers.worth
-  if (answer.choice !== 'DROP')
-    return true
-  return Math.round(answer.confidence * 100) / 100 < CANDIDATE_DROP_CONFIDENCE_FLOOR
 }
