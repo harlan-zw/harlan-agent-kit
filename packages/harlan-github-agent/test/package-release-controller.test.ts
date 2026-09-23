@@ -9,7 +9,7 @@ import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
-const repository = { ...repositoryMapping(), release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'] } }
+const repository = { ...repositoryMapping(), release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'], credential: { _tag: 'Repository' as const } } }
 
 function setup() {
   const database = new DatabaseSync(':memory:')
@@ -99,6 +99,17 @@ it('keeps a text command that arrives before the offer exists', async () => {
   expect(task.source.prepare).toHaveBeenCalledTimes(1)
   task.store.queuePackageReleaseCommand({ repository: repository.github, pullRequestNumber: 24, commentId: 101, requestedBy: 'harlan-zw', bump: 'auto' })
   expect(task.store.listPackageReleaseCommands(repository.github)).toEqual([])
+  task.database.close()
+})
+
+it.each([
+  ['User', 1],
+  ['Repository', 0],
+] as const)('offers a maintained repository release only with the %s credential opt in', async (credential, offers) => {
+  const task = setup()
+  const maintained = { ...repository, github: 'nuxt-modules/example', ownership: 'maintained' as const, release: { ...repository.release, credential: { _tag: credential } } }
+  await reconcilePackageReleases({ webhookReady: true, repository: maintained, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  expect(task.source.comment).toHaveBeenCalledTimes(offers)
   task.database.close()
 })
 

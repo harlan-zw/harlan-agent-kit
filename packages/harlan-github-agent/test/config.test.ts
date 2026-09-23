@@ -345,6 +345,28 @@ agent:
     })
   })
 
+  it.each([
+    ['owned', ''],
+    ['maintained', '\n      credential: user'],
+    ['owned', '\n      credential: user'],
+  ])('accepts a package release policy on an %s repository', (ownership, credential) => {
+    const parsed = parseConfigText(configText
+      .replace('ownership: owned', `ownership: ${ownership}`)
+      .replace('    take_ownership:', `    release:\n      manifest: package.json\n      version_files: [package.json]\n      tag_prefix: v\n      workflow: release.yml\n      checks: [test]${credential}\n    take_ownership:`))
+    expect(parsed._tag).toBe('Ok')
+  })
+
+  it.each([
+    ['maintained', '', 'Package releases in a maintained repository need the explicit opt in credential: user.'],
+    ['external', '\n      credential: user', 'Package releases require an owned or maintained repository.'],
+  ])('refuses a package release policy on a %s repository without the user credential opt in', (ownership, credential, message) => {
+    const parsed = parseConfigText(configText
+      .replace('ownership: owned', `ownership: ${ownership}`)
+      .replace('conflict_resolution: true', 'conflict_resolution: false')
+      .replace('    take_ownership:', `    release:\n      manifest: package.json\n      version_files: [package.json]\n      tag_prefix: v\n      workflow: release.yml\n      checks: [test]${credential}\n    take_ownership:`))
+    expect(parsed._tag === 'Err' && parsed.error).toContainEqual({ path: '$.repositories[0].release', message })
+  })
+
   it('refuses a contained scope on a repository the service does not own or review', () => {
     const maintained = parseConfigText(configText
       .replace('ownership: owned', 'ownership: maintained')

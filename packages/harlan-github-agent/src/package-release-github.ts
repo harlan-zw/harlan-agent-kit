@@ -10,11 +10,21 @@ import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMer
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
 
+/** One GitHub identity: the login it writes as, and the credential that proves it. */
+export interface PackageReleaseActor {
+  login: string
+  tokens: GitHubTokenProvider
+}
+
 /** All remote writes stay in the controller, with a fresh lease and repository credential. */
 export function createPackageReleaseSource(options: {
   repository: RepositoryMapping
-  tokens: GitHubTokenProvider
-  actorLogin: string
+  /**
+   * `repository` is the credential discovery chose. `user` is Harlan's own.
+   * The release policy picks one. Discovery never does, so an App installed
+   * later cannot take over a release that must speak for Harlan.
+   */
+  actors: { repository: PackageReleaseActor, user: PackageReleaseActor }
   assertLease: () => void
   review: (number: number, sha: string) => StoredReviewForHead
   template: () => Promise<string>
@@ -27,12 +37,13 @@ export function createPackageReleaseSource(options: {
   const config = repository.release
   if (config === undefined)
     throw new Error('Package releases are disabled.')
+  const actor = config.credential._tag === 'User' ? options.actors.user : options.actors.repository
   const [owner = '', repo = ''] = repository.github.split('/')
   const scope = { owner, repo }
   const request = { signal, timeout: 30_000 }
   const client = async (access: GitHubRepositoryAccess): Promise<Octokit> => {
     assertLease()
-    const result = await options.tokens.getToken(repository.github, access, signal)
+    const result = await actor.tokens.getToken(repository.github, access, signal)
     if (result._tag === 'Err')
       throw new Error(result.error.message)
     const octokit = options.createClient?.(result.value.token) ?? new Octokit({ auth: result.value.token, request, throttle: failFastThrottle })
@@ -96,7 +107,7 @@ export function createPackageReleaseSource(options: {
   const blocked = (reason: string) => ({ _tag: 'Blocked' as const, reason })
   const inspect = async (number: number): Promise<PackageReleaseOffer> => {
     const unavailable = (reason: string): PackageReleaseOffer => ({ _tag: 'Unavailable', reason })
-    if (!repository.pullRequestReview || !repository.writablePullRequestAuthors.some(author => author.toLowerCase() === options.actorLogin.toLowerCase()))
+    if (!repository.pullRequestReview || !repository.writablePullRequestAuthors.some(author => author.toLowerCase() === actor.login.toLowerCase()))
       return unavailable('Release preparation requires Review and a trusted publishing author.')
     const api = await client('read')
     const pull = (await api.rest.pulls.get({ ...scope, pull_number: number })).data
@@ -172,7 +183,7 @@ export function createPackageReleaseSource(options: {
     const comments = stored === null
       ? await api.paginate(api.rest.issues.listComments, { ...scope, issue_number: number, per_page: 100 })
       : [stored]
-    const existing = comments.find(comment => comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase()
+    const existing = comments.find(comment => comment.user?.login.toLowerCase() === actor.login.toLowerCase()
       && comment.issue_url.endsWith(`/issues/${number}`) && comment.body?.startsWith(PACKAGE_RELEASE_MARKER))
     if (stored !== null && existing === undefined)
       throw new Error('The release comment no longer belongs to this Task.')
@@ -212,8 +223,8 @@ export function createPackageReleaseSource(options: {
       const tag = `${config.tagPrefix}${plan.version}`
       if (current.version === plan.version)
         return { _tag: 'Publishing', tag, sha: plan.sourceSha }
-      if (!repository.writablePullRequestAuthors.some(author => author.toLowerCase() === options.actorLogin.toLowerCase()))
-        return blocked('Add the GitHub App author to writable_pr_authors before enabling release preparation.')
+      if (!repository.writablePullRequestAuthors.some(author => author.toLowerCase() === actor.login.toLowerCase()))
+        return blocked(`Add ${actor.login} to writable_pr_authors before enabling release preparation.`)
       const files = await Promise.all(config.versionFiles.map(async (path) => {
         const value = await manifest(path, plan.sourceSha)
         if (value.version !== plan.previousVersion)

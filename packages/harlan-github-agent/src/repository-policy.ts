@@ -63,3 +63,18 @@ export function canWorkIssues(mapping: RepositoryMapping): boolean {
     && mapping.issueWork
     && mapping.writablePullRequestHeadPrefixes.length > 0
 }
+
+/**
+ * True when the controller may offer and publish package releases here.
+ *
+ * An owned repository needs a release policy. A maintained repository also
+ * needs the explicit `credential: user` opt in, so every release write there
+ * uses Harlan's own token and never the App.
+ */
+export function canReleasePackages(mapping: RepositoryMapping): boolean {
+  if (!mapping.enabled || !mapping.pullRequestReview || mapping.release === undefined)
+    return false
+  if (mapping.ownership === 'owned')
+    return true
+  return mapping.ownership === 'maintained' && mapping.release.credential._tag === 'User'
+}

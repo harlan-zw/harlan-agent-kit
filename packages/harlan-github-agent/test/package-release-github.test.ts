@@ -2,7 +2,7 @@ import type { StoredReviewForHead } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { DatabaseSync } from 'node:sqlite'
 import { Octokit } from 'octokit'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseSource } from '../src/package-release-github.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
@@ -10,7 +10,7 @@ import { repositoryMapping } from './fixtures.ts'
 
 const sha = 'a'.repeat(40)
 const mergeSha = 'b'.repeat(40)
-const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-github-agent[bot]'], release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'] } }
+const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-github-agent[bot]'], release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'], credential: { _tag: 'Repository' as const } } }
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
 const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued' as const, requestedBy: 'harlan-zw' } }
 
@@ -128,7 +128,7 @@ function fixture() {
     Object.defineProperty(response, 'url', { value: req.url })
     return response
   }
-  const source = createPackageReleaseSource({ repository: mapping, actorLogin: 'harlan-github-agent[bot]', template: async () => '### 📚 Description', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }, assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: token => new Octokit({ auth: token, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
+  const source = createPackageReleaseSource({ repository: mapping, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: token => new Octokit({ auth: token, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
   return { source, writes, refs, openSource: (title = 'fix: handle input') => {
     sourceOpen = true
     sourceTitle = title
@@ -257,4 +257,35 @@ it('releases a preselected pull request only after merge and passing default bra
   expect(store.listPackageReleases(mapping.github)[0]?.state._tag).toBe('Prepared')
   expect(task.refs.has('heads/release/24-1.0.1')).toBe(true)
   db.close()
+})
+
+it('writes a maintained repository release with the user credential even when the App can reach it', async () => {
+  const requests: Array<{ method: string, path: string, authorization: string | null }> = []
+  const appTokens = { getToken: vi.fn(async () => ({ _tag: 'Ok' as const, value: { token: 'app-token', expiresAt: '2099-01-01' } })), invalidate: () => {} }
+  const repository = { ...repositoryMapping({ github: 'nuxt-modules/example', ownership: 'maintained', authentication: 'app' }), release: { ...mapping.release, credential: { _tag: 'User' as const } } }
+  const source = createPackageReleaseSource({
+    repository,
+    actors: {
+      repository: { login: 'harlan-github-agent[bot]', tokens: appTokens },
+      user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'user-token', expiresAt: '2099-01-01' } }), invalidate: () => {} } },
+    },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    createClient: token => new Octokit({ auth: token, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      const req = new Request(input, init)
+      requests.push({ method: req.method, path: new URL(req.url).pathname, authorization: req.headers.get('authorization') })
+      const response = Response.json(req.method === 'GET' ? [] : { id: 7 })
+      Object.defineProperty(response, 'url', { value: req.url })
+      return response
+    } }, retry: { enabled: false }, throttle: { enabled: false } }),
+  })
+  expect(await source.comment(24, 'status')).toBe(7)
+  expect(requests).toEqual([
+    { method: 'GET', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
+    { method: 'POST', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
+  ])
+  expect(appTokens.getToken).not.toHaveBeenCalled()
 })

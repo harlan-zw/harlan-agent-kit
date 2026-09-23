@@ -66,6 +66,7 @@ import { createPullRequestTriageController } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
+import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
 import { err, ok } from './result.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
@@ -302,13 +303,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // login used to throw out of start and take the whole service with it. The
   // repositories that need the login are dropped for this run instead, so the
   // ones that do not need it keep working.
-  const resolvedLogin = userRepositories.length === 0
-    ? { _tag: 'Ok' as const, value: AGENT_ACTOR_LOGIN }
-    : await resolveUserLogin(userAccess, options.logger)
+  // Package releases need the login as well. Only Harlan grants release
+  // authority, and a release with the user credential writes as him.
+  const needsUserLogin = userRepositories.length > 0 || options.config.repositories.some(repository => repository.release !== undefined)
+  const resolvedLogin = needsUserLogin
+    ? await resolveUserLogin(userAccess, options.logger)
+    : { _tag: 'Ok' as const, value: AGENT_ACTOR_LOGIN }
   const activeUserRepositories = resolvedLogin._tag === 'Ok' ? userRepositories : []
   const userLogin = resolvedLogin._tag === 'Ok' ? resolvedLogin.value : AGENT_ACTOR_LOGIN
+  const userLoginKnown = needsUserLogin && resolvedLogin._tag === 'Ok'
   if (resolvedLogin._tag === 'Err') {
-    options.logger.error(`The GitHub CLI could not name its account, so ${userRepositories.length} repositories that need it stay untracked this run: ${resolvedLogin.error}`)
+    options.logger.error(`The GitHub CLI could not name its account, so ${userRepositories.length} repositories that need it stay untracked this run, and package releases stay off: ${resolvedLogin.error}`)
   }
   if (activeUserRepositories.length > 0)
     options.logger.info(`${activeUserRepositories.length} repositories answer to @${userLogin} because the GitHub App is not installed: ${activeUserRepositories.map(repository => repository.github).join(', ')}.`)
@@ -465,6 +470,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   // A repository the App cannot reach is answered with Harlan's own account.
   const actorLogin = (repository: RepositoryMapping): string => repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN
+  // The release policy picks the release author, never discovery. See createPackageReleaseSource.
+  const releaseActorLogin = (repository: RepositoryMapping): string | null => {
+    if (!userLoginKnown || !canReleasePackages(repository))
+      return null
+    return repository.release?.credential._tag === 'User' ? userLogin : actorLogin(repository)
+  }
   const appTokens = createGitHubAppTokenProvider({
     appId: config.github.appId,
     privateKey: options.githubPrivateKey,
@@ -1169,7 +1180,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       recordPassIncidents('pull_request_status', statusSync.errors)
       if (mutationSchedulers !== undefined) {
         if (config.triggers.includes('github') && config.webhook._tag === 'Enabled' && store.getAgentControl()._tag !== 'Paused') {
-          for (const repository of config.repositories.filter(repository => repository.enabled && repository.release !== undefined)) {
+          for (const repository of config.repositories.filter(repository => releaseActorLogin(repository) !== null)) {
             if (!store.mayPublishPackageRelease(repository.github))
               continue
             const errors = await guarded('Package releases', async () => {
@@ -1181,8 +1192,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                 signal,
                 source: assertLease => createPackageReleaseSource({
                   repository,
-                  tokens,
-                  actorLogin: actorLogin(repository),
+                  actors: {
+                    repository: { login: actorLogin(repository), tokens },
+                    user: { login: userLogin, tokens: legacyUserTokens },
+                  },
                   signal,
                   now,
                   template: async () => {
@@ -1454,11 +1467,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           packageRelease: {
             allowedAuthor: userLogin,
             actorLogin: (name) => {
-              const repository = config.repositories.find(repository => repository.github === name && repository.enabled
-                && repository.release !== undefined && repository.ownership === 'owned')
+              const repository = config.repositories.find(repository => repository.github === name)
               return repository === undefined || !config.mutationsEnabled || !store.mayPublishPackageRelease(name)
                 ? null
-                : actorLogin(repository)
+                : releaseActorLogin(repository)
             },
             apply: (request) => { store.requestPackageRelease(request) },
             command: command => store.queuePackageReleaseCommand(command),

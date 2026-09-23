@@ -249,7 +249,7 @@ Only a signed GitHub webhook from the authenticated Harlan account grants releas
 Comment edits cannot create text commands. Duplicate clicks and deliveries cannot publish another version.
 
 Enable the webhook and `github` trigger. Enable repository writes and set Selection mode to Auto.
-Add this block to an owned Repository mapping with `pull_request_review: true`:
+Add this block to an owned Repository mapping with `pr_review: true`:
 
 ```yaml
 writable_pr_authors: [harlan-zw, 'harlan-github-agent[bot]']
@@ -261,6 +261,27 @@ release:
   checks: [test, build] # Use exact GitHub Actions check names.
   changelog: CHANGELOG.md # Optional. The file must already exist.
 ```
+
+A maintained repository gets releases only when its policy opts in explicitly:
+
+```yaml
+ownership: maintained
+release:
+  credential: user # Required. Every release write uses Harlan's own token.
+  # manifest, version_files, tag_prefix, workflow, checks, and changelog as above
+```
+
+With `credential: user`, Harlan's GitHub CLI token writes the release comment, the version pull request, its merge, and the tag.
+The GitHub App never writes a release there, even if the organization installs it later.
+The release comment and the version pull request carry Harlan's name, and their text says an agent wrote them.
+The configuration refuses a `release` block on a maintained repository without `credential: user`.
+It refuses a `release` block on an external repository.
+An owned repository can omit `credential`. It then uses the credential that discovery chose for it.
+
+The GitHub App does not deliver webhooks for a repository where it is not installed.
+Add a repository webhook to such a repository. Point it at the same `/webhook` route, use the same secret, and select Issue comments.
+Without that webhook, the checkbox and `do release` do nothing.
+A tag that Harlan's token creates triggers the tag workflow. A tag that `GITHUB_TOKEN` creates would not.
 
 The policy authorizes stable patch and minor releases, including the release version pull request.
 That pull request requires fresh Review at 90% confidence, required checks, and GitHub branch protection.
