@@ -728,7 +728,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
           activityLog,
-          classification,
           logger: {
             error: message => options.logger.error(message),
             info: message => options.logger.info(message),
