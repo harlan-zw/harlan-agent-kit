@@ -2,12 +2,13 @@ import type { ClassificationSource } from './classification.ts'
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { Result } from './result.ts'
+import type { ReviewCheckRunReport } from './review-check-run.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
 import { choice } from 'advocaat'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
-import { reviewCheckRunUpdate } from './review-check-run.ts'
+import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
@@ -122,6 +123,7 @@ export interface PullRequestTriageControllerOptions {
   classification: ClassificationSource | null
   github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'listPullRequestFiles' | 'stampAgentLabel' | 'upsertReviewCheckRun' | 'upsertReviewStatus'>
   now: () => Date
+  reportCheckRun: ReviewCheckRunReport
   store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'hasActiveReviewTask' | 'markPullRequestTriageSettled' | 'storedReviewForHead'>
 }
 
@@ -296,18 +298,15 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       const posted = await options.github.upsertReviewStatus(repository, subject.number, null, body, false, signal)
       if (posted._tag === 'Err')
         return posted
-      // The Review check run mirrors the skip comment, so a skipped pull
-      // request keeps its Review entry beside CI. The same decision time
-      // keeps a retry identical, like the comment above.
-      const mirrored = reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'SKIPPED', body }, decisionTime)
-      if (mirrored !== null) {
-        const checkRun = await options.github.upsertReviewCheckRun(repository, subject.headSha, mirrored, signal)
-        if (checkRun._tag === 'Err')
-          return err(`The skip comment published but its Review check run did not: ${checkRun.error}`)
-      }
       const stamped = await options.github.stampAgentLabel(repository, subject.number, 'ADVERSARIAL_REVIEW_SKIPPED', signal)
       if (stamped._tag === 'Err')
         return err(`The skip comment published but its label did not: ${stamped.error}`)
+      // The Review check run mirrors the skip comment, so a skipped pull
+      // request keeps its Review entry beside CI. It gates nothing: its
+      // failure reaches a person through the report, and the settle stands.
+      const mirrored = reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'SKIPPED', body }, decisionTime)
+      if (mirrored !== null)
+        await mirrorReviewCheckRun({ publisher: options.github, report: options.reportCheckRun }, repository, subject.headSha, mirrored, signal)
       // Every sink landed, so later polls owe this head no GitHub call. A
       // partial failure above keeps the marker unset and the next poll
       // re-settles the missing piece.

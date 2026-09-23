@@ -1,6 +1,7 @@
 import type { Questions, SystemOneResult } from 'advocaat'
 import type { ClassificationFailure, ClassificationSource } from '../src/classification.ts'
 import type { PullRequestTriageDecision, PullRequestTriageVerdict } from '../src/pull-request-triage.ts'
+import type { ReviewCheckRunOutcome } from '../src/review-check-run.ts'
 import type { LatestPullRequestTriageRun } from '../src/store.ts'
 import type { GitHubPullRequestItem, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
@@ -25,6 +26,7 @@ function classificationFailure(failure: ClassificationFailure): ClassificationSo
 
 interface ControllerHarness {
   checkRuns: Array<{ headSha: string, update: unknown }>
+  reports: ReviewCheckRunOutcome[]
   comments: string[]
   consumedApprovalLabels: string[]
   verdict: () => Promise<PullRequestTriageVerdict>
@@ -54,6 +56,7 @@ function controller(input: {
   })
   const repository = repositoryMapping()
   const checkRuns: Array<{ headSha: string, update: unknown }> = []
+  const reports: ReviewCheckRunOutcome[] = []
   const comments: string[] = []
   const stamped: string[] = []
   const consumedApprovalLabels: string[] = []
@@ -97,6 +100,7 @@ function controller(input: {
       },
     },
     now: () => new Date('2026-09-18T01:00:00.000Z'),
+    reportCheckRun: (_repository, outcome) => reports.push(outcome),
     store: {
       getLatestPullRequestTriageRun: () => storedRow(),
       hasActiveReviewTask: () => input.activeReviewTask === true,
@@ -112,6 +116,7 @@ function controller(input: {
   const signal = new AbortController().signal
   return {
     checkRuns,
+    reports,
     comments,
     consumedApprovalLabels,
     verdict: () => controller.verdict(repository, subject, signal),
@@ -424,13 +429,13 @@ describe('pull request triage controller', () => {
     ])
   })
 
-  it('reports a settled skip whose Review check run mirror failed', async () => {
-    const harness = controller({ checkRunFailure: 'GitHub refused the check run.' })
+  it('stamps and settles a skip whose Review check run the installation refuses', async () => {
+    const harness = controller({ checkRunFailure: 'The permissions requested are not granted to this installation.' })
 
     const settled = await harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })
-    expect(settled).toEqual(err('The skip comment published but its Review check run did not: GitHub refused the check run.'))
-    expect(harness.comments).toHaveLength(1)
-    expect(harness.stamped).toEqual([])
+    expect(settled).toEqual(ok(undefined))
+    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_SKIPPED'])
+    expect(harness.reports).toEqual([{ _tag: 'Refused', permission: 'checks: write', message: 'The permissions requested are not granted to this installation.' }])
   })
 
   it('stamps and consumes the override label for a settled override', async () => {
@@ -499,6 +504,7 @@ describe('pull request triage controller', () => {
         upsertReviewStatus: () => Promise.resolve(err('GitHub refused the comment.')),
       },
       now: () => new Date('2026-09-18T01:00:00.000Z'),
+      reportCheckRun: () => { throw new Error('A failed comment must not reach the check run.') },
       store: {
         getLatestPullRequestTriageRun: () => null,
         hasActiveReviewTask: () => false,
