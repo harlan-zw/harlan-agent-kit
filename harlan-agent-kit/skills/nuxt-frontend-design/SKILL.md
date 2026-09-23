@@ -79,7 +79,7 @@ If an element has no job, delete it. Noise is any element that fails this test.
 - Subtitles or taglines that restate the heading.
 - Labels that restate the value ("Status: Active" becomes "Active").
 - Counts or facts that do not vary ("Watching 3 of 3 sites"). For table columns, see Hierarchy in [craft-rules.md](references/craft-rules.md).
-- Decorative icons beside headings, cards, or list items.
+- Decorative icons beside headings, cards, or list items. A per-metric icon that encodes its data, a trend direction or a status, informs. The same constant icon on every card carries no data and fails.
 - Section numbers where the order means nothing.
 - Metadata lines joined with "·" that nobody acts on.
 

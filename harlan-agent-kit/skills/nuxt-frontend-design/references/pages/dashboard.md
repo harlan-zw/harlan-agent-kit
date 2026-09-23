@@ -122,12 +122,13 @@ Grid of cards with ambient sparklines — richer, landing-style:
   variant="cards"
   :data="kpis.map(k => ({
     ...k,
-    icon: 'i-lucide-activity',
     sparkline: k.history,
     to: `/metrics/${k.slug}`,
   }))"
 />
 ```
+
+No per-card icon: the same constant icon on every card is decoration ("Every Element Earns Its Place" in [SKILL.md](../../SKILL.md)). An icon earns its slot only when it encodes the metric's data, as the trend icon in Single KPI above does.
 
 ### Loading and empty
 
