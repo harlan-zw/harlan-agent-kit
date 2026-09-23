@@ -74,6 +74,7 @@ writing a sentence.
    generated copy, so it does double duty.
 7. **Copy is not decoration.** If a section needs filler to look finished, the layout is wrong.
    Never invent a stat, a testimonial, or a feature to fill space.
+   Text that restates a heading, a value, or a visible fact is decoration too.
 
 Rule 5 is the one that matters. Rules 1 to 3 only work on strings someone already decided.
 
