@@ -62,11 +62,32 @@ Apply across Phase 2 and Phase 3. Review treats violations as hard rejects.
 
 ### Every Element Earns Its Place
 
-One thousand no's for every yes. Do not pad designs with placeholder sections, dummy stats, filler copy, or decorative content to fill space. If a section feels empty, solve it with layout, composition, or scale, not invented content.
+Each visible element does one job:
 
-Ask before adding material. If another section, page, stat block, or copy block would strengthen the design, raise it with the user rather than adding content the contract did not name.
+- **Inform**: data the reader acts on or decides with.
+- **Teach**: something the reader does not know yet and needs now.
+- **Orient**: navigation, wayfinding, current location.
+- **Brand**: an element the site's `DESIGN.md` registers as a brand asset.
 
-Watch for "data slop": rows of stat counters, icon grids, logo bars, testimonial strips, feature bullets added reflexively rather than because the content demanded them.
+If an element has no job, delete it. Noise is any element that fails this test.
+
+**Show, don't tell.** If a sentence describes what the UI does, show the UI doing it with a real component, real data, or a working demo. This applies to dashboards and empty states too.
+
+**No text decoration.** These fail the test unless `DESIGN.md` registers them as brand:
+
+- Eyebrows: a small label above a heading.
+- Subtitles or taglines that restate the heading.
+- Labels that restate the value ("Status: Active" becomes "Active").
+- Counts or facts that do not vary ("Watching 3 of 3 sites"). For table columns, see Hierarchy in [craft-rules.md](references/craft-rules.md).
+- Decorative icons beside headings, cards, or list items.
+- Section numbers where the order means nothing.
+- Metadata lines joined with "·" that nobody acts on.
+
+If a section reads flat after removal, fix it with separation, scale, or layout. Do not add the decoration back. Sanctioned replacements: a data line below the heading, a hairline with a directional action, numbering where order is real, emphasis on one lead item.
+
+**Start with less.** Build the first version with the fewest elements. Each addition names its job. Never pad with placeholder sections, dummy stats, filler copy, icon grids, or logo bars. Ask before you add content the contract did not name.
+
+**Subtraction pass.** Before handoff, list each visible element with its job. Delete the ones with none. Show before and after screenshots.
 
 ### AI Slop Ban List
 
@@ -91,7 +112,7 @@ A labelled placeholder beats a bad attempt at the real thing.
 
 Never leave broken `<img>` tags or unstyled fallback boxes. Placeholders should look intentional.
 
-Scope: placeholders suit internal tools, dashboards, and prototypes. Landing and marketing pages want real product demos, screenshots, and named logos per [pages/landing.md](references/pages/landing.md) "Show, Don't Tell"; a labelled grey box on a hero kills the sale. Fall back to placeholders only when real assets genuinely don't exist yet.
+Scope: placeholders suit internal tools, dashboards, and prototypes. Landing and marketing pages want real product demos, screenshots, and named logos per "Show, don't tell" above; a labelled grey box on a hero kills the sale. Fall back to placeholders only when real assets genuinely don't exist yet.
 
 ### Minimum Scales
 

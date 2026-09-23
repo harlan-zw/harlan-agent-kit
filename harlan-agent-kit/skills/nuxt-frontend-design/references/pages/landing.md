@@ -57,10 +57,9 @@ Components:
 
 ## Best Practices
 
-**Show, Don't Tell:**
-- Hero animates product working (silent demo)
-- Features show UI screenshots, not icons
-- Logos: Figma, Linear, Notion (not IBM, Oracle)
+**Show, don't tell:** the rule lives in "Every Element Earns Its Place" in [SKILL.md](../../SKILL.md). On a landing page, the hero shows the product working as a silent demo.
+
+**Logos:** Figma, Linear, Notion (not IBM, Oracle).
 
 **Psychology:**
 - Enterprise tier anchors Pro ($999 makes $49 feel cheap)

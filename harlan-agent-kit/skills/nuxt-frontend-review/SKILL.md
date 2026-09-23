@@ -132,6 +132,7 @@ Then evaluate qualitatively, each still pass/fail:
 | **Responsiveness** | 375px: no horizontal scroll, no text under 14px, no touch target under 44px. 768px: layout uses the space rather than stretching mobile. |
 | **Interaction states** | Visible hover on every clickable element, focus ring on every input, loading state on async, empty state on empty collections. |
 | **Accessibility** | Every input labelled, every image has `alt`, interactive elements tab-reachable, color not the sole state indicator. |
+| **Purpose** | List each visible element with its job: inform, teach, orient, or brand. An element with no job is a defect. Rules: "Every Element Earns Its Place" in [nuxt-frontend-design](../nuxt-frontend-design/SKILL.md). |
 
 Rubric violations are defects, not suggestions.
 
