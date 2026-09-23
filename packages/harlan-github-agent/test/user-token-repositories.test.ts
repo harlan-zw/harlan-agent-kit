@@ -36,7 +36,7 @@ describe('discoverUserRepositories', () => {
 
   it('adds a maintained repository the App cannot reach', async () => {
     const read: string[] = []
-    const repositories = await discoverUserRepositories({
+    const { repositories } = await discoverUserRepositories({
       allowedOwners: ['harlan-zw', 'nuxt-modules'],
       checkouts,
       installed: [installed],
@@ -51,55 +51,79 @@ describe('discoverUserRepositories', () => {
     expect(repositories).toEqual([expect.objectContaining({ github: 'nuxt-modules/sitemap', authentication: 'user' })])
   })
 
-  it('leaves out a checkout whose remote points at a renamed repository', async () => {
+  it('names a checkout whose remote points at a renamed repository, and maps nothing for it', async () => {
     // GitHub redirects the old name, so the read answers with the current one.
-    expect(await discoverUserRepositories({
+    const discovery = await discoverUserRepositories({
       allowedOwners: ['harlan-zw', 'nuxt-modules'],
       checkouts: [{ github: 'harlan-zw/massivemonster.co', checkout: '/home/harlan/sites/massivemonster.co' }],
       installed: [],
       readRepository: () => Promise.resolve(organizationRepository('harlan-zw/massivemonster.com')),
-    })).toEqual([])
+    })
+
+    expect(discovery.repositories).toEqual([])
+    expect(discovery.renamed).toEqual([{
+      checkout: '/home/harlan/sites/massivemonster.co',
+      origin: 'harlan-zw/massivemonster.co',
+      current: 'harlan-zw/massivemonster.com',
+    }])
+    expect(discovery.unresolved).toEqual([])
+  })
+
+  it.each([
+    ['rejects', () => Promise.reject(new Error('HTTP 502'))],
+    // The CLI answers every failure, an outage included, with no repository.
+    ['answers nothing', () => Promise.resolve(undefined)],
+  ])('names a repository as unresolved when the read %s', async (_, readRepository) => {
+    const discovery = await discoverUserRepositories({
+      allowedOwners: ['nuxt-modules'],
+      checkouts,
+      installed: [],
+      readRepository,
+    })
+
+    expect(discovery.repositories).toEqual([])
+    expect(discovery.unresolved).toEqual(['nuxt-modules/sitemap'])
   })
 
   it('leaves the App in charge when it already reaches the current repository', async () => {
-    expect(await discoverUserRepositories({
+    expect((await discoverUserRepositories({
       allowedOwners: ['harlan-zw'],
       checkouts: [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }],
       installed: [],
       readRepository: github => Promise.resolve(organizationRepository(github)),
-    })).toEqual([expect.objectContaining({ github: 'harlan-zw/example' })])
+    })).repositories).toEqual([expect.objectContaining({ github: 'harlan-zw/example' })])
 
-    expect(await discoverUserRepositories({
+    expect((await discoverUserRepositories({
       allowedOwners: ['harlan-zw'],
       checkouts: [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }],
       installed: [installed],
       readRepository: github => Promise.resolve(organizationRepository(github)),
-    })).toEqual([])
+    })).repositories).toEqual([])
   })
 
   it('leaves out a repository Harlan cannot read or that is archived', async () => {
-    expect(await discoverUserRepositories({
+    expect((await discoverUserRepositories({
       allowedOwners: ['nuxt-modules'],
       checkouts,
       installed: [],
       readRepository: () => Promise.resolve(undefined),
-    })).toEqual([])
+    })).repositories).toEqual([])
 
-    expect(await discoverUserRepositories({
+    expect((await discoverUserRepositories({
       allowedOwners: ['nuxt-modules'],
       checkouts,
       installed: [],
       readRepository: github => Promise.resolve(organizationRepository(github, true)),
-    })).toEqual([])
+    })).repositories).toEqual([])
   })
 
   it('leaves out a fork', async () => {
-    expect(await discoverUserRepositories({
+    expect((await discoverUserRepositories({
       allowedOwners: ['nuxt-modules'],
       checkouts,
       installed: [],
       readRepository: github => Promise.resolve(organizationRepository(github, false, true)),
-    })).toEqual([])
+    })).repositories).toEqual([])
   })
 
   it('maps as maintained, so the controller reviews without pushing', () => {

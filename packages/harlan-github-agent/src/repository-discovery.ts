@@ -149,32 +149,63 @@ export function isAllowedRepository(github: string, allowedOwners: string[]): bo
   })
 }
 
+/** A trusted checkout whose origin still names a repository GitHub renamed. */
+export interface RenamedCheckout {
+  checkout: string
+  /** The name the origin remote gives. */
+  origin: string
+  /** The name GitHub answers with today. */
+  current: string
+}
+
+export interface UserRepositoryDiscovery {
+  repositories: InstalledRepository[]
+  /**
+   * Checkout repositories GitHub gave no answer for. Their absence from the
+   * mapping proves nothing, because an outage reads exactly like no access.
+   */
+  unresolved: string[]
+  renamed: RenamedCheckout[]
+}
+
+type UserRepositoryRead
+  = | { _tag: 'Found', repository: InstalledRepository }
+    | { _tag: 'Excluded' }
+    | { _tag: 'Unresolved', github: string }
+    | { _tag: 'Renamed', renamed: RenamedCheckout }
+
 /**
  * Repositories Harlan maintains that the App cannot reach.
  *
  * An organization can refuse the App, so the controller falls back to his own
  * access: a trusted local checkout plus a repository he can read himself.
  */
-export async function discoverUserRepositories(options: UserRepositoryDiscoveryOptions): Promise<InstalledRepository[]> {
+export async function discoverUserRepositories(options: UserRepositoryDiscoveryOptions): Promise<UserRepositoryDiscovery> {
   const installed = new Set(options.installed.map(repository => repository.github.toLowerCase()))
   const candidates = options.checkouts.filter(checkout =>
     isAllowedRepository(checkout.github, options.allowedOwners) && !installed.has(checkout.github.toLowerCase()))
   const unique = [...new Map(candidates.map(checkout => [checkout.github.toLowerCase(), checkout])).values()]
-  const repositories = await Promise.all(unique.map(checkout => options.readRepository(checkout.github)
-    .then((repository) => {
+  const reads = await Promise.all(unique.map(checkout => options.readRepository(checkout.github)
+    .then((repository): UserRepositoryRead => {
+      if (repository === undefined)
+        return { _tag: 'Unresolved', github: checkout.github }
       // GitHub answers a renamed repository with its current name. A checkout that
-      // still points at the old name says nothing about the repository behind it.
-      if (repository === undefined || repository.github.toLowerCase() !== checkout.github.toLowerCase())
-        return undefined
-      return installed.has(repository.github.toLowerCase())
-        ? undefined
-        : { ...repository, authentication: 'user' as const }
+      // still points at the old name says nothing about the repository behind it,
+      // so it maps nothing, and the operator is told to update its origin.
+      if (repository.github.toLowerCase() !== checkout.github.toLowerCase())
+        return { _tag: 'Renamed', renamed: { checkout: checkout.checkout, origin: checkout.github, current: repository.github } }
+      if (installed.has(repository.github.toLowerCase()) || repository.archived || repository.fork)
+        return { _tag: 'Excluded' }
+      return { _tag: 'Found', repository: { ...repository, authentication: 'user' } }
     })
-    .catch(() => {
-      // An unreadable repository is one Harlan cannot reach either, so it stays untracked.
-      return undefined
-    })))
-  return repositories.flatMap(repository => repository === undefined || repository.archived || repository.fork ? [] : [repository])
+    // A failed read is not swallowed: it marks the repository unresolved, so
+    // nothing downstream reads its absence as a removal.
+    .catch((): UserRepositoryRead => ({ _tag: 'Unresolved', github: checkout.github }))))
+  return {
+    repositories: reads.flatMap(read => read._tag === 'Found' ? [read.repository] : []),
+    unresolved: reads.flatMap(read => read._tag === 'Unresolved' ? [read.github] : []),
+    renamed: reads.flatMap(read => read._tag === 'Renamed' ? [read.renamed] : []),
+  }
 }
 
 /**

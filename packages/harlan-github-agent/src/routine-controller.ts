@@ -112,15 +112,78 @@ export async function syncRepositoryRoutines(
   return { _tag: 'Synced', routines }
 }
 
+/** The Routine names one repository declares, grouped for a report. */
+export interface RepositoryRoutines {
+  repository: string
+  names: string[]
+}
+
+/** The mapped repositories that may run Routines: enabled ones only, by lowercase name. */
+function mappedRepositories(repositories: readonly Pick<RepositoryMapping, 'github' | 'enabled'>[]): Set<string> {
+  return new Set(repositories.filter(repository => repository.enabled).map(repository => repository.github.toLowerCase()))
+}
+
+function groupByRepository(routines: readonly Routine[]): RepositoryRoutines[] {
+  const groups = new Map<string, string[]>()
+  routines.forEach(routine => groups.set(routine.repository, [...(groups.get(routine.repository) ?? []), routine.name]))
+  return [...groups].map(([repository, names]) => ({ repository, names }))
+}
+
+export interface RoutineMappingDependencies {
+  now: () => Date
+  /** The Repository mappings this start built. */
+  repositories: readonly Pick<RepositoryMapping, 'github' | 'enabled'>[]
+  /** Repositories discovery could not settle this start. Their absence from the mapping proves nothing. */
+  unresolved: readonly string[]
+  store: Pick<JournalStore, 'listRoutines' | 'retireRoutines'>
+}
+
+export interface RoutineMappingOutcome {
+  /** Routines retired, with their Queued runs superseded, because their repository left the mapping. */
+  retired: RepositoryRoutines[]
+  /** Routines of an unmapped repository kept, because discovery could not settle it. */
+  deferred: RepositoryRoutines[]
+}
+
+/**
+ * Retires the Routines of every repository with no enabled Repository mapping.
+ *
+ * A renamed or removed repository leaves its Routines behind. The planner
+ * refuses them, but a Queued run already open waits forever, and nothing else
+ * ever settles the definition. A repository discovery could not settle is kept:
+ * one failed GitHub read must not delete a schedule the repository still has.
+ */
+export function retireUnmappedRoutines(dependencies: RoutineMappingDependencies): RoutineMappingOutcome {
+  const mapped = mappedRepositories(dependencies.repositories)
+  const unresolved = new Set(dependencies.unresolved.map(repository => repository.toLowerCase()))
+  const unmapped = dependencies.store.listRoutines().filter(routine => !mapped.has(routine.repository.toLowerCase()))
+  const deferred = unmapped.filter(routine => unresolved.has(routine.repository.toLowerCase()))
+  const at = dependencies.now().toISOString()
+  const retired = groupByRepository(unmapped.filter(routine => !unresolved.has(routine.repository.toLowerCase())))
+    .map(({ repository }) => ({
+      repository,
+      names: dependencies.store.retireRoutines({
+        repository,
+        reason: 'The repository has no enabled Repository mapping.',
+        at,
+      }),
+    }))
+  return { retired, deferred: groupByRepository(deferred) }
+}
+
 export interface RoutinePlanDependencies {
   catchUpMinutes?: number
   now: () => Date
+  /** The current Repository mappings. A Routine of any other repository opens no run. */
+  repositories: readonly Pick<RepositoryMapping, 'github' | 'enabled'>[]
   store: Pick<JournalStore, 'listRoutines' | 'openRoutineRun' | 'skipRoutineRun' | 'stageRoutineReport'>
 }
 
 export interface RoutinePlan {
   opened: RoutineRun[]
   skipped: RoutineRun[]
+  /** Routines that owe nothing because no enabled mapping names their repository. */
+  unmapped: RepositoryRoutines[]
 }
 
 /**
@@ -132,15 +195,25 @@ export interface RoutinePlan {
  *
  * A disabled Routine is skipped entirely, including its catch-up. Re-enabling
  * one must not fire a run for an instant that passed while it was off.
+ *
+ * A Routine whose repository has no enabled mapping opens nothing, and the
+ * plan names it. No Worker claims such a run, so opening one queued a run a day
+ * that nothing ever settled, with no trace but an info log.
  */
 export function planRoutineRuns(dependencies: RoutinePlanDependencies): RoutinePlan {
   const now = dependencies.now()
+  const mapped = mappedRepositories(dependencies.repositories)
   const opened: RoutineRun[] = []
   const skipped: RoutineRun[] = []
+  const unmapped: Routine[] = []
 
   for (const routine of dependencies.store.listRoutines()) {
     if (!routine.enabled)
       continue
+    if (!mapped.has(routine.repository.toLowerCase())) {
+      unmapped.push(routine)
+      continue
+    }
     const lastRunAt = routine.lastRunAt === null ? null : new Date(routine.lastRunAt)
 
     let due: { scheduledFor: Date, missed: string | null } | null = null
@@ -199,5 +272,5 @@ export function planRoutineRuns(dependencies: RoutinePlanDependencies): RoutineP
     skipped.push(run)
   }
 
-  return { opened, skipped }
+  return { opened, skipped, unmapped: groupByRepository(unmapped) }
 }

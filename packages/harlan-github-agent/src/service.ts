@@ -75,7 +75,7 @@ import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { createReviewStatusScheduler } from './review-status-scheduler.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
-import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
+import { planRoutineRuns, retireUnmappedRoutines, syncRepositoryRoutines } from './routine-controller.ts'
 import { createRoutineReportController } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 import { createRoutineScanWorker } from './routine-worker.ts'
@@ -291,12 +291,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     discoverLocalCheckouts(options.config.trustedCheckoutRoots),
   ])
   const userAccess = options.userAccess ?? createGitHubUserAccess()
-  const userRepositories = await discoverUserRepositories({
+  const userDiscovery = await discoverUserRepositories({
     allowedOwners: options.config.github.allowedOwners,
     checkouts: localCheckouts,
     installed: installedRepositories,
     readRepository: github => userAccess.readRepository(github),
   })
+  const userRepositories = userDiscovery.repositories
   // The GitHub CLI answers a degraded API with an error, and reading Harlan's
   // login used to throw out of start and take the whole service with it. The
   // repositories that need the login are dropped for this run instead, so the
@@ -312,6 +313,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   if (activeUserRepositories.length > 0)
     options.logger.info(`${activeUserRepositories.length} repositories answer to @${userLogin} because the GitHub App is not installed: ${activeUserRepositories.map(repository => repository.github).join(', ')}.`)
   const userRepositoryNames = new Set(activeUserRepositories.map(repository => repository.github.toLowerCase()))
+  // A repository discovery could not settle keeps its Routines. Without the
+  // login, every user repository is dropped for this run, so none is settled.
+  const unresolvedRepositories = resolvedLogin._tag === 'Ok'
+    ? userDiscovery.unresolved
+    : [...userDiscovery.unresolved, ...userRepositories.map(repository => repository.github)]
   const discoveredMappings = buildRepositoryMappings([...installedRepositories, ...activeUserRepositories], localCheckouts, options.config.repositories, options.config.github.allowedOwners)
   const validatedDiscovery = await validateRepositoryMappings({ ...options.config, repositories: discoveredMappings })
   if (validatedDiscovery._tag === 'Err')
@@ -436,6 +442,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   options.logger.info(`Agent provider: ${profile.provider} with ${profile.roles.adversarial_review.model}.`)
   const startedAt = now().toISOString()
   store.syncRepositories(config.repositories, startedAt)
+  replaceServiceIncidents(store, startedAt, 'repository_rename', userDiscovery.renamed.map(renamed =>
+    `${renamed.checkout}: the origin names ${renamed.origin}, but GitHub renamed it to ${renamed.current}. No Agent sees it. Run: git -C ${renamed.checkout} remote set-url origin https://github.com/${renamed.current}.git, then restart the service.`))
+  const routineMapping = retireUnmappedRoutines({ now, repositories: config.repositories, unresolved: unresolvedRepositories, store })
+  routineMapping.retired.forEach(({ repository, names }) =>
+    options.logger.info(`${repository}: retired ${names.length} routines, because the repository has no enabled Repository mapping: ${names.join(', ')}.`))
   if (config.mutationsEnabled) {
     const recovered = store.recoverInterruptedAgentTasks(startedAt)
     if (recovered > 0)
@@ -1100,9 +1111,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }
 
       if (config.mutationsEnabled && config.triggers.includes('routine')) {
-        const planned = await guarded('Routine planning', () => planRoutineRuns({ now, store }), { opened: [], skipped: [] })
+        const planned = await guarded('Routine planning', () => planRoutineRuns({ now, repositories: config.repositories, store }), { opened: [], skipped: [], unmapped: [] })
         planned.opened.forEach(run => options.logger.info(`${run.repository}: queued the ${run.name} routine for ${run.scheduledFor}.`))
         planned.skipped.forEach(run => options.logger.info(`${run.repository}: skipped the ${run.name} routine due at ${run.scheduledFor}.`))
+        // Only a repository discovery could not settle reaches here. A settled
+        // one had its Routines retired at start.
+        recordPassIncidents('routine_unmapped', planned.unmapped.map(({ repository, names }) =>
+          `${repository}: ${names.length} routines open no runs, because the repository has no enabled Repository mapping: ${names.join(', ')}. If GitHub answered for it at start, restart the service to retire them.`))
       }
 
       // Everything below answers a GitHub observation, so a routines-only
