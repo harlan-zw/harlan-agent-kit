@@ -24,6 +24,17 @@ describe('desktop boundaries', () => {
     expect(() => parseDesktopWorktree({ head: 'a'.repeat(40), origin: '/tmp/repo', history: { _tag: 'Held' }, patch: '', files: [] })).toThrow('origin is not a GitHub repository')
   })
 
+  it.each([
+    { _tag: 'ContextBudgetWarned', cachedTokensRead: 15_000_000, delivery: { _tag: 'Sent' } },
+    { _tag: 'ContextBudgetWarned', cachedTokensRead: 15_000_000, delivery: { _tag: 'Failed', reason: 'The opencode server answered 500.' } },
+  ])('carries a Context budget warning from the desktop', (event) => {
+    expect(parseDesktopEvents([event])).toEqual([event])
+  })
+
+  it('refuses a Context budget warning without a delivery', () => {
+    expect(() => parseDesktopEvents([{ _tag: 'ContextBudgetWarned', cachedTokensRead: 15_000_000 }])).toThrow('unsupported')
+  })
+
   it('names the part of a Worktree it refuses', () => {
     const worktree = { head: 'a'.repeat(40), origin: 'https://github.com/harlan-zw/nuxtseo.com', history: { _tag: 'Held' as const }, patch: '', files: [] }
     expect(parseDesktopWorktree(worktree)).toEqual(worktree)

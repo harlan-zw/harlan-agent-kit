@@ -1,11 +1,15 @@
 import type { ChildProcessByStdio } from 'node:child_process'
 import type { Readable } from 'node:stream'
-import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
+import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest, ContextBudgetPhase } from './agent-provider.ts'
+import type { Result } from './result.ts'
+import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { opencodeTurnEnvironment } from './agent-context.ts'
-import { agentProviderFailureReason, agentTextEvent, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
+import { advanceContextBudget, agentProviderFailureReason, agentTextEvent, contextBudgetWrapUpPrompt, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
+import { err, ok } from './result.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
@@ -20,6 +24,96 @@ type OpencodeExit
   = | { _tag: 'Exited', code: number | null, signal: NodeJS.Signals | null }
     | { _tag: 'SpawnFailed', error: Error }
 
+/**
+ * The OpenCode server one turn runs on.
+ *
+ * `opencode run` alone serves its session inside its own process, so nothing
+ * outside can reach a running session. A turn therefore starts its own server,
+ * and the run attaches to it. The server runs the tools, so it gets the turn
+ * environment.
+ */
+export interface OpencodeServer {
+  url: string
+  /** Basic auth password for this server. It lives only as long as the turn. */
+  password: string
+  /** Adds one user message to a busy session. The session reads it before its next model step. */
+  steer: (sessionId: string, text: string) => Promise<Result<void, string>>
+  /** Stops the server, and with it every model call the session still makes. */
+  close: (signal: NodeJS.Signals) => void
+}
+
+export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv) => Promise<Result<OpencodeServer, string>>
+
+/** The fixed user name OpenCode expects with a server password. */
+const serverUsername = 'opencode'
+const serverStartMilliseconds = 60_000
+const steerMilliseconds = 15_000
+const serverListening = /opencode server listening on (http:\/\/\S+)/
+
+/** Reads the address `opencode serve` prints once it listens. */
+export function opencodeServerUrl(output: string): string | undefined {
+  return serverListening.exec(output)?.[1]
+}
+
+/** Environment that authenticates a client to one turn server. */
+function serverCredentials(password: string): NodeJS.ProcessEnv {
+  return { OPENCODE_SERVER_USERNAME: serverUsername, OPENCODE_SERVER_PASSWORD: password }
+}
+
+/** Starts `opencode serve` on a free local port in the turn's worktree. */
+export function spawnOpencodeServer(binaryPath: string): StartOpencodeServer {
+  return (workspace, environment) => new Promise((resolve) => {
+    const password = randomBytes(24).toString('hex')
+    const child = spawn(binaryPath, ['serve', '--hostname', '127.0.0.1', '--port', '0'], {
+      cwd: workspace,
+      env: { ...environment, ...serverCredentials(password) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let output = ''
+    let settled = false
+    const settle = (result: Result<OpencodeServer, string>) => {
+      if (settled)
+        return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      settle(err(`The opencode server did not start within ${serverStartMilliseconds / 1000} seconds.`))
+    }, serverStartMilliseconds)
+    const read = (chunk: string) => {
+      output = `${output}${chunk}`.slice(-maximumErrorCharacters)
+      const url = opencodeServerUrl(output)
+      if (url !== undefined)
+        settle(ok(opencodeServer(url, password, workspace, child)))
+    }
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', read)
+    child.stderr.on('data', read)
+    child.once('error', error => settle(err(error.message)))
+    child.once('exit', (code, signal) => settle(err(opencodeFailureReason(output, { code, signal }))))
+  })
+}
+
+function opencodeServer(url: string, password: string, workspace: string, child: OpencodeProcess): OpencodeServer {
+  const authorization = `Basic ${Buffer.from(`${serverUsername}:${password}`).toString('base64')}`
+  return {
+    url,
+    password,
+    steer: (sessionId, text) => fetch(`${url}/session/${encodeURIComponent(sessionId)}/prompt_async?directory=${encodeURIComponent(workspace)}`, {
+      method: 'POST',
+      headers: { 'authorization': authorization, 'content-type': 'application/json' },
+      body: JSON.stringify({ parts: [{ type: 'text', text }] }),
+      signal: AbortSignal.timeout(steerMilliseconds),
+    })
+      .then((response): Result<void, string> => response.ok ? ok(undefined) : err(`The opencode server answered ${response.status}.`))
+      .catch((error: unknown) => err(`The opencode server did not take the message: ${error instanceof Error ? error.message : String(error)}`)),
+    close: signal => child.kill(signal),
+  }
+}
+
 export interface OpencodeProviderOptions {
   binaryPath?: string
   /** Stops a run once its session has read this many cached context tokens. */
@@ -28,6 +122,8 @@ export interface OpencodeProviderOptions {
   environment?: NodeJS.ProcessEnv
   /** Kills a run that has printed nothing for this long. */
   idleTimeoutMilliseconds?: number
+  /** Injected for tests. Starts the server one turn attaches to. */
+  startOpencodeServer?: StartOpencodeServer
   /** Injected for tests. Returns the raw NDJSON line stream of one run. */
   spawnOpencode?: (args: string[], workspace: string, environment: NodeJS.ProcessEnv) => OpencodeProcess
 }
@@ -158,9 +254,11 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
  * it, which is never the worktree this turn prepared, and the process then
  * stays alive after its loop ends. Each turn therefore carries its own context.
  */
-export function opencodeArguments(request: AgentTurnRequest, prompt: string): string[] {
+export function opencodeArguments(request: AgentTurnRequest, prompt: string, serverUrl: string): string[] {
   return [
     'run',
+    '--attach',
+    serverUrl,
     '--format',
     'json',
     '--auto',
@@ -178,6 +276,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
   const idleTimeoutMilliseconds = options.idleTimeoutMilliseconds ?? 10 * 60_000
   const cachedContextBudget = options.cachedContextBudget ?? DEFAULT_CACHED_CONTEXT_BUDGET
   const environment = options.environment ?? process.env
+  const startOpencodeServer = options.startOpencodeServer ?? spawnOpencodeServer(binaryPath)
   const spawnOpencode = options.spawnOpencode ?? ((args, workspace, environment) => spawn(binaryPath, args, {
     cwd: workspace,
     env: environment,
@@ -196,8 +295,22 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       yield { _tag: 'Failed', reason: turnEnvironment.error }
       return
     }
-    const child = spawnOpencode(opencodeArguments(request, prompt), request.workspace, turnEnvironment.value)
-    const abort = () => child.kill('SIGTERM')
+    const started = await startOpencodeServer(request.workspace, turnEnvironment.value)
+    if (started._tag === 'Err') {
+      yield { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error) }
+      return
+    }
+    const server = started.value
+    const child = spawnOpencode(
+      opencodeArguments(request, prompt, server.url),
+      request.workspace,
+      { ...turnEnvironment.value, ...serverCredentials(server.password) },
+    )
+    const stop = (signal: NodeJS.Signals) => {
+      child.kill(signal)
+      server.close(signal)
+    }
+    const abort = () => stop('SIGTERM')
     request.signal.addEventListener('abort', abort, { once: true })
     let standardError = ''
     child.stderr.setEncoding('utf8')
@@ -217,7 +330,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       if (Date.now() - lastOutputAt < idleTimeoutMilliseconds)
         return
       silent = true
-      child.kill('SIGKILL')
+      stop('SIGKILL')
     }, Math.max(1_000, Math.floor(idleTimeoutMilliseconds / 4)))
     watchdog.unref()
 
@@ -226,7 +339,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     let cachedTokensRead = 0
     let usage: Extract<AgentTokenUsage, { _tag: 'Available' }> = { _tag: 'Available', input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }
     let usageAvailable = false
-    let overBudget = false
+    let budget: ContextBudgetPhase = { _tag: 'Normal' }
     let completed = false
     try {
       for await (const raw of createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY })) {
@@ -275,12 +388,26 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
           break
         // A stopping step ends the turn by itself, so the budget never discards
         // an answer the session already paid for. Every other step means one
-        // more full read of the context, so stop paying for it now. SIGKILL,
+        // more full read of the context. Past the warning share the session is
+        // asked once to answer now. Past the budget it is stopped. SIGKILL,
         // because a run this deep must not negotiate.
-        if (cachedTokensRead > cachedContextBudget && event?._tag !== 'TurnCompleted') {
-          overBudget = true
-          child.kill('SIGKILL')
+        if (stepUsage === undefined)
+          continue
+        const advanced = advanceContextBudget(budget, cachedTokensRead, cachedContextBudget)
+        budget = advanced.phase
+        if (advanced.action._tag === 'Stop') {
+          stop('SIGKILL')
           break
+        }
+        if (advanced.action._tag === 'Warn') {
+          const delivered = sessionId === null
+            ? err('The session reported no identity to send the message to.')
+            : await server.steer(sessionId, contextBudgetWrapUpPrompt(cachedTokensRead, cachedContextBudget))
+          yield {
+            _tag: 'ContextBudgetWarned',
+            cachedTokensRead,
+            delivery: delivered._tag === 'Ok' ? { _tag: 'Sent' } : { _tag: 'Failed', reason: delivered.error },
+          }
         }
       }
       const exit = await exited
@@ -288,7 +415,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         yield { _tag: 'Failed', reason: agentProviderFailureReason('opencode', exit.error.message) }
         return
       }
-      if (overBudget) {
+      if (budget._tag === 'Exhausted') {
         yield { _tag: 'ContextBudgetExhausted', cachedTokensRead }
         return
       }
@@ -302,6 +429,8 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     finally {
       clearInterval(watchdog)
       request.signal.removeEventListener('abort', abort)
+      // The run ended, so its server has no session left to serve.
+      server.close('SIGTERM')
     }
   }
 

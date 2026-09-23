@@ -19,8 +19,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 1: the original whole-history payload.
  * 2: tagged `DesktopHistory`, which carries only what the receiver lacks.
  * 3: tagged `DesktopFailure`, which says whether the Agent provider started.
+ * 4: the `ContextBudgetWarned` Agent event.
  */
-export const DESKTOP_PROTOCOL = 3
+export const DESKTOP_PROTOCOL = 4
 
 /**
  * Why one desktop turn failed.
@@ -167,6 +168,13 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
     }
     if (event._tag === 'WebSearch' || event._tag === 'TurnCompleted')
       return { _tag: event._tag }
+    if (event._tag === 'ContextBudgetWarned' && Number.isFinite(event.cachedTokensRead) && Number(event.cachedTokensRead) >= 0 && record(event.delivery)) {
+      const delivery = event.delivery
+      if (delivery._tag === 'Sent')
+        return { _tag: 'ContextBudgetWarned', cachedTokensRead: Number(event.cachedTokensRead), delivery: { _tag: 'Sent' } }
+      if (delivery._tag === 'Failed' && typeof delivery.reason === 'string')
+        return { _tag: 'ContextBudgetWarned', cachedTokensRead: Number(event.cachedTokensRead), delivery: { _tag: 'Failed', reason: delivery.reason } }
+    }
     if (event._tag === 'ContextBudgetExhausted' && Number.isFinite(event.cachedTokensRead) && Number(event.cachedTokensRead) >= 0)
       return { _tag: 'ContextBudgetExhausted', cachedTokensRead: Number(event.cachedTokensRead) }
     if (event._tag === 'Usage' && record(event.usage) && event.usage._tag === 'Available') {

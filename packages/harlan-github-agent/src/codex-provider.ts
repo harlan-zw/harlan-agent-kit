@@ -92,9 +92,11 @@ async function* providerEvents(events: AsyncIterable<ThreadEvent>): AsyncGenerat
  *
  * The Codex SDK reports usage once, on `turn.completed`, after the whole turn
  * has been paid for. It reports nothing per model step, so nothing can stop a
- * runaway Codex turn while it runs. `ContextBudgetExhausted` therefore never
- * comes from this provider. If the SDK adds per-step usage, meter it here the
- * way `opencode-provider.ts` meters `step_finish`.
+ * runaway Codex turn while it runs. `ContextBudgetWarned` and
+ * `ContextBudgetExhausted` therefore never come from this provider. The SDK
+ * also takes no message into a running turn, so a wrap-up warning has no way
+ * in. If the SDK adds per-step usage, meter it here the way
+ * `opencode-provider.ts` meters `step_finish`.
  */
 function definedEntries(environment: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined))
