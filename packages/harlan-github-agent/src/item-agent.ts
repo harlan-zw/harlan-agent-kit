@@ -9,6 +9,7 @@ import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageS
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
 import type { MergeRisk, PullRequestFile } from './merge-risk.ts'
+import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { Result } from './result.ts'
 import type { ReviewReasoningEffort, ReviewReasoningEffortPolicy } from './review-effort.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
@@ -99,7 +100,7 @@ export interface ItemAgentOptions {
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -728,13 +729,52 @@ function githubCiAbsent(snapshot: PullRequestReviewSnapshot): boolean {
 }
 
 /**
+ * How long GitHub may take to report the first check run on a head commit.
+ *
+ * GitHub starts workflow runs seconds after a push, and a Review turn already
+ * takes minutes. Past this bound an empty head check set means the
+ * repository's own trigger filters skipped CI for this change. A docs only
+ * pull request under `paths-ignore` reads exactly like that.
+ */
+export const HEAD_CI_GRACE_MILLISECONDS = 15 * 60_000
+
+/**
+ * When the Review that owns these gates started, and the time now.
+ *
+ * The Review starts after the controller saw the head commit, so the grace
+ * measured from it is never shorter than the grace since the push.
+ */
+export interface CiGateClock {
+  reviewStartedAt: string
+  now: Date
+}
+
+/**
+ * True when the head commit ran no CI by the repository's own rules.
+ *
+ * On 2026-09-15 unlighthouse.dev#127 changed only a Markdown file under
+ * `docs/`. Its workflow ignores that path, so GitHub ran nothing on the head,
+ * while the base commit kept its checks. The gate read PENDING for a week and
+ * raised the same Incident 1500 times. Only a repository that requires no
+ * check qualifies, because GitHub then allows the merge on its own terms.
+ */
+function headRanNoCi(snapshot: PullRequestReviewSnapshot, clock: CiGateClock): boolean {
+  const startedAt = Date.parse(clock.reviewStartedAt)
+  return snapshot.requiredChecks._tag === 'None'
+    && snapshot.checks._tag === 'Available'
+    && snapshot.checks.checks.length === 0
+    && !Number.isNaN(startedAt)
+    && clock.now.getTime() - startedAt >= HEAD_CI_GRACE_MILLISECONDS
+}
+
+/**
  * A Baseline repair pull request exists because the default branch CI fails, so
  * its own review reads head CI alone. Every other review stops at a red base.
  * If GitHub names no required checks and reports none for both commits, no
  * future CI result can resolve the gate. The Agent report owns the local proof
  * in that repository.
  */
-function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): CiGateResult {
+function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean, clock: CiGateClock): CiGateResult {
   if (repairsBaseline)
     return headChecksGate(snapshot.checks, snapshot.requiredChecks)
   if (githubCiAbsent(snapshot)) {
@@ -758,6 +798,22 @@ function ciGate(snapshot: PullRequestReviewSnapshot, repairsBaseline: boolean): 
   const base = checksGate(snapshot.baseChecks, 'base-ci', 'Pending')
   if (base.cause._tag === 'BaseBranchFailed')
     return base
+  if (headRanNoCi(snapshot, clock)) {
+    return {
+      state: {
+        _tag: 'Passed',
+        // No `now` here: the evidence must stay equal on every pass, or each
+        // sweep would read a moved gate and publish again.
+        evidence: [...base.state.evidence, evidence('head-ci', JSON.stringify({
+          checks: snapshot.checks,
+          requiredChecks: snapshot.requiredChecks,
+          reviewStartedAt: clock.reviewStartedAt,
+        }))],
+      },
+      reported: [],
+      cause: { _tag: 'Settled' },
+    }
+  }
   const head = headChecksGate(snapshot.checks, snapshot.requiredChecks)
   return {
     state: { ...head.state, evidence: [...base.state.evidence, ...head.state.evidence] },
@@ -822,9 +878,9 @@ function mergeGate(pullRequest: GitHubPullRequestItem): ReviewGateState {
       : { _tag: 'Failed', reason: 'The pull request has merge conflicts.', evidence: [evidence('mergeability', 'conflicting')] }
 }
 
-function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean): { gates: ReviewGates, reportedChecks: string[] } {
+function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean, clock: CiGateClock): { gates: ReviewGates, reportedChecks: string[] } {
   const findings = response.findings
-  const ci = ciGate(snapshot, repairsBaseline)
+  const ci = ciGate(snapshot, repairsBaseline, clock)
   const reviewEvidence = [evidence('agent-report', JSON.stringify(response))]
   const gates: ReviewGates = {
     merge: mergeGate(snapshot.pullRequest),
@@ -856,10 +912,11 @@ export function refreshControllerGates(
   gates: ReviewGates,
   snapshot: PullRequestReviewSnapshot,
   mapping: RepositoryMapping,
+  clock: CiGateClock,
 ): { gates: ReviewGates, reportedChecks: string[], ciCause: CiGateCause } {
   const repairsBaseline = snapshot.pullRequest.purpose._tag === 'BaselineRepair'
     || (basesDefaultBranch(snapshot.pullRequest, mapping) && headRepairsFailedBaseChecks(snapshot))
-  const ci = ciGate(snapshot, repairsBaseline)
+  const ci = ciGate(snapshot, repairsBaseline, clock)
   const merge = mergeGate(snapshot.pullRequest)
   return {
     gates: { ...gates, ci: ci.state, merge: settledMergeGate(gates.merge, merge) },
@@ -1033,6 +1090,11 @@ async function reportReviewProgress(
   return ok(undefined)
 }
 
+/** The Repair round plan for the live head this snapshot read. */
+function repairRounds(options: ReviewWorkerOptions, snapshot: PullRequestReviewSnapshot): RepairRoundPlan {
+  return options.store.repairRoundPlan(snapshot.pullRequest.repository, snapshot.pullRequest.number, snapshot.pullRequest.headSha)
+}
+
 function hasReviewMutationAuthority(mapping: RepositoryMapping): boolean {
   return mapping.enabled && mapping.pullRequestReview
 }
@@ -1041,10 +1103,20 @@ type RepairPreflight
   = | { _tag: 'Authorized' }
     | { _tag: 'ActionRequired', reason: string }
 
-export function repairPreflight(mapping: RepositoryMapping, snapshot: PullRequestReviewSnapshot, access: Result<void, string>): RepairPreflight {
+/**
+ * Decides whether a fresh Repair Agent may act on this pull request.
+ *
+ * Spent Repair rounds come first after a closed pull request. They need a
+ * person whatever else holds Repair. On 2026-09-15 unlighthouse.dev#120 spent
+ * its three rounds, and its canonical comment asked for a green base branch
+ * instead, which no CI result could ever answer.
+ */
+export function repairPreflight(mapping: RepositoryMapping, snapshot: PullRequestReviewSnapshot, access: Result<void, string>, rounds: RepairRoundPlan): RepairPreflight {
   const merged = snapshot.pullRequest.state === 'closed' && snapshot.pullRequest.mergedAt !== null
   if (snapshot.pullRequest.state !== 'open' && !merged)
     return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.closed }
+  if (rounds._tag === 'Exhausted')
+    return { _tag: 'ActionRequired', reason: rounds.reason }
   if (snapshot.pullRequest.draft)
     return { _tag: 'ActionRequired', reason: REVIEW_REPAIR_REFUSALS.draft }
   if (!merged && snapshot.pullRequest.mergeState !== 'clean')
@@ -1206,7 +1278,7 @@ async function projectReviewRun(
     if (observed._tag === 'Conflict' || observed._tag === 'Stale')
       return err('The merged pull request changed before Repair was queued.')
   }
-  const refreshed = refreshControllerGates(run.gates, snapshot, task.repositoryMapping)
+  const refreshed = refreshControllerGates(run.gates, snapshot, task.repositoryMapping, { reviewStartedAt: run.startedAt, now: options.now() })
   const gates = refreshed.gates
   const gatesChanged = JSON.stringify(gates) !== JSON.stringify(run.gates)
   let findings = run.findings
@@ -1289,7 +1361,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           task,
           snapshot.value,
           storedRun,
-          repairPreflight(task.repositoryMapping, snapshot.value, repairAccess),
+          repairPreflight(task.repositoryMapping, snapshot.value, repairAccess, repairRounds(options, snapshot.value)),
           signal,
         )
       }
@@ -1376,7 +1448,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const changedFiles = await reviewChangedFiles(options, task, signal)
       const band = reviewReasoningEffortBand(changedFiles._tag === 'Ok' ? changedFiles.value : null, reviewReasoningEffortPolicy(task))
       const reviewRuntime = bandedReviewRuntime(options.runtime(task.repository), band.effort)
-      const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess)
+      const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess, repairRounds(options, snapshot.value))
       const repairedHeadFindings = options.store.getRepairedHeadFindings(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
       // The slug comes from the primary checkout, never from this worktree.
       const memory = options.claudeHome === undefined
@@ -1421,7 +1493,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       }))
       // Persist the expensive Agent report before any later GitHub read or
       // write. A retry can now resume at the controller boundary.
-      const { gates } = reviewGates(snapshot.value, response, repairsBaseline)
+      const { gates } = reviewGates(snapshot.value, response, repairsBaseline, { reviewStartedAt: startedAt, now: options.now() })
       const outcome = reviewOutcome(gates)
       const mergeRisk = resolveMergeRisk(task, response, changedFiles)
       const reviewRunId = randomUUID()
@@ -1492,7 +1564,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         mergeRisk,
         feedback: null,
         publications: [],
-      }, repairPreflight(task.repositoryMapping, frozen.value, await options.preflightRepair(task.repository, signal)), signal)
+      }, repairPreflight(task.repositoryMapping, frozen.value, await options.preflightRepair(task.repository, signal), repairRounds(options, frozen.value)), signal)
     },
   }
 }

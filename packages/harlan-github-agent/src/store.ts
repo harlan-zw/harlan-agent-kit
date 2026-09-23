@@ -8,6 +8,7 @@ import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
+import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
@@ -1109,6 +1110,14 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
    * identities go back into its prompt and it reuses them verbatim.
    */
   getRepairedHeadFindings: (repository: string, pullRequestNumber: number, commitSha: string) => ReviewFinding[]
+  /**
+   * Whether one more Repair round may start on this pull request head.
+   *
+   * Queueing Repair answers the same question, but a caller that must refuse
+   * Repair for another reason never reaches the queue. It reads this first, so
+   * spent rounds win over a transient refusal such as a running base branch.
+   */
+  repairRoundPlan: (repository: string, pullRequestNumber: number, headSha: string) => RepairRoundPlan
   /** Open pull requests across enabled repositories, which is the work waiting on Harlan. */
   countOpenPullRequests: () => number
   needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string, usage?: AgentTokenUsage }) => boolean
@@ -8999,6 +9008,15 @@ export function openJournalStore(
     return repaired === undefined ? [] : getReviewFixFindings(repository, pullRequestNumber, repaired.revision_id)
   }
 
+  const repairRoundPlan: JournalStore['repairRoundPlan'] = (repository, pullRequestNumber, headSha) => {
+    const subject = database.prepare(`
+      SELECT subjects.id FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+    `).get(repository, pullRequestNumber) as { id: number } | undefined
+    return planRepairRound(subject === undefined ? [] : reviewFixRounds(database, subject.id, headSha))
+  }
+
   const recoverExpiredTasks = (now: string): void => {
     const expired = database.prepare(`
       SELECT id, state_tag, fence FROM tasks
@@ -15320,6 +15338,7 @@ export function openJournalStore(
     claimNextReviewFixTask,
     queueReviewFixTaskForReview,
     queueReviewFixForGate,
+    repairRoundPlan,
     recordCiRepairFinding,
     recordRepairReport,
     queueBaselineRepairForReview,

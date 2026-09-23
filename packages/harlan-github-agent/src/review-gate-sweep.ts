@@ -26,7 +26,7 @@ export interface ReviewGateSweepOptions {
   /** Proves the controller may publish Repair commits in this repository. */
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordCiRepairFinding' | 'recordIncident' | 'recordReviewPublication' | 'resolveIncidents' | 'stageReviewGateStatus'>
+  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordCiRepairFinding' | 'recordIncident' | 'recordReviewPublication' | 'repairRoundPlan' | 'resolveIncidents' | 'stageReviewGateStatus'>
 }
 
 /**
@@ -69,7 +69,7 @@ export async function refreshReviewGates(
     if (live.value.pullRequest.state !== 'open' || live.value.pullRequest.headSha !== review.headSha || live.value.pullRequest.baseRef !== review.baseRef)
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
-    const { gates, reportedChecks, ciCause } = refreshControllerGates(review.gates, live.value, mapping)
+    const { gates, reportedChecks, ciCause } = refreshControllerGates(review.gates, live.value, mapping, { reviewStartedAt: review.startedAt, now: options.now() })
     const outcome = reviewOutcome(gates)
     const confidence = outcome === 'READY' ? review.confidence : undefined
     let findings = review.findings
@@ -88,7 +88,12 @@ export async function refreshReviewGates(
       && findings.some(finding => finding._tag === 'Open' && finding.resolution !== 'Dismissal')
       && !findings.some(finding => finding._tag === 'Open' && finding.resolution === 'Dismissal')
     if (repairable) {
-      const preflight = repairPreflight(mapping, live.value, await options.preflightRepair(review.repository, signal))
+      const preflight = repairPreflight(
+        mapping,
+        live.value,
+        await options.preflightRepair(review.repository, signal),
+        options.store.repairRoundPlan(review.repository, review.pullRequestNumber, review.headSha),
+      )
       const repair = preflight._tag === 'Authorized'
         ? options.store.queueReviewFixForGate({
             reviewRunId: review.reviewRunId,

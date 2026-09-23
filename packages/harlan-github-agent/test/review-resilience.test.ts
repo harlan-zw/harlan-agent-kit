@@ -1,5 +1,6 @@
 import type { PullRequestReviewSnapshot } from '../src/github-agent-source.ts'
 import type { ReviewWorkerOptions } from '../src/item-agent.ts'
+import type { RepairRoundPlan } from '../src/repair-rounds.ts'
 import type { ClaimedAdversarialReviewTask, GitHubPullRequestItem, RecordReviewRunInput, ReviewFixQueueResult, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
@@ -73,6 +74,7 @@ function harness(input: {
   publish?: () => ReturnType<ReviewWorkerOptions['status']['publish']>
   preflightRepair?: ReviewWorkerOptions['preflightRepair']
   queueRepair?: () => ReviewFixQueueResult
+  repairRounds?: RepairRoundPlan
   reviewRuns?: ReviewRun[]
   verifyReview?: () => ReturnType<ReviewWorkerOptions['workspaces']['verifyReview']>
 }): Harness {
@@ -126,6 +128,7 @@ function harness(input: {
         return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
       }),
       getRepairedHeadFindings: () => [],
+      repairRoundPlan: () => input.repairRounds ?? { _tag: 'Allowed', number: 1 },
       storedReviewForHead: (_repository, _pullRequestNumber, headSha) => {
         const run = (input.reviewRuns ?? []).find(candidate => candidate.headSha === headSha)
         return run === undefined ? { _tag: 'None' } : { _tag: 'Current', run }
@@ -684,6 +687,28 @@ describe('review resilience', () => {
 
     expect(test.queued).toBe(0)
     expect(test.comments.at(-1)).toContain('The base branch must pass CI before Repair starts.')
+  })
+
+  it('names every spent Repair round instead of the unreadable base CI', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const snapshot = reviewSnapshot(pullRequest)
+    snapshot.baseChecks = { _tag: 'Unavailable', reason: 'GitHub checks timed out.' }
+    const reason = 'Repair used 3 of 3 rounds and the finding remains. Round 1 (`1111111`): a. Round 2 (`2222222`): b. Round 3 (`3333333`): c. A person decides the next step.'
+    const test = harness({
+      pullRequest,
+      snapshots: [snapshot],
+      repairRounds: { _tag: 'Exhausted', reason },
+      response: {
+        findings: [materialFinding()],
+        confidence: 90,
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.queued).toBe(0)
+    expect(test.comments.at(-1)).toContain(reason)
+    expect(test.comments.at(-1)).not.toContain('The base branch must pass CI before Repair starts.')
   })
 
   it('does not queue Repair when GitHub refuses write access', async () => {

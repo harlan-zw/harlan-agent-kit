@@ -60,6 +60,7 @@ async function reviewWith(files: PullRequestFile[], profile: AgentProfile = CODE
       recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
       queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
       getRepairedHeadFindings: () => [],
+      repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
       getWorkerSession: () => null,
       storedReviewForHead: () => ({ _tag: 'None' }),
       getRevisionFiles: () => ({ files, headSha: 'abc123' }),

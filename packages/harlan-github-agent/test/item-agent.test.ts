@@ -97,6 +97,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A clean review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -205,6 +206,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A second review must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: storedTag }),
         getRevisionFiles: () => null,
@@ -309,6 +311,7 @@ describe('subject Workers', () => {
           return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -438,6 +441,7 @@ describe('subject Workers', () => {
           return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -545,6 +549,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A wrong premise must not queue Repair work.') },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -649,6 +654,7 @@ describe('subject Workers', () => {
           // The store refuses once the reused identity matches its guard.
           return { _tag: 'ActionRequired', reason: 'A repaired head still has the same Review finding: The parser drops data.' }
         },
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getRepairedHeadFindings: (_repository, _pullRequestNumber, commitSha) => {
           askedForHeadSha = commitSha
           return [{
@@ -750,6 +756,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('Base CI failure must prevent Repair work.') },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -846,6 +853,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -939,6 +947,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -1028,6 +1037,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('No Repair is needed.') },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,

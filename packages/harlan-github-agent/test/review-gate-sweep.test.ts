@@ -1,4 +1,5 @@
 import type { GitHubCheck, PullRequestReviewSnapshot } from '../src/github-agent-source.ts'
+import type { RepairRoundPlan } from '../src/repair-rounds.ts'
 import type { RecordIncidentInput, ReviewGateRefresh } from '../src/store.ts'
 import type { Incident, ReviewFinding, ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,6 +11,9 @@ import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 import { githubPublicationFixture } from './github-publication-fixture.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
+
+/** A Review that started long before `now`, so no grace period applies. */
+const refreshClock = { reviewStartedAt: '2026-08-27T08:11:00.000Z', now: new Date('2026-08-27T11:15:00.000Z') }
 
 function passed(label: string) {
   return { _tag: 'Passed' as const, evidence: [{ label, sha256: 'a'.repeat(64) }] }
@@ -97,7 +101,7 @@ function recordPublishedRefreshReview(store: ReturnType<typeof openJournalStore>
   const live = snapshot([check()])
   if (live._tag !== 'Ok')
     throw new Error('Expected a Review snapshot.')
-  const refreshed = refreshControllerGates(passedControllerGates(), live.value, repository)
+  const refreshed = refreshControllerGates(passedControllerGates(), live.value, repository, refreshClock)
   const gates = refreshed.gates
   store.syncRepositories([repository], '2026-08-27T08:00:00.000Z')
   store.setRepositoryWritesEnabled(repository.github, true)
@@ -204,6 +208,7 @@ function harness(options: {
   live?: ReturnType<typeof snapshot>
   edit?: () => Promise<any>
   repairAccess?: string
+  rounds?: RepairRoundPlan
 }) {
   const recorded: Recorded = { baselineQueued: [], ciFindings: [], failed: [], fixQueued: [], incidents: [], resolved: [], staged: [], stamped: [] }
   const run = async () => refreshReviewGates({
@@ -227,6 +232,7 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
+      repairRoundPlan: () => options.rounds ?? { _tag: 'Allowed', number: 1 },
       queueReviewFixForGate: ({ at: _at, ...input }) => {
         recorded.fixQueued.push(input)
         return { _tag: 'Queued', taskId: 'fix-1', rounds: { number: 1, limit: 3 } }
@@ -275,8 +281,8 @@ describe('refreshControllerGates', () => {
     if (queued._tag !== 'Ok' || running._tag !== 'Ok')
       throw new Error('Expected Review snapshots.')
 
-    const queuedGates = refreshControllerGates(pendingControllerGates(), queued.value, repositoryMapping())
-    const runningGates = refreshControllerGates(pendingControllerGates(), running.value, repositoryMapping())
+    const queuedGates = refreshControllerGates(pendingControllerGates(), queued.value, repositoryMapping(), refreshClock)
+    const runningGates = refreshControllerGates(pendingControllerGates(), running.value, repositoryMapping(), refreshClock)
 
     expect(queuedGates.ciCause).toEqual({ _tag: 'CheckQueued', check: 'test' })
     expect(queuedGates.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'test is queued, and no runner has accepted the job.' })
@@ -289,7 +295,7 @@ describe('refreshControllerGates', () => {
     if (live._tag !== 'Ok')
       throw new Error('Expected a Review snapshot.')
 
-    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping(), refreshClock)
 
     expect(refreshed.gates.ci._tag).toBe('Passed')
     expect(refreshed.ciCause).toEqual({ _tag: 'Settled' })
@@ -301,7 +307,7 @@ describe('refreshControllerGates', () => {
       throw new Error('Expected a Review snapshot.')
     live.value.pullRequest.mergeState = 'unknown'
 
-    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping(), refreshClock)
 
     expect(refreshed.gates.merge).toEqual(passedControllerGates().merge)
   })
@@ -311,7 +317,7 @@ describe('refreshControllerGates', () => {
     if (live._tag !== 'Ok')
       throw new Error('Expected a Review snapshot.')
 
-    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping(), refreshClock)
 
     expect(refreshed.gates.ci).toMatchObject({ _tag: 'Pending', reason: 'Base branch CI: test failed.' })
     expect(refreshed.ciCause).toEqual({ _tag: 'BaseBranchFailed', check: 'test' })
@@ -322,7 +328,7 @@ describe('refreshControllerGates', () => {
     if (live._tag !== 'Ok')
       throw new Error('Expected a Review snapshot.')
 
-    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping(), refreshClock)
 
     expect(refreshed.gates.ci).toMatchObject({ _tag: 'Failed', reason: 'test failed.' })
     expect(refreshed.ciCause).toEqual({ _tag: 'HeadCheckFailed', check: 'test' })
@@ -337,7 +343,7 @@ describe('refreshControllerGates', () => {
     if (live._tag !== 'Ok')
       throw new Error('Expected a Review snapshot.')
 
-    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping())
+    const refreshed = refreshControllerGates(passedControllerGates(), live.value, repositoryMapping(), refreshClock)
 
     expect(refreshed.ciCause).toEqual({ _tag: 'HeadCheckFailed', check: 'test' })
   })
@@ -434,6 +440,79 @@ describe('refreshReviewGates head CI repair', () => {
   })
 })
 
+describe('refreshReviewGates on a head that ran no CI', () => {
+  // unlighthouse.dev#127 changed only docs/ops/triage-ledger.md. Its workflow
+  // ignores docs/**, so GitHub ran no check on the head while the base kept its
+  // checks. The gate read PENDING for a week.
+  const docsOnlyHead = () => snapshot([check()], [])
+
+  it('passes the CI gate once GitHub has had time to start a check run', async () => {
+    const { recorded, run } = harness({ live: docsOnlyHead(), review: gateRefresh({ startedAt: '2026-08-27T08:11:00.000Z' }) })
+
+    await run()
+
+    expect(recorded.staged.map(({ outcome, ci }) => ({ outcome, ci }))).toEqual([{ outcome: 'READY', ci: 'Passed' }])
+  })
+
+  it('keeps the CI gate PENDING while the head commit is young', async () => {
+    const { recorded, run } = harness({ live: docsOnlyHead(), review: gateRefresh({ startedAt: '2026-08-27T11:10:00.000Z' }) })
+
+    await run()
+
+    expect(recorded.staged.map(({ outcome, ci }) => ({ outcome, ci }))).toEqual([{ outcome: 'PENDING', ci: 'Pending' }])
+  })
+
+  it.each([
+    { requiredChecks: { _tag: 'Declared' as const, contexts: ['test'] } },
+    { requiredChecks: { _tag: 'Unavailable' as const, reason: 'GitHub timed out.' } },
+  ])('keeps the CI gate PENDING when required checks are $requiredChecks._tag', async ({ requiredChecks }) => {
+    const { recorded, run } = harness({ live: snapshot([check()], [], requiredChecks), review: gateRefresh({ startedAt: '2026-08-27T08:11:00.000Z' }) })
+
+    await run()
+
+    expect(recorded.staged.map(({ ci }) => ci)).toEqual(['Pending'])
+  })
+})
+
+describe('refreshReviewGates after the Repair rounds are spent', () => {
+  // unlighthouse.dev#120 spent its three Repair rounds, and its canonical
+  // comment then asked for a green base branch instead of a person.
+  const spent: RepairRoundPlan = {
+    _tag: 'Exhausted',
+    reason: 'Repair used 3 of 3 rounds and the finding remains. Round 1 (`1111111`): a. Round 2 (`2222222`): b. Round 3 (`3333333`): c. A person decides the next step.',
+  }
+  const finding: ReviewFinding = {
+    _tag: 'Open',
+    summary: 'Unsafe parser input.',
+    nextAction: 'Reject the input.',
+    resolution: 'Repair',
+  }
+  const blocked = (): ReviewGates => ({
+    ...passedControllerGates(),
+    review: { _tag: 'Failed', reason: 'Unsafe parser input.', evidence: [{ label: 'agent-report', sha256: 'd'.repeat(64) }] },
+  })
+
+  it('names every spent round instead of the base branch CI', async () => {
+    const live = snapshot([check({ name: 'deploy', status: 'in_progress', conclusion: null })])
+    const { recorded, run } = harness({ live, rounds: spent, review: gateRefresh({ gates: blocked(), findings: [finding] }) })
+
+    await run()
+
+    expect(recorded.fixQueued).toEqual([])
+    expect(recorded.staged[0]?.body).toContain(spent.reason)
+    expect(recorded.staged[0]?.body).not.toContain('The base branch must pass CI before Repair starts.')
+  })
+
+  it('still asks for a green base branch while rounds remain', async () => {
+    const live = snapshot([check({ name: 'deploy', status: 'in_progress', conclusion: null })])
+    const { recorded, run } = harness({ live, review: gateRefresh({ gates: blocked(), findings: [finding] }) })
+
+    await run()
+
+    expect(recorded.staged[0]?.body).toContain('The base branch must pass CI before Repair starts.')
+  })
+})
+
 describe('refreshReviewGates', () => {
   it('skips Reviews outside the requested Repository mappings', async () => {
     const { recorded, run } = harness({ review: gateRefresh({ repository: 'harlan-zw/other' }) })
@@ -480,7 +559,7 @@ describe('refreshReviewGates', () => {
     const { recorded, run } = harness({
       live,
       review: gateRefresh({
-        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping(), refreshClock).gates,
       }),
     })
 
@@ -553,7 +632,7 @@ describe('refreshReviewGates', () => {
     const { recorded, run } = harness({
       live,
       review: gateRefresh({
-        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping(), refreshClock).gates,
       }),
     })
 
@@ -582,7 +661,7 @@ describe('refreshReviewGates', () => {
     const { recorded, run } = harness({
       live,
       review: gateRefresh({
-        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping(), refreshClock).gates,
       }),
     })
 
@@ -657,7 +736,7 @@ describe('refreshReviewGates', () => {
     const { recorded, run } = harness({
       live,
       review: gateRefresh({
-        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping(), refreshClock).gates,
       }),
       edit: () => Promise.resolve(ok({ _tag: 'Missing' })),
     })
@@ -681,7 +760,7 @@ describe('refreshReviewGates', () => {
     const { recorded, run } = harness({
       live,
       review: gateRefresh({
-        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping(), refreshClock).gates,
         gatesUpdatedAt: '2026-08-26T11:15:00.000Z',
       }),
     })
@@ -715,7 +794,7 @@ describe('refreshReviewGates', () => {
     const { recorded, run } = harness({
       live,
       review: gateRefresh({
-        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping(), refreshClock).gates,
       }),
     })
 
@@ -745,7 +824,7 @@ describe('refreshReviewGates', () => {
     const { recorded, run } = harness({
       live,
       review: gateRefresh({
-        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping()).gates,
+        gates: refreshControllerGates(pendingControllerGates(), live.value, repositoryMapping(), refreshClock).gates,
       }),
       edit: () => Promise.resolve(ok({ _tag: 'Foreign', reason })),
     })
@@ -1105,7 +1184,7 @@ describe('refreshReviewGates against the journal store', () => {
       startedAt: '2026-08-26T08:11:00.000Z',
       completedAt: '2026-08-26T08:20:00.000Z',
       usage: { _tag: 'Unavailable' },
-      gates: refreshControllerGates(pendingControllerGates(), red.value, repositoryMapping()).gates,
+      gates: refreshControllerGates(pendingControllerGates(), red.value, repositoryMapping(), refreshClock).gates,
       confidence: 88,
       findings: [],
     })).toEqual({ _tag: 'Inserted', reviewRunId: 'run-stalled' })
