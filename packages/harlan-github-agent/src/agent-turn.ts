@@ -5,11 +5,12 @@ import type { AgentTokenUsage } from './agent-provider.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentRole } from './types.ts'
+import { isDeepStrictEqual } from 'node:util'
 import { agentActivityFromEvent } from './agent-activity.ts'
 import { roleProfile } from './agent-profile.ts'
 import { advancedPhase, agentEventPhase } from './agent-progress.ts'
 import { addAgentTokenUsage } from './agent-provider.ts'
-import { contextBudgetExhaustedReason } from './failure.ts'
+import { contextBudgetExhaustedReason, repeatedAgentResultReason } from './failure.ts'
 import { err, ok } from './result.ts'
 
 /**
@@ -77,7 +78,23 @@ ${response.slice(0, 8_000)}
 Return one corrected JSON object that matches this schema and keeps every result you already decided:
 ${JSON.stringify(schema)}
 
+Fix the rule the rejection names. The same answer again fails the task.
 Use no tool. Return no prose, no explanation, and no Markdown code fence.`
+}
+
+function parsedJson(text: string): { _tag: 'Json', value: unknown } | { _tag: 'Text', text: string } {
+  try {
+    return { _tag: 'Json', value: JSON.parse(text) }
+  }
+  catch {
+    // Not JSON, so the answers compare as trimmed text instead.
+    return { _tag: 'Text', text: text.trim() }
+  }
+}
+
+/** Whether two answers say the same thing, ignoring JSON whitespace and fences. */
+function sameAnswer(first: string, second: string): boolean {
+  return isDeepStrictEqual(parsedJson(unwrapJsonResponse(first)), parsedJson(unwrapJsonResponse(second)))
 }
 
 /**
@@ -250,9 +267,14 @@ export async function runRepairedAgentTurn<Value>(
     return ok({ _tag: 'Unparsed', reason: parsed.error, response: turn.value.response, sessionId: turn.value.sessionId, usage: turn.value.usage })
   const reparsed = await options.parse(unwrapJsonResponse(repaired.value.response))
   const usage = addAgentTokenUsage(turn.value.usage, repaired.value.usage)
-  return reparsed._tag === 'Ok'
-    ? ok({ _tag: 'Parsed', value: reparsed.value, sessionId: repaired.value.sessionId, usage })
-    : ok({ _tag: 'Unparsed', reason: reparsed.error, response: repaired.value.response, sessionId: repaired.value.sessionId, usage })
+  if (reparsed._tag === 'Ok')
+    return ok({ _tag: 'Parsed', value: reparsed.value, sessionId: repaired.value.sessionId, usage })
+  // The correction named the broken rule and the agent gave the same answer.
+  // Another turn would too, so the reason stops recovery instead of retrying.
+  const reason = reparsed.error === parsed.error && sameAnswer(turn.value.response, repaired.value.response)
+    ? repeatedAgentResultReason(reparsed.error)
+    : reparsed.error
+  return ok({ _tag: 'Unparsed', reason, response: repaired.value.response, sessionId: repaired.value.sessionId, usage })
 }
 
 /**

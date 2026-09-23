@@ -121,7 +121,7 @@ Give each finding a stable identity, exact location, proof, next action, and res
 
 Decide the pull request premise once before classifying findings.
 
-Use a sound premise only when safe fixes preserve the pull request intent. Every finding then uses resolution `Repair`. Name the regression test Repair must write first.
+Use a sound premise only when safe fixes preserve the pull request intent. Every finding then uses resolution `Repair`. Name the regression test Repair must write first. Record none only when no test can cover the finding, such as a stale comment or documentation.
 
 Use a wrong premise when safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Every finding then uses resolution `Dismissal` and records no regression test. Never mix Repair and Dismissal findings. Never Dismiss or close the pull request.
 

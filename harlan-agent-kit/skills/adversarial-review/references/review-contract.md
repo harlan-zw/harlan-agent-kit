@@ -141,7 +141,7 @@ Each finding records a stable fingerprint, exact path and line, proof, summary, 
 
 Decide the pull request premise once before classifying findings.
 
-A sound premise means safe fixes preserve the pull request intent. Every finding uses `Repair` and records the regression test the fresh Repair Agent must write first.
+A sound premise means safe fixes preserve the pull request intent. Every finding uses `Repair` and records the regression test the fresh Repair Agent must write first. A finding no test can cover, such as a stale comment or documentation, records none.
 
 A wrong premise means safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Every finding uses `Dismissal` and records no regression test.
 

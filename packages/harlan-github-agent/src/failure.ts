@@ -39,6 +39,8 @@ export type PermanentKind
   = | 'policy'
     /** The agent session read its whole Context budget without an answer. */
     | 'context_budget'
+    /** The agent repeated a rejected result after the controller named the broken rule. */
+    | 'agent_result'
     | 'unknown'
 
 export interface FailureSignal {
@@ -97,6 +99,19 @@ export function contextBudgetExhaustedReason(input: ContextBudgetExhaustedInput)
 
 export function isContextBudgetExhausted(message: string): boolean {
   return message.startsWith(CONTEXT_BUDGET_EXHAUSTED)
+}
+
+/**
+ * The first sentence of every reason a repeated rejected result reports.
+ *
+ * The correction prompt names the rule the answer broke. An agent that returns
+ * the same answer anyway has decided, so a fresh turn only buys the same
+ * answer again. One Review spent 18 attempts and five hours that way.
+ */
+export const AGENT_RESULT_REPEATED = 'The agent repeated a rejected result after one named correction.'
+
+export function repeatedAgentResultReason(reason: string): string {
+  return `${AGENT_RESULT_REPEATED} ${reason}`
 }
 
 /**
@@ -263,6 +278,10 @@ export function classifyFailure(signal: FailureSignal): FailureClass {
   // already spent its whole budget spend another one.
   if (isContextBudgetExhausted(message))
     return { _tag: 'Permanent', kind: 'context_budget' }
+  // Matched by prefix before the Transient agent result patterns, which the
+  // quoted parser reason would otherwise match.
+  if (message.startsWith(AGENT_RESULT_REPEATED))
+    return { _tag: 'Permanent', kind: 'agent_result' }
 
   if (permanentMessages.has(message.trim()) || matches(permanentPatterns, message))
     return { _tag: 'Permanent', kind: 'policy' }

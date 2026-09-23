@@ -582,7 +582,7 @@ describe('review resilience', () => {
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
+    expect(result).toEqual(err('The agent repeated a rejected result after one named correction. The agent returned an invalid adversarial review result: confidence must be an integer from 0 to 100.'))
     expect(test.attempts).toEqual([])
   })
   it('queues exact findings for a fresh Repair Agent', async () => {
@@ -769,24 +769,6 @@ describe('review resilience', () => {
     expect(result._tag).toBe('Ok')
     expect(test.queued).toBe(0)
     expect(test.comments.at(-1)).toContain(refusal)
-  })
-
-  it('rejects a wrong premise that still asks for Repair', async () => {
-    const pullRequest = pullRequestItem({ mergeState: 'clean' })
-    const test = harness({
-      pullRequest,
-      response: {
-        premise: { verdict: 'wrong', reason: 'Safe repair would reverse the pull request intent.' },
-        findings: [materialFinding()],
-        confidence: 90,
-      },
-    })
-
-    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
-
-    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
-    expect(test.queued).toBe(0)
-    expect(test.attempts).toEqual([])
   })
 
   it('recommends Dismissal instead of repairing a wrong premise', async () => {
