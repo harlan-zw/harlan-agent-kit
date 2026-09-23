@@ -842,6 +842,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   /** Replaces one repository's Routines with the spec its default branch declares. */
   syncRoutines: (input: { repository: string, specSha: string, entries: readonly RoutineSpecEntry[], at: string }) => Routine[]
   listRoutines: (repository?: string) => Routine[]
+  /** Retires every active Routine of one repository and supersedes its Queued runs with `reason`. Returns the retired names. */
+  retireRoutines: (input: { repository: string, reason: string, at: string }) => string[]
   /** Inserts one run for one exact cron instant. Answers null when it already exists. */
   openRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, at: string }) => RoutineRun | null
   /** Records an instant that fell outside the catch-up window, so a missed run stays visible. */
@@ -14170,7 +14172,6 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       const declared = input.entries.map(entry => `${input.repository}:${entry.name}`)
-      const placeholders = declared.map(() => '?').join(', ')
       input.entries.forEach((entry) => {
         upsert.run(
           `${input.repository}:${entry.name}`,
@@ -14184,38 +14185,7 @@ export function openJournalStore(
           input.at,
         )
       })
-      database.prepare(`
-        UPDATE routines
-        SET retired_at = ?, updated_at = ?
-        WHERE repository = ?
-          ${declared.length === 0 ? '' : `AND id NOT IN (${placeholders})`}
-          AND retired_at IS NULL
-      `).run(input.at, input.at, input.repository, ...declared)
-
-      const superseded = database.prepare(`
-        SELECT routine_runs.id, routine_runs.fence
-        FROM routine_runs
-        JOIN routines ON routines.id = routine_runs.routine_id
-        WHERE routine_runs.state_tag = 'Queued'
-          AND routines.repository = ?
-          AND (routines.enabled = 0 OR routines.retired_at IS NOT NULL)
-      `).all(input.repository) as unknown as Array<{ id: string, fence: number }>
-      superseded.forEach((run) => {
-        database.prepare(`
-          UPDATE routine_runs
-          SET state_tag = 'Superseded', reason = 'The Routine definition is disabled or retired.', updated_at = ?
-          WHERE id = ? AND state_tag = 'Queued'
-        `).run(input.at, run.id)
-        recordRoutineRunEvent(database, {
-          runId: run.id,
-          event: 'Superseded',
-          from: 'Queued',
-          to: 'Superseded',
-          reason: 'The Routine definition is disabled or retired.',
-          fence: run.fence,
-          at: input.at,
-        })
-      })
+      retireUndeclaredRoutines(input.repository, declared, input.at, 'The Routine definition is disabled or retired.')
       database.exec('COMMIT')
     }
     catch (error) {
@@ -14223,6 +14193,61 @@ export function openJournalStore(
       throw error
     }
     return listRoutines(input.repository)
+  }
+
+  /**
+   * Retires a repository's active Routines outside `declared`, then supersedes
+   * every Queued run of a disabled or retired one. Runs inside the caller's
+   * transaction.
+   */
+  function retireUndeclaredRoutines(repository: string, declared: readonly string[], at: string, reason: string): void {
+    const placeholders = declared.map(() => '?').join(', ')
+    database.prepare(`
+      UPDATE routines
+      SET retired_at = ?, updated_at = ?
+      WHERE repository = ?
+        ${declared.length === 0 ? '' : `AND id NOT IN (${placeholders})`}
+        AND retired_at IS NULL
+    `).run(at, at, repository, ...declared)
+
+    const superseded = database.prepare(`
+      SELECT routine_runs.id, routine_runs.fence
+      FROM routine_runs
+      JOIN routines ON routines.id = routine_runs.routine_id
+      WHERE routine_runs.state_tag = 'Queued'
+        AND routines.repository = ?
+        AND (routines.enabled = 0 OR routines.retired_at IS NOT NULL)
+    `).all(repository) as unknown as Array<{ id: string, fence: number }>
+    superseded.forEach((run) => {
+      database.prepare(`
+        UPDATE routine_runs
+        SET state_tag = 'Superseded', reason = ?, updated_at = ?
+        WHERE id = ? AND state_tag = 'Queued'
+      `).run(reason, at, run.id)
+      recordRoutineRunEvent(database, {
+        runId: run.id,
+        event: 'Superseded',
+        from: 'Queued',
+        to: 'Superseded',
+        reason,
+        fence: run.fence,
+        at,
+      })
+    })
+  }
+
+  const retireRoutines: JournalStore['retireRoutines'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const names = listRoutines(input.repository).map(routine => routine.name)
+      retireUndeclaredRoutines(input.repository, [], input.at, input.reason)
+      database.exec('COMMIT')
+      return names
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   const listRoutines: JournalStore['listRoutines'] = (repository) => {
@@ -15279,6 +15304,7 @@ export function openJournalStore(
     getRoutineRun: readRunById,
     getRoutineIssueSource,
     listRoutineRuns,
+    retireRoutines,
     recordCandidates,
     listCandidates,
     stageCandidateIssues,

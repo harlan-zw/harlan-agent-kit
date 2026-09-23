@@ -2,7 +2,7 @@ import type { GitHubReadError, GitHubSource, RoutineSpecSource } from '../src/gi
 import type { Result } from '../src/result.ts'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
-import { planRoutineRuns, syncRepositoryRoutines } from '../src/routine-controller.ts'
+import { planRoutineRuns, retireUnmappedRoutines, syncRepositoryRoutines } from '../src/routine-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -21,6 +21,7 @@ function githubReturning(source: Result<RoutineSpecSource, GitHubReadError>): Pi
 }
 
 const at = (iso = '2026-08-27T08:00:00.000Z') => () => new Date(iso)
+const mapped = [repositoryMapping()]
 
 describe('syncing one repository Routine spec', () => {
   it('stores what the default branch declares, with its commit', async () => {
@@ -215,7 +216,7 @@ describe('planning the Routine runs that are due', () => {
     const store = openJournalStore(':memory:')
     try {
       await seed(store)
-      const plan = planRoutineRuns({ now: at('2026-08-27T07:30:00.000Z'), store })
+      const plan = planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:30:00.000Z'), store })
 
       expect(plan.opened).toMatchObject([{ name: 'sentry-checkin', scheduledFor: '2026-08-27T07:00:00.000Z' }])
       expect(plan.skipped).toEqual([])
@@ -229,8 +230,8 @@ describe('planning the Routine runs that are due', () => {
     const store = openJournalStore(':memory:')
     try {
       await seed(store)
-      planRoutineRuns({ now: at('2026-08-27T07:30:00.000Z'), store })
-      const second = planRoutineRuns({ now: at('2026-08-27T07:31:00.000Z'), store })
+      planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:30:00.000Z'), store })
+      const second = planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:31:00.000Z'), store })
 
       expect(second.opened).toEqual([])
     }
@@ -243,8 +244,8 @@ describe('planning the Routine runs that are due', () => {
     const store = openJournalStore(':memory:')
     try {
       await seed(store)
-      planRoutineRuns({ now: at('2026-08-27T07:30:00.000Z'), store })
-      const later = planRoutineRuns({ now: at('2026-08-29T06:00:00.000Z'), store })
+      planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:30:00.000Z'), store })
+      const later = planRoutineRuns({ repositories: mapped, now: at('2026-08-29T06:00:00.000Z'), store })
 
       expect(later.opened).toEqual([])
       expect(later.skipped).toMatchObject([{ scheduledFor: '2026-08-28T07:00:00.000Z' }])
@@ -267,7 +268,7 @@ routines:
         - cron: "0 7 * * *"
         - cron: "0 7 * * 4"
 `)
-      const plan = planRoutineRuns({ now: at('2026-08-27T07:30:00.000Z'), store })
+      const plan = planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:30:00.000Z'), store })
 
       expect(plan.opened).toHaveLength(1)
       expect(plan.opened[0]?.scheduledFor).toBe('2026-08-27T07:00:00.000Z')
@@ -291,7 +292,7 @@ routines:
         - cron: "0 7 * * *"
 `)
 
-      expect(planRoutineRuns({ now: at('2026-08-27T07:30:00.000Z'), store }).opened).toEqual([])
+      expect(planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:30:00.000Z'), store }).opened).toEqual([])
     }
     finally {
       store.close()
@@ -310,7 +311,7 @@ describe('moving a Routine spec', () => {
         now: at('2026-08-30T18:00:00.000Z'),
         store,
       })
-      const onTime = planRoutineRuns({ now: at('2026-08-30T19:00:30.000Z'), store })
+      const onTime = planRoutineRuns({ repositories: mapped, now: at('2026-08-30T19:00:30.000Z'), store })
       expect(onTime.opened.map(run => run.scheduledFor)).toEqual(['2026-08-30T19:00:00.000Z'])
 
       // The next morning passes with no pass planning it. That afternoon the
@@ -326,9 +327,122 @@ describe('moving a Routine spec', () => {
         store,
       })
 
-      const afterMove = planRoutineRuns({ now: at('2026-09-01T04:25:00.000Z'), store })
+      const afterMove = planRoutineRuns({ repositories: mapped, now: at('2026-09-01T04:25:00.000Z'), store })
       expect(afterMove.opened).toEqual([])
       expect(afterMove.skipped.map(run => run.scheduledFor)).toEqual(['2026-08-31T19:00:00.000Z'])
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
+describe('routines of a repository with no Repository mapping', () => {
+  async function seedQueuedRun(store: ReturnType<typeof openJournalStore>): Promise<void> {
+    await syncRepositoryRoutines(repositoryMapping(), {
+      github: githubReturning(ok({ _tag: 'Present', specSha: 'abc123', text: specText })),
+      now: at('2026-08-26T00:00:00.000Z'),
+      store,
+    })
+    planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:30:00.000Z'), store })
+  }
+
+  it('opens no run and names the Routine when its repository left the mapping', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await seedQueuedRun(store)
+      const renamed = repositoryMapping({ github: 'harlan-zw/example.com' })
+
+      const plan = planRoutineRuns({ repositories: [renamed], now: at('2026-08-28T07:30:00.000Z'), store })
+
+      expect(plan.opened).toEqual([])
+      expect(plan.skipped).toEqual([])
+      expect(plan.unmapped).toEqual([{ repository: 'harlan-zw/example', names: ['sentry-checkin'] }])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('opens no run for a repository whose mapping is disabled', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await seedQueuedRun(store)
+
+      const plan = planRoutineRuns({ repositories: [repositoryMapping({ enabled: false })], now: at('2026-08-28T07:30:00.000Z'), store })
+
+      expect(plan.opened).toEqual([])
+      expect(plan.unmapped).toEqual([{ repository: 'harlan-zw/example', names: ['sentry-checkin'] }])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('retires the Routines and supersedes their queued runs after a settled discovery', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await seedQueuedRun(store)
+
+      const outcome = retireUnmappedRoutines({
+        repositories: [repositoryMapping({ github: 'harlan-zw/example.com' })],
+        unresolved: [],
+        now: at('2026-08-28T00:00:00.000Z'),
+        store,
+      })
+
+      expect(outcome).toEqual({
+        retired: [{ repository: 'harlan-zw/example', names: ['sentry-checkin'] }],
+        deferred: [],
+      })
+      expect(store.listRoutines()).toEqual([])
+      const runs = store.listRoutineRuns('harlan-zw/example:sentry-checkin')
+      expect(runs.map(run => run.state)).toEqual([{ _tag: 'Superseded', reason: expect.stringContaining('Repository mapping') }])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps the Routines of a repository discovery could not settle', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await seedQueuedRun(store)
+
+      const outcome = retireUnmappedRoutines({
+        repositories: [],
+        unresolved: ['Harlan-ZW/Example'],
+        now: at('2026-08-28T00:00:00.000Z'),
+        store,
+      })
+
+      expect(outcome).toEqual({
+        retired: [],
+        deferred: [{ repository: 'harlan-zw/example', names: ['sentry-checkin'] }],
+      })
+      expect(store.listRoutines().map(routine => routine.name)).toEqual(['sentry-checkin'])
+      const runs = store.listRoutineRuns('harlan-zw/example:sentry-checkin')
+      expect(runs.map(run => run.state._tag)).toEqual(['Queued'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('leaves the Routines of a mapped repository alone, whatever the letter case', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await seedQueuedRun(store)
+
+      const outcome = retireUnmappedRoutines({
+        repositories: [repositoryMapping({ github: 'Harlan-ZW/Example' })],
+        unresolved: [],
+        now: at('2026-08-28T00:00:00.000Z'),
+        store,
+      })
+
+      expect(outcome).toEqual({ retired: [], deferred: [] })
+      expect(store.listRoutines().map(routine => routine.name)).toEqual(['sentry-checkin'])
     }
     finally {
       store.close()
