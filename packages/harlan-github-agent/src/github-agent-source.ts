@@ -12,6 +12,7 @@ import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseChecks, currentBaseSha } from './github-base.ts'
+import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
@@ -474,6 +475,10 @@ function pullRequestItem(
 }
 
 export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & ExistingReviewLabelSource {
+  // Review snapshots reread every open pull request and its base branch on
+  // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
+  // charges no primary quota for a 304. Only `read` access uses the cache.
+  const responseCache = createGitHubResponseCache()
   const clientWith = async (tokens: GitHubTokenProvider, repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> => {
     const token = await tokens.getToken(repository, access, signal)
     return token._tag === 'Err'
@@ -481,6 +486,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       : ok(options.createClient?.(token.value.token) ?? createAuthenticatedClient({
           access,
           repository,
+          responseCache,
           signal,
           token: token.value.token,
           tokens,

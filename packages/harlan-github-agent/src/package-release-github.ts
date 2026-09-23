@@ -5,6 +5,7 @@ import type { GitHubRepositoryAccess, RepositoryMapping, StoredReviewForHead } f
 import { Buffer } from 'node:buffer'
 import { Octokit } from 'octokit'
 import { parse } from 'yaml'
+import { failFastThrottle } from './github-rate-limit.ts'
 import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMerge, stableVersion } from './package-release.ts'
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
@@ -34,7 +35,7 @@ export function createPackageReleaseSource(options: {
     const result = await options.tokens.getToken(repository.github, access, signal)
     if (result._tag === 'Err')
       throw new Error(result.error.message)
-    const octokit = options.createClient?.(result.value.token) ?? new Octokit({ auth: result.value.token, request })
+    const octokit = options.createClient?.(result.value.token) ?? new Octokit({ auth: result.value.token, request, throttle: failFastThrottle })
     octokit.hook.before('request', () => assertLease())
     return octokit
   }

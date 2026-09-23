@@ -3,6 +3,7 @@ import type { Server } from 'srvx'
 import type { AgentProviderName } from './agent-provider.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
+import type { GitHubQuota } from './github-rate-limit.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { AgentSlotLimits } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
@@ -39,6 +40,7 @@ import { createExternalWatchController, mergeExternalWatchSnapshot } from './ext
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
+import { createGitHubRateLimitGate } from './github-rate-limit.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
@@ -419,12 +421,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     appId: config.github.appId,
     privateKey: options.githubPrivateKey,
   })
-  const userTokens = createUserTokenProvider({ readToken: signal => userAccess.token(signal) })
-  const routedTokens = createRoutedTokenProvider({
+  const usesUserToken = (repository: string): boolean => userRepositoryNames.has(repository.toLowerCase())
+  const rawUserTokens = createUserTokenProvider({ readToken: signal => userAccess.token(signal) })
+  // A rate limited quota refuses its credentials until GitHub resets it, so a
+  // held installation spends no request and the System pane names it.
+  const rateLimits = createGitHubRateLimitGate({ now })
+  const userQuota = (): GitHubQuota => ({ _tag: 'User', login: userLogin })
+  const userTokens = rateLimits.guard(rawUserTokens, userQuota)
+  const routedTokens = rateLimits.guard(createRoutedTokenProvider({
     app: appTokens,
-    user: userTokens,
-    usesUserToken: repository => userRepositoryNames.has(repository.toLowerCase()),
-  })
+    user: rawUserTokens,
+    usesUserToken,
+  }), repository => usesUserToken(repository)
+    ? userQuota()
+    : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository })
   // Write authority belongs at the credential boundary. Every current and
   // future mutation needs one of these write credentials before it can leave.
   const gatedTokens = (source: GitHubTokenProvider): GitHubTokenProvider => createGitHubWriteGate({
@@ -977,6 +987,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // Cleared here and written only by the guard below, so a pass where every
       // step answered normally resolves the last pass's defects.
       recordPassIncidents('poll_pass', [])
+      recordPassIncidents('github_rate_limit', rateLimits.active())
       const passDefects: string[] = []
       const guarded = <T>(step: string, run: () => T | Promise<T>, fallback: T): Promise<T> =>
         runPassStep(step, run, fallback, {

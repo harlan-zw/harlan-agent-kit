@@ -1,7 +1,9 @@
+import type { GitHubRateLimit } from './github-rate-limit.ts'
 import type { GitHubResponseCache } from './github-response-cache.ts'
 import type { Result } from './result.ts'
 import type { GitHubRepositoryAccess, GitHubRepositoryToken } from './types.ts'
-import { App, Octokit, RequestError } from 'octokit'
+import { App, Octokit } from 'octokit'
+import { failFastThrottle, parseRateLimit } from './github-rate-limit.ts'
 import { err, ok } from './result.ts'
 
 export interface GitHubTokenError {
@@ -22,6 +24,12 @@ export interface GitHubTokenProvider {
    * wrong. A rejected request is that proof, so the caller reports it here.
    */
   invalidate: (repository: string, access: GitHubRepositoryAccess) => void
+  /**
+   * Hears that GitHub rate limited a request made with this credential.
+   *
+   * A provider that holds quotas refuses the next credential until the reset.
+   */
+  rateLimited?: (repository: string, limit: GitHubRateLimit) => void
 }
 
 type PermissionLevel = 'read' | 'write'
@@ -214,7 +222,7 @@ export function createGitHubAppTokenProvider(options: GitHubAppTokenProviderOpti
   const app = new App({
     appId: options.appId,
     privateKey: options.privateKey,
-    Octokit: Octokit.defaults({ userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0' }),
+    Octokit: Octokit.defaults({ userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0', throttle: failFastThrottle }),
   })
 
   return createRepositoryTokenProvider({
@@ -303,16 +311,6 @@ export function isAuthenticationRejection(status: number | undefined): boolean {
   return status === 401 || status === 403
 }
 
-/** Rate limits reject valid credentials. Refreshing them spends more requests. */
-function isRateLimitRejection(error: unknown): boolean {
-  if (!(error instanceof RequestError) || error.status !== 403)
-    return false
-  const headers = error.response?.headers
-  return headers?.['x-ratelimit-remaining'] === '0'
-    || headers?.['retry-after'] !== undefined
-    || /\b(?:rate limits?|abuse detection)\b/i.test(error.message)
-}
-
 export interface AuthenticatedClientOptions {
   /** Optional observation cache. Every reuse is revalidated with GitHub. */
   responseCache?: GitHubResponseCache
@@ -324,7 +322,7 @@ export interface AuthenticatedClientOptions {
   userAgent: string
   signal?: AbortSignal | undefined
   /** Injected for tests. Receives the same options the real client is built with. */
-  createClient?: (options: { authStrategy: () => unknown, auth: unknown, userAgent: string }) => Octokit
+  createClient?: (options: { authStrategy: () => unknown, auth: unknown, userAgent: string, throttle: typeof failFastThrottle }) => Octokit
 }
 
 /**
@@ -358,6 +356,7 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
     authStrategy: mutableTokenStrategy(credential),
     auth: credential,
     userAgent: options.userAgent,
+    throttle: failFastThrottle,
   }
   const octokit = options.createClient === undefined
     ? new Octokit(clientOptions as never)
@@ -382,7 +381,11 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
       return await read()
     }
     catch (error) {
-      if (retried || !isAuthenticationRejection(errorStatus(error)) || isRateLimitRejection(error))
+      // Rate limits reject valid credentials. Refreshing them spends more requests.
+      const limit = parseRateLimit(error)
+      if (limit !== null)
+        options.tokens.rateLimited?.(options.repository, limit)
+      if (retried || !isAuthenticationRejection(errorStatus(error)) || limit !== null)
         throw error
       retried = true
       options.tokens.invalidate(options.repository, options.access)

@@ -1,6 +1,7 @@
 import type { DashboardSnapshot, ExternalRepositoryWatch, GitHubIssueItem, ItemSummary, RepositoryStatus } from './types.ts'
 import { createHash } from 'node:crypto'
 import { Octokit } from 'octokit'
+import { failFastThrottle } from './github-rate-limit.ts'
 import { isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from './github.ts'
 
 export interface PublicIssueSnapshot {
@@ -42,7 +43,7 @@ function repositoryParts(repository: string): { owner: string, repo: string } {
 
 function defaultIssueRequest(repository: string, number: number, signal?: AbortSignal): Promise<PublicIssueSnapshot> {
   const { owner, repo } = repositoryParts(repository)
-  const octokit = new Octokit({ userAgent: 'harlan-github-agent/0.0.0' })
+  const octokit = new Octokit({ userAgent: 'harlan-github-agent/0.0.0', throttle: failFastThrottle })
   return octokit.rest.issues.get({
     owner,
     repo,
@@ -63,7 +64,7 @@ function defaultIssueRequest(repository: string, number: number, signal?: AbortS
 
 function defaultIssueListRequest(repository: string, signal?: AbortSignal): Promise<PublicIssueSnapshot[]> {
   const { owner, repo } = repositoryParts(repository)
-  const octokit = new Octokit({ userAgent: 'harlan-github-agent/0.0.0' })
+  const octokit = new Octokit({ userAgent: 'harlan-github-agent/0.0.0', throttle: failFastThrottle })
   return octokit.paginate(octokit.rest.issues.listForRepo, {
     owner,
     repo,
