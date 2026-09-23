@@ -52,7 +52,7 @@ Colour is a signal with a fixed attention budget. The more instances on screen, 
 
 ## Contrast
 
-- Nuxt UI's stock 500 shades fail AA as text on white. Amber measures about 1.9:1 and emerald about 3.4:1.
+- Nuxt UI's stock 500 shades fail AA as text on white. Amber measures about 2.15:1 and emerald about 2.5:1.
 - If a status or primary colour is text on a light surface, step it down to the lightest AA stop. Success and warning usually land on 700, info and error on 600.
 - Keep the stock ramp for fills, tints, borders, and chart marks. Text on the page was the contrast problem.
 - `text-dimmed` is tertiary metadata only. Never use it for primary content or a label. Measure it in dark mode, where it fails first.
@@ -69,5 +69,5 @@ Colour is a signal with a fixed attention budget. The more instances on screen, 
 
 ## Dates
 
-- Do not format a stored calendar date with `Intl.DateTimeFormat` short months. Locales disagree: `en-AU` writes `Sept`, `June`, and `July`.
+- Do not format a stored calendar date with `Intl.DateTimeFormat` short months. Locales disagree: `en-AU` writes `Sept` where `en-US` writes `Sep`.
 - `new Date('2024-11-25')` parses as UTC midnight. West of UTC it prints 24 November. Split the ISO string instead.

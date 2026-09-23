@@ -93,6 +93,11 @@ components:
 
 ## Component Rules
 
+`craft-rules.md` in this skill's `references/` owns the rules that hold on every Nuxt UI site:
+colour budget, hierarchy, async state, motion, navigation, contrast, CSS gotchas, dates. Read it
+before list, table, dashboard, async state, or custom CSS work. This file binds those rules to the
+project's components; it never restates them.
+
 > Behavioral constraints that tokens alone don't communicate. Component *surfaces* (bg, text, radius, padding) live in the YAML front matter under `components:`. This section holds the "always/never" judgment rules.
 
 - {{e.g. "Buttons: always solid variant, never ghost — ghost disappears on dark glass"}}
