@@ -72,6 +72,14 @@ Sort each action into one disposition:
 | Operational | The fix is outside the code: Search Console, DNS, Cloudflare, or a NuxtSEO setting. | No |
 | Needs a person | A content or product decision, such as which page should rank for a query. | No |
 | Not this repository | The URL belongs to another app or Site. | No |
+| Owned by vitals-review | A performance action, and this repository enables `vitals-review` in `.github/routines.yml`. | No |
+
+### Boundary with vitals-review
+
+The `vitals-review` Routine owns performance on a Site whose repository enables it.
+That covers the action types `cwv-poor`, `cwv-element`, `cwv-regression`, `poor-cwv-pages`, `poor-homepage-lighthouse`, `lcp-not-preloaded`, `render-blocking-resources`, `js-transfer-weight`, `payload-too-heavy`, `perf-waste`, and `third-party-bloat`.
+Read `.github/routines.yml` on the default branch. If it enables `vitals-review`, mark those actions Owned by vitals-review, list them in the report, and judge them no further.
+If it does not, judge them here like any other action.
 
 Verify a Repository fix against the current default branch before you propose it.
 A live check of the URL is cheap and allowed: `curl -sI <url>`.
