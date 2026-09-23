@@ -148,6 +148,8 @@ Emit `DESIGN.md` at the project root after writing `app.config.ts`, `main.css`, 
 
 Modifying an existing design system: update `DESIGN.md` in place.
 
+`DESIGN.md` binds [craft-rules.md](references/craft-rules.md) to the project's components. It never restates those rules.
+
 ### After Setup: COPY.md is the other half
 
 `DESIGN.md` owns the pixels. It does not own the words, and a page built with no decision about
@@ -215,6 +217,7 @@ Load the reference matching what you're building. Loading several before writing
 | Navigation | [components/navigation.md](references/components/navigation.md) |
 | Feedback / overlays | [components/feedback.md](references/components/feedback.md) |
 | Charts, dashboards, sparklines, stat cards | [polish/data-viz.md](references/polish/data-viz.md) |
+| Lists, tables, async states, custom CSS classes | [craft-rules.md](references/craft-rules.md) |
 
 ### When The User Asks For Variations
 
