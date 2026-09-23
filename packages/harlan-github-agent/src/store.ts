@@ -7455,9 +7455,10 @@ export function openJournalStore(
   }
 
   const writeObservation = (
-    input: Parameters<JournalStore['recordObservation']>[0],
+    observed: Parameters<JournalStore['recordObservation']>[0],
     exactPullRequest: boolean,
   ): RecordObservationResult => {
+    const input = { ...observed, subject: settledMergeability(observed.subject) }
     const payload = canonicalPayload(input.subject)
     const revisionId = revisionIdFor(input.subject)
     database.exec('BEGIN IMMEDIATE')
@@ -7708,6 +7709,33 @@ export function openJournalStore(
       database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * GitHub reads `unknown` while it recomputes mergeability. Only a head or
+   * base change can move the answer, so on the same pair `unknown` is not an
+   * observation, and the stored answer stands. Recording it minted a new
+   * Revision, which retired the running conflict resolution; the flip back to
+   * `conflicting` requeued it and spent its recovery budget. That was 93 of
+   * 134 retired conflict resolutions in September 2026.
+   */
+  const settledMergeability = (subject: GitHubItem): GitHubItem => {
+    if (subject.kind !== 'pull_request' || subject.mergeState !== 'unknown')
+      return subject
+    const current = database.prepare(`
+      SELECT revisions.payload FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+    `).get(subject.repository, subject.number) as { payload: string } | undefined
+    if (current === undefined)
+      return subject
+    const prior = JSON.parse(current.payload) as GitHubItem
+    if (prior.kind !== 'pull_request' || prior.mergeState === 'unknown'
+      || prior.headSha !== subject.headSha || prior.baseSha !== subject.baseSha || prior.baseRef !== subject.baseRef) {
+      return subject
+    }
+    return { ...subject, mergeState: prior.mergeState }
   }
 
   const recordObservation: JournalStore['recordObservation'] = input => writeObservation(input, false)
