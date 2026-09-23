@@ -383,7 +383,7 @@ Issue work fixes the cause. It verifies with local [Unlighthouse](https://unligh
 After a fix merges and deploys, the next scan starts a `nuxtseo page scan` for that page and later reports the fix as confirmed or not holding.
 A fix that is not holding names its issue for Harlan to reopen, because the ledger never files one fingerprint twice.
 
-When a repository enables `vitals-review`, the `seo-review` Routine leaves NuxtSEO's performance actions to it.
+When a repository runs `vitals-review` in `propose` mode, the `seo-review` Routine leaves NuxtSEO's performance actions to it. In `report` mode `seo-review` still files them.
 The usual Review and merge policies apply. Repositories enable `vitals-review` through their own Routine spec.
 
 ## Adding a Routine

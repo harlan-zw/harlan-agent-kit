@@ -31,9 +31,9 @@ If `nuxtseo` is missing or exits `3`, report the blocker and never report a heal
 
 ## Boundary with seo-review
 
-This Routine owns every performance defect on a Site whose repository enables `vitals-review` in `.github/routines.yml`.
+This Routine owns every performance defect on a Site whose repository runs `vitals-review` in `propose` mode in `.github/routines.yml`.
 That covers the NuxtSEO action types `cwv-poor`, `cwv-element`, `cwv-regression`, `poor-cwv-pages`, `poor-homepage-lighthouse`, `lcp-not-preloaded`, `render-blocking-resources`, `js-transfer-weight`, `payload-too-heavy`, `perf-waste`, and `third-party-bloat`.
-The `seo-review` Skill leaves those actions to this Routine. Read them here as cause evidence for a finding you file, and name their IDs in the claim so a person resolves them after deploy.
+In that mode the `seo-review` Skill leaves those actions to this Routine. In `report` mode it still files them itself. Read them here as cause evidence for a finding you file, and name their IDs in the claim so a person resolves them after deploy.
 
 ## Scan mode
 
