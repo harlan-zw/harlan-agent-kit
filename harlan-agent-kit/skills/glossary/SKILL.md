@@ -11,13 +11,7 @@ argument-hint: "[init | audit | add <term>]"
 
 ## Worktree isolation
 
-Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Before mutation, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md).
 
 ## The failure mode this exists to stop
 
@@ -81,8 +75,6 @@ For any shape, add a second table when published identifiers outnumber concepts:
 
 When presenting the map to a human for a naming decision, a rendered diagram can carry the argument: sources on the left, arrows labelled with what actually moves, paths shown splitting and whether they rejoin. Tag each internal box with the customer word it surfaces under. Several differently-shaped boxes carrying an identical tag is the drift argument made visible. Write it as Mermaid per **Map syntax** below.
 
-**Do not draw one by default.** Two `init` runs produced a diagram; in both the table found every collision and the diagram found none, restating what the `Customer word` column already said. Draw one only when a human has to be persuaded of a branching pipeline, and skip it whenever the relationships are type-flow rather than data-flow.
-
 Never ask for an ASCII containment tree. A tree cannot render a node with two parents, and a term with two parents is the normal case, not the exception: one real repo had `Site` owned by both `Team` and `GSC Property`, which made the tree impossible to draw at all.
 
 ### Read the decision records before drawing
@@ -130,6 +122,7 @@ Add a row when `audit` finds two scopes naming one concept. Pick the winner by t
 ## Format
 
 `GLOSSARY.md` has four sections in this order: Map, Terms, Banned, Open questions. A repository that enforces commit scopes adds Scopes after Banned.
+Past 60 entries, split `## Terms` into one section per layer. The caps live in the [root docs contract](../../references/root-docs.md#size-budgets).
 Read [references/format.md](references/format.md) for the Mermaid map syntax, the term entry shape, and a worked example before writing or auditing the file.
 
 ## Workflows
@@ -168,6 +161,7 @@ Do not invent the vocabulary. Recover the one already in use, then pick winners.
 2. **Validate the ban list before searching against it.** For each banned word, grep for it as a stored enum value, column name, or status literal. A word the schema persists is not a synonym to be replaced; the ban is the defect. Report those first, as glossary bugs rather than code bugs, because every hit they generate downstream is noise.
 3. Search the codebase for each surviving term. Prioritise user-visible surfaces: templates, markdown, route names, public exports, error strings. Internal-only variable names are a lower tier; report separately.
 4. **Re-walk the map against reality.** Confirm each term still has the table, owner, and cardinality recorded, and that no new term has appeared in the tree's territory. A map that has silently gone stale makes every other answer in the file untrustworthy. Redraw it as part of the audit output, not as a follow-up.
+   Every backticked table, file or export in a term block must exist. Run the [drift audit](../../references/root-docs.md#drift-audit) with `GLOSSARY.md` in its file list.
 5. Report as `file:line`, the offending term, and the canonical replacement:
 
 ```
@@ -188,7 +182,7 @@ Needs a human read (may be ordinary English):
 
 ### `add <term>`
 
-Append a term block. Fill the `Never:` line with the synonyms it displaces, including whatever the code currently calls it. A new term with an empty `Never:` line is half-recorded, and audit will not catch drift against it.
+Append a term block. If `GLOSSARY.md` is over its cap, put the term in its layer's Terms section and add only a Map row at the root. Fill the `Never:` line with the synonyms it displaces, including whatever the code currently calls it. A new term with an empty `Never:` line is half-recorded, and audit will not catch drift against it.
 
 Then place the term in the map, and treat that as part of adding it rather than as bookkeeping. Give it a parent, a table, an owner, a cardinality, and its customer-facing word. A term that cannot be placed is the useful failure: either it duplicates something already on the tree, or it belongs to a concept nobody has named yet, and both need resolving before the term is written.
 

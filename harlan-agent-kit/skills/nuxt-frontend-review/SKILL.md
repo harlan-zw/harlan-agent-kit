@@ -15,9 +15,7 @@ Never fix what you find. You are the evaluator.
 
 ## Worktree isolation
 
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
+Follow the [worktree isolation contract](../../references/worktree-isolation.md).
 
 Resolve the builder checkout before reading job state. Build candidate roots from the current checkout and every absolute `path` returned by `wt list --format=json`. Never create a worktree solely for review.
 
@@ -76,9 +74,9 @@ Guard against these in yourself, always:
 
 Do not let `self_assessment.weakest_area` steer where you look. Evaluate independently, then compare.
 
-**Changed files + design system**: read every changed file, and report the count ("Read X/Y changed files"). Then read `DESIGN.md`, `app/assets/css/main.css`, `app.config.ts`.
+**Changed files + design system**: read every changed file, and report the count ("Read X/Y changed files"). Then read the `DESIGN.md` core, the topic file its load map names for each changed layer, `app/assets/css/main.css`, `app.config.ts`.
 
-A `## Design Decisions` section in `DESIGN.md` records choices the user confirmed. Those are not findings.
+The decisions log records choices the user confirmed: `docs/design-decisions.md`, or `## Design Decisions` in `DESIGN.md`. Those are not findings.
 
 **Token regression**: see [references/token-checks.md](references/token-checks.md).
 
@@ -102,7 +100,8 @@ Any ONE means FAIL. Each needs **positive evidence** to pass. "I didn't see erro
 - **Unreadable text**: contrast below 4.5:1.
 - **Layout break**: overflow or overlap at 375px, 768px, or 1280px.
 - **Missing state handling**: any async operation without loading and error states.
-- **Theme incoherence**: implementation contradicts a stated design principle. Exception: `## Design Decisions` items.
+- **Theme incoherence**: implementation contradicts a stated design principle. Exception: decisions log items.
+- **Filter doc growth**: the diff adds a dated paragraph or a history clause to a root filter doc, or pushes a section over its [budget](../../references/root-docs.md#size-budgets).
 - **Unnecessary custom tokens**: custom `@theme` tokens or CSS properties duplicating `--ui-*` variables or Tailwind utilities. Override Nuxt UI tokens; do not invent parallel ones.
 
 "This is minor, it's fine" is the signal to investigate, not to skip.

@@ -12,23 +12,9 @@ Full lifecycle frontend skill: setup, build, polish. Detects the right phase fro
 
 ## Worktree isolation
 
-Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Before mutation, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md).
 
 Job artifacts, contract format, dev server, checkpointing, and the handoff schema live in [references/workflow.md](references/workflow.md). Read it before Phase 2 or Phase 3.
-
-## Craft Principles
-
-These justify the specificity in the rest of the skill. Hold them while working; cite them when the user questions a rule.
-
-- **Taste is trained, not innate.** Good defaults come from reverse-engineering interfaces that feel right, not from invention. Before building a pattern, recall the best version of it you have seen and borrow the invariants (timing, origin, easing, rhythm). Generic output is a sign you skipped this step.
-- **Unseen details compound.** No single user consciously notices that a popover scales from its trigger, that a tooltip skips its delay on the second hover, or that a button releases faster than it presses. In aggregate these decisions separate "feels designed" from "feels assembled".
-- **Beauty is leverage.** When every product works, the one that feels best wins the user. Polish is the only thing still up for grabs once the feature set is commoditised.
 
 ## Project State
 
@@ -159,13 +145,14 @@ Read exactly one theme file: `${CLAUDE_SKILL_DIR}/references/themes/{chosen-them
 
 Emit `DESIGN.md` at the project root after writing `app.config.ts`, `main.css`, and `nuxt.config.ts`:
 
-1. **Collision guard**: if `DESIGN.md` exists, ask before overwriting. Offer to merge (preserving `## Design Decisions`) or abort.
+1. **Collision guard**: if `DESIGN.md` exists, ask before overwriting. Offer to merge (keeping the decisions log) or abort.
 2. Read the template: [templates/DESIGN.md](templates/DESIGN.md)
 3. **YAML front matter**: the chosen theme file already carries a DESIGN.md-compatible YAML block. Copy it, then apply user-specific customisations (brand name, swapped primary hex, additional registered colours, extra component surfaces). Prefer token refs (`{colors.primary}`, `{rounded.md}`) over restating hex/px values.
 4. **Prose sections**: fill every section below the front matter from the decisions just made, no placeholders.
 5. Write to `DESIGN.md` at the project root.
 6. **Verify placeholders removed**: `grep -cE '\{\{|TODO|placeholder' DESIGN.md` returns 0. (Single-brace `{colors.primary}` token refs are legitimate and stay.)
-7. **Verify tokens lint**: `npx --yes @google/design.md lint DESIGN.md 2>/dev/null | jq -r '.summary.errors'` returns `0`. If the linter crashes (`raw.match is not a function`) because a component prop holds a float or `rgba()`, quote floats and convert `rgba()` to 8-digit hex. Contrast warnings on button-primary are informational here; if the theme's signature colour intentionally trades 4.5:1 for aesthetic, document it under `## Design Decisions`.
+7. **Verify tokens lint**: `npx --yes @google/design.md lint DESIGN.md 2>/dev/null | jq -r '.summary.errors'` returns `0`. If the linter crashes (`raw.match is not a function`) because a component prop holds a float or `rgba()`, quote floats and convert `rgba()` to 8-digit hex. Contrast warnings on button-primary are informational here; if the theme's signature colour intentionally trades 4.5:1 for aesthetic, log it in `docs/design-decisions.md`.
+8. **Verify budget**: `DESIGN.md` is at or under 300 lines, and every section is at or under 40. The caps and the audit live in the [root docs contract](../../references/root-docs.md#size-budgets).
 
 Modifying an existing design system: update `DESIGN.md` in place.
 
@@ -210,14 +197,11 @@ Run the dev server setup and contract steps in [references/workflow.md](referenc
 
 If not already in context from Phase 1:
 
-```
-DESIGN.md                 -> aesthetic intent, component rules, avoid list, custom utilities
-COPY.md                   -> canonical strings, register per surface, banned language
-GLOSSARY.md               -> what each product concept is called
-app/assets/css/main.css   -> @theme tokens, --ui-* overrides, custom classes
-app.config.ts             -> colors, component theme overrides, defaultVariants
-nuxt.config.ts            -> fonts, colorMode, ui.theme.colors
-```
+1. Read the `DESIGN.md` core.
+2. Read the topic file its load map names for the layer you work in. Skip the others.
+3. Read `COPY.md`.
+4. Grep `GLOSSARY.md` for each noun you will render. Do not read it whole.
+5. Open `main.css`, `app.config.ts` or `nuxt.config.ts` only to look up a token you need.
 
 Every string the page renders comes from `COPY.md` and `GLOSSARY.md`, in that order: the noun
 from the glossary, the sentence around it from the copy file. Inventing either while building a
@@ -329,16 +313,10 @@ Aesthetic observations (need your input):
 
 - Token and consistency violations are objectively wrong per the design system: present as "will fix".
 - Aesthetic judgments (sizing, hierarchy, rhythm, visual weight) need user input. Do not assume they are problems.
-- Read `## Design Decisions` in `DESIGN.md` first. Anything already ruled on is settled; present only new observations. If all of them are covered, fix the token issues and move to Elevate.
+- Read the decisions log first: `docs/design-decisions.md`, or `## Design Decisions` in `DESIGN.md` if the repo has not split. Anything already ruled on is settled; present only new observations. If all of them are covered, fix the token issues and move to Elevate.
 - Wait for the user to mark each aesthetic item "intentional" or "fix".
 
-After confirmation, update `DESIGN.md`: append new "intentional" choices to `## Design Decisions`, remove entries the user just marked "fix", create the section if absent.
-
-```markdown
-## Design Decisions
-- Hero uses text-3xl intentionally: minimal aesthetic for utility tool
-- Cards use uniform treatment: flat hierarchy is intentional
-```
+After confirmation, append each "intentional" choice to `docs/design-decisions.md` with a date. If it changes a standing rule, edit that rule in `DESIGN.md` in one sentence. Never add dated text to `DESIGN.md`. Follow the [root docs budgets](../../references/root-docs.md#size-budgets).
 
 Fix only approved items.
 
