@@ -1,6 +1,5 @@
 import { automatedDisclosure } from './review-comment.ts'
 
-/** One explicitly configured, jointly versioned npm package group. */
 /**
  * Which GitHub credential writes a package release.
  *
@@ -11,6 +10,7 @@ import { automatedDisclosure } from './review-comment.ts'
  */
 export type PackageReleaseCredential = { _tag: 'Repository' } | { _tag: 'User' }
 
+/** One explicitly configured, jointly versioned npm package group. */
 export interface PackageReleaseConfig {
   manifest: string
   changelog?: string
