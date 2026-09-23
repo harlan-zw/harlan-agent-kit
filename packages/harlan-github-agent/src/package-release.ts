@@ -1,5 +1,15 @@
 import { automatedDisclosure } from './review-comment.ts'
 
+/**
+ * Which GitHub credential writes a package release.
+ *
+ * `Repository` uses the credential discovery chose for the repository.
+ * `User` always uses Harlan's own token, even where the App is installed.
+ * A maintained repository must opt in with `User`, because a release there
+ * speaks for Harlan and never for the App.
+ */
+export type PackageReleaseCredential = { _tag: 'Repository' } | { _tag: 'User' }
+
 /** One explicitly configured, jointly versioned npm package group. */
 export interface PackageReleaseConfig {
   manifest: string
@@ -8,6 +18,7 @@ export interface PackageReleaseConfig {
   tagPrefix: string
   workflow: string
   checks: string[]
+  credential: PackageReleaseCredential
 }
 
 export interface PackageReleaseInput {

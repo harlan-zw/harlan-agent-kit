@@ -2,6 +2,7 @@ import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore } f
 import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.ts'
 import type { RepositoryMapping } from './types.ts'
 import { PACKAGE_RELEASE_MARKER, renderPackageRelease } from './package-release.ts'
+import { canReleasePackages } from './repository-policy.ts'
 import { automatedDisclosure } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
@@ -39,7 +40,7 @@ export async function reconcilePackageReleases(options: {
   signal: AbortSignal
 }): Promise<void> {
   const { repository, store, now, signal } = options
-  if (!options.webhookReady || !repository.enabled || repository.release === undefined || repository.ownership !== 'owned')
+  if (!options.webhookReady || !canReleasePackages(repository))
     return
   const fence = store.claimPackageReleaseLease(repository.github, now())
   if (fence === null)

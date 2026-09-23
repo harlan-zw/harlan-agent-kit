@@ -283,7 +283,11 @@ When required CI fails on the current base of an owned repository, dispatch a se
 ## Package releases
 
 Use an explicit `repositories[].release` policy for stable patch and minor npm releases.
-Require an owned repository, enabled writes, signed webhooks, and pull request Review.
+Require an owned or opted in maintained repository, enabled writes, signed webhooks, and pull request Review.
+A maintained repository needs the explicit opt in `release.credential: user`.
+With that opt in, write every release change with Harlan's own token. Never use the GitHub App.
+The configuration refuses a maintained release policy without `credential: user`.
+If the App is not installed, add a repository webhook for Issue comments with the same secret.
 Only Harlan's checkbox click or new `do release` comment authorizes publication.
 Feature pull requests offer minor. Fix and performance pull requests offer patch.
 Never offer patch when the unreleased range contains features.
