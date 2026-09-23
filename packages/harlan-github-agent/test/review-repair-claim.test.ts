@@ -592,6 +592,8 @@ describe('review Repair queue', () => {
     expect(queueRound(store, review, '2026-08-13T01:00:04.000Z')).toMatchObject({ _tag: 'Queued', rounds: { number: 1, limit: 3 } })
 
     const first = publishRepairRound(store, 'fix/repeated-finding', 1)
+    expect(store.repairRoundPlan(first.freshReview.repository, first.freshReview.pullRequestNumber, first.freshReview.pullRequest.headSha))
+      .toEqual({ _tag: 'Allowed', number: 2 })
     expect(queueRound(store, first.freshReview, first.at)).toMatchObject({ _tag: 'Queued', rounds: { number: 2, limit: 3 } })
 
     const second = store.claimNextReviewFixTask('repair-agent-2', '2026-08-13T01:02:00.000Z', 60_000)
@@ -622,15 +624,15 @@ describe('review Repair queue', () => {
     const second = publishRepairRound(store, 'fix/exhausted-rounds', 2)
     expect(queueRound(store, second.freshReview, second.at)).toMatchObject({ _tag: 'Queued', rounds: { number: 3 } })
     const third = publishRepairRound(store, 'fix/exhausted-rounds', 3)
+    const reason = 'Repair used 3 of 3 rounds and the finding remains. '
+      + 'Round 1 (`1111111`): Round 1 widened the parser guard. '
+      + 'Round 2 (`2222222`): Round 2 widened the parser guard. '
+      + 'Round 3 (`3333333`): Round 3 widened the parser guard. '
+      + 'A person decides the next step.'
 
-    expect(queueRound(store, third.freshReview, third.at)).toEqual({
-      _tag: 'ActionRequired',
-      reason: 'Repair used 3 of 3 rounds and the finding remains. '
-        + 'Round 1 (`1111111`): Round 1 widened the parser guard. '
-        + 'Round 2 (`2222222`): Round 2 widened the parser guard. '
-        + 'Round 3 (`3333333`): Round 3 widened the parser guard. '
-        + 'A person decides the next step.',
-    })
+    expect(store.repairRoundPlan(third.freshReview.repository, third.freshReview.pullRequestNumber, third.freshReview.pullRequest.headSha))
+      .toEqual({ _tag: 'Exhausted', reason })
+    expect(queueRound(store, third.freshReview, third.at)).toEqual({ _tag: 'ActionRequired', reason })
     expect(store.claimNextReviewFixTask('repair-agent-4', '2026-08-13T01:04:00.000Z', 60_000)).toBeNull()
   })
 

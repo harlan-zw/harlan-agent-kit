@@ -81,6 +81,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
       queueReviewFixTaskForReview: () => { throw new Error('Unexpected Repair queue.') },
       getRepairedHeadFindings: () => [],
+      repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
       getWorkerSession: () => null,
       storedReviewForHead: () => ({ _tag: 'None' }),
       getRevisionFiles: () => null,

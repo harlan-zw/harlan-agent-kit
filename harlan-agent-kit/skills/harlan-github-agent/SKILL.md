@@ -225,6 +225,8 @@ If Review records `Repair` findings, queue all findings immediately under the ex
 
 Available empty base and head check sets with no declared required checks mean the repository has no CI. This passes the CI Review gate and permits Repair. An unavailable, running, or failed base check set does not permit Repair.
 
+If GitHub declares no required checks and reports no check run on the head commit 15 minutes after the Review started, the head ran no CI. The trigger filters of the repository skipped it, as `paths-ignore` does for a docs only change. This passes the CI Review gate unless the base branch failed.
+
 Ignore a base check run that a `workflow_run`, `dynamic`, or an unfinished `schedule` event attached to the base commit. The first reports on another commit's workflow. The second is Dependabot's updater, which fails when an update is not possible. A cron run GitHub has not reported `completed` stalls the base gate on a timer, in any of its unfinished statuses, so drop it too. A cron run reported `completed` executed on the base commit tip: keep it as base evidence, so a failed one holds the gate red and queues a Baseline repair.
 
 When the gate refresh of a settled review finds the default branch failed, queue one Baseline repair for that exact base commit. Report Existing on every later pass.
@@ -237,7 +239,7 @@ If Review recommends Dismissal, queue no Repair. Use this only when the premise 
 
 If fresh Review of a Repair commit still records a Repair finding, queue the next Repair round. Give that round every earlier round's commit, report, and target findings. Never repeat a rejected approach.
 
-Allow 3 Repair rounds per contributor commit. A contributor push starts a fresh count. When the rounds are spent, stop with Action required and list every round in the canonical comment. Do not attempt a root architecture rewrite.
+Allow 3 Repair rounds per contributor commit. A contributor push starts a fresh count. When the rounds are spent, stop with Action required and list every round in the canonical comment. Spent rounds win over every other Repair refusal except a closed pull request. Do not attempt a root architecture rewrite.
 
 If Repair returns Action required or exhausts retries, replace its progress comment with `BLOCKED`. Include every stored finding and its exact next action.
 
