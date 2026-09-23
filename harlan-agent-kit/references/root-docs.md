@@ -88,19 +88,27 @@ Run this from the repository root before you edit one:
 
 ```bash
 for f in DESIGN.md COPY.md VISION.md; do
+  [ -f "$f" ] || continue
   rg -oN '`[A-Za-z][\w./-]*`' "$f" | tr -d '`' | sort -u | while read -r name; do
     case "$name" in
-      *.ts|*.vue|*.css|*.mjs) rg --files . | rg -qF "/${name##*/}" || echo "$f: dead file $name" ;;
+      *.ts|*.vue|*.css|*.mjs|*.md) rg --files . | rg -qF "/${name##*/}" || echo "$f: dead file $name" ;;
       *[a-z][A-Z]*) rg -qw "${name%%.*}" -g '!*.md' . || echo "$f: dead symbol $name" ;;
     esac
   done
 done
-rg -n '\(20[0-9]{2}-[0-9]{2}-[0-9]{2}\)|until 20[0-9]{2}|superseded' DESIGN.md COPY.md VISION.md GLOSSARY.md
-awk '/^## /{if(s)print n, s; s=$0; n=0} {n++} END{print n, s}' DESIGN.md | awk '$1>40'
+for f in DESIGN.md COPY.md VISION.md GLOSSARY.md; do
+  [ -f "$f" ] || continue
+  rg -n '\(20[0-9]{2}-[0-9]{2}-[0-9]{2}\)|until 20[0-9]{2}|superseded' "$f"
+done
+if [ -f DESIGN.md ]; then
+  awk '/^## /{if(s)print n, s; s=$0; n=0} {n++} END{print n, s}' DESIGN.md | awk '$1>40'
+fi
 ```
 
 A dead name means the rule is wrong or the code moved. Fix the rule or delete it.
 The second command finds dated amendments. The third finds sections over 40 lines.
+Files that do not exist are skipped, so a repository without every filter doc
+still audits clean.
 
 ## Docs lifecycle
 
