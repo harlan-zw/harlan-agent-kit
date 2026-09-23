@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { agentPhase } from '../src/agent-progress.ts'
 import { runAgentTurn, runParsedAgentTurn, runRepairedAgentTurn } from '../src/agent-turn.ts'
-import { mayRetryFailure } from '../src/failure.ts'
+import { classifyFailure, mayRetryFailure } from '../src/failure.ts'
 import { err, ok } from '../src/result.ts'
 import { agentRuntime, turnEvents } from './fixtures.ts'
 
@@ -134,6 +134,28 @@ describe('runParsedAgentTurn', () => {
 
     expect(result).toEqual(err('The agent returned an invalid conflict resolution result.'))
     expect(capture.prompts).toHaveLength(2)
+  })
+
+  it('stops retrying a result the agent repeats after the named correction', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = replies([{ outcome: 'nearly' }, { outcome: 'nearly' }], capture)
+
+    const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
+
+    expect(result._tag).toBe('Err')
+    const reason = result._tag === 'Err' ? result.error : ''
+    expect(reason).toContain('The agent returned an invalid conflict resolution result.')
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'agent_result' })
+    expect(mayRetryFailure({ message: reason })).toBe(false)
+  })
+
+  it('keeps retrying a result the correction changed but did not fix', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = replies([{ outcome: 'nearly' }, { outcome: 'still wrong' }], capture)
+
+    const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
+
+    expect(result._tag === 'Err' && mayRetryFailure({ message: result.error })).toBe(true)
   })
 
   it('never asks twice for a result that already fits', async () => {

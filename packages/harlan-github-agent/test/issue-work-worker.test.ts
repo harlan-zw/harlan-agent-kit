@@ -438,7 +438,7 @@ Closes #12.`,
       _tag: 'ActionRequired',
       usage: { _tag: 'Unavailable' },
       reason: 'The Agent did not return a descriptive pull request title.',
-      evidence: 'The agent returned malformed issue work JSON.',
+      evidence: 'The agent repeated a rejected result after one named correction. The agent returned malformed issue work JSON.',
     }))
   })
 

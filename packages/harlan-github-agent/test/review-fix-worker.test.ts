@@ -601,7 +601,7 @@ describe('review fix Worker', () => {
       },
     }).run(task, new AbortController().signal)
 
-    expect(result).toEqual(err('The Agent returned an invalid Repair result.'))
+    expect(result).toEqual(err('The agent repeated a rejected result after one named correction. The Agent returned an invalid Repair result.'))
     expect(capture.requests).toHaveLength(2)
     expect(capture.requests[1]?.prompt).toContain('schema')
   })

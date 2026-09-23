@@ -149,6 +149,7 @@ Each finding needs a stable identity, exact path and line, proof, summary, and n
 Example finding: {"identity":"buffered-byte-loss","path":"src/parser.ts","line":42,"proof":"A split UTF-8 sequence loses its first byte.","regressionTest":"Split one sequence across two chunks and assert the original string.","summary":"The parser drops data.","nextAction":"Keep the buffered bytes."}
 Keep the identity stable across line changes.
 For a sound premise, describe one test that fails before Repair and passes after it.
+Return null for regressionTest only when no test can cover the finding, such as a stale comment or documentation.
 For a wrong premise, return null for every regressionTest. The controller will recommend Dismissal.
 Return confidence as an integer from 0 to 100 when every gate you report passes.
 
@@ -448,55 +449,97 @@ function bandedReviewRuntime(runtime: AgentRuntime, band: ReviewReasoningEffort)
   }
 }
 
-function parseReviewResponse(text: string): Promise<Result<ReviewResponse, string>> {
+/** Names the first rule one finding breaks, or undefined when it fits. */
+function findingViolation(finding: unknown, index: number): string | undefined {
+  const field = (name: string) => `findings[${index}].${name}`
+  if (typeof finding !== 'object' || finding === null)
+    return `findings[${index}] must be an object.`
+  const candidate = finding as Record<string, unknown>
+  if (typeof candidate.identity !== 'string' || normalizedFindingIdentity(candidate.identity).length === 0)
+    return `${field('identity')} must be a non-empty string.`
+  if (typeof candidate.path !== 'string' || cleanLine(candidate.path).length === 0)
+    return `${field('path')} must be a non-empty string.`
+  if (!(candidate.line === null || (Number.isInteger(candidate.line) && (candidate.line as number) >= 1)))
+    return `${field('line')} must be null or an integer from 1.`
+  if (typeof candidate.proof !== 'string' || cleanText(candidate.proof).length === 0)
+    return `${field('proof')} must be a non-empty string.`
+  if (!(candidate.regressionTest === null || (typeof candidate.regressionTest === 'string' && cleanText(candidate.regressionTest).length > 0)))
+    return `${field('regressionTest')} must be null or a non-empty string.`
+  if (typeof candidate.summary !== 'string' || cleanLine(candidate.summary).length === 0)
+    return `${field('summary')} must be a non-empty string.`
+  if (typeof candidate.nextAction !== 'string' || cleanText(candidate.nextAction).length === 0)
+    return `${field('nextAction')} must be a non-empty string.`
+  return undefined
+}
+
+/**
+ * Names the first rule a Review answer breaks, or undefined when it fits.
+ *
+ * Every rule here also holds in `reviewSchema`, or checks what JSON schema
+ * cannot say, such as a non-empty string. A rule the schema contradicts sends
+ * the agent the same answer on every retry, so the two must never disagree.
+ */
+function reviewViolation(value: Record<string, unknown>): string | undefined {
+  const allowed = new Set(['premise', 'findings', 'confidence', 'mergeRisk'])
+  const extra = Object.keys(value).find(key => !allowed.has(key))
+  if (extra !== undefined)
+    return `${extra} is not a schema field.`
+  const premise = value.premise as Record<string, unknown> | null | undefined
+  if (typeof premise !== 'object' || premise === null)
+    return 'premise must be an object.'
+  if (premise.verdict !== 'sound' && premise.verdict !== 'wrong')
+    return 'premise.verdict must be sound or wrong.'
+  if (typeof premise.reason !== 'string' || cleanLine(premise.reason).length === 0)
+    return 'premise.reason must be a non-empty string.'
+  if (!Array.isArray(value.findings))
+    return 'findings must be an array.'
+  if (premise.verdict === 'wrong' && value.findings.length === 0)
+    return 'A wrong premise needs at least one finding that names its consequence.'
+  const finding = value.findings.map(findingViolation).find(violation => violation !== undefined)
+  if (finding !== undefined)
+    return finding
+  const confidence = value.confidence
+  if (!(typeof confidence === 'number' && Number.isInteger(confidence) && confidence >= 0 && confidence <= 100))
+    return 'confidence must be an integer from 0 to 100.'
+  if (Object.hasOwn(value, 'mergeRisk')) {
+    const mergeRisk = value.mergeRisk as Record<string, unknown> | null | undefined
+    if (typeof mergeRisk !== 'object' || mergeRisk === null)
+      return 'mergeRisk must be an object.'
+    if (mergeRisk.verdict !== 'contained' && mergeRisk.verdict !== 'reviewable' && mergeRisk.verdict !== 'sensitive')
+      return 'mergeRisk.verdict must be contained, reviewable, or sensitive.'
+    if (typeof mergeRisk.reason !== 'string' || cleanLine(mergeRisk.reason).length === 0)
+      return 'mergeRisk.reason must be a non-empty string.'
+  }
+  return undefined
+}
+
+/**
+ * Parses one Review answer, or names the rule it breaks.
+ *
+ * The named rule reaches the correction prompt, so the agent can fix the exact
+ * field instead of guessing from a generic rejection.
+ */
+export function parseReviewResponse(text: string): Promise<Result<ReviewResponse, string>> {
   return Promise.resolve(text)
-    .then(value => JSON.parse(value) as Record<string, unknown>)
+    .then(value => JSON.parse(value) as unknown)
     .then((value): Result<ReviewResponse, string> => {
-      const premise = typeof value.premise === 'object' && value.premise !== null
-        ? value.premise as Partial<ReviewResponse['premise']>
-        : undefined
-      const findings = Array.isArray(value.findings) ? value.findings : undefined
-      const confidence = value.confidence
+      if (typeof value !== 'object' || value === null || Array.isArray(value))
+        return err('The agent returned an invalid adversarial review result: the answer must be a JSON object.')
+      const record = value as Record<string, unknown>
+      const violation = reviewViolation(record)
+      if (violation !== undefined)
+        return err(`The agent returned an invalid adversarial review result: ${violation}`)
+      // reviewViolation proved every field below.
+      const response = record as unknown as ReviewResponse
+      const wrong = response.premise.verdict === 'wrong'
       // Merge risk is optional on the wire. An Agent that omits it leaves the
       // claim at Reviewable, so a missing answer can never merge anything.
-      const mergeRisk = typeof value.mergeRisk === 'object' && value.mergeRisk !== null
-        ? value.mergeRisk as Partial<NonNullable<ReviewResponse['mergeRisk']>>
-        : undefined
-      if (
-        Object.keys(value).length !== (Object.hasOwn(value, 'mergeRisk') ? 4 : 3)
-        || !Object.hasOwn(value, 'premise') || !Object.hasOwn(value, 'findings') || !Object.hasOwn(value, 'confidence')
-        || (Object.hasOwn(value, 'mergeRisk') && (mergeRisk === undefined
-          || (mergeRisk.verdict !== 'contained' && mergeRisk.verdict !== 'reviewable' && mergeRisk.verdict !== 'sensitive')
-          || typeof mergeRisk.reason !== 'string' || cleanLine(mergeRisk.reason).length === 0))
-        || premise === undefined
-        || (premise.verdict !== 'sound' && premise.verdict !== 'wrong')
-        || typeof premise.reason !== 'string' || cleanLine(premise.reason).length === 0
-        || findings === undefined
-        || (premise.verdict === 'wrong' && findings.length === 0)
-        || !findings.every((finding) => {
-          if (typeof finding !== 'object' || finding === null)
-            return false
-          const candidate = finding as Partial<ReviewResponse['findings'][number]>
-          return typeof candidate.identity === 'string' && normalizedFindingIdentity(candidate.identity).length > 0
-            && typeof candidate.path === 'string' && cleanLine(candidate.path).length > 0
-            && (candidate.line === null || (Number.isInteger(candidate.line) && (candidate.line ?? 0) >= 1))
-            && typeof candidate.proof === 'string' && cleanText(candidate.proof).length > 0
-            && (premise.verdict === 'sound'
-              ? typeof candidate.regressionTest === 'string' && cleanText(candidate.regressionTest).length > 0
-              : candidate.regressionTest === null)
-            && typeof candidate.summary === 'string' && cleanLine(candidate.summary).length > 0
-            && typeof candidate.nextAction === 'string' && cleanText(candidate.nextAction).length > 0
-        })
-        || !(typeof confidence === 'number' && Number.isInteger(confidence) && confidence >= 0 && confidence <= 100)
-      ) {
-        return err('The agent returned an invalid adversarial review result.')
-      }
-      const reviewed = findings as ReviewResponse['findings']
+      const mergeRisk = response.mergeRisk
       return ok({
-        premise: { verdict: premise.verdict, reason: cleanLine(premise.reason) },
-        ...(mergeRisk?.verdict === undefined ? {} : { mergeRisk: { verdict: mergeRisk.verdict, reason: cleanLine(mergeRisk.reason ?? '') } }),
-        confidence,
-        findings: reviewed.map(finding => ({
+        premise: { verdict: response.premise.verdict, reason: cleanLine(response.premise.reason) },
+        ...(mergeRisk === undefined ? {} : { mergeRisk: { verdict: mergeRisk.verdict, reason: cleanLine(mergeRisk.reason) } }),
+        confidence: response.confidence,
+        findings: response.findings.map(finding => ({
           identity: normalizedFindingIdentity(finding.identity),
           line: finding.line,
           // Only the summary must fit one line. The other fields reach the
@@ -505,7 +548,10 @@ function parseReviewResponse(text: string): Promise<Result<ReviewResponse, strin
           nextAction: cleanText(finding.nextAction),
           path: cleanLine(finding.path),
           proof: cleanText(finding.proof),
-          regressionTest: finding.regressionTest === null ? null : cleanText(finding.regressionTest),
+          // A wrong premise recommends Dismissal, which writes no test, so a
+          // test the agent named anyway is dropped rather than rejected.
+          // A sound finding may carry none: no test covers a stale comment.
+          regressionTest: wrong || finding.regressionTest === null ? null : cleanText(finding.regressionTest),
         })),
       })
     })
