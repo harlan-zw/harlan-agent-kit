@@ -18,8 +18,50 @@ function record(value: unknown): value is Record<string, unknown> {
  *
  * 1: the original whole-history payload.
  * 2: tagged `DesktopHistory`, which carries only what the receiver lacks.
+ * 3: tagged `DesktopFailure`, which says whether the Agent provider started.
  */
-export const DESKTOP_PROTOCOL = 2
+export const DESKTOP_PROTOCOL = 3
+
+/**
+ * Why one desktop turn failed.
+ *
+ * The desktop used to report every failure as one string. A branch Worktrunk
+ * refused to create then read as a failed Agent turn, and each retry spent a
+ * Task attempt on the same refusal.
+ */
+export type DesktopFailure
+  /** The turn stopped before the Agent provider started, so Hogwild may run it. */
+  = | { _tag: 'SetupFailed', reason: string }
+  /** The Agent provider started and failed. */
+    | { _tag: 'AgentFailed', reason: string }
+
+/**
+ * The error cause each desktop failure carries to the host pool.
+ *
+ * The first two leave the turn untouched, so the pool runs it on Hogwild.
+ */
+export type DesktopErrorCause = 'desktop-unsupported' | 'desktop-setup' | 'desktop-execution'
+
+export function desktopErrorCause(error: unknown): DesktopErrorCause | null {
+  if (!(error instanceof Error))
+    return null
+  const cause = error.cause
+  return cause === 'desktop-unsupported' || cause === 'desktop-setup' || cause === 'desktop-execution' ? cause : null
+}
+
+/** Whether another host may still run a turn that failed with this error. */
+export function desktopTurnMayMove(error: unknown): boolean {
+  const cause = desktopErrorCause(error)
+  return cause === 'desktop-unsupported' || cause === 'desktop-setup'
+}
+
+export function parseDesktopFailure(value: unknown): DesktopFailure | null {
+  if (value === null)
+    return null
+  if (record(value) && (value._tag === 'SetupFailed' || value._tag === 'AgentFailed') && typeof value.reason === 'string')
+    return { _tag: value._tag, reason: value.reason }
+  throw new Error('The desktop failure is invalid.')
+}
 
 /**
  * Memory one desktop Agent reserves through `harlan-desktop-capacity`.

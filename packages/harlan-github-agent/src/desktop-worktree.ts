@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import process from 'node:process'
 import { promisify } from 'node:util'
 import { parseWtWorktrees } from './worktree.ts'
 
@@ -326,7 +327,45 @@ async function worktrunk(args: string[], cwd: string, signal?: AbortSignal): Pro
   }
 }
 
-export async function prepareDesktopWorktree(snapshot: DesktopWorktree, directory: string, temporary: string, task: string, signal?: AbortSignal): Promise<string> {
+/**
+ * One turn's hold on its desktop Worktree.
+ *
+ * The desktop runs two Agents at once, each in its own process. Every turn
+ * swept every other desktop Worktree in the repository, so a second Task on
+ * the same repository reset and removed the first one's Worktree mid-turn.
+ */
+export interface DesktopWorktreeLease {
+  workspace: string
+  /** Lets the next turn remove this Worktree. Call it when the turn ends. */
+  release: () => Promise<void>
+}
+
+function leasePath(directory: string, branch: string): string {
+  return join(directory, 'leases', branch)
+}
+
+/** Whether a live turn, in any process, holds the branch's Worktree. */
+async function held(directory: string, branch: string): Promise<boolean> {
+  const text = await readFile(leasePath(directory, branch), 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT')
+      return null
+    throw error
+  })
+  const pid = text === null ? Number.NaN : Number(text.trim())
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    return false
+  try {
+    process.kill(pid, 0)
+    return true
+  }
+  catch (error) {
+    // EPERM means the process exists under another user. ESRCH means the turn
+    // that wrote the lease died, so its Worktree is free.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+export async function prepareDesktopWorktree(snapshot: DesktopWorktree, directory: string, temporary: string, task: string, signal?: AbortSignal): Promise<DesktopWorktreeLease> {
   await mkdir(directory, { recursive: true })
   await mkdir(temporary, { recursive: true })
   const carried = desktopHistoryBundle(snapshot.history)
@@ -353,32 +392,54 @@ export async function prepareDesktopWorktree(snapshot: DesktopWorktree, director
   // once for the life of the cache, and every later Task inherited whatever
   // the previous one left behind.
   const branch = `${DESKTOP_BRANCH_PREFIX}${desktopTaskKey(task)}`
-  const list = async () => {
-    const parsed = parseWtWorktrees(await worktrunk(['--config-set', 'list.json-schema=2', 'list', '--format=json'], control, signal))
-    if (parsed._tag === 'Err')
-      throw new Error(parsed.error)
-    return parsed.value
+  // The lease comes first, so a concurrent sweep never sees this Worktree, or
+  // its branch, without it.
+  const lease = leasePath(directory, branch)
+  await mkdir(dirname(lease), { recursive: true })
+  await writeFile(lease, String(process.pid))
+  const release = () => rm(lease, { force: true })
+  try {
+    const list = async () => {
+      const parsed = parseWtWorktrees(await worktrunk(['--config-set', 'list.json-schema=2', 'list', '--format=json'], control, signal))
+      if (parsed._tag === 'Err')
+        throw new Error(parsed.error)
+      return parsed.value
+    }
+    for (const item of await list()) {
+      if (item.branch === undefined || item.branch === branch || !isDesktopBranch(item.branch) || await held(directory, item.branch))
+        continue
+      // The Worktree still holds the last Task's uncommitted work, and Worktrunk
+      // refuses to remove a dirty one. Nothing is lost: Hogwild sends the whole
+      // Worktree again for every turn, so this side is derived, never the record.
+      await desktopCommand('git', ['reset', '--hard'], item.path, signal)
+      await desktopCommand('git', ['clean', '-ffd'], item.path, signal)
+      await worktrunk(['remove', item.branch], control, signal)
+    }
+    // Worktrunk deletes a branch on removal only when main already holds it, and
+    // a pull request head never is. The branch outlived its Worktree, and the
+    // next turn for that Task failed creating it again, every retry alike. The
+    // cache is derived, so a desktop branch with no Worktree holds nothing.
+    const worktrees = new Set((await list()).map(item => item.branch))
+    const branches = (await desktopCommand('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads/'], control, signal)).split('\n').filter(Boolean)
+    for (const name of branches) {
+      if (!isDesktopBranch(name) || worktrees.has(name) || (name !== branch && await held(directory, name)))
+        continue
+      await desktopCommand('git', ['branch', '-D', name], control, signal)
+    }
+    if (!worktrees.has(branch))
+      await worktrunk(['switch', '--create', branch, '--base', snapshot.head], control, signal)
+    const current = (await list()).find(item => item.branch === branch)
+    if (current === undefined)
+      throw new Error('Worktrunk did not create the desktop Worktree.')
+    const workspace = current.path
+    for (const file of await desktopFiles(workspace, signal))
+      await rm(await regularDesktopFile(workspace, file.path), { force: true })
+    await desktopCommand('git', ['reset', '--hard', snapshot.head], workspace, signal)
+    await applyDesktopFiles(workspace, snapshot, temporary, signal)
+    return { workspace, release }
   }
-  for (const item of await list()) {
-    if (item.branch === undefined || item.branch === branch || !isDesktopBranch(item.branch))
-      continue
-    // The Worktree still holds the last Task's uncommitted work, and Worktrunk
-    // refuses to remove a dirty one. Nothing is lost: Hogwild sends the whole
-    // Worktree again for every turn, so this side is derived, never the record.
-    await desktopCommand('git', ['reset', '--hard'], item.path, signal)
-    await desktopCommand('git', ['clean', '-ffd'], item.path, signal)
-    await worktrunk(['remove', item.branch], control, signal)
+  catch (error) {
+    await release()
+    throw error
   }
-  const existing = (await list()).find(item => item.branch === branch)
-  if (existing === undefined)
-    await worktrunk(['switch', '--create', branch, '--base', snapshot.head], control, signal)
-  const current = (await list()).find(item => item.branch === branch)
-  if (current === undefined)
-    throw new Error('Worktrunk did not create the desktop Worktree.')
-  const workspace = current.path
-  for (const file of await desktopFiles(workspace, signal))
-    await rm(await regularDesktopFile(workspace, file.path), { force: true })
-  await desktopCommand('git', ['reset', '--hard', snapshot.head], workspace, signal)
-  await applyDesktopFiles(workspace, snapshot, temporary, signal)
-  return workspace
 }

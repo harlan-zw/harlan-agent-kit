@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentProvider } from './agent-provider.ts'
 import type { ProviderCircuit, ProviderFailureClass, ProviderStartReservation } from './types.ts'
 import { agentProviderFailureReason } from './agent-provider.ts'
+import { desktopErrorCause } from './desktop-protocol.ts'
 
 export interface CircuitProtectedProviderStore {
   reserveProviderStart: (input: {
@@ -110,9 +111,9 @@ export function createCircuitProtectedProvider(options: CircuitProtectedProvider
         }
       }
       catch (error) {
-        // Neither cause says the Agent provider is unhealthy, so neither one
-        // may open its circuit.
-        if (error instanceof Error && (error.cause === 'desktop-execution' || error.cause === 'desktop-unsupported')) {
+        // No desktop cause says the Agent provider is unhealthy, so none of
+        // them may open its circuit.
+        if (error instanceof Error && desktopErrorCause(error) !== null) {
           if (!request.signal.aborted)
             yield { _tag: 'Failed', reason: error.message }
           return

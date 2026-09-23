@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import type { DesktopTurn } from './desktop-broker.ts'
+import type { DesktopFailure } from './desktop-protocol.ts'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -111,12 +112,18 @@ async function main(): Promise<void> {
       child.once('error', reject)
       child.once('close', code => resolve(code ?? 1))
     })
+    let setup: DesktopFailure | null = null
     try {
       for await (const line of createInterface({ input: child.stdout })) {
         const event: unknown = JSON.parse(line)
         // Capacity refusal is handled after exit, before any provider starts.
         if (typeof event === 'object' && event !== null && '_tag' in event && event._tag === 'AtCapacity')
           continue
+        // No provider started, so the controller may run this turn on Hogwild.
+        if (typeof event === 'object' && event !== null && '_tag' in event && event._tag === 'SetupFailed' && 'reason' in event && typeof event.reason === 'string') {
+          setup = { _tag: 'SetupFailed', reason: event.reason }
+          continue
+        }
         const answer = await api<{ accepted: boolean }>('/api/desktop/events', { id: turn.id, events: [event] })
         if (!answer?.accepted)
           stop()
@@ -133,7 +140,10 @@ async function main(): Promise<void> {
             return null
           throw error
         })
-      await api('/api/desktop/complete', { id: turn.id, result, failure: code === 0 ? null : `Desktop Agent stopped with status ${code}. ${stderr}` })
+      const failure: DesktopFailure | null = code === 0
+        ? null
+        : setup ?? { _tag: 'AgentFailed', reason: `Desktop Agent stopped with status ${code}. ${stderr}` }
+      await api('/api/desktop/complete', { id: turn.id, result, failure })
     }
     finally {
       stop()

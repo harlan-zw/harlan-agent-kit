@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentProvider, AgentTurnRequest } from './agent-provider.ts'
+import type { DesktopErrorCause, DesktopFailure } from './desktop-protocol.ts'
 import type { DesktopWorktree } from './desktop-worktree.ts'
 import type { RunnerJobs } from './runner-jobs.ts'
 import { randomUUID } from 'node:crypto'
@@ -7,7 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL } from './desktop-protocol.ts'
+import { DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, desktopErrorCause } from './desktop-protocol.ts'
 import { exportDesktopWorktree, importDesktopWorktree } from './desktop-worktree.ts'
 
 export interface DesktopTurn {
@@ -22,7 +23,7 @@ interface PendingTurn {
   events: AgentEvent[]
   state: 'queued' | 'running' | 'completed' | 'cancelled'
   result: DesktopWorktree | null
-  failure: string | null
+  failure: DesktopFailure | null
 }
 
 export interface DesktopReport {
@@ -90,7 +91,7 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
       entry.events.push(...events)
       return true
     },
-    complete: (id: string, result: DesktopWorktree | null, failure: string | null) => {
+    complete: (id: string, result: DesktopWorktree | null, failure: DesktopFailure | null) => {
       const entry = pending.get(id)
       if (entry?.state !== 'running')
         return false
@@ -123,14 +124,15 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
           if (entry.result !== null)
             await importDesktopWorktree(request.workspace, worktree, entry.result, temporary, signal)
           if (entry.failure !== null)
-            throw new Error(entry.failure)
+            throw new Error(entry.failure.reason, { cause: entry.failure._tag === 'SetupFailed' ? 'desktop-setup' : 'desktop-execution' })
           if (entry.result === null)
             throw new Error('Desktop returned no Worktree.')
         }
         catch (error) {
-          // A Worktree the desktop cannot carry keeps its own cause, so the
-          // host pool runs the turn on Hogwild instead of failing the Task.
-          const cause = error instanceof Error && error.cause === 'desktop-unsupported' ? 'desktop-unsupported' : 'desktop-execution'
+          // A Worktree the desktop cannot carry, or one it could not set up,
+          // keeps its own cause, so the host pool runs the turn on Hogwild
+          // instead of failing the Task.
+          const cause: DesktopErrorCause = desktopErrorCause(error) ?? 'desktop-execution'
           throw new Error(error instanceof Error ? error.message : 'Desktop execution failed.', { cause })
         }
         finally {
