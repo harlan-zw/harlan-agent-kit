@@ -61,6 +61,17 @@ describe('agentActivityFromEvent', () => {
       text: 'next-step (waitlist flow read).',
     })
   })
+
+  it('names a Context budget warning the Agent did not receive', () => {
+    expect(agentActivityFromEvent(
+      { _tag: 'ContextBudgetWarned', cachedTokensRead: 15_020_000, delivery: { _tag: 'Failed', reason: 'The opencode server answered 500.' } },
+      '2026-08-14T00:00:00.000Z',
+    )).toEqual({
+      _tag: 'Reasoning',
+      at: '2026-08-14T00:00:00.000Z',
+      text: 'The Agent read 15.0 million cached context tokens, most of its Context budget. The wrap-up message did not reach it: The opencode server answered 500.',
+    })
+  })
 })
 
 describe('createAgentActivityLog', () => {

@@ -47,6 +47,8 @@ export type AgentEvent
     | { _tag: 'Message', text: string }
     | { _tag: 'Usage', usage: Extract<AgentTokenUsage, { _tag: 'Available' }> }
     | { _tag: 'TurnCompleted' }
+    /** The session read most of its Context budget, so the provider asked it to wrap up. */
+    | { _tag: 'ContextBudgetWarned', cachedTokensRead: number, delivery: ContextBudgetWarningDelivery }
     /** The session read its whole Context budget, so the provider stopped it. */
     | { _tag: 'ContextBudgetExhausted', cachedTokensRead: number }
     | { _tag: 'Failed', reason: string }
@@ -101,6 +103,66 @@ export interface AgentTurnRequest {
  * bounds the bill.
  */
 export const DEFAULT_CACHED_CONTEXT_BUDGET = 20_000_000
+
+/**
+ * Share of the Context budget a session reads before it is asked to wrap up.
+ *
+ * Two Repair sessions on one pull request were stopped at the budget, the
+ * second one while it ran its last typecheck. Both lost all their work. The
+ * last quarter leaves the session room to keep what passes and answer.
+ */
+export const CONTEXT_BUDGET_WARNING_SHARE = 0.75
+
+/** Whether the wrap-up message reached the session. */
+export type ContextBudgetWarningDelivery
+  = | { _tag: 'Sent' }
+    | { _tag: 'Failed', reason: string }
+
+/** Where one session stands against its Context budget. It only moves forward. */
+export type ContextBudgetPhase
+  = | { _tag: 'Normal' }
+    | { _tag: 'Warned' }
+    | { _tag: 'Exhausted' }
+
+/** What the provider must do after one model step. */
+export type ContextBudgetAction
+  = | { _tag: 'Continue' }
+    | { _tag: 'Warn' }
+    | { _tag: 'Stop' }
+
+/**
+ * Advances one session's budget phase after a model step.
+ *
+ * The session gets one warning at the warning share, and a stop past the whole
+ * budget. A session that jumps past both in one step is stopped without a
+ * warning, because it has no step left to answer in.
+ */
+export function advanceContextBudget(
+  phase: ContextBudgetPhase,
+  cachedTokensRead: number,
+  budget: number,
+): { phase: ContextBudgetPhase, action: ContextBudgetAction } {
+  if (phase._tag === 'Exhausted')
+    return { phase, action: { _tag: 'Continue' } }
+  if (cachedTokensRead > budget)
+    return { phase: { _tag: 'Exhausted' }, action: { _tag: 'Stop' } }
+  if (phase._tag === 'Normal' && cachedTokensRead >= budget * CONTEXT_BUDGET_WARNING_SHARE)
+    return { phase: { _tag: 'Warned' }, action: { _tag: 'Warn' } }
+  return { phase, action: { _tag: 'Continue' } }
+}
+
+/** The message a session receives when it reaches the warning share. */
+export function contextBudgetWrapUpPrompt(cachedTokensRead: number, budget: number): string {
+  const millions = (tokens: number) => (tokens / 1_000_000).toFixed(1)
+  return `Controller notice: this session read ${millions(cachedTokensRead)} million of its ${millions(budget)} million cached context token budget.
+At the budget, the controller stops the session, and all work without a result is lost.
+Do not start new work. Do not explore further.
+Keep the changes that pass the checks you already ran. Revert a change that does not pass.
+Commit only if your instructions tell you to commit.
+Return your final result now, in the required format.
+In the summary, name the work you finished and the work that is left.
+If the result has a blocked or partial outcome, use it for work you could not finish.`
+}
 
 export interface AgentProvider {
   name: AgentProviderName

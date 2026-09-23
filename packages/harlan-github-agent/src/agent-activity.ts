@@ -60,7 +60,19 @@ export function agentActivityFromEvent(event: AgentEvent, at: string): AgentActi
     return { _tag: 'FileChange', at, changes: event.changes }
   if (event._tag === 'Reasoning')
     return { _tag: 'Reasoning', at, text: redactSecrets(event.text) }
+  if (event._tag === 'ContextBudgetWarned') {
+    // A controller notice reads as a Reasoning line, so every activity reader
+    // shows it without a new item kind.
+    return { _tag: 'Reasoning', at, text: contextBudgetWarningText(event) }
+  }
   return undefined
+}
+
+function contextBudgetWarningText(event: Extract<AgentEvent, { _tag: 'ContextBudgetWarned' }>): string {
+  const read = `The Agent read ${(event.cachedTokensRead / 1_000_000).toFixed(1)} million cached context tokens, most of its Context budget.`
+  return event.delivery._tag === 'Sent'
+    ? `${read} The controller asked it to return its result now.`
+    : `${read} The wrap-up message did not reach it: ${redactSecrets(event.delivery.reason)}`
 }
 
 export interface AgentActivityLog {
