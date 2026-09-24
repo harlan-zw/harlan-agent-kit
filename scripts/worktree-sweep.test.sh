@@ -135,7 +135,7 @@ export SWEEP_TEST_GIT="$real_git" SWEEP_TEST_HEAD="$squashed_head" SWEEP_TEST_ME
 rm "$test_root/bin/git"
 cat > "$test_root/bin/git" <<'EOF'
 #!/usr/bin/env bash
-if [[ " $* " == *' remote get-url origin '* ]]; then
+if [[ ${SWEEP_TEST_LOCAL_ONLY:-false} != true && " $* " == *' remote get-url origin '* ]]; then
   printf '%s\n' https://github.com/fixture/example.git
   exit 0
 fi
@@ -209,4 +209,9 @@ dry_run=$(bash "$sweep" --days 0 "$test_root")
 grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
 bash "$sweep" --apply --days 0 "$test_root" >/dev/null
 test ! -e "$squashed"
+export SWEEP_TEST_LOCAL_ONLY=true
+git -C "$repository" remote remove origin
+local_run=$(bash "$sweep" --apply --days 0 "$test_root")
+grep -F -- "kept"$'\t'"$unintegrated"$'\t'"reason=no-origin" <<< "$local_run" >/dev/null
+test -d "$unintegrated"
 printf '%s\n' 'Merged pull request sweep tests passed'

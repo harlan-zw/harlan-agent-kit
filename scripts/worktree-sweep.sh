@@ -234,6 +234,13 @@ inspect_repository() {
   done < <(git -C "$repository" worktree list --porcelain -z 2>/dev/null)
 
   ((${#paths[@]})) || return
+  # Local-only repositories have no remote integration evidence to refresh.
+  if ! git -C "$repository" remote get-url origin >/dev/null 2>&1; then
+    for path in "${paths[@]}"; do
+      keep "$path" no-origin
+    done
+    return
+  fi
   if ! fetch_origin "$repository" --prune '+refs/heads/*:refs/remotes/origin/*'; then
     record_error "$repository" fetch-failed
     return
@@ -320,7 +327,8 @@ inspect_repository() {
     fi
 
     # Remote checks can take time. Recheck the local head and claim at removal.
-    if [[ $(git -C "$path" rev-parse HEAD 2>/dev/null) != "$head" ]]; then
+    if [[ $(git -C "$path" rev-parse HEAD 2>/dev/null) != "$head" ||
+      $(git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null) != "$branch" ]]; then
       keep "$path" changed
       continue
     fi
