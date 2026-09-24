@@ -147,6 +147,23 @@ exec "$SWEEP_TEST_GIT" "$@"
 EOF
 cat > "$test_root/bin/gh" <<'EOF'
 #!/usr/bin/env bash
+branch=''
+prev=''
+for arg in "$@"; do
+  if [[ $prev == -F && $arg == branch=* ]]; then
+    branch=${arg#branch=}
+  fi
+  prev=$arg
+done
+if [[ -n $branch && -n ${SWEEP_TEST_COUNT_DIR:-} ]]; then
+  count_file=$SWEEP_TEST_COUNT_DIR/$branch
+  count=$(cat "$count_file" 2>/dev/null || printf 0)
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$count_file"
+  if [[ $count -ge 2 && $branch == squashed && -n ${SWEEP_TEST_LATE_WRITE:-} ]]; then
+    printf '%s\n' late > "$SWEEP_TEST_LATE_WRITE/late.txt"
+  fi
+fi
 if [[ ${SWEEP_TEST_API:-ok} == failure ]]; then
   printf '%s\n' 'GitHub fixture unavailable' >&2
   exit 1
@@ -167,6 +184,10 @@ chmod +x "$test_root/bin/git" "$test_root/bin/gh"
 dry_run=$(bash "$sweep" --days 0 "$test_root")
 grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
 export SWEEP_TEST_HEAD_REPO=contributor/example
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+# Origin URLs accept any casing. Canonical GitHub casing must still match the slug.
+export SWEEP_TEST_REPO=Fixture/Example
 dry_run=$(bash "$sweep" --days 0 "$test_root")
 grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
 
@@ -198,6 +219,15 @@ for scenario in open foreign failure fetch-failure newer missing-destination del
 done
 export SWEEP_TEST_STATE=MERGED SWEEP_TEST_REPO=fixture/example SWEEP_TEST_API=ok SWEEP_TEST_MERGE="$squash_commit"
 export SWEEP_TEST_MORE=false SWEEP_TEST_BASE=main
+# A write landing during the second GitHub check must abort the removal as dirty.
+rm -rf "$test_root/counts"
+mkdir "$test_root/counts"
+export SWEEP_TEST_COUNT_DIR=$test_root/counts SWEEP_TEST_LATE_WRITE=$squashed
+apply_run=$(bash "$sweep" --apply --days 0 "$test_root" 2>"$test_root/late-write.err") || true
+grep -F -- "kept"$'\t'"$squashed"$'\t'"reason=dirty" <<< "$apply_run" >/dev/null
+test -f "$squashed/late.txt"
+rm "$squashed/late.txt"
+unset SWEEP_TEST_COUNT_DIR SWEEP_TEST_LATE_WRITE
 # Fetch a missing merged head from the pull request ref. The destination may be a release branch.
 git -C "$repository" push --quiet origin "$squashed_head:refs/pull/1/head" "$squash_commit:refs/heads/release"
 export SWEEP_TEST_HEAD

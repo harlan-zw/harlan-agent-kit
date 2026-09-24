@@ -110,8 +110,10 @@ is_github_integrated() {
     select(.state == "OPEN")' <<< "$response" >/dev/null; then
     return 1
   fi
+  # GitHub reports canonical casing, but the slug comes from the origin URL.
+  # Renamed and differently cased remotes must still match.
   entries=$("$jq_bin" -r --arg slug "$slug" '.data.repository.pullRequests.nodes[] |
-    select(.state == "MERGED" and .baseRepository.nameWithOwner == $slug and .mergeCommit.oid != null) |
+    select(.state == "MERGED" and (.baseRepository.nameWithOwner | ascii_downcase) == ($slug | ascii_downcase) and .mergeCommit.oid != null) |
     [.number, .headRefOid, .mergeCommit.oid, .baseRefName] | @tsv' <<< "$response") || return 1
   while IFS=$'\t' read -r number pr_head merge base; do
     [[ $number =~ ^[0-9]+$ && $pr_head =~ ^[0-9a-f]{40}$ && $merge =~ ^[0-9a-f]{40}$ ]] || continue
@@ -325,10 +327,19 @@ inspect_repository() {
       continue
     fi
 
-    # Remote checks can take time. Recheck the local head and claim at removal.
+    # Remote checks can take time. Recheck the local head, status, and claim at
+    # removal, because writes may have landed during the remote call.
     if [[ $(git -C "$path" rev-parse HEAD 2>/dev/null) != "$head" ||
       $(git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null) != "$branch" ]]; then
       keep "$path" changed
+      continue
+    fi
+    if ! status=$(git -C "$path" status --porcelain=v1 --untracked-files=all 2>/dev/null); then
+      record_error "$path" status-failed
+      continue
+    fi
+    if [[ -n $status ]]; then
+      keep "$path" dirty
       continue
     fi
     if has_live_claim "$path"; then
