@@ -79,7 +79,7 @@ github_repository_for() {
 # Git cannot recognise an old squash merge after later edits touch the same files.
 # A merged pull request supplies the missing link between source and destination.
 is_github_integrated() {
-  local repository=$1 head=$2 branch=$3 slug=$4 response entries number pr_head merge base destination
+  local repository=$1 head=$2 branch=$3 slug=$4 response entries canonical number pr_head merge base destination
   [[ -n $slug ]] || return 1
   if [[ ! -x $gh_bin ]]; then
     record_error "$repository" github-unavailable
@@ -89,6 +89,7 @@ is_github_integrated() {
     -F owner="${slug%/*}" -F name="${slug#*/}" -F branch="$branch" \
     -f query='query($owner:String!,$name:String!,$branch:String!) {
       repository(owner:$owner,name:$name) {
+        nameWithOwner
         pullRequests(headRefName:$branch,first:100,orderBy:{field:UPDATED_AT,direction:DESC}) {
           pageInfo { hasNextPage }
           nodes { number state headRefOid headRepository { nameWithOwner }
@@ -110,9 +111,10 @@ is_github_integrated() {
     select(.state == "OPEN")' <<< "$response" >/dev/null; then
     return 1
   fi
-  # GitHub reports canonical casing, but the slug comes from the origin URL.
-  # Renamed and differently cased remotes must still match.
-  entries=$("$jq_bin" -r --arg slug "$slug" '.data.repository.pullRequests.nodes[] |
+  # The origin URL can carry an old or differently cased name. GitHub still
+  # resolves it, and the canonical name in the response decides the match.
+  canonical=$("$jq_bin" -r '.data.repository.nameWithOwner' <<< "$response") || return 1
+  entries=$("$jq_bin" -r --arg slug "$canonical" '.data.repository.pullRequests.nodes[] |
     select(.state == "MERGED" and (.baseRepository.nameWithOwner | ascii_downcase) == ($slug | ascii_downcase) and .mergeCommit.oid != null) |
     [.number, .headRefOid, .mergeCommit.oid, .baseRefName] | @tsv' <<< "$response") || return 1
   while IFS=$'\t' read -r number pr_head merge base; do

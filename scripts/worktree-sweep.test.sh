@@ -136,7 +136,7 @@ rm "$test_root/bin/git"
 cat > "$test_root/bin/git" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${SWEEP_TEST_LOCAL_ONLY:-false} != true && " $* " == *' remote get-url origin '* ]]; then
-  printf '%s\n' https://github.com/fixture/example.git
+  printf '%s\n' "https://github.com/${SWEEP_TEST_ORIGIN_SLUG:-fixture/example}.git"
   exit 0
 fi
 if [[ ${SWEEP_TEST_FETCH:-ok} == failure && " $* " == *' fetch '* ]]; then
@@ -171,8 +171,9 @@ fi
 jq -n --arg head "$SWEEP_TEST_HEAD" --arg merge "$SWEEP_TEST_MERGE" \
   --arg state "${SWEEP_TEST_STATE:-MERGED}" --arg repo "${SWEEP_TEST_REPO:-fixture/example}" \
   --arg head_repo "${SWEEP_TEST_HEAD_REPO:-fixture/example}" \
+  --arg canonical "${SWEEP_TEST_CANONICAL_REPO:-fixture/example}" \
   --argjson more "${SWEEP_TEST_MORE:-false}" --arg base "${SWEEP_TEST_BASE:-main}" \
-  '{data:{repository:{pullRequests:{pageInfo:{hasNextPage:$more},nodes:[{
+  '{data:{repository:{nameWithOwner:$canonical,pullRequests:{pageInfo:{hasNextPage:$more},nodes:[{
     number:1,state:"MERGED",headRefOid:$head,headRepository:{nameWithOwner:$head_repo},
     baseRepository:{nameWithOwner:$repo},baseRefName:$base,mergeCommit:{oid:$merge}
   }]}}}} | if $state == "OPEN" then
@@ -190,6 +191,14 @@ grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
 export SWEEP_TEST_REPO=Fixture/Example
 dry_run=$(bash "$sweep" --days 0 "$test_root")
 grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+# A renamed origin keeps its old URL. GitHub resolves it and reports the new
+# canonical name, so the match must use the name from the query response.
+export SWEEP_TEST_ORIGIN_SLUG=fixture/old-name SWEEP_TEST_CANONICAL_REPO=fixture/example
+export SWEEP_TEST_REPO=fixture/example
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+unset SWEEP_TEST_ORIGIN_SLUG SWEEP_TEST_CANONICAL_REPO
+export SWEEP_TEST_REPO=fixture/example
 
 for scenario in open foreign failure fetch-failure newer missing-destination deleted-base incomplete; do
   export SWEEP_TEST_STATE=MERGED SWEEP_TEST_REPO=fixture/example SWEEP_TEST_API=ok
