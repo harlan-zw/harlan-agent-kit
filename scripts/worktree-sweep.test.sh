@@ -153,16 +153,20 @@ if [[ ${SWEEP_TEST_API:-ok} == failure ]]; then
 fi
 jq -n --arg head "$SWEEP_TEST_HEAD" --arg merge "$SWEEP_TEST_MERGE" \
   --arg state "${SWEEP_TEST_STATE:-MERGED}" --arg repo "${SWEEP_TEST_REPO:-fixture/example}" \
+  --arg head_repo "${SWEEP_TEST_HEAD_REPO:-fixture/example}" \
   --argjson more "${SWEEP_TEST_MORE:-false}" --arg base "${SWEEP_TEST_BASE:-main}" \
   '{data:{repository:{pullRequests:{pageInfo:{hasNextPage:$more},nodes:[{
-    number:1,state:"MERGED",headRefOid:$head,headRepository:{nameWithOwner:$repo},
-    baseRepository:{nameWithOwner:"fixture/example"},baseRefName:$base,mergeCommit:{oid:$merge}
+    number:1,state:"MERGED",headRefOid:$head,headRepository:{nameWithOwner:$head_repo},
+    baseRepository:{nameWithOwner:$repo},baseRefName:$base,mergeCommit:{oid:$merge}
   }]}}}} | if $state == "OPEN" then
     .data.repository.pullRequests.nodes += [(.data.repository.pullRequests.nodes[0] | .state = "OPEN" | .number = 2)]
     else . end'
 EOF
 chmod +x "$test_root/bin/git" "$test_root/bin/gh"
 
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+export SWEEP_TEST_HEAD_REPO=contributor/example
 dry_run=$(bash "$sweep" --days 0 "$test_root")
 grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
 

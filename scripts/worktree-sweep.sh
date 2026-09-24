@@ -106,13 +106,12 @@ is_github_integrated() {
     record_error "$repository" github-history-incomplete
     return 1
   fi
-  if "$jq_bin" -e --arg slug "$slug" '.data.repository.pullRequests.nodes[] |
-    select(.state == "OPEN" and .headRepository.nameWithOwner == $slug)' <<< "$response" >/dev/null; then
+  if "$jq_bin" -e '.data.repository.pullRequests.nodes[] |
+    select(.state == "OPEN")' <<< "$response" >/dev/null; then
     return 1
   fi
   entries=$("$jq_bin" -r --arg slug "$slug" '.data.repository.pullRequests.nodes[] |
-    select(.state == "MERGED" and .headRepository.nameWithOwner == $slug and
-      .baseRepository.nameWithOwner == $slug and .mergeCommit.oid != null) |
+    select(.state == "MERGED" and .baseRepository.nameWithOwner == $slug and .mergeCommit.oid != null) |
     [.number, .headRefOid, .mergeCommit.oid, .baseRefName] | @tsv' <<< "$response") || return 1
   while IFS=$'\t' read -r number pr_head merge base; do
     [[ $number =~ ^[0-9]+$ && $pr_head =~ ^[0-9a-f]{40}$ && $merge =~ ^[0-9a-f]{40}$ ]] || continue
