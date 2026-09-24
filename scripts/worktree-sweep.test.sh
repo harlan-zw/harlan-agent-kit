@@ -116,3 +116,145 @@ grep -F 'realpath is not installed' <<< "$regression_run" >/dev/null
 test -d "$claimed"
 
 printf '%s\n' 'Worktree sweep tests passed'
+
+# A squash merge followed by edits must not strand the original worktree.
+squashed=$(create_worktree squashed)
+printf '%s\n' feature > "$squashed/base.txt"
+git -C "$squashed" commit --quiet -am feature
+squashed_head=$(git -C "$squashed" rev-parse HEAD)
+git -C "$repository" merge --squash squashed >/dev/null
+git -C "$repository" commit --quiet -m squash
+squash_commit=$(git -C "$repository" rev-parse HEAD)
+printf '%s\n' later > "$repository/base.txt"
+git -C "$repository" commit --quiet -am later
+git -C "$repository" push --quiet origin main
+
+# Only the network boundary is replaced. Git history and removal use real tools.
+real_git=$(realpath "$(command -v git)")
+export SWEEP_TEST_GIT="$real_git" SWEEP_TEST_HEAD="$squashed_head" SWEEP_TEST_MERGE="$squash_commit"
+rm "$test_root/bin/git"
+cat > "$test_root/bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${SWEEP_TEST_LOCAL_ONLY:-false} != true && " $* " == *' remote get-url origin '* ]]; then
+  printf '%s\n' "https://github.com/${SWEEP_TEST_ORIGIN_SLUG:-fixture/example}.git"
+  exit 0
+fi
+if [[ ${SWEEP_TEST_FETCH:-ok} == failure && " $* " == *' fetch '* ]]; then
+  printf '%s\n' 'Origin fixture unavailable' >&2
+  exit 1
+fi
+exec "$SWEEP_TEST_GIT" "$@"
+EOF
+cat > "$test_root/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+branch=''
+prev=''
+for arg in "$@"; do
+  if [[ $prev == -F && $arg == branch=* ]]; then
+    branch=${arg#branch=}
+  fi
+  prev=$arg
+done
+if [[ -n $branch && -n ${SWEEP_TEST_COUNT_DIR:-} ]]; then
+  count_file=$SWEEP_TEST_COUNT_DIR/$branch
+  count=$(cat "$count_file" 2>/dev/null || printf 0)
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$count_file"
+  if [[ $count -ge 2 && $branch == squashed && -n ${SWEEP_TEST_LATE_WRITE:-} ]]; then
+    printf '%s\n' late > "$SWEEP_TEST_LATE_WRITE/late.txt"
+  fi
+fi
+if [[ ${SWEEP_TEST_API:-ok} == failure ]]; then
+  printf '%s\n' 'GitHub fixture unavailable' >&2
+  exit 1
+fi
+jq -n --arg head "$SWEEP_TEST_HEAD" --arg merge "$SWEEP_TEST_MERGE" \
+  --arg state "${SWEEP_TEST_STATE:-MERGED}" --arg repo "${SWEEP_TEST_REPO:-fixture/example}" \
+  --arg head_repo "${SWEEP_TEST_HEAD_REPO:-fixture/example}" \
+  --arg canonical "${SWEEP_TEST_CANONICAL_REPO:-fixture/example}" \
+  --argjson more "${SWEEP_TEST_MORE:-false}" --arg base "${SWEEP_TEST_BASE:-main}" \
+  '{data:{repository:{nameWithOwner:$canonical,pullRequests:{pageInfo:{hasNextPage:$more},nodes:[{
+    number:1,state:"MERGED",headRefOid:$head,headRepository:{nameWithOwner:$head_repo},
+    baseRepository:{nameWithOwner:$repo},baseRefName:$base,mergeCommit:{oid:$merge}
+  }]}}}} | if $state == "OPEN" then
+    .data.repository.pullRequests.nodes += [(.data.repository.pullRequests.nodes[0] | .state = "OPEN" | .number = 2)]
+    else . end'
+EOF
+chmod +x "$test_root/bin/git" "$test_root/bin/gh"
+
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+export SWEEP_TEST_HEAD_REPO=contributor/example
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+# Origin URLs accept any casing. Canonical GitHub casing must still match the slug.
+export SWEEP_TEST_REPO=Fixture/Example
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+# A renamed origin keeps its old URL. GitHub resolves it and reports the new
+# canonical name, so the match must use the name from the query response.
+export SWEEP_TEST_ORIGIN_SLUG=fixture/old-name SWEEP_TEST_CANONICAL_REPO=fixture/example
+export SWEEP_TEST_REPO=fixture/example
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+unset SWEEP_TEST_ORIGIN_SLUG SWEEP_TEST_CANONICAL_REPO
+export SWEEP_TEST_REPO=fixture/example
+
+for scenario in open foreign failure fetch-failure newer missing-destination deleted-base incomplete; do
+  export SWEEP_TEST_STATE=MERGED SWEEP_TEST_REPO=fixture/example SWEEP_TEST_API=ok
+  export SWEEP_TEST_MERGE="$squash_commit" SWEEP_TEST_MORE=false SWEEP_TEST_BASE=main SWEEP_TEST_FETCH=ok
+  case "$scenario" in
+    open) export SWEEP_TEST_STATE=OPEN ;;
+    foreign) export SWEEP_TEST_REPO=someone/example ;;
+    failure) export SWEEP_TEST_API=failure ;;
+    fetch-failure) export SWEEP_TEST_FETCH=failure ;;
+    newer)
+      printf '%s\n' unpublished > "$squashed/unpublished.txt"
+      git -C "$squashed" add unpublished.txt
+      git -C "$squashed" commit --quiet -m unpublished
+      ;;
+    missing-destination) export SWEEP_TEST_MERGE="$squashed_head" ;;
+    deleted-base)
+      export SWEEP_TEST_BASE=deleted
+      git -C "$repository" update-ref refs/remotes/origin/deleted "$squash_commit"
+      ;;
+    incomplete) export SWEEP_TEST_MORE=true ;;
+  esac
+  bash "$sweep" --apply --days 0 "$test_root" > "$test_root/$scenario.log" 2>&1 || true
+  test -d "$squashed" || { printf 'Removed protected case: %s\n' "$scenario" >&2; exit 1; }
+  if [[ $scenario == newer ]]; then
+    git -C "$squashed" reset --hard --quiet "$squashed_head"
+  fi
+done
+export SWEEP_TEST_STATE=MERGED SWEEP_TEST_REPO=fixture/example SWEEP_TEST_API=ok SWEEP_TEST_MERGE="$squash_commit"
+export SWEEP_TEST_MORE=false SWEEP_TEST_BASE=main
+# A write landing during the second GitHub check must abort the removal as dirty.
+rm -rf "$test_root/counts"
+mkdir "$test_root/counts"
+export SWEEP_TEST_COUNT_DIR=$test_root/counts SWEEP_TEST_LATE_WRITE=$squashed
+apply_run=$(bash "$sweep" --apply --days 0 "$test_root" 2>"$test_root/late-write.err") || true
+grep -F -- "kept"$'\t'"$squashed"$'\t'"reason=dirty" <<< "$apply_run" >/dev/null
+test -f "$squashed/late.txt"
+rm "$squashed/late.txt"
+unset SWEEP_TEST_COUNT_DIR SWEEP_TEST_LATE_WRITE
+# Fetch a missing merged head from the pull request ref. The destination may be a release branch.
+git -C "$repository" push --quiet origin "$squashed_head:refs/pull/1/head" "$squash_commit:refs/heads/release"
+export SWEEP_TEST_HEAD
+SWEEP_TEST_HEAD=$(git -C "$origin" -c user.name=Fixture -c user.email=fixture@example.invalid \
+  commit-tree "$squashed_head^{tree}" -p "$squashed_head" -m followup)
+git -C "$origin" update-ref refs/pull/1/head "$SWEEP_TEST_HEAD"
+export SWEEP_TEST_BASE=release
+if git -C "$repository" cat-file -e "$SWEEP_TEST_HEAD" 2>/dev/null; then
+  printf '%s\n' 'The fixture already has the missing pull request head.' >&2
+  exit 1
+fi
+dry_run=$(bash "$sweep" --days 0 "$test_root")
+grep -F -- "ready"$'\t'"$squashed" <<< "$dry_run" >/dev/null
+bash "$sweep" --apply --days 0 "$test_root" >/dev/null
+test ! -e "$squashed"
+export SWEEP_TEST_LOCAL_ONLY=true
+git -C "$repository" remote remove origin
+local_run=$(bash "$sweep" --apply --days 0 "$test_root")
+grep -F -- "kept"$'\t'"$unintegrated"$'\t'"reason=no-origin" <<< "$local_run" >/dev/null
+test -d "$unintegrated"
+printf '%s\n' 'Merged pull request sweep tests passed'
