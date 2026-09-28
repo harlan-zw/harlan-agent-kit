@@ -69,11 +69,12 @@ export interface AgentTurnResult {
  * envelope wrongly, so the controller repairs the envelope instead of paying
  * for the whole turn again.
  */
-function repairPrompt(schema: unknown, response: string, reason: string): string {
+function repairPrompt(schema: unknown, response: string, reason: string, context: string | null): string {
   return `Your previous answer was rejected: ${reason}
 
 Previous answer:
 ${response.slice(0, 8_000)}
+${context === null ? '' : `\nTrusted correction context:\n${context}\n`}
 
 Return one corrected JSON object that matches this schema and keeps every result you already decided:
 ${JSON.stringify(schema)}
@@ -226,6 +227,8 @@ export async function runAgentTurn(
 
 export interface ParsedAgentTurnOptions<Value> extends AgentTurnOptions {
   parse: (response: string) => Promise<Result<Value, string>> | Result<Value, string>
+  /** Supplies trusted facts needed to correct one named parser refusal. */
+  repairContext?: (reason: string) => string | null
 }
 
 /** A completed turn whose answer either fit the parser or, after one repair, still did not. */
@@ -261,7 +264,7 @@ export async function runRepairedAgentTurn<Value>(
   const { progress: _reported, ...withoutProgress } = input
   const repaired = await runAgentTurn(frozen, {
     ...withoutProgress,
-    prompt: repairPrompt(input.schema, turn.value.response, parsed.error),
+    prompt: repairPrompt(input.schema, turn.value.response, parsed.error, options.repairContext?.(parsed.error) ?? null),
   }, signal)
   if (repaired._tag === 'Err')
     return ok({ _tag: 'Unparsed', reason: parsed.error, response: turn.value.response, sessionId: turn.value.sessionId, usage: turn.value.usage })
