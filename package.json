@@ -6,7 +6,9 @@
     "build": "pnpm --filter harlan-github-agent build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "pnpm test:release && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:skill-doc-paths && pnpm test:service && pnpm --filter advocaat test:run && pnpm --filter harlan-github-agent test:run",
+    "test": "pnpm test:release && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:skill-doc-paths && pnpm test:service && pnpm test:lockfile && pnpm --filter advocaat test:run && pnpm --filter harlan-github-agent test:run && pnpm test:notes-viewer",
+    "test:lockfile": "vitest run scripts/lockfile.test.ts",
+    "test:notes-viewer": "vitest run packages/notes-viewer/start.test.ts",
     "typecheck": "pnpm --filter harlan-github-agent typecheck",
     "check:context": "scripts/check-agent-context.sh",
     "sync:context": "bash scripts/sync-agent-context.sh local",
@@ -43,7 +45,10 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/semver": "catalog:",
+    "semver": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "catalog:"
   }
 }
