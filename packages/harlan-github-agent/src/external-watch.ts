@@ -1,8 +1,10 @@
+import type { Result } from './result.ts'
 import type { DashboardSnapshot, ExternalRepositoryWatch, GitHubIssueItem, ItemSummary, RepositoryStatus } from './types.ts'
 import { createHash } from 'node:crypto'
 import { Octokit } from 'octokit'
 import { failFastThrottle } from './github-rate-limit.ts'
 import { isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from './github.ts'
+import { err, ok } from './result.ts'
 
 export interface PublicIssueSnapshot {
   number: number
@@ -24,6 +26,10 @@ export interface ExternalWatchSnapshot {
 export interface ExternalWatchController {
   poll: (signal?: AbortSignal) => Promise<Array<{ repository: string, subjects: number, error?: string }>>
   snapshot: () => ExternalWatchSnapshot
+}
+
+export interface ReloadableExternalWatchController extends ExternalWatchController {
+  reload: (options: ExternalWatchControllerOptions) => Promise<Result<{ repositories: number, issues: number }, string>>
 }
 
 export interface ExternalWatchControllerOptions {
@@ -167,6 +173,32 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
       repositories: [...states.values()].map(state => state.repository),
       items: [...states.values()].flatMap(state => state.items),
     }),
+  }
+}
+
+export function createReloadableExternalWatchController(options: ExternalWatchControllerOptions): ReloadableExternalWatchController {
+  let active = createExternalWatchController(options)
+  let pending: ReturnType<ReloadableExternalWatchController['reload']> | null = null
+
+  const reload: ReloadableExternalWatchController['reload'] = (next) => {
+    if (pending !== null)
+      return pending
+    pending = (async () => {
+      const candidate = createExternalWatchController(next)
+      const results = await candidate.poll()
+      const failed = results.find(result => result.error !== undefined)
+      if (failed?.error !== undefined)
+        return err(`${failed.repository}: ${failed.error}`)
+      active = candidate
+      return ok({ repositories: results.length, issues: results.reduce((count, result) => count + result.subjects, 0) })
+    })().finally(() => { pending = null })
+    return pending
+  }
+
+  return {
+    poll: signal => active.poll(signal),
+    snapshot: () => active.snapshot(),
+    reload,
   }
 }
 

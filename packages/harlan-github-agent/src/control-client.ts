@@ -58,6 +58,7 @@ export interface ControlClient {
   pause: () => Promise<Result<StoredAgentControl, ControlApiError>>
   resume: () => Promise<Result<StoredAgentControl, ControlApiError>>
   restart: () => Promise<Result<RestartRequest, ControlApiError>>
+  reloadExternalWatches: () => Promise<Result<{ repositories: number, issues: number }, ControlApiError>>
   update: () => Promise<Result<RestartRequest, ControlApiError>>
   cancelTask: (taskId: string) => Promise<Result<TaskCancellation, ControlApiError>>
   /** Opens one run of a Routine for the current minute, ahead of its schedule. */
@@ -86,6 +87,13 @@ function parseHealth(value: unknown): Parsed<ControlHealth> {
     return err('The service returned invalid health data.')
   }
   return ok(input as unknown as ControlHealth)
+}
+
+function parseExternalWatchReload(value: unknown): Parsed<{ repositories: number, issues: number }> {
+  const input = record(value)
+  return input !== undefined && integer(input.repositories) && integer(input.issues)
+    ? ok({ repositories: input.repositories, issues: input.issues })
+    : err('The service returned invalid external watch counts.')
 }
 
 function parseState(value: unknown): Parsed<DashboardSnapshot> {
@@ -277,6 +285,7 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     pause: () => request({ method: 'POST', path: 'api/agents/pause', parse: parseAgentControl }),
     resume: () => request({ method: 'POST', path: 'api/agents/resume', parse: parseAgentControl }),
     restart: () => request({ method: 'POST', path: 'api/service/restart', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
+    reloadExternalWatches: () => request({ method: 'POST', path: 'api/external-watches/reload', parse: parseExternalWatchReload }),
     update: () => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     cancelTask: taskId => request({ method: 'POST', path: 'api/tasks/cancel', body: { taskId }, parse: parseCancellation }),
     runRoutine: routineId => request({ method: 'POST', path: 'api/routines/run', body: { routineId }, parse: parseRoutineRun, acceptedStatuses: [202] }),

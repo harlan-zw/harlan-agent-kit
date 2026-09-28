@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
+import type { Result } from './result.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
@@ -19,6 +20,7 @@ import { parseAgentSlots } from './host-capacity.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
+  reloadExternalWatches?: () => Promise<Result<{ repositories: number, issues: number }, string>>
   desktop?: DesktopBroker
   hostCapacity?: () => HostCapacity
   hostTasks?: HostAgentPool['tasks']
@@ -445,6 +447,15 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     })
     setResponseStatus(event, 202)
     return request
+  })
+
+  app.post('/api/external-watches/reload', async () => {
+    if (options.reloadExternalWatches === undefined)
+      throw createError({ status: 503, statusText: 'Unavailable', message: 'External watch reload is unavailable.' })
+    const result = await options.reloadExternalWatches()
+    if (result._tag === 'Err')
+      throw createError({ status: 422, statusText: 'Unprocessable Entity', message: result.error })
+    return result.value
   })
 
   app.post('/api/service/update', async (event) => {

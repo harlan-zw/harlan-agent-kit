@@ -385,6 +385,33 @@ describe('dashboard HTTP app', () => {
     expect(requests).toEqual([expect.objectContaining({ source: 'dashboard', at: now().toISOString() })])
   })
 
+  it('reloads external watches without a Restart request', async () => {
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      reloadExternalWatches: async () => ({ _tag: 'Ok', value: { repositories: 3, issues: 12 } }),
+      store: {
+        ...agentControls,
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/external-watches/reload`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin },
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ repositories: 3, issues: 12 })
+  })
+
   it('pins the available commit in a dashboard Update request', async () => {
     const latestCommit = 'b'.repeat(40)
     const requests: unknown[] = []

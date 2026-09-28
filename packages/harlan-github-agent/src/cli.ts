@@ -237,6 +237,11 @@ const controlCommand = defineCommand({
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.restart()),
     }),
+    'reload-external-watches': defineCommand({
+      meta: { name: 'reload-external-watches', description: 'Reload public issue watches without restarting agents.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, client => client.reloadExternalWatches()),
+    }),
     'update': defineCommand({
       meta: { name: 'update', description: 'Request Update after current work.' },
       args: controlConnectionArguments,
@@ -512,6 +517,7 @@ const command = defineCommand({
         ? { classification: { accountId: classification.accountId, apiToken: classificationToken, ...(classification.gatewayId === undefined ? {} : { gatewayId: classification.gatewayId }), model: classification.model } }
         : {}),
       config,
+      configPath,
       dashboardPassword,
       gitIdentity,
       githubPrivateKey,

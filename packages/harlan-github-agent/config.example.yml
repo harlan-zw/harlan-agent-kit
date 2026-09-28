@@ -88,7 +88,8 @@ issue_batches: true
 # With webhooks on, polling only has to catch what a delivery missed.
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14
-# Public, read-only watches outside the GitHub App installation.
+# Public, read-only issue watches. They can also show issues in a maintained
+# repository whose Issue work is disabled.
 # - github: nuxt-modules/sitemap
 #   issues: [658]
 # - github: nuxt-modules/robots

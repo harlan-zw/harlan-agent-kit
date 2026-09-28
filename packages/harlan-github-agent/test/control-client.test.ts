@@ -70,6 +70,20 @@ describe('harlan GitHub Agent control client', () => {
     await expect(requests[0]?.json()).resolves.toEqual({ source: 'helper' })
   })
 
+  it('reloads external watches through the control API', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ repositories: 3, issues: 12 })], requests)
+
+    expect(created._tag).toBe('Ok')
+    if (created._tag === 'Err')
+      return
+    const result = await created.value.reloadExternalWatches()
+
+    expect(result).toEqual({ _tag: 'Ok', value: { repositories: 3, issues: 12 } })
+    expect(requests[0]?.method).toBe('POST')
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/external-watches/reload`)
+  })
+
   it('returns an HTTP failure as a value', async () => {
     const created = clientWith([
       Response.json({ message: 'The task already finished.' }, { status: 409 }),

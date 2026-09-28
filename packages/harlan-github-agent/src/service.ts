@@ -33,11 +33,11 @@ import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
 import { createClassificationSource } from './classification.ts'
 import { createCodexProvider } from './codex-provider.ts'
-import { validateRepositoryMappings } from './config.ts'
+import { loadConfig, validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
 import { createDesktopBroker } from './desktop-broker.ts'
 import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
-import { createExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
+import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
@@ -96,6 +96,8 @@ export interface RunningAgentService {
 
 export interface StartAgentServiceOptions {
   config: ValidatedAgentConfig
+  /** The running service reads only external watches and the issue cutoff from this file. */
+  configPath?: string
   /** Required when the configuration enables the webhook listener. */
   webhookSecret?: string
   /** Required when the configuration enables the classification service. */
@@ -508,13 +510,32 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     now,
     repositories: config.repositories,
   })
-  const installed = new Set(config.repositories.map(repository => repository.github.toLowerCase()))
-  const externalWatches = config.externalRepositories.filter(watch => !installed.has(watch.github.toLowerCase()))
-  const externalWatch = createExternalWatchController({
-    watches: externalWatches,
+  const externalWatch = createReloadableExternalWatchController({
+    watches: config.externalRepositories,
     issueCutoff: config.issueCutoff,
     now,
   })
+  const reloadConfigPath = options.configPath
+  const reloadExternalWatches = reloadConfigPath === undefined
+    ? undefined
+    : async () => {
+      const loaded = await loadConfig(reloadConfigPath).catch((error: unknown) =>
+        err([{ path: '$', message: error instanceof Error ? error.message : 'The configuration file could not be read.' }]),
+      )
+      if (loaded._tag === 'Err')
+        return err(loaded.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
+      const watches = loaded.value.externalRepositories
+      const disallowed = watches.find((watch) => {
+        const owner = watch.github.split('/')[0]?.toLowerCase()
+        return !config.github.allowedOwners.some(allowed => allowed.toLowerCase() === owner || allowed.toLowerCase() === watch.github.toLowerCase())
+      })
+      if (disallowed !== undefined)
+        return err(`${disallowed.github}: the running service does not allow this GitHub owner.`)
+      const result = await externalWatch.reload({ watches, issueCutoff: loaded.value.issueCutoff, now })
+      if (result._tag === 'Ok')
+        options.logger.info(`Reloaded ${result.value.repositories} external repository watches with ${result.value.issues} public issues.`)
+      return result
+    }
   // Ephemeral: what each running agent is doing right now, never persisted.
   const activityLog = createAgentActivityLog()
   const workerGithub = createGitHubAgentSource({
@@ -1370,6 +1391,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     return settled.includes(true)
   }
   const app = createAgentApp({
+    ...(reloadExternalWatches === undefined ? {} : { reloadExternalWatches }),
     desktop,
     hostCapacity: hosts.read,
     hostTasks: hosts.tasks,
