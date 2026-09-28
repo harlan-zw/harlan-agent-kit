@@ -52,6 +52,36 @@ describe('external repository watches', () => {
     }))
   })
 
+  it('surfaces a failed watch on a repository the snapshot also maintains', async () => {
+    const controller = createExternalWatchController({
+      watches: [{ github: 'harlan-zw/example', issues: [12] }],
+      issueCutoff: '2026-07-14',
+      now: () => new Date('2026-08-13T13:00:00.000Z'),
+      requestIssue: () => Promise.reject(new Error('GitHub rate limit reached.')),
+    })
+    await controller.poll()
+
+    const existing = dashboardSnapshot()
+    existing.repositories.push({
+      github: 'harlan-zw/example',
+      enabled: true,
+      writesEnabled: true,
+      ownership: 'maintained',
+      lastAttemptAt: '2026-08-13T01:00:00.000Z',
+      lastSuccessAt: '2026-08-13T01:00:00.000Z',
+      lastError: null,
+      paused: false,
+      subjectCount: 3,
+    })
+    const merged = mergeExternalWatchSnapshot(existing, controller.snapshot())
+
+    expect(merged.status).toBe('degraded')
+    expect(merged.repositories.find(repository => repository.github === 'harlan-zw/example')).toEqual(expect.objectContaining({
+      ownership: 'maintained',
+      lastError: 'GitHub rate limit reached.',
+    }))
+  })
+
   it('lists all current human issues for a repository watch', async () => {
     const controller = createExternalWatchController({
       watches: [{ github: 'nuxt-modules/robots', issues: 'all' }],

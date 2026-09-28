@@ -204,13 +204,22 @@ export function createReloadableExternalWatchController(options: ExternalWatchCo
 
 export function mergeExternalWatchSnapshot(snapshot: DashboardSnapshot, external: ExternalWatchSnapshot): DashboardSnapshot {
   const repositories = new Set(snapshot.repositories.map(repository => repository.github.toLowerCase()))
+  const watchErrors = new Map(external.repositories
+    .filter((repository): repository is RepositoryStatus & { lastError: string } => repository.lastError !== null)
+    .map(repository => [repository.github.toLowerCase(), repository.lastError]))
   const externalRepositories = external.repositories.filter(repository => !repositories.has(repository.github.toLowerCase()))
   const subjects = new Set(snapshot.items.map(subject => `${subject.repository.toLowerCase()}:${subject.kind}:${subject.number}`))
   const externalItems = external.items.filter(subject => !subjects.has(`${subject.repository.toLowerCase()}:${subject.kind}:${subject.number}`))
+  // A maintained repository has no row of its own in the watch snapshot, so its
+  // failed watch would otherwise vanish with the dropped external row.
+  const maintainedWithWatchErrors = snapshot.repositories.map((repository) => {
+    const watchError = watchErrors.get(repository.github.toLowerCase())
+    return watchError === undefined || repository.lastError !== null ? repository : { ...repository, lastError: watchError }
+  })
   return {
     ...snapshot,
-    status: snapshot.status === 'ready' && externalRepositories.some(repository => repository.lastError !== null) ? 'degraded' : snapshot.status,
-    repositories: [...snapshot.repositories, ...externalRepositories].sort((left, right) => left.github.localeCompare(right.github)),
+    status: snapshot.status === 'ready' && external.repositories.some(repository => repository.lastError !== null) ? 'degraded' : snapshot.status,
+    repositories: [...maintainedWithWatchErrors, ...externalRepositories].sort((left, right) => left.github.localeCompare(right.github)),
     items: [...snapshot.items, ...externalItems],
   }
 }
