@@ -107,7 +107,7 @@ Trace each visual defect to the affected implementation. Treat a clearly labelle
 
 Do not complete Review while an image remains uninspected. Record an image that stays inaccessible after authenticated retrieval, a corrupt image, or a non-GitHub-hosted image as a material documentation finding.
 
-Treat required CI as the only source for repository-wide test, lint, typecheck, and build results.
+Treat GitHub Actions CI as the only source for repository-wide test, lint, typecheck, and build results. Ignore other apps' check runs and commit statuses, including PR comments about their check state.
 
 Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. Continue the review when CI is missing or unavailable. The controller owns that gate. Never recreate CI locally.
 
@@ -146,7 +146,7 @@ The Repair Agent writes each failing regression test first. It fixes every findi
 
 For a visual finding, reproduce the defect at the shown viewport when known. Capture and inspect the repaired view before pushing.
 
-When a required check fails on the head commit and the same check passes on the current base, treat that failure as one material finding with resolution `Repair`. Queue it in the same handoff. Its next action names the failing check and its job logs. The Repair Agent reads those logs, fixes the cause, and runs only focused checks. Never recreate the full CI suite locally. When Repair authority is missing, record the permission boundary instead.
+When a GitHub Actions check run fails on the head commit and the same check passes on the current base, treat that failure as one material finding with resolution `Repair`. Queue it in the same handoff. Its next action names the failing check and its job logs. The Repair Agent reads those logs, fixes the cause, and runs only focused checks. Never recreate the full CI suite locally. When Repair authority is missing, record the permission boundary instead.
 
 Never publish `BLOCKED` for a head CI failure while a permitted repair has not been attempted.
 
@@ -160,7 +160,7 @@ Use `BLOCKED` with Action required when scope is unsafe, Repair authority is mis
 
 If Repair stops or exhausts its retries, replace the canonical progress comment with `BLOCKED`. Include every stored finding and its exact next action.
 
-If required CI fails identically on the current base branch, treat it as baseline repair work. For an owned repository, start a separate worktree from the current base. Repair the failure, verify it, and open a focused pull request through `../pr/SKILL.md`. Set the reviewed pull request to `PENDING`, link the repair pull request as its next action, then resume after that repair merges.
+If GitHub Actions CI fails identically on the current base branch, treat it as baseline repair work. For an owned repository, start a separate worktree from the current base. Repair the failure, verify it, and open a focused pull request through `../pr/SKILL.md`. Set the reviewed pull request to `PENDING`, link the repair pull request as its next action, then resume after that repair merges.
 
 Never blame a pull request for a confirmed baseline failure. For a maintained or external repository, report the exact permission boundary.
 
