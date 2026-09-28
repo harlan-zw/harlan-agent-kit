@@ -262,6 +262,8 @@ Work as a normal local agent session. Use the user's global agent context and in
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before you return a result.
 ${agents}${memoryBlock}${UNIT_TEST_LINES}
 
+Find the test or command that failed before editing code. A warning in a successful command is not the cause.
+
 Failing checks:
 ${input.repairable.map(checkBlock).join('\n')}
 ${outOfScope}
