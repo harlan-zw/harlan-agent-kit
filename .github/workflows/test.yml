@@ -120,6 +120,9 @@ jobs:
       - name: Sentry check in
         run: pnpm test:sentry-checkin
 
+      - name: Agent retro exporter
+        run: pnpm test:agent-retro
+
       - name: Service scripts
         run: pnpm test:service
 

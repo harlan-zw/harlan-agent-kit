@@ -29,6 +29,7 @@
     "test:worktree-claim": "bash harlan-agent-kit/scripts/worktree-claim.test.sh",
     "test:pr-skill-only": "bash harlan-agent-kit/hooks/pr-skill-only.test.sh",
     "test:wt-only": "bash harlan-agent-kit/hooks/wt-only.test.sh",
+    "test:agent-retro": "python3 -m unittest discover -s harlan-agent-kit/skills/agent-retro/scripts -p 'test_*.py'",
     "test:sentry-checkin": "python3 -m unittest discover -s harlan-agent-kit/skills/sentry-checkin/scripts -p 'test_*.py'",
     "test:release": "vitest run scripts/release.test.ts",
     "release": "node --experimental-strip-types scripts/release.ts",
