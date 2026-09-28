@@ -116,6 +116,7 @@ describe('review status scheduler', () => {
       onPublished: () => { throw new Error('The legacy status must retire before publication.') },
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: () => {
           writes.push('comment')
@@ -146,6 +147,7 @@ describe('review status scheduler', () => {
     const scheduler = createReviewStatusScheduler({
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: (_repository, _number, _commentId, body) => {
           bodies.push(body)
@@ -185,6 +187,7 @@ describe('review status scheduler', () => {
     const scheduler = createReviewStatusScheduler({
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: () => {
           writes += 1
@@ -218,6 +221,7 @@ describe('review status scheduler', () => {
     const scheduler = createReviewStatusScheduler({
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: (_repository, _number, commentId) => {
           commentIds.push(commentId)
@@ -269,6 +273,7 @@ describe('review status scheduler', () => {
       },
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot(test.pullRequest))),
         upsertReviewStatus: () => Promise.resolve(ok({ commentId: 42, url: `${test.pullRequest.url}#issuecomment-42` })),
         stampAgentLabel: (_repository, _number, label) => {

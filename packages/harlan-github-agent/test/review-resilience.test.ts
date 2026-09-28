@@ -196,7 +196,11 @@ describe('review resilience', () => {
     test.options.now = now
     test.options.store = store
     const controller = createReviewStatusController({
-      github: { ...test.options.github, readExistingReviewLabel: () => Promise.reject(new Error('Unexpected existing review.')) },
+      github: {
+        ...test.options.github,
+        getPullRequestStatusIdentity: () => Promise.resolve(ok({ state: pullRequest.state, headSha: pullRequest.headSha, ...(pullRequest.baseRef === undefined ? {} : { baseRef: pullRequest.baseRef }) })),
+        readExistingReviewLabel: () => Promise.reject(new Error('Unexpected existing review.')),
+      },
       store,
       now,
       workerId: 'publisher',

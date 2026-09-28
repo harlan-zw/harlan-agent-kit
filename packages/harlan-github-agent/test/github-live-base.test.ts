@@ -37,6 +37,31 @@ function tokens() {
 }
 
 describe('live pull request base', () => {
+  it('reads only the pull request identity for progress publication', async () => {
+    let reads = 0
+    const client = {
+      rest: {
+        pulls: { get: () => {
+          reads += 1
+          return Promise.resolve({ data: pullRequest() })
+        } },
+      },
+    } as unknown as Octokit
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    expect(await source.getPullRequestStatusIdentity(repositoryMapping(), 24, new AbortController().signal)).toEqual(ok({
+      state: 'open',
+      headSha,
+      baseRef: 'main',
+    }))
+    expect(reads).toBe(1)
+  })
+
   it('observes the current base branch commit instead of GitHub pull history', async () => {
     const client = {
       rest: {
