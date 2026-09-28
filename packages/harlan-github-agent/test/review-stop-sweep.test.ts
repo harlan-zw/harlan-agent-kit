@@ -74,6 +74,25 @@ describe('stoppedReviewComment', () => {
     expect(body).toContain('The Repair Agent found an unsafe scope.')
     expect(body).not.toContain('### 🤖 REPAIR')
   })
+
+  it('keeps the reviewed code link after merge', () => {
+    const body = stoppedReviewComment({
+      ...stopped,
+      findings: [{
+        _tag: 'Open',
+        summary: 'The queue can drop events.',
+        nextAction: 'Preserve pending events.',
+        details: {
+          fingerprint: 'queue-events',
+          location: { path: 'src/queue.ts', line: 42 },
+          proof: 'The queue resets before sending.',
+          regressionTest: 'Send two events.',
+        },
+      }],
+    }, '2026-08-15T04:00:00.000Z', { _tag: 'Merged' })
+
+    expect(body).toContain('[View code](https://github.com/harlan-zw/example/blob/abc123/src/queue.ts#L42)')
+  })
 })
 
 describe('publishStoppedReviews', () => {

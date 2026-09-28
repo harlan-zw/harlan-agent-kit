@@ -52,4 +52,38 @@ describe('reviewOutcome', () => {
     expect(body).toContain('**CI gate:** PENDING. Base branch CI: deploy is still running.')
     expect(body).toContain('Next: The controller updates this comment when a Review gate changes.')
   })
+
+  it('links an open finding to the reviewed code line', () => {
+    const body = terminalComment('abc123', 'base123', gates({ review: failed('A defect remains.') }), [{
+      _tag: 'Open',
+      summary: 'The queue can drop events.',
+      nextAction: 'Preserve pending events.',
+      details: {
+        fingerprint: 'queue-events',
+        location: { path: 'src/queue worker.ts', line: 42 },
+        proof: 'The queue resets before sending.',
+        regressionTest: 'Send two events.',
+      },
+    }], undefined, [], undefined, 'harlan-zw/example')
+
+    expect(body).toContain('[View code](https://github.com/harlan-zw/example/blob/abc123/src/queue%20worker.ts#L42)')
+    expect(body).not.toContain('events..')
+  })
+
+  it('keeps the finding when its code path cannot form a safe link', () => {
+    const body = terminalComment('abc123', 'base123', gates({ review: failed('A defect remains.') }), [{
+      _tag: 'Open',
+      summary: 'The queue can drop events.',
+      nextAction: 'Preserve pending events.',
+      details: {
+        fingerprint: 'queue-events',
+        location: { path: '../queue.ts', line: 42 },
+        proof: 'The queue resets before sending.',
+        regressionTest: 'Send two events.',
+      },
+    }], undefined, [], undefined, 'harlan-zw/example')
+
+    expect(body).toContain('The queue can drop events. Next: Preserve pending events.')
+    expect(body).not.toContain('[View code]')
+  })
 })

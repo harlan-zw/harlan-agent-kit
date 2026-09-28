@@ -43,7 +43,7 @@ import { combineMergeRisk, describeMergeRisk, mergeRiskFloor } from './merge-ris
 import { repairRoundLabel } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingCodeLink } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
 
@@ -1048,7 +1048,7 @@ function gateSummary(name: 'Merge' | 'Review' | 'CI', gate: ReviewGateState, fin
   return `- **${name} gate:** ${outcome}. ${cleanLine(gate.reason)}`
 }
 
-export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk): string {
+export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk, repository?: string): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const workflow = JSON.stringify({
@@ -1075,11 +1075,16 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
     // comment keeps the shape it always had.
     ...(mergeRisk === undefined ? [] : [`- **Merge risk:** ${describeMergeRisk(mergeRisk)}`]),
   ]
-  const findingLines = findings.map(finding => finding._tag === 'Fixed'
-    ? `- **Fixed:** ${cleanLine(finding.summary)}`
-    : finding.resolution === 'Dismissal'
-      ? `- **Dismissal recommended:** ${cleanLine(finding.summary)}. Next: ${cleanLine(finding.nextAction)}`
-      : `- **Open:** ${cleanLine(finding.summary)}. Next: ${cleanLine(finding.nextAction)}`)
+  const findingLines = findings.map((finding) => {
+    const summary = cleanLine(finding.summary)
+    if (finding._tag === 'Fixed')
+      return `- **Fixed:** ${summary}`
+    const sentence = `${summary}${/[.!?]$/.test(summary) ? '' : '.'}`
+    const link = reviewFindingCodeLink(repository, headSha, finding)
+    return finding.resolution === 'Dismissal'
+      ? `- **Dismissal recommended:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`
+      : `- **Open:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`
+  })
   const checkLines = reportedChecks.map(line => `- **Reported:** ${cleanLine(line)}`)
   const next = result === 'PENDING' ? ['', 'Next: The controller updates this comment when a Review gate changes.'] : []
   return [
@@ -1366,7 +1371,7 @@ async function projectReviewRun(
 
   const outcome = reviewOutcome(gates)
   const confidence = outcome === 'READY' ? run.outcome.confidence : undefined
-  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined)
+  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined, task.repository)
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication
     ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
