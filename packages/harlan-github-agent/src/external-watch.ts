@@ -181,9 +181,9 @@ export function createReloadableExternalWatchController(options: ExternalWatchCo
   let pending: ReturnType<ReloadableExternalWatchController['reload']> | null = null
 
   const reload: ReloadableExternalWatchController['reload'] = (next) => {
-    if (pending !== null)
-      return pending
-    pending = (async () => {
+    // A reload validates and applies only its own argument, so an overlapping
+    // call queues behind the in-flight one instead of returning its result.
+    const run = async (): Promise<Result<{ repositories: number, issues: number }, string>> => {
       const candidate = createExternalWatchController(next)
       const results = await candidate.poll()
       const failed = results.find(result => result.error !== undefined)
@@ -191,8 +191,15 @@ export function createReloadableExternalWatchController(options: ExternalWatchCo
         return err(`${failed.repository}: ${failed.error}`)
       active = candidate
       return ok({ repositories: results.length, issues: results.reduce((count, result) => count + result.subjects, 0) })
-    })().finally(() => { pending = null })
-    return pending
+    }
+    const prior = pending
+    const result = prior === null ? run() : prior.then(run, run)
+    const tail = result.finally(() => {
+      if (pending === tail)
+        pending = null
+    })
+    pending = tail
+    return result
   }
 
   return {

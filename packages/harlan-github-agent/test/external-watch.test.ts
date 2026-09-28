@@ -147,6 +147,64 @@ describe('external repository watches', () => {
     expect(controller.snapshot().items.map(item => item.number)).toEqual([658])
   })
 
+  it('applies a second reload issued while one is still in flight', async () => {
+    const now = () => new Date('2026-09-28T04:00:00.000Z')
+    let releaseFirstPoll: (() => void) | undefined
+    const firstPoll = new Promise<void>(resolve => (releaseFirstPoll = resolve))
+    const controller = createReloadableExternalWatchController({
+      watches: [{ github: 'nuxt-modules/sitemap', issues: [658] }],
+      issueCutoff: '2026-07-14',
+      now,
+      requestIssue: () => Promise.resolve({
+        number: 658,
+        state: 'open',
+        title: 'Startup issue',
+        author: 'contributor',
+        url: 'https://github.com/nuxt-modules/sitemap/issues/658',
+        createdAt: '2026-09-20T00:00:00.000Z',
+        updatedAt: '2026-09-20T00:00:00.000Z',
+        isPullRequest: false,
+      }),
+    })
+    await controller.poll()
+
+    const first = controller.reload({
+      watches: [{ github: 'nuxt-modules/robots', issues: 'all' }],
+      issueCutoff: '2026-07-14',
+      now,
+      requestIssues: () => firstPoll.then(() => [{
+        number: 658,
+        state: 'open',
+        title: 'In-flight issue',
+        author: 'contributor',
+        url: 'https://github.com/nuxt-modules/robots/issues/658',
+        createdAt: '2026-09-26T00:00:00.000Z',
+        updatedAt: '2026-09-26T00:00:00.000Z',
+        isPullRequest: false,
+      }]),
+    })
+    const second = controller.reload({
+      watches: [{ github: 'nuxt-modules/sitemap', issues: [658, 659] }],
+      issueCutoff: '2026-07-14',
+      now,
+      requestIssue: (_repository, number) => Promise.resolve({
+        number,
+        state: 'open',
+        title: `Newest issue ${number}`,
+        author: 'contributor',
+        url: `https://github.com/nuxt-modules/sitemap/issues/${number}`,
+        createdAt: '2026-09-27T00:00:00.000Z',
+        updatedAt: '2026-09-27T00:00:00.000Z',
+        isPullRequest: false,
+      }),
+    })
+    releaseFirstPoll?.()
+
+    expect(await second).toEqual({ _tag: 'Ok', value: { repositories: 1, issues: 2 } })
+    expect(await first).toEqual({ _tag: 'Ok', value: { repositories: 1, issues: 1 } })
+    expect(controller.snapshot().items.map(item => item.number)).toEqual([658, 659])
+  })
+
   it('shows the new public issues after a successful reload', async () => {
     const now = () => new Date('2026-09-28T04:00:00.000Z')
     const controller = createReloadableExternalWatchController({
