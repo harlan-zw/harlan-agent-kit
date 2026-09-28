@@ -6,12 +6,14 @@ Run on Hogwild. Reads both databases read-only.
 Usage: export-sessions.py OUT_DIR [--days 7] [--per-goal 10]
 """
 import collections
+import hashlib
 import json
 import os
 import re
 import sqlite3
 import sys
 import time
+from functools import cache
 
 out = sys.argv[1]
 days = 7
@@ -50,6 +52,7 @@ GOALS = [
 TASK_KIND = {'review_fix': 'review_fix', 'resolve_conflict': 'resolve_conflict', 'baseline_repair': 'baseline_repair'}
 
 SLUG = re.compile(r'\.harlan-agent-(?:review|fix|pull|baseline|issue|routine)-(?P<number>[^-]+)-(?P<revision>[0-9a-f]{12})')
+BASELINE_SLUG = re.compile(r'\.harlan-agent-baseline-(?P<base>[0-9a-f]{12})-(?P<lease>[0-9a-f]{12})(?:$|/)')
 
 # Transcripts carry raw shell output. Redact token shapes before anything reads them.
 SECRETS = [
@@ -77,8 +80,24 @@ def goal_of(directory):
 
 
 def subject_of(directory):
+    baseline = BASELINE_SLUG.search(directory)
+    if baseline:
+        return baseline.group('base')
     m = SLUG.search(directory)
     return f"{m.group('number')}-{m.group('revision')}" if m else directory
+
+
+@cache
+def baseline_tasks_by_lease():
+    """The Baseline worktree suffix names a task lease, not a Revision."""
+    if journal is None:
+        return {}
+    tasks = {}
+    for row in journal.execute("select id, fence from tasks where kind = 'baseline_repair'"):
+        for fence in range(1, row['fence'] + 1):
+            key = hashlib.sha256(f"{row['id']}:{fence}".encode()).hexdigest()[:12]
+            tasks[key] = row['id']
+    return tasks
 
 
 def trunc(s, n):
@@ -116,6 +135,7 @@ def journal_outcome(goal, sess):
     m = SLUG.search(sess['directory'])
     if not m:
         return None
+    baseline = BASELINE_SLUG.search(sess['directory']) if goal == 'baseline_repair' else None
     kind = TASK_KIND.get(goal)
     if goal == 'issue':
         row = journal.execute(
@@ -128,12 +148,19 @@ def journal_outcome(goal, sess):
             return dict(source='worker_tasks', task=row['id'][:12], state=row['state_tag'], reason=row['reason'], attempts=row['attempts'])
     if kind is None:
         return None
-    row = journal.execute(
-        'select id, state_tag, reason, attempts, recovery_attempts, fence from tasks where kind = ? and revision_id like ? order by updated_at desc limit 1',
-        (kind, m.group('revision') + '%'),
-    ).fetchone()
+    if baseline:
+        task_id = baseline_tasks_by_lease().get(baseline.group('lease'))
+        row = journal.execute(
+            'select id, state_tag, reason, attempts, recovery_attempts, fence from tasks where kind = ? and id = ?',
+            (kind, task_id),
+        ).fetchone()
+    else:
+        row = journal.execute(
+            'select id, state_tag, reason, attempts, recovery_attempts, fence from tasks where kind = ? and revision_id like ? order by updated_at desc limit 1',
+            (kind, m.group('revision') + '%'),
+        ).fetchone()
     if row is None:
-        return dict(source='tasks', outcome='no task row for this revision')
+        return dict(source='tasks', outcome='no task row for this worktree')
     transitions = journal.execute(
         'select to_tag, reason from task_transitions where task_id = ? order by created_at desc limit 3', (row['id'],),
     ).fetchall()
@@ -247,9 +274,13 @@ for goal, ss in groups.items():
         by_subject[subject_of(s['directory'])].append(s)
     # Spread the sample: at most two per subject before filling from the rest.
     picked = []
+    # A large loop may be older than the newest ten subjects. Always inspect it.
+    largest = max(by_subject.values(), key=len)
+    if len(largest) > 5:
+        picked.append(max(largest, key=lambda session: session['time_updated'] - session['time_created']))
     for round_ in range(3):
         for lst in by_subject.values():
-            if round_ < len(lst) and len(picked) < per_goal:
+            if round_ < len(lst) and lst[round_] not in picked and len(picked) < per_goal:
                 picked.append(lst[round_])
     picked = picked[:per_goal]
     stats = []

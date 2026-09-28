@@ -6,6 +6,11 @@ minimumReleaseAgeExclude:
 
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800
+
+peerDependencyRules:
+  allowedVersions:
+    vitepress-plugin-mermaid>mermaid: '12'
+
 shellEmulator: true
 
 packages:
@@ -62,24 +67,24 @@ allowBuilds:
 
 catalog:
   '@antfu/eslint-config': ^9.5.1
-  '@coldtea/pr-lens-renderer': ^0.2.6
-  '@coldtea/pr-lens-schema': ^0.4.0
+  '@coldtea/pr-lens-renderer': ^0.3.0
+  '@coldtea/pr-lens-schema': ^0.6.0
   '@harlan-zw/jev': ^0.2.0
   '@iconify-json/octicon': ^1.2.36
   '@iconify-json/simple-icons': ^1.2.97
   '@nuxt/fonts': ^0.14.0
   '@nuxt/icon': ^2.5.1
-  '@nuxt/ui': ^4.11.1
-  '@openai/codex-sdk': ^0.155.1
-  '@types/node': ^26.6.2
+  '@nuxt/ui': ^4.11.2
+  '@openai/codex-sdk': ^0.157.1
+  '@types/node': ^26.6.3
   '@types/semver': ^7.7.1
   '@vueuse/nuxt': ^15.0.0
   citty: ^0.2.2
   consola: ^3.4.2
   eslint: ^10.11.0
-  eslint-plugin-harlanzw: ^0.22.0
+  eslint-plugin-harlanzw: ^0.23.0
   h3: ^2.0.1-rc.32
-  mermaid: ^11.12.0
+  mermaid: ^12.0.0
   nuxt: ^4.5.2
   nuxt-skew-protection: ^1.5.4
   obuild: ^0.4.40
@@ -89,7 +94,7 @@ catalog:
   typescript: 6.0.3
   vitepress: ^1.6.4
   vitepress-plugin-mermaid: ^2.0.17
-  vitest: ^5.0.1
+  vitest: ^5.0.2
   vue: ^3.5.43
   vue-tsc: ^3.3.11
   yaml: ^2.9.1

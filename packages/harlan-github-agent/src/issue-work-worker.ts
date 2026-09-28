@@ -437,6 +437,9 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           agentTitle ??= await salvagedTitle(response)
           return parseAgentResponse(response, issueNumbers, templateBody)
         },
+        repairContext: reason => reason.includes('the body drops part of the repository pull request template')
+          ? `Trusted repository pull request template as JSON:\n${JSON.stringify(templateBody)}\nCopy every heading, comment, and checklist in order.`
+          : null,
       }, {
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
