@@ -336,6 +336,7 @@ export function checkBudgetLines(scope: CheckScope): string {
     : ''
   return `Check budget: ${scope}
 ${fullSuiteRule}${lastResort}
+Run test commands without pipes. If you pipe output, set pipefail in the same shell command and report the program's exit code.
 Failures outside the changed files are pre-existing. Do not stash changes to verify them.`
 }
 
