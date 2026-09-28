@@ -31,6 +31,7 @@ it('requires fresh Review before publishing a READY label for an unscoped commen
   const labels: string[] = []
   const scheduler = createReviewStatusScheduler({
     github: {
+      getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
       getPullRequestReviewSnapshot: () => Promise.resolve(ok({
         baseChecks: { _tag: 'Available', checks: [] },
         body: '',
@@ -90,6 +91,7 @@ it.each(['kept', 'revoked', 'rerun', 'Pause', 'labels', 'create label', 'add lab
     const github = githubPublicationFixture({ body: '', mode: 'idempotent', ...(['labels', 'create label', 'add label', 'remove label'].includes(authority) ? { boundary: authority as 'labels' | 'create label' | 'add label' | 'remove label' } : {}), change: () => expect(reopened.requestReviewRerun({ repository: repository.github, pullRequestNumber: 24, revisionId: observed.revisionId, requestId: 'boundary-rerun', source: 'dashboard', requestedBy: 'harlan-zw', at: '2026-08-13T01:00:05.000Z' })._tag).toBe('Queued') })
     let paused = false
     const options = { store: reopened, now: () => new Date('2026-08-13T01:00:05.000Z'), github: {
+      getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
       getPullRequestReviewSnapshot: () => { throw new Error('Unexpected snapshot.') },
       upsertReviewStatus: () => { throw new Error('Unexpected comment.') },
       readExistingReviewLabel: () => {

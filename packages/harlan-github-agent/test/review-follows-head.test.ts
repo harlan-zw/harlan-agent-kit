@@ -139,6 +139,7 @@ describe('review work follows the head commit', () => {
       now: () => new Date('2026-08-13T02:02:01.000Z'),
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
@@ -178,6 +179,7 @@ describe('review work follows the head commit', () => {
       now: () => new Date('2026-08-13T02:02:01.000Z'),
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => {
           if (change === 'Dismissal')
             store.dismissItem({ repository: input.repository, itemNumber: 24, at: '2026-08-13T02:02:01.000Z' })
@@ -217,6 +219,7 @@ describe('review work follows the head commit', () => {
       now: () => new Date('2026-08-13T02:02:01.000Z'),
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => {
           store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })], '2026-08-13T02:02:01.000Z')
           return Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] }))
@@ -257,6 +260,7 @@ describe('review work follows the head commit', () => {
       now: () => new Date('2026-08-13T02:02:01.000Z'),
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] })),
         upsertReviewStatus: () => {
           writes.push('comment')
@@ -291,6 +295,7 @@ describe('review work follows the head commit', () => {
       now: () => new Date(at),
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
+        getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] })),
         upsertReviewStatus: () => {
           writes.push('comment')

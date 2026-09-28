@@ -174,6 +174,12 @@ function publicationHarness(test: Pick<TerminalStatus, 'store' | 'pullRequest' |
     now: () => clock,
     github: {
       readExistingReviewLabel: () => { throw new Error('Unexpected existing Review.') },
+      getPullRequestStatusIdentity: () => {
+        reads += 1
+        if (boundary === 'snapshot')
+          change()
+        return Promise.resolve(ok({ state: test.pullRequest.state, headSha: test.pullRequest.headSha, ...(test.pullRequest.baseRef === undefined ? {} : { baseRef: test.pullRequest.baseRef }) }))
+      },
       getPullRequestReviewSnapshot: () => {
         reads += 1
         if (boundary === 'snapshot')

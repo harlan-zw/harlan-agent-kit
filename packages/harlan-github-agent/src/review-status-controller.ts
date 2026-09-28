@@ -1,5 +1,5 @@
 import type { AgentPhase, AgentPhaseTag } from './agent-progress.ts'
-import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource } from './github-agent-source.ts'
+import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource, ReviewStatusIdentitySource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunMirror } from './review-check-run.ts'
 import type { JournalStore } from './store.ts'
@@ -22,7 +22,7 @@ export interface ReviewStatusControllerOptions {
   /** Mirrors each Review publication onto the Review check run. Absent leaves the check run unwritten. */
   checkRuns?: ReviewCheckRunMirror
   commentControls?: boolean
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewStatusIdentitySource & ReviewPublicationSource & ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
   store: Pick<JournalStore, 'authorizeReviewStatus' | 'claimReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'stageReviewStatus' | 'supersedeReviewStatus'>
@@ -31,7 +31,7 @@ export interface ReviewStatusControllerOptions {
 
 export interface ReviewStatusPublicationOptions {
   checkRuns?: ReviewCheckRunMirror
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewStatusIdentitySource & ReviewPublicationSource & ExistingReviewLabelSource
   now: () => Date
   store: Pick<JournalStore, 'authorizeReviewStatus' | 'completeReviewStatus' | 'deferReviewStatus' | 'recordReviewStatusReceipt' | 'supersedeReviewStatus'>
 }
@@ -152,7 +152,16 @@ export async function publishClaimedReviewStatus(
   if (command.taskKind === 'existing_review')
     return publishExistingReviewLabel(options, command, command.expectedBaseRef, signal)
 
-  const current = await options.github.getPullRequestReviewSnapshot(command.repositoryMapping, command.pullRequestNumber, signal)
+  const current = command.phase === 'terminal'
+    ? await options.github.getPullRequestReviewSnapshot(command.repositoryMapping, command.pullRequestNumber, signal)
+        .then(result => result._tag === 'Err'
+          ? result
+          : ok({
+              state: result.value.pullRequest.state,
+              headSha: result.value.pullRequest.headSha,
+              baseRef: result.value.pullRequest.baseRef,
+            }))
+    : await options.github.getPullRequestStatusIdentity(command.repositoryMapping, command.pullRequestNumber, signal)
   if (current._tag === 'Err') {
     options.store.deferReviewStatus({
       commandId: command.id,
@@ -164,9 +173,9 @@ export async function publishClaimedReviewStatus(
     return current
   }
   if (
-    current.value.pullRequest.state !== 'open'
-    || current.value.pullRequest.headSha !== command.expectedHeadSha
-    || current.value.pullRequest.baseRef !== command.expectedBaseRef
+    current.value.state !== 'open'
+    || current.value.headSha !== command.expectedHeadSha
+    || current.value.baseRef !== command.expectedBaseRef
   ) {
     const reason = 'The pull request changed before the review comment was posted.'
     options.store.supersedeReviewStatus({

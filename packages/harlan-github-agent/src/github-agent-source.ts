@@ -279,6 +279,11 @@ export interface ReviewPublicationSource {
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<PublishedReviewStatus, string>>
 }
 
+export interface ReviewStatusIdentitySource {
+  /** Reads only the fields needed to keep a Review progress write on its current pull request. */
+  getPullRequestStatusIdentity: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<Pick<GitHubPullRequestItem, 'state' | 'headSha' | 'baseRef'>, string>>
+}
+
 export interface GitHubAgentSource {
   /** Finds the open pull request whose head is `headRef`, if one exists. */
   findOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal: AbortSignal) => Promise<Result<OpenPullRequestReference | null, string>>
@@ -474,7 +479,7 @@ function pullRequestItem(
   }
 }
 
-export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & ExistingReviewLabelSource {
+export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & ExistingReviewLabelSource & ReviewStatusIdentitySource {
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
   // charges no primary quota for a 304. Only `read` access uses the cache.
@@ -851,6 +856,16 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         }
         return ok({ commentId: confirmed.data.id, url: confirmed.data.html_url })
       }).catch((error: unknown) => err(message(error)))
+    },
+
+    async getPullRequestStatusIdentity(repository, pullRequestNumber, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return octokit.value.rest.pulls.get({ owner, repo, pull_number: pullRequestNumber, request: { signal } })
+        .then(({ data }) => ok({ state: data.state, headSha: data.head.sha, baseRef: data.base.ref }))
+        .catch((error: unknown) => err(message(error)))
     },
 
     async getPullRequestReviewSnapshot(repository, pullRequestNumber, signal) {
