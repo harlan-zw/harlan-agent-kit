@@ -128,6 +128,46 @@ describe('live pull request base', () => {
     expect(checkedRefs).not.toContain(historicBaseSha)
   })
 
+  it('uses only GitHub Actions jobs for review CI', async () => {
+    const listForRef = () => undefined
+    const client = {
+      paginate: (method: unknown) => Promise.resolve(method === listForRef
+        ? [
+            { id: 1, name: 'test', status: 'completed', conclusion: 'success', app: { id: 15368, slug: 'github-actions' } },
+            { id: 2, name: 'Vercel', status: 'completed', conclusion: 'failure', app: { id: 42, slug: 'vercel' } },
+          ]
+        : []),
+      rest: {
+        actions: { listWorkflowRunsForRepo: () => undefined },
+        checks: { listForRef },
+        issues: { listComments: () => undefined },
+        pulls: {
+          get: () => Promise.resolve({ data: pullRequest() }),
+          listReviewComments: () => undefined,
+          listReviews: () => undefined,
+        },
+        repos: {
+          getBranch: () => Promise.resolve({ data: { commit: { sha: liveBaseSha } } }),
+          getCombinedStatusForRef: () => Promise.reject(new Error('Commit statuses must not be read.')),
+          listCommits: () => Promise.resolve({ data: [{ sha: liveBaseSha }] }),
+        },
+      },
+    } as unknown as Octokit
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      checks: { _tag: 'Available', checks: [expect.objectContaining({ name: 'test' })] },
+      requiredChecks: { _tag: 'None' },
+    })))
+  })
+
   it.each([
     ['queued', null, 'completed', 'failure', 'completed', 'failure'],
     ['in_progress', null, 'completed', 'cancelled', 'completed', 'cancelled'],

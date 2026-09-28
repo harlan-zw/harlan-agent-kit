@@ -31,10 +31,13 @@ The controller records `Passed`, `Pending`, or `Failed` for three gates:
 | --- | --- | --- | --- |
 | Merge | GitHub reports conflict-free | Mergeability unknown, or conflicts with repair active | Conflicts present |
 | Review | The Agent report has zero material findings | Never, a valid Agent report completes this gate | One or more material findings remain |
-| CI | Every required check passed | Required CI unavailable, running, or blocked by a confirmed head or base failure with repair active | The PR caused required CI failure, or repair exhausted its attempts |
+| CI | Every GitHub Actions check run passed | GitHub Actions CI unavailable, running, or blocked by a confirmed head or base failure with repair active | The PR caused a GitHub Actions check run to fail, or repair exhausted its attempts |
 
-No declared checks, plus available empty base and head check snapshots, passes CI.
-An unavailable snapshot or a declared check with no result stays `Pending`.
+Only check runs from the `github-actions` app count as CI. Ignore commit statuses
+and check runs from other apps, even when GitHub branch rules require them.
+Do not mention ignored checks in the Review finding or status comment.
+Available empty base and head Actions check snapshots pass CI.
+An unavailable Actions snapshot stays `Pending`.
 
 Head stability is an invariant. Store the Agent report against its exact
 Revision before later GitHub reads. If the head moved, keep that history but

@@ -870,41 +870,30 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           ? Promise.resolve({ _tag: 'Unavailable', reason: checksClient.error })
           : Promise.all([
               checksClient.value.paginate(checksClient.value.rest.checks.listForRef, { owner, repo, ref, per_page: 100, request: { signal } }),
-              checksClient.value.rest.repos.getCombinedStatusForRef({ owner, repo, ref, per_page: 100, request: { signal } }),
               checksClient.value.paginate(checksClient.value.rest.actions.listWorkflowRunsForRepo, { owner, repo, head_sha: ref, per_page: 100, request: { signal } }),
-            ]).then(async ([allRuns, statuses, workflowRuns]): Promise<GitHubChecksSnapshot> => {
+            ]).then(async ([allRuns, workflowRuns]): Promise<GitHubChecksSnapshot> => {
               const derivedSuites = derivedCheckSuiteIds(workflowRuns)
               const completedWorkflows = new Map(workflowRuns.flatMap(run => run.status === 'completed' && run.conclusion && run.check_suite_id
                 ? [[run.check_suite_id, run.conclusion] as const]
                 : []))
               // This app's own check runs report the Review, so reading them
               // as CI would make a Review gate on its own progress and stall.
-              const runs = allRuns.filter(check => check.app?.id !== options.ownAppId
+              const runs = allRuns.filter(check => check.app?.slug === ACTIONS_APP_SLUG && check.app?.id !== options.ownAppId
                 && (check.check_suite?.id === undefined || check.check_suite.id === null || !derivedSuites.has(check.check_suite.id)))
-              const current = currentGitHubChecks([
-                ...runs.map((check) => {
-                  // GitHub can leave jobs queued after their workflow has finished.
-                  const workflowConclusion = check.status !== 'completed' && check.check_suite?.id
-                    ? completedWorkflows.get(check.check_suite.id)
-                    : undefined
-                  return {
-                    id: check.id,
-                    failure: { _tag: 'NotAsked' as const },
-                    source: { _tag: 'CheckRun' as const, appId: check.app?.id ?? null },
-                    name: check.name,
-                    status: workflowConclusion ? 'completed' : check.status,
-                    conclusion: workflowConclusion || check.conclusion,
-                  }
-                }),
-                ...statuses.data.statuses.map(status => ({
-                  id: status.id,
+              const current = currentGitHubChecks(runs.map((check) => {
+                // GitHub can leave jobs queued after their workflow has finished.
+                const workflowConclusion = check.status !== 'completed' && check.check_suite?.id
+                  ? completedWorkflows.get(check.check_suite.id)
+                  : undefined
+                return {
+                  id: check.id,
                   failure: { _tag: 'NotAsked' as const },
-                  source: { _tag: 'CommitStatus' as const },
-                  name: status.context,
-                  status: status.state === 'pending' ? 'in_progress' : 'completed',
-                  conclusion: status.state,
-                })),
-              ])
+                  source: { _tag: 'CheckRun' as const, appId: check.app?.id ?? null },
+                  name: check.name,
+                  status: workflowConclusion ? 'completed' : check.status,
+                  conclusion: workflowConclusion || check.conclusion,
+                }
+              }))
               // Only a failing Actions check run can have lost its runner, and
               // only the `failure` conclusion can. GitHub reports a job a person
               // cancelled as `cancelled` with no failed step, which is the same
@@ -917,27 +906,15 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                 ? [check.id]
                 : [])
               const evidence = await resolveFailedJobs(checksClient.value, owner, repo, failedActionsJobs, signal)
-              // A commit status id and a check run id come from different
-              // sequences, so the evidence is keyed back onto check runs only.
-              return { _tag: 'Available', checks: current.map(check => check.source._tag === 'CheckRun'
-                ? { ...check, failure: evidence.get(check.id) ?? check.failure }
-                : check) }
+              return { _tag: 'Available', checks: current.map(check => ({ ...check, failure: evidence.get(check.id) ?? check.failure })) }
             }).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
-        const requiredChecksFor = (branch: string): Promise<RequiredChecks> => octokit.value.rest.repos
-          .getBranchRules({ owner, repo, branch, per_page: 100, request: { signal } })
-          .then((rules): RequiredChecks => {
-            const contexts = requiredCheckContexts(rules.data)
-            return contexts.length === 0 ? { _tag: 'None' } : { _tag: 'Declared', contexts }
-          })
-          .catch((error: unknown): RequiredChecks => ({ _tag: 'Unavailable', reason: message(error) }))
         const liveBaseSha = await currentBaseSha(octokit.value, owner, repo, pull.data.merged_at === null ? pull.data.base.ref : repository.defaultBranch, signal)
         const baseCommits = (sha: string, count: number): Promise<string[]> => octokit.value.rest.repos
           .listCommits({ owner, repo, sha, per_page: count, request: { signal } })
           .then(response => response.data.map(commit => commit.sha))
-        const [checks, baseChecks, requiredChecks] = await Promise.all([
+        const [checks, baseChecks] = await Promise.all([
           checksFor(pull.data.head.sha),
           currentBaseChecks(liveBaseSha, checksFor, baseCommits),
-          requiredChecksFor(pull.data.base.ref),
         ])
         return ok({
           baseChecks,
@@ -963,7 +940,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                   url: comment.html_url,
                 }]), pull.data.head.sha, options.actorLogin(repository), liveBaseSha),
           pullRequest: pullRequestItem(repository, pull.data, liveBaseSha, options.actorLogin(repository)),
-          requiredChecks,
+          requiredChecks: { _tag: 'None' as const },
           reviews: chronologicalPullRequestComments(reviews.flatMap(review => review.body === undefined || review.body === null
             ? []
             : [{ body: review.body, createdAt: review.submitted_at ?? '' }])),
