@@ -878,6 +878,7 @@ describe('issue work pull request metadata', () => {
 
     expect(capture.requests).toHaveLength(2)
     expect(capture.requests[1]?.prompt).toContain('the body drops part of the repository pull request template')
+    expect(capture.requests[1]?.prompt).toContain(JSON.stringify(template.body))
     expect(JSON.stringify(recorded)).toContain('the body drops part of the repository pull request template')
     expect(result).toEqual(ok(expect.objectContaining({
       publication: expect.objectContaining({
