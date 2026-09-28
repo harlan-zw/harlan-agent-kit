@@ -86,10 +86,13 @@ harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent
 harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control reload-external-watches --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config /absolute/path/to/harlan-github-agent.yml
 ```
 
 `routine-run` opens one Routine run for the current minute, ahead of its cron.
+
+`reload-external-watches` validates the configuration file and reads every new public issue watch before replacing the live watches. It also reloads `issue_cutoff` for those watches. An invalid file or GitHub failure keeps the current watches. Other configuration changes still need Restart.
 On the service host, pass `--url http://127.0.0.1:3210`. That host may not resolve its own public name.
 
 For daily check-ins, apply [daily-checkin](../daily-checkin/SKILL.md). It owns collection, interpretation, storage, and reporting.
