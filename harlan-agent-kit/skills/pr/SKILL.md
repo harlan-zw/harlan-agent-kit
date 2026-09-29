@@ -238,6 +238,8 @@ Then add it to the pull request:
 HARLAN_AGENT_PR_SKILL=1 gh pr edit NUMBER --add-label harlan-agent-review
 ```
 
+Record the UTC time of this Review request for the current head SHA in the session scratchpad.
+Reset that time after every later push that changes the head.
 Do not add the label to an outside contributor's pull request. Never treat the label as a Review outcome.
 
 ### Let the agent merge it
@@ -339,14 +341,17 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    `harlan-agent-review-skipped` does not satisfy an Agent-submitted pull request. Confirm the Review request was recorded and wait for Review.
    The service may consume the request label before it posts the outcome.
    If Review is `QUEUED`, or no current-head Task appears, check capacity and elapsed time before waiting again.
+   Respect a trusted `PAUSED`, stopped, or cancelled Review. Do not start another review for that head.
 4. Read every finding in the terminal comment, plus other review and inline comments:
    ```bash
    gh pr view NUMBER --json reviews,comments --jq '.reviews[].body, .comments[].body'
    gh api repos/OWNER/REPO/pulls/NUMBER/comments --paginate --jq '.[].body'
    ```
-5. Act on each material finding. If the service has a Repair Task running, let it finish before editing the same head.
+5. Act on each material finding. If the service owns a current-head Repair Task, let it finish before editing.
+   This includes `Queued`, `Running`, and `Publishing` Tasks. If its Queue is saturated, hand off to that durable Task.
    Otherwise reproduce the finding, fix it in this task's worktree, run focused checks, commit, and push.
    If a finding is false positive or not applicable, post one self-identified Agent comment naming the finding, its classification, and concrete evidence.
+   That comment cannot change the service outcome. Ask Harlan to decide whether to dismiss or rerun the Review.
    Do not change the marked comment or Review outcome label yourself. A `BLOCKED` outcome remains blocked until the service publishes a new outcome.
 6. After any new push, restart at step 1. Never reuse CI or Review evidence from the old head SHA.
    Report success only when current-head CI passes or is correctly absent, the current-head Review is `READY`, and other material comments are handled.
@@ -371,14 +376,14 @@ harlan-github-agent control status --config "$agent_config" |
        .repository == $repo and .number == $number and .headSha == $head)][0]}'
 ```
 
-Start a subagent review when this head's Review is queued and either condition holds:
+Start a subagent review when this head's Review Task is `Queued` and either condition holds:
 
 - At least two Review or Repair Tasks are queued, and their count exceeds free host slots.
 - `state.agentStart` is `ReserveReached` or `CapacityUnavailable`.
 
-Also start one if this head remains queued for 20 minutes, including when the control command is unavailable.
-Use the queued Task's `updatedAt` and the current time.
-If no Task appears, start one 20 minutes after this head commit's time.
+Also start one 20 minutes after the recorded Review request if no terminal Review exists for this head.
+This applies when no Task appears or the control command is unavailable.
+Require an open pull request and a recorded request. Exclude an intentional pause, stop, cancellation, or missing Approval.
 Record the capacity snapshot or elapsed time that triggered the decision.
 Do not infer saturation from `maxOpenPullRequests`; that limit controls new Issue work.
 
