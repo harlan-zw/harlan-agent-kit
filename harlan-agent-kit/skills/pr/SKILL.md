@@ -222,7 +222,7 @@ EOF
 )"
 ```
 
-For stacked work, add `--base PARENT_BRANCH` to `gh pr create`, then link the chain with `gh stack link PARENT_BRANCH BRANCH`. Open the description with `Stacked on #PARENT_PR.` Read [references/stacked-prs.md](references/stacked-prs.md) before either command.
+For stacked work, add `--base PARENT_BRANCH` to `gh pr create`, then link it with `gh stack link` as the reference says: it only appends to the top of a stack. Open the description with `Stacked on #PARENT_PR.` Read [references/stacked-prs.md](references/stacked-prs.md) before either command.
 
 When Step 3 rendered a diagram, add `--attach .pr-lens/<view>-dark-<hash>.svg` for each image the body references. GitHub CLI rewrites the Markdown path to the uploaded asset.
 
