@@ -43,6 +43,24 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('scopes release defaults to an allowed owner and trusted checkout root', () => {
+    const block = `release_defaults:\n  owner: harlan-zw\n  checkout_root: ${homedir()}/pkg\n  manifest: package.json\n  version_files: [package.json]\n  tag_prefix: v\n  workflow: release.yml\n  checks: all\n`
+    const parsed = parseConfigText(`${block}${configText}`)
+    expect(parsed._tag === 'Ok' && parsed.value.releaseDefaults).toEqual({
+      owner: 'harlan-zw',
+      checkoutRoot: `${homedir()}/pkg`,
+      policy: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: 'all', credential: { _tag: 'Repository' } },
+    })
+    const outside = parseConfigText(`${block.replace(`${homedir()}/pkg`, '/tmp')}${configText}`)
+    expect(outside._tag === 'Err' && outside.error.map(issue => issue.path)).toContain('$.release_defaults.checkout_root')
+  })
+
+  it('allows one repository to disable inherited release defaults', () => {
+    const parsed = parseConfigText(configText.replace('    enabled: true', '    enabled: true\n    release: false'))
+    expect(parsed._tag === 'Ok' && Object.hasOwn(parsed.value.repositories[0]!, 'release')).toBe(true)
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.release).toBeUndefined()
+  })
+
   it('reads Reasoning effort for one repository without changing the global overrides', () => {
     const parsed = parseConfigText(configText.replace('    enabled: true', `    enabled: true
     reasoning_effort:

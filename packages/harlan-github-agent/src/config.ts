@@ -604,7 +604,8 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     return undefined
   }
 
-  const release = value.release === undefined ? undefined : parsePackageReleaseConfig(value.release)
+  const releaseDisabled = value.release === false
+  const release = value.release === undefined || releaseDisabled ? undefined : parsePackageReleaseConfig(value.release)
   if (release?._tag === 'Err')
     issues.push({ path: `${path}.release`, message: release.error })
   const github = requiredString(value, 'github', path, issues)
@@ -685,7 +686,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
 
   return {
     github,
-    ...(release?._tag === 'Ok' ? { release: release.value } : {}),
+    ...(releaseDisabled ? { release: undefined } : release?._tag === 'Ok' ? { release: release.value } : {}),
     checkout,
     enabled,
     ...(typeof priority === 'number' ? { priority } : {}),
@@ -820,6 +821,33 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   const trustedCheckoutRoots = [join(homedir(), 'pkg'), join(homedir(), 'sites')]
 
+  const releaseDefaultsValue = document.value.release_defaults
+  const releaseDefaultsRecord = releaseDefaultsValue === undefined ? undefined : isRecord(releaseDefaultsValue) ? releaseDefaultsValue : null
+  if (releaseDefaultsRecord === null)
+    issues.push({ path: '$.release_defaults', message: 'Expected an object.' })
+  const releaseDefaultsOwner = releaseDefaultsRecord === undefined || releaseDefaultsRecord === null
+    ? undefined
+    : requiredString(releaseDefaultsRecord, 'owner', '$.release_defaults', issues)
+  const releaseDefaultsRoot = releaseDefaultsRecord === undefined || releaseDefaultsRecord === null
+    ? undefined
+    : requiredString(releaseDefaultsRecord, 'checkout_root', '$.release_defaults', issues)
+  const releaseDefaultsPolicy = releaseDefaultsRecord === undefined || releaseDefaultsRecord === null
+    ? undefined
+    : parsePackageReleaseConfig(releaseDefaultsRecord)
+  if (releaseDefaultsPolicy?._tag === 'Err')
+    issues.push({ path: '$.release_defaults', message: releaseDefaultsPolicy.error })
+  if (releaseDefaultsOwner !== undefined && (!/^[\w-]+$/.test(releaseDefaultsOwner)
+    || !allowedOwners?.some(owner => owner.toLowerCase() === releaseDefaultsOwner.toLowerCase()))) {
+    issues.push({ path: '$.release_defaults.owner', message: 'Expected an allowed GitHub owner.' })
+  }
+  if (releaseDefaultsRoot !== undefined && (!isAbsolute(releaseDefaultsRoot)
+    || !trustedCheckoutRoots.some(root => isWithin(root, releaseDefaultsRoot)))) {
+    issues.push({ path: '$.release_defaults.checkout_root', message: 'Expected a path inside a trusted checkout root.' })
+  }
+  const releaseDefaults = releaseDefaultsOwner !== undefined && releaseDefaultsRoot !== undefined && releaseDefaultsPolicy?._tag === 'Ok'
+    ? { owner: releaseDefaultsOwner, checkoutRoot: releaseDefaultsRoot, policy: releaseDefaultsPolicy.value }
+    : undefined
+
   const repositoriesValue = document.value.repositories
   const repositories = Array.isArray(repositoriesValue)
     ? repositoriesValue.map((value, index) => repositoryMapping(value, index, issues)).filter(mapping => mapping !== undefined)
@@ -888,6 +916,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     pollIntervalSeconds,
     issueCutoff,
     externalRepositories,
+    ...(releaseDefaults === undefined ? {} : { releaseDefaults }),
     repositories,
   })
 }

@@ -17,8 +17,15 @@ export interface PackageReleaseConfig {
   versionFiles: string[]
   tagPrefix: string
   workflow: string
-  checks: string[]
+  checks: string[] | 'all'
   credential: PackageReleaseCredential
+}
+
+/** Owned repositories under one checkout root may inherit this policy. */
+export interface PackageReleaseDefaults {
+  owner: string
+  checkoutRoot: string
+  policy: PackageReleaseConfig
 }
 
 export interface PackageReleaseInput {
