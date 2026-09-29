@@ -1,10 +1,14 @@
+import type { PackageReleaseDefaults } from './package-release.ts'
 import type { RepositoryAuthentication, RepositoryMapping } from './types.ts'
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { App, Octokit } from 'octokit'
+import { parse } from 'yaml'
 import { normalizeGitHubRemote } from './config.ts'
 import { failFastThrottle } from './github-rate-limit.ts'
+import { stableVersion } from './package-release.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 
 export interface InstalledRepository {
@@ -101,14 +105,50 @@ export async function discoverGitHubAppRepositories(options: GitHubAppRepository
   return repositories
 }
 
-function defaultMapping(repository: InstalledRepository, checkout: string): RepositoryMapping {
+function inheritedRelease(repository: InstalledRepository, checkout: string, defaults: PackageReleaseDefaults | undefined): PackageReleaseDefaults['policy'] | undefined {
+  if (defaults === undefined || repository.owner.type !== 'User'
+    || repository.owner.login.toLowerCase() !== defaults.owner.toLowerCase()
+    || repository.github.split('/')[0]?.toLowerCase() !== defaults.owner.toLowerCase()
+    || !isWithin(defaults.checkoutRoot, checkout)) {
+    return undefined
+  }
+  // A default only applies to a public, stable package with a matching tag workflow.
+  // Explicit repository policies still support monorepos and other layouts.
+  try {
+    const pkg: unknown = JSON.parse(readFileSync(join(checkout, defaults.policy.manifest), 'utf8'))
+    if (typeof pkg !== 'object' || pkg === null || !('name' in pkg) || typeof pkg.name !== 'string'
+      || !('version' in pkg) || typeof pkg.version !== 'string' || stableVersion(pkg.version) === null
+      || ('private' in pkg && pkg.private === true)) {
+      return undefined
+    }
+    const workflow: unknown = parse(readFileSync(join(checkout, '.github', 'workflows', defaults.policy.workflow), 'utf8'))
+    const triggers = typeof workflow === 'object' && workflow !== null && 'on' in workflow ? workflow.on : null
+    const push = typeof triggers === 'object' && triggers !== null && 'push' in triggers ? triggers.push : null
+    const tags = typeof push === 'object' && push !== null && 'tags' in push ? push.tags : null
+    if (!Array.isArray(tags) || !tags.some(pattern => pattern === `${defaults.policy.tagPrefix}*` || pattern === '*' || pattern === '**'))
+      return undefined
+    return defaults.policy
+  }
+  catch (error) {
+    // Missing or malformed package metadata is ineligible. Other file errors stop startup.
+    if (error instanceof SyntaxError || (error instanceof Error && error.name === 'YAMLParseError')
+      || (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) {
+      return undefined
+    }
+    throw error
+  }
+}
+
+function defaultMapping(repository: InstalledRepository, checkout: string, releaseDefaults?: PackageReleaseDefaults): RepositoryMapping {
   const ownership = repository.owner.type === 'User' ? 'owned' : 'maintained'
+  const release = inheritedRelease(repository, checkout, releaseDefaults)
   return {
     github: repository.github,
     checkout,
     enabled: !repository.archived,
     authentication: repository.authentication,
     ownership,
+    ...(release === undefined ? {} : { release }),
     defaultBranch: repository.defaultBranch,
     writablePullRequestAuthors: ['harlan-zw', AGENT_ACTOR_LOGIN],
     writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/', 'ci/'],
@@ -234,6 +274,7 @@ export function buildRepositoryMappings(
   checkouts: LocalCheckout[],
   overrides: RepositoryMapping[],
   allowedOwners: string[],
+  releaseDefaults?: PackageReleaseDefaults,
 ): RepositoryMapping[] {
   const checkoutByRepository = new Map(checkouts.map(checkout => [checkout.github.toLowerCase(), checkout.checkout]))
   const overrideByRepository = new Map(overrides.map(mapping => [mapping.github.toLowerCase(), mapping]))
@@ -246,7 +287,7 @@ export function buildRepositoryMappings(
     const checkout = checkoutByRepository.get(repository.github.toLowerCase())
     if (checkout === undefined)
       return []
-    const defaults = defaultMapping(repository, checkout)
+    const defaults = defaultMapping(repository, checkout, releaseDefaults)
     const override = overrideByRepository.get(repository.github.toLowerCase())
     return [{
       ...defaults,

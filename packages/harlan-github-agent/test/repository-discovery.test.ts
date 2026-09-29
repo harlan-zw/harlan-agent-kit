@@ -1,6 +1,6 @@
 import type { InstalledRepository } from '../src/repository-discovery.ts'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -34,6 +34,26 @@ describe('installedWithoutCheckout', () => {
 })
 
 describe('repository discovery', () => {
+  it('inherits release policy only for stable public packages with a tag workflow', () => {
+    const root = mkdtempSync(join(tmpdir(), 'harlan-release-defaults-'))
+    temporaryDirectories.push(root)
+    const checkout = join(root, 'example')
+    mkdirSync(join(checkout, '.github', 'workflows'), { recursive: true })
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'example', version: '1.2.3' }))
+    writeFileSync(join(checkout, '.github', 'workflows', 'release.yml'), 'on:\n  push:\n    tags: ["v*"]\n')
+    const installed = [{ github: 'harlan-zw/example', defaultBranch: 'main', archived: false, fork: false, topics: [], authentication: 'app' as const, owner: { login: 'harlan-zw', type: 'User' as const } }]
+    const defaults = { owner: 'harlan-zw', checkoutRoot: root, policy: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: 'all' as const, credential: { _tag: 'Repository' as const } } }
+    const map = (overrides: Parameters<typeof buildRepositoryMappings>[2] = []) => buildRepositoryMappings(installed, [{ github: 'harlan-zw/example', checkout }], overrides, ['harlan-zw'], defaults)
+
+    expect(map()[0]?.release).toEqual(defaults.policy)
+    expect(map([{ ...repositoryMapping(), github: 'harlan-zw/example', release: undefined }])[0]?.release).toBeUndefined()
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'example', version: '1.2.3', private: true }))
+    expect(map()[0]?.release).toBeUndefined()
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'example', version: '1.2.3' }))
+    writeFileSync(join(checkout, '.github', 'workflows', 'release.yml'), 'on:\n  push:\n    branches: [main]\n')
+    expect(map()[0]?.release).toBeUndefined()
+  })
+
   it('ignores temporary worktrees beside the canonical checkout', async () => {
     const root = mkdtempSync(join(tmpdir(), 'harlan-discovery-'))
     temporaryDirectories.push(root)

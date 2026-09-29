@@ -79,8 +79,10 @@ export function createPackageReleaseSource(options: {
     }
     return value as Manifest
   }
-  const registry = async (name: string): Promise<{ 'versions': Record<string, { version: string, gitHead?: string }>, 'dist-tags': Record<string, string> }> => {
+  const registry = async (name: string): Promise<{ 'versions': Record<string, { version: string, gitHead?: string }>, 'dist-tags': Record<string, string> } | null> => {
     const response = await (options.fetch ?? globalThis.fetch)(`https://registry.npmjs.org/${encodeURIComponent(name)}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) })
+    if (response.status === 404)
+      return null
     if (!response.ok)
       throw new Error(`npm could not read ${name}: HTTP ${response.status}.`)
     const value = await response.json() as { 'versions'?: unknown, 'dist-tags'?: unknown }
@@ -90,18 +92,26 @@ export function createPackageReleaseSource(options: {
   }
   const checkRunsPassed = async (sha: string, defaultBranch = false): Promise<boolean> => {
     const api = await client('checks_read')
-    const checks = await api.paginate(api.rest.checks.listForRef, { ...scope, ref: sha, per_page: 100, filter: defaultBranch ? 'all' : 'latest' })
+    const checks = await api.paginate(api.rest.checks.listForRef, { ...scope, ref: sha, per_page: 100, filter: defaultBranch || config.checks === 'all' ? 'all' : 'latest' })
     // A passing pull request check on the same SHA is not default branch CI evidence.
     const runs = defaultBranch
       ? await api.paginate(api.rest.actions.listWorkflowRunsForRepo, { ...scope, head_sha: sha, event: 'push', branch: repository.defaultBranch, per_page: 100 })
       : []
-    const suites = new Set(runs.filter(run => run.head_sha === sha && run.event === 'push'
-      && run.head_branch === repository.defaultBranch && run.status === 'completed' && run.conclusion === 'success')
-      .map(run => run.check_suite_id))
+    const pushRuns = runs.filter(run => run.head_sha === sha && run.event === 'push'
+      && run.head_branch === repository.defaultBranch)
+    const latestRuns = pushRuns.filter(run => !pushRuns.some(other => other.workflow_id === run.workflow_id && other.id > run.id))
+    const suites = new Set(latestRuns.map(run => run.check_suite_id))
     // Tag workflows can reuse check names. Keep the newest attempt within each check suite.
     const latest = checks.filter(check => !checks.some(other => other.name === check.name
       && other.check_suite?.id === check.check_suite?.id && other.id > check.id))
-    return config.checks.every(name => latest.some(check => (!defaultBranch || suites.has(check.check_suite?.id)) && check.name === name && check.app?.slug === 'github-actions'
+    if (config.checks === 'all') {
+      const relevant = latest.filter(check => (!defaultBranch || suites.has(check.check_suite?.id)) && check.app?.slug === 'github-actions')
+      const pushPassed = latestRuns.length > 0 && latestRuns.every(run => run.status === 'completed' && run.conclusion === 'success')
+      return relevant.length > 0 && (!defaultBranch || pushPassed)
+        && relevant.every(check => check.status === 'completed' && check.conclusion === 'success')
+    }
+    const passedSuites = new Set(latestRuns.filter(run => run.status === 'completed' && run.conclusion === 'success').map(run => run.check_suite_id))
+    return config.checks.every(name => latest.some(check => (!defaultBranch || passedSuites.has(check.check_suite?.id)) && check.name === name && check.app?.slug === 'github-actions'
       && check.status === 'completed' && check.conclusion === 'success'))
   }
   const blocked = (reason: string) => ({ _tag: 'Blocked' as const, reason })
@@ -120,6 +130,8 @@ export function createPackageReleaseSource(options: {
     if (pkg.private || typeof pkg.name !== 'string' || !/^(?:@[\w.-]+\/)?[\w.-]+$/.test(pkg.name))
       return unavailable('The configured package is not a public npm package.')
     const npm = await registry(pkg.name)
+    if (npm === null)
+      return unavailable('The package has no published stable release.')
     const version = npm['dist-tags'].latest
     if (version === undefined || stableVersion(version) === null)
       return unavailable('The package has no stable latest release.')
@@ -128,7 +140,14 @@ export function createPackageReleaseSource(options: {
     if (previousSha === null)
       return unavailable('The published version has no matching Git tag.')
     const range = (await api.rest.repos.compareCommits({ ...scope, base: tag, head: sha })).data
-    const workflow: unknown = parse(await content(`.github/workflows/${config.workflow}`, sha))
+    const workflowText = await content(`.github/workflows/${config.workflow}`, sha).catch((error: unknown) => {
+      if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404)
+        return null
+      throw error
+    })
+    if (workflowText === null)
+      return unavailable('The release workflow is missing from the default branch.')
+    const workflow: unknown = parse(workflowText)
     const triggers = typeof workflow === 'object' && workflow !== null && 'on' in workflow ? workflow.on : null
     if (typeof triggers !== 'object' || triggers === null || !('push' in triggers))
       return unavailable('The release workflow must publish from a tag push.')
@@ -329,7 +348,7 @@ export function createPackageReleaseSource(options: {
         if (typeof pkg.name !== 'string')
           throw new Error('A public release package has no npm name.')
         const npm = await registry(pkg.name)
-        if (npm.versions[record.plan.version]?.version !== record.plan.version || npm['dist-tags'].latest !== record.plan.version)
+        if (npm === null || npm.versions[record.plan.version]?.version !== record.plan.version || npm['dist-tags'].latest !== record.plan.version)
           return null
       }
       const github = await client('read')

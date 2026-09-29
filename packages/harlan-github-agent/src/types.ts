@@ -4,7 +4,7 @@ import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
-import type { PackageReleaseConfig } from './package-release.ts'
+import type { PackageReleaseConfig, PackageReleaseDefaults } from './package-release.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { RoutineName } from './routines/index.ts'
 
@@ -45,7 +45,8 @@ export type RepositoryAutoMergeScope
 
 export interface RepositoryMapping {
   /** Explicit authority for stable patch and minor package releases. */
-  release?: PackageReleaseConfig
+  /** Explicit undefined disables inherited release defaults. */
+  release?: PackageReleaseConfig | undefined
   github: string
   checkout: string
   enabled: boolean
@@ -187,6 +188,7 @@ export interface AgentConfig {
   pollIntervalSeconds: number
   issueCutoff: string
   externalRepositories: ExternalRepositoryWatch[]
+  releaseDefaults?: PackageReleaseDefaults
   repositories: RepositoryMapping[]
 }
 

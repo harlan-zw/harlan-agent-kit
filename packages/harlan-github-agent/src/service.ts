@@ -360,7 +360,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // ones that do not need it keep working.
   // Package releases need the login as well. Only Harlan grants release
   // authority, and a release with the user credential writes as him.
-  const needsUserLogin = userRepositories.length > 0 || options.config.repositories.some(repository => repository.release !== undefined)
+  const needsUserLogin = userRepositories.length > 0 || options.config.releaseDefaults !== undefined
+    || options.config.repositories.some(repository => repository.release !== undefined)
   const resolvedLogin = needsUserLogin
     ? await resolveUserLogin(userAccess, options.logger)
     : { _tag: 'Ok' as const, value: AGENT_ACTOR_LOGIN }
@@ -378,7 +379,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const unresolvedRepositories = resolvedLogin._tag === 'Ok'
     ? userDiscovery.unresolved
     : [...userDiscovery.unresolved, ...userRepositories.map(repository => repository.github)]
-  const discoveredMappings = buildRepositoryMappings([...installedRepositories, ...activeUserRepositories], localCheckouts, options.config.repositories, options.config.github.allowedOwners)
+  const discoveredMappings = buildRepositoryMappings([...installedRepositories, ...activeUserRepositories], localCheckouts, options.config.repositories, options.config.github.allowedOwners, options.config.releaseDefaults)
   const validatedDiscovery = await validateRepositoryMappings({ ...options.config, repositories: discoveredMappings })
   if (validatedDiscovery._tag === 'Err')
     throw new Error(validatedDiscovery.error.map(issue => `${issue.path}: ${issue.message}`).join(' '))

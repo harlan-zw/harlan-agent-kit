@@ -1,4 +1,4 @@
-import type { StoredReviewForHead } from '../src/types.ts'
+import type { RepositoryMapping, StoredReviewForHead } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { DatabaseSync } from 'node:sqlite'
 import { Octokit } from 'octokit'
@@ -14,7 +14,7 @@ const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-g
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
 const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued' as const, requestedBy: 'harlan-zw' } }
 
-function fixture() {
+function fixture(repository: RepositoryMapping = mapping) {
   const writes: Array<{ path: string, body: Record<string, unknown> }> = []
   const refs = new Map<string, string>([['heads/main', sha], ['tags/v1.0.0', mergeSha]])
   let ready = false
@@ -27,6 +27,7 @@ function fixture() {
   let sourceOpen = false
   let sourceTitle = 'fix: handle input'
   let mainChecks = true
+  let extraCheckPassed = true
   let checkEvent = 'push'
   let checkBranch = 'main'
   let sourceHead = 'f'.repeat(40)
@@ -77,7 +78,8 @@ function fixture() {
     else if (path.endsWith('/check-runs')) {
       const main = { id: 10, name: 'test', check_suite: { id: 10 }, app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success' }
       const tag = { ...main, id: 20, check_suite: { id: 20 } }
-      const checkRuns = refs.has('tags/v1.0.1') ? url.searchParams.get('filter') === 'all' ? [tag, main] : [tag] : [main]
+      const extra = { ...main, id: 11, name: 'lint', conclusion: extraCheckPassed ? 'success' : 'failure' }
+      const checkRuns = refs.has('tags/v1.0.1') ? url.searchParams.get('filter') === 'all' ? [tag, main, extra] : [tag] : [main, extra]
       data = { total_count: checkRuns.length, check_runs: checkRuns }
     }
     else if (path === `/git/commits/${sha}`) {
@@ -128,7 +130,7 @@ function fixture() {
     Object.defineProperty(response, 'url', { value: req.url })
     return response
   }
-  const source = createPackageReleaseSource({ repository: mapping, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: token => new Octokit({ auth: token, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
+  const source = createPackageReleaseSource({ repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: token => new Octokit({ auth: token, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
   return { source, writes, refs, openSource: (title = 'fix: handle input') => {
     sourceOpen = true
     sourceTitle = title
@@ -140,6 +142,8 @@ function fixture() {
     mainChecks = passed
     checkEvent = event
     checkBranch = branch
+  }, setExtraCheck: (passed: boolean) => {
+    extraCheckPassed = passed
   }, allowReview: () => {
     ready = true
   }, changeMergeTree: () => {
@@ -233,6 +237,14 @@ it.each(['pending', 'pull_request', 'other-branch'])('waits for default branch p
   expect(await task.source.prepare(record)).toBeNull()
   expect(task.writes).toEqual([])
   task.setMainChecks(true)
+  expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
+})
+
+it('waits for every GitHub Actions check run under an inherited policy', async () => {
+  const task = fixture({ ...mapping, release: { ...mapping.release, checks: 'all' } })
+  task.setExtraCheck(false)
+  expect(await task.source.prepare(record)).toBeNull()
+  task.setExtraCheck(true)
   expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
 })
 

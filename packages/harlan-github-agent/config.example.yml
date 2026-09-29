@@ -138,7 +138,18 @@ repositories: []
 # A file an agent reads as instructions is always Sensitive. SKILL.md, AGENTS.md,
 # CLAUDE.md, .github, .claude and .codex need no entry, and a repository cannot
 # widen its own globs to cover them.
-# Package releases are disabled unless an owned Repository mapping includes release.
+# Inherit release policy for owned public packages under one checkout root.
+# A stable root package.json and a matching tag workflow must exist.
+# Explicit Repository release policy replaces the default. Set release: false to opt out.
+# release_defaults:
+#   owner: harlan-zw
+#   checkout_root: /home/harlan/pkg
+#   manifest: package.json
+#   version_files: [package.json]
+#   tag_prefix: v
+#   workflow: release.yml
+#   checks: all  # Every GitHub Actions check run must pass.
+# Without release_defaults, package releases need an explicit Repository release policy.
 # Enable webhooks, repository writes, pull_request_review, and automatic selection first.
 # Trust the publishing actor in writable_pr_authors so the version pull request receives Review.
 #   release:

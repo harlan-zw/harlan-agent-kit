@@ -249,6 +249,24 @@ Only a signed GitHub webhook from the authenticated Harlan account grants releas
 Comment edits cannot create text commands. Duplicate clicks and deliveries cannot publish another version.
 
 Enable the webhook and `github` trigger. Enable repository writes and set Selection mode to Auto.
+For owned public packages with a stable root `package.json` and a tag publishing workflow, set one default:
+
+```yaml
+release_defaults:
+  owner: harlan-zw
+  checkout_root: /home/harlan/pkg
+  manifest: package.json
+  version_files: [package.json]
+  tag_prefix: v
+  workflow: release.yml
+  checks: all
+```
+
+The default applies only to matching owned checkouts. Every GitHub Actions check run must pass.
+An explicit Repository `release` block replaces the default. Set `release: false` to exclude one Repository.
+Private packages, prereleases, monorepos, and repositories without a matching tag workflow need separate policy or setup.
+Each npm package still needs a trusted publisher for its workflow.
+
 Add this block to an owned Repository mapping with `pr_review: true`:
 
 ```yaml

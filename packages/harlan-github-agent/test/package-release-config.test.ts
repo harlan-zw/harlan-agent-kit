@@ -16,6 +16,10 @@ it('parses the explicit user credential opt in', () => {
   const parsed = parsePackageReleaseConfig({ ...input, credential: 'user' })
   expect(parsed._tag === 'Ok' && parsed.value.credential).toEqual({ _tag: 'User' })
 })
+it('accepts all successful GitHub Actions check runs for inherited policies', () => {
+  const parsed = parsePackageReleaseConfig({ ...input, checks: 'all' })
+  expect(parsed._tag === 'Ok' && parsed.value.checks).toBe('all')
+})
 it.each([
   { manifest: '../package.json' },
   { manifest: '/package.json' },
