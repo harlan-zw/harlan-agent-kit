@@ -360,7 +360,9 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 ### Review queue capacity
 
 Use the [service control command](../harlan-github-agent/SKILL.md#run-and-inspect) to read `harlan-github-agent control status`.
-Match this repository, pull request number, and current head SHA in `state.queue`.
+Match this repository, pull request number, and current head SHA in `state.queue` when present.
+If that entry is missing, use a queued Review Task for this pull request as the capacity signal.
+Refetch the GitHub head before spawning; the Task alone does not identify its head SHA.
 Count `state.tasks` whose state is `Queued` and kind is `adversarial_review` or `review_fix`.
 Calculate free host slots from `state.hostCapacity`: local maximum minus active, plus desktop maximum minus active when connected.
 
@@ -372,11 +374,14 @@ harlan-github-agent control status --config "$agent_config" |
      hostCapacity: $state.hostCapacity,
      queuedWork: [$state.tasks[] | select(.state._tag == "Queued") |
        select(.kind == "adversarial_review" or .kind == "review_fix")],
+     targetTask: [$state.tasks[] | select(.kind == "adversarial_review" and
+       .repository == $repo and .pullRequestNumber == $number and
+       .state._tag == "Queued")][0],
      target: [$state.queue[] | select(.kind == "pull_request" and
        .repository == $repo and .number == $number and .headSha == $head)][0]}'
 ```
 
-Start a subagent review when this head's Review Task is `Queued` and either condition holds:
+Start a subagent review when Review is queued for this pull request and either condition holds:
 
 - At least two Review or Repair Tasks are queued, and their count exceeds free host slots.
 - `state.agentStart` is `ReserveReached` or `CapacityUnavailable`.
