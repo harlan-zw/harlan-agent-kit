@@ -369,7 +369,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    The Service consumes that label per head in Manual Selection mode. Then restart at step 1.
    A Service Repair commit keeps its own Approval; do not add the label for that commit.
    Never reuse CI or Review evidence from the old head SHA.
-   Report success only when current-head CI passes or is correctly absent, the current-head Review is `READY`, and other material comments are handled.
+   Report success only when current-head CI passes or is correctly absent, the current-head Service Review is `READY` or a stopped Service Review has a completed subagent assessment, and other material comments are handled.
    If a finding remains `BLOCKED` after an evidence-backed false positive or not applicable comment, report that outcome and the comment link.
 
 Count review-driven repair pushes by this submitting Agent across the entire pull request.
@@ -424,14 +424,27 @@ Exclude an intentional pause, stop, cancellation, or missing Approval.
 Record the capacity snapshot or elapsed time that triggered the decision.
 Do not infer saturation from `maxOpenPullRequests`; that limit controls new Issue work.
 
+Before spawning, stop the Service Review for this exact head:
+
+```bash
+harlan-github-agent control stop-review \
+  --repository OWNER/REPO --number NUMBER --head HEAD_SHA \
+  --config /home/harlan/.config/harlan-github-agent/config.yml \
+  --url http://127.0.0.1:3210
+```
+
+Run the command on the Service host. `Stopped` and `AlreadyStopped` permit the subagent.
+The command checks the current open head, records a durable stop for that head, and cancels its queued Review Task.
+It rejects a dismissed Item, changed head, or Running Review.
+If the command fails, report the exact error and leave the Service Review in charge.
+Refetch the GitHub head after the command. If it moved, stop and restart Step 6.
 Spawn one native subagent for this exact head SHA.
-Refetch targeted Item status before spawning. Stop if it became dismissed.
 Give it the pull request snapshot and disproof checks in the [review contract](../adversarial-review/references/review-contract.md#adversarial-review).
 It reads the full diff, surrounding code, author images, and current checks.
 Keep it read only. It returns evidence-backed findings with impact from 0 to 100, path, line, and proof.
 Only findings above 80 need a next action. Include lower scores in the assessment as Logged.
 It does not post comments, set labels, approve, or merge.
-Do not cancel the service Review. If its Review starts while the subagent runs, let both finish and compare their findings.
+The Service Review is stopped for this head. A new head needs a new Review request.
 Refetch the head before acting on findings. Discard the subagent assessment if the head moved.
 Refetch targeted Item status before posting an assessment. Stop if it became dismissed.
 
@@ -439,8 +452,8 @@ Apply confirmed findings above 80 in new commits, subject to the three-push limi
 Mark false positives or inapplicable findings in one self-identified Agent comment with evidence.
 If no confirmed blocker remains, post a self-identified Agent assessment with the head SHA and capacity reason.
 Start that comment with `🤖 Harlan Agent Kit Agent assessment of head SHA.`
-After CI passes, the submitting Agent may hand the pull request back to the service instead of holding its turn in the Queue.
-Report the subagent's result and the outstanding service Review. Never call the subagent assessment `READY` or change the service's marked status.
+After CI passes, report the subagent's result and the stopped Service Review.
+Never call the subagent assessment `READY` or change the service's marked status.
 
 Fix CI failures from the failing check logs (`gh run view RUN_ID --log-failed`).
 Use new commits, never amend published commits. After three failed repairs for one cause, ask the user for guidance.

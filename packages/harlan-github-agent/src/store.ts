@@ -760,6 +760,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   }) => PullRequestApprovalResult
   authorizePublication: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
   cancelReviewForHead: (input: { repository: string, pullRequestNumber: number, headSha: string, requestId: string, requestedBy: string, at: string }) => boolean
+  /** Stops Service Review for one head when another Agent takes its Review. */
+  stopReviewForHead: (input: { repository: string, pullRequestNumber: number, headSha: string, at: string }) => { _tag: 'Stopped' | 'AlreadyStopped' } | { _tag: 'Rejected', reason: 'ItemNotFound' | 'HeadChanged' | 'Dismissed' | 'ReviewRunning' }
   cancelTask: (input: { taskId: string, at: string }) => CancelTaskResult
   /** The newest recorded Pull request triage decision for one exact head commit, or null. */
   getLatestPullRequestTriageRun: (repository: string, pullRequestNumber: number, headSha: string) => LatestPullRequestTriageRun | null
@@ -3026,6 +3028,7 @@ function dashboardQueue(
   desiredReviewOutcomes: Map<string, ReviewDesiredOutcome>,
   issueApprovals: Set<string> = new Set(),
   batchReservationReasons: Map<string, string> = new Map(),
+  stoppedReviews: Set<string> = new Set(),
 ): QueueEntry[] {
   const currentTasks = new Map<string, DashboardTask>()
   tasks.forEach((task) => {
@@ -3177,6 +3180,9 @@ function dashboardQueue(
       return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for mergeability.' } }]
     if (subject.approval._tag === 'ReviewRequired')
       return [{ ...pullRequest, state: { _tag: 'AwaitingApproval', kind: 'review' } }]
+
+    if (stoppedReviews.has(`${subject.repository}:${subject.number}:${subject.headSha}`))
+      return []
 
     const reviewTask = currentTasks.get(`${key}:adversarial_review`)
     const fixTask = currentTasks.get(`${key}:review_fix`)
@@ -4672,6 +4678,13 @@ function planAdversarialReview(
       undefined,
       ownRunLanded ? revisionId : undefined,
     )
+    return
+  }
+
+  if (subject.kind === 'pull_request' && database.prepare(`
+    SELECT 1 FROM review_stops WHERE subject_id = ? AND head_sha = ?
+  `).get(subjectId, subject.headSha) !== undefined) {
+    supersedeWorkerTasks(database, subjectId, 'adversarial_review', observedAt, 'Another Agent took this Review.')
     return
   }
 
@@ -6765,7 +6778,19 @@ function installSchema(database: DatabaseSync): void {
         PRAGMA user_version = ${target};`)
     version = target
   }
-  if (version === 80)
+  if (version === 80) {
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS review_stops (
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        head_sha TEXT NOT NULL,
+        stopped_at TEXT NOT NULL,
+        PRIMARY KEY (subject_id, head_sha)
+      );
+      PRAGMA user_version = 81;
+    `)
+    version = 81
+  }
+  if (version === 81)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7315,6 +7340,57 @@ export function openJournalStore(
       tasks.forEach(task => cancelStoredTask(database, task.id, input.at, 'Harlan stopped Review and follow-up repair.'))
       database.exec('COMMIT')
       return true
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const stopReviewForHead: JournalStore['stopReviewForHead'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = database.prepare(`
+        SELECT subjects.id, json_extract(revisions.payload, '$.headSha') AS head_sha,
+          EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id) AS dismissed
+        FROM subjects
+        JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        WHERE repositories.github = ? AND repositories.enabled = 1
+          AND subjects.kind = 'pull_request' AND subjects.github_number = ?
+          AND json_extract(revisions.payload, '$.state') = 'open'
+      `).get(input.repository, input.pullRequestNumber) as { id: number, head_sha: string, dismissed: number } | undefined
+      if (row === undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'ItemNotFound' }
+      }
+      if (row.head_sha !== input.headSha) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'HeadChanged' }
+      }
+      if (row.dismissed === 1) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'Dismissed' }
+      }
+      if (database.prepare('SELECT 1 FROM review_stops WHERE subject_id = ? AND head_sha = ?').get(row.id, input.headSha) !== undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'AlreadyStopped' }
+      }
+      const tasks = database.prepare(`
+        SELECT worker_tasks.id, worker_tasks.state_tag FROM worker_tasks
+        JOIN revisions ON revisions.id = worker_tasks.revision_id
+        WHERE worker_tasks.subject_id = ? AND worker_tasks.kind = 'adversarial_review'
+          AND json_extract(revisions.payload, '$.headSha') = ?
+          AND worker_tasks.state_tag IN ('Queued', 'Running', 'ActionRequired', 'Failed')
+      `).all(row.id, input.headSha) as Array<{ id: string, state_tag: string }>
+      if (tasks.some(task => task.state_tag === 'Running')) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'ReviewRunning' }
+      }
+      database.prepare('INSERT INTO review_stops VALUES (?, ?, ?)').run(row.id, input.headSha, input.at)
+      tasks.forEach(task => cancelStoredTask(database, task.id, input.at, 'Another Agent took this Review.'))
+      database.exec('COMMIT')
+      return { _tag: 'Stopped' }
     }
     catch (error) {
       database.exec('ROLLBACK')
@@ -13050,6 +13126,15 @@ export function openJournalStore(
     `).all() as unknown as Array<{ repository: string, total: number }>)
       .map(row => [row.repository, row.total] as const))
     const currentSelectionMode = selectionMode(database)
+    const stoppedReviews = new Set((database.prepare(`
+      SELECT repositories.github AS repository, subjects.github_number, review_stops.head_sha
+      FROM review_stops
+      JOIN subjects ON subjects.id = review_stops.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE review_stops.head_sha = json_extract(revisions.payload, '$.headSha')
+    `).all() as unknown as Array<{ repository: string, github_number: number, head_sha: string }>).map(row =>
+      `${row.repository}:${row.github_number}:${row.head_sha}`))
     const reviewResolutionRows = database.prepare(`
       SELECT repositories.github AS repository, subjects.github_number, review_resolutions.revision_id,
         review_resolutions.resolution_tag, review_resolutions.review_run_id,
@@ -13214,6 +13299,7 @@ export function openJournalStore(
         desiredReviewOutcomes,
         issueApprovals,
         batchStore.batchReservationReasons(),
+        stoppedReviews,
       ),
       repositories,
       items,
@@ -15365,6 +15451,7 @@ export function openJournalStore(
     authorizeReviewStatus,
     cancelTask,
     cancelReviewForHead,
+    stopReviewForHead,
     getLatestPullRequestTriageRun,
     getLatestIssueTriageRun,
     hasIssueTriageEvidence,

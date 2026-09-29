@@ -88,9 +88,11 @@ harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/h
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control reload-external-watches --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control stop-review --repository OWNER/REPOSITORY --number NUMBER --head HEAD_SHA --config /absolute/path/to/harlan-github-agent.yml
 ```
 
 `routine-run` opens one Routine run for the current minute, ahead of its cron.
+`stop-review` records that another Agent took the exact head's Review. It stops queued Service Review work for that head. A new head can request Review again.
 
 `reload-external-watches` validates the configuration file and reads every new public issue watch before replacing the live watches. It also reloads `issue_cutoff` for those watches. An invalid file or GitHub failure keeps the current watches. Other configuration changes still need Restart.
 On the service host, pass `--url http://127.0.0.1:3210`. That host may not resolve its own public name.

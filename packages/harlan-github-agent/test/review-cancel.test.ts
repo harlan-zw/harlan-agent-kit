@@ -48,3 +48,39 @@ describe('durable Review cancellation', () => {
     rmSync(directory, { recursive: true, force: true })
   })
 })
+
+describe('stop Service Review for a subagent', () => {
+  it('stops a queued Service Review for one head and does not requeue it', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'review-handoff-'))
+    const path = join(directory, 'journal.sqlite')
+    const store = openJournalStore(path)
+    const mapping = repositoryMapping()
+    const subject = pullRequestItem({ headSha: 'a'.repeat(40), mergeState: 'clean' })
+    const at = '2026-08-13T01:00:00.000Z'
+    store.syncRepositories([mapping], at)
+    store.recordObservation({ externalId: 'open', observedAt: at, source: 'poll', subject })
+    expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: 'b'.repeat(40), at })).toEqual({ _tag: 'Rejected', reason: 'HeadChanged' })
+    expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'Stopped' })
+    expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'AlreadyStopped' })
+    store.recordObservation({ externalId: 'again', observedAt: '2026-08-13T01:01:00.000Z', source: 'poll', subject })
+    expect(store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:01:01.000Z', 60000)).toBeNull()
+    expect(store.getDashboardSnapshot('2026-08-13T01:01:02.000Z').queue.some(item => item.repository === mapping.github && item.number === 24)).toBe(false)
+    const next = { ...subject, headSha: 'c'.repeat(40), updatedAt: '2026-08-13T01:02:00.000Z' }
+    store.recordObservation({ externalId: 'next-head', observedAt: next.updatedAt, source: 'poll', subject: next })
+    expect(store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:02:01.000Z', 60000)?.kind).toBe('adversarial_review')
+    store.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('leaves a Running Service Review in charge', () => {
+    const store = openJournalStore(':memory:')
+    const mapping = repositoryMapping()
+    const subject = pullRequestItem({ headSha: 'a'.repeat(40), mergeState: 'clean' })
+    const at = '2026-08-13T01:00:00.000Z'
+    store.syncRepositories([mapping], at)
+    store.recordObservation({ externalId: 'open', observedAt: at, source: 'poll', subject })
+    expect(store.claimNextAdversarialReviewTask('reviewer', at, 60000)?.kind).toBe('adversarial_review')
+    expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'Rejected', reason: 'ReviewRunning' })
+    store.close()
+  })
+})

@@ -61,6 +61,7 @@ export interface ControlClient {
   reloadExternalWatches: () => Promise<Result<{ repositories: number, issues: number }, ControlApiError>>
   update: () => Promise<Result<RestartRequest, ControlApiError>>
   cancelTask: (taskId: string) => Promise<Result<TaskCancellation, ControlApiError>>
+  stopReview: (repository: string, pullRequestNumber: number, headSha: string) => Promise<Result<{ _tag: 'Stopped' | 'AlreadyStopped' }, ControlApiError>>
   /** Opens one run of a Routine for the current minute, ahead of its schedule. */
   runRoutine: (routineId: string) => Promise<Result<RoutineRun, ControlApiError>>
 }
@@ -153,6 +154,13 @@ function parseCancellation(value: unknown): Parsed<TaskCancellation> {
   if (input?._tag === 'Cancelled' || input?._tag === 'AlreadyCancelled')
     return ok({ _tag: input._tag })
   return err('The service returned an invalid Task cancellation.')
+}
+
+function parseStoppedReview(value: unknown): Parsed<{ _tag: 'Stopped' | 'AlreadyStopped' }> {
+  const input = record(value)
+  if (input?._tag === 'Stopped' || input?._tag === 'AlreadyStopped')
+    return ok({ _tag: input._tag })
+  return err('The service returned an invalid stopped Review result.')
 }
 
 function parseWorkflowEvents(value: unknown): Parsed<WorkflowEvent[]> {
@@ -288,6 +296,7 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     reloadExternalWatches: () => request({ method: 'POST', path: 'api/external-watches/reload', parse: parseExternalWatchReload }),
     update: () => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     cancelTask: taskId => request({ method: 'POST', path: 'api/tasks/cancel', body: { taskId }, parse: parseCancellation }),
+    stopReview: (repository, pullRequestNumber, headSha) => request({ method: 'POST', path: 'api/reviews/stop', body: { repository, pullRequestNumber, headSha }, parse: parseStoppedReview }),
     runRoutine: routineId => request({ method: 'POST', path: 'api/routines/run', body: { routineId }, parse: parseRoutineRun, acceptedStatuses: [202] }),
   })
 }

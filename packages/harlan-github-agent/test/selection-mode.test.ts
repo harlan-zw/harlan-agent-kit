@@ -200,6 +200,7 @@ describe('selection mode route', () => {
         approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        stopReviewForHead: () => ({ _tag: 'Stopped' }),
         listRoutines: () => [],
         openRoutineRun: () => null,
         getDashboardSnapshot: () => dashboardSnapshot(),

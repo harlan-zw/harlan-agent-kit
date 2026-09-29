@@ -63,6 +63,7 @@ type ControlCommandError
     | { _tag: 'InvalidTaskId', message: string }
     | { _tag: 'InvalidEventLimit', message: string }
     | { _tag: 'InvalidStream', message: string }
+    | { _tag: 'InvalidReviewTarget', message: string }
     | { _tag: 'InvalidBaseUrl', message: string }
 
 const workflowEventStreams = [
@@ -248,6 +249,24 @@ const controlCommand = defineCommand({
       run: ({ args }) => runControl(args, client => client.update()),
     }),
     'cancel': controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
+    'stop-review': defineCommand({
+      meta: { name: 'stop-review', description: 'Stop Service Review for one pull request head.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Pull request number.', required: true },
+        head: { type: 'string', description: 'Exact head commit SHA.', required: true },
+      },
+      async run({ args }) {
+        const number = Number(args.number)
+        if (!/^[^/]+\/[^/]+$/.test(args.repository) || !Number.isSafeInteger(number) || number < 1 || !/^[a-f\d]{40}$/.test(args.head)) {
+          writeJson({ _tag: 'InvalidReviewTarget', message: 'Set a valid repository, pull request number, and head commit.' } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, client => client.stopReview(args.repository, number, args.head))
+      },
+    }),
     'routine-run': defineCommand({
       meta: { name: 'routine-run', description: 'Open one Routine run now, ahead of its schedule.' },
       args: {

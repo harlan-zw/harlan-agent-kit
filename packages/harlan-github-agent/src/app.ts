@@ -27,7 +27,7 @@ export interface AgentAppOptions {
   /** The bounds of the Agent slot control. Absent means the control is unavailable. */
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity
-  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -247,6 +247,18 @@ function reviewRerunRequest(value: unknown): ReviewRerunRequest | undefined {
   if (typeof body.revisionId !== 'string' || !/^[a-f\d]{64}$/.test(body.revisionId))
     return undefined
   return body as unknown as ReviewRerunRequest
+}
+
+function stopReviewRequest(value: unknown): { repository: string, pullRequestNumber: number, headSha: string } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return undefined
+  const body = value as Record<string, unknown>
+  if (typeof body.repository !== 'string' || !/^[^/]+\/[^/]+$/.test(body.repository)
+    || !Number.isSafeInteger(body.pullRequestNumber) || (body.pullRequestNumber as number) < 1
+    || typeof body.headSha !== 'string' || !/^[a-f\d]{40}$/.test(body.headSha)) {
+    return undefined
+  }
+  return body as { repository: string, pullRequestNumber: number, headSha: string }
 }
 
 function statsRangeMessage(error: StatsRangeError): string {
@@ -696,6 +708,22 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (result.reason._tag === 'TaskNotFound')
       throw createError({ status: 404, statusText: 'Not Found', message: 'The task was not found.' })
     throw createError({ status: 409, statusText: 'Conflict', message: 'The task already finished.' })
+  })
+
+  app.post('/api/reviews/stop', async (event) => {
+    const body = stopReviewRequest(await event.req.json().catch(() => undefined))
+    if (body === undefined)
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Set a valid repository, pull request number, and head commit.' })
+    const result = options.store.stopReviewForHead({ ...body, at: options.now().toISOString() })
+    if (result._tag !== 'Rejected')
+      return result
+    if (result.reason === 'ItemNotFound')
+      throw createError({ status: 404, statusText: 'Not Found', message: 'The open pull request is not tracked.' })
+    if (result.reason === 'HeadChanged')
+      throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request head commit changed.' })
+    if (result.reason === 'Dismissed')
+      throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request is dismissed.' })
+    throw createError({ status: 409, statusText: 'Conflict', message: 'The Service Review is running.' })
   })
 
   app.post('/api/reviews/rerun', async (event) => {
