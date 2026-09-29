@@ -36,6 +36,7 @@ function reviewSnapshot(pullRequest: GitHubPullRequestItem, comments: string[] =
     comments,
     priorAutomatedReview: { _tag: 'None' as const },
     pullRequest,
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' as const },
     reviews: [],
   }

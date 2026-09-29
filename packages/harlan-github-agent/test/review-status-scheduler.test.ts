@@ -89,6 +89,7 @@ function snapshot(pullRequest: ReturnType<typeof pullRequestItem>) {
     comments: [],
     priorAutomatedReview: { _tag: 'None' as const },
     pullRequest,
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' as const },
     reviews: [],
   }

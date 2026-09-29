@@ -48,6 +48,7 @@ async function reviewWith(files: PullRequestFile[], profile: AgentProfile = CODE
         comments: [],
         priorAutomatedReview: { _tag: 'None' },
         pullRequest,
+        findingDiscussions: [],
         requiredChecks: { _tag: 'None' },
         reviews: [],
       })),

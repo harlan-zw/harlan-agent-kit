@@ -89,6 +89,7 @@ function snapshot(
     body: '',
     checks: { _tag: 'Available' as const, checks: headChecks },
     comments: [],
+    findingDiscussions: [],
     priorAutomatedReview: { _tag: 'None' as const },
     pullRequest: pullRequestItem({ headSha: 'abc123', mergeState: 'clean' }),
     requiredChecks,

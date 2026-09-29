@@ -5,7 +5,7 @@ import type { PullRequestFile } from './merge-risk.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunPublisher, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
-import type { ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
+import type { FindingDiscussion, ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
 import { approvalLabels } from './approval-labels.ts'
@@ -19,7 +19,7 @@ import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
-import { reviewFindingThreadFingerprint } from './review-finding-threads.ts'
+import { findingDiscussions, inlineReviewComment, reviewFindingThreadFingerprint } from './review-finding-threads.ts'
 
 /**
  * What the job steps say about a check run GitHub reports as failed.
@@ -164,6 +164,8 @@ export interface PullRequestReviewSnapshot {
   checks: GitHubChecksSnapshot
   comments: string[]
   priorAutomatedReview: PriorAutomatedReview
+  /** Replies people left on this service's finding threads. They stay out of `comments`. */
+  findingDiscussions: FindingDiscussion[]
   pullRequest: GitHubPullRequestItem
   requiredChecks: RequiredChecks
   reviews: string[]
@@ -962,6 +964,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           checksFor(pull.data.head.sha),
           currentBaseChecks(liveBaseSha, checksFor, baseCommits),
         ])
+        const discussions = findingDiscussions(reviewComments.map(inlineReviewComment), options.actorLogin(repository))
+        const discussed = new Set(discussions.flatMap(discussion => discussion.replies.map(reply => reply.commentId)))
         return ok({
           baseChecks,
           body: pull.data.body ?? '',
@@ -972,6 +976,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
               ? []
               : [{ body: comment.body, createdAt: comment.created_at }]),
             ...reviewComments.flatMap(comment => comment.body === undefined
+              || discussed.has(comment.id)
               || (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body.includes(AUTOMATED_REVIEW_MARKER))
               ? []
               : [{ body: comment.body, createdAt: comment.created_at }]),
@@ -985,6 +990,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                   body: comment.body,
                   url: comment.html_url,
                 }]), pull.data.head.sha, options.actorLogin(repository), liveBaseSha),
+          findingDiscussions: discussions,
           pullRequest: pullRequestItem(repository, pull.data, liveBaseSha, options.actorLogin(repository)),
           requiredChecks: { _tag: 'None' as const },
           // An inline comment opens a review with an empty body, which says nothing.

@@ -147,6 +147,7 @@ describe('review work follows the head commit', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest: pullRequestItem({ baseRef, baseSha: 'base-after-claim', mergeState: 'clean' }),
+          findingDiscussions: [],
           requiredChecks: { _tag: 'None' },
           reviews: [],
         })),
@@ -189,7 +190,7 @@ describe('review work follows the head commit', () => {
             store.setRepositoryWritesEnabled(input.repository, false)
           if (change === 'review disabled')
             store.syncRepositories([repositoryMapping({ pullRequestReview: false })], '2026-08-13T02:02:01.000Z')
-          return Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] }))
+          return Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), findingDiscussions: [], requiredChecks: { _tag: 'None' }, reviews: [] }))
         },
         upsertReviewStatus: () => {
           writes.push('comment')
@@ -222,7 +223,7 @@ describe('review work follows the head commit', () => {
         getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
         getPullRequestReviewSnapshot: () => {
           store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })], '2026-08-13T02:02:01.000Z')
-          return Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] }))
+          return Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), findingDiscussions: [], requiredChecks: { _tag: 'None' }, reviews: [] }))
         },
         upsertReviewStatus: () => {
           writes.push('comment')
@@ -261,7 +262,7 @@ describe('review work follows the head commit', () => {
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
-        getPullRequestReviewSnapshot: () => Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), findingDiscussions: [], requiredChecks: { _tag: 'None' }, reviews: [] })),
         upsertReviewStatus: () => {
           writes.push('comment')
           return Promise.resolve(ok({ commentId: 43, url: 'url' }))
@@ -296,7 +297,7 @@ describe('review work follows the head commit', () => {
       github: {
         readExistingReviewLabel: () => { throw new Error('Unexpected existing review.') },
         getPullRequestStatusIdentity: () => { throw new Error('Unexpected progress identity read.') },
-        getPullRequestReviewSnapshot: () => Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), requiredChecks: { _tag: 'None' }, reviews: [] })),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({ baseChecks: { _tag: 'Available', checks: [] }, body: '', checks: { _tag: 'Available', checks: [] }, comments: [], priorAutomatedReview: { _tag: 'None' }, pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }), findingDiscussions: [], requiredChecks: { _tag: 'None' }, reviews: [] })),
         upsertReviewStatus: () => {
           writes.push('comment')
           return Promise.resolve(ok({ commentId: 43, url: 'url' }))

@@ -53,6 +53,7 @@ describe('review rerun controller', () => {
         listReviewRerunRequests: () => Promise.resolve(ok([{
           author: 'harlan-zw',
           commentId: 42,
+          origin: 'Command' as const,
           pullRequestNumber: 24,
           updatedAt: '2026-08-13T01:01:00.000Z',
         }])),
