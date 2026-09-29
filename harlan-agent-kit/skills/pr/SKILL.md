@@ -226,7 +226,19 @@ For stacked work, add `--base PARENT_BRANCH` to `gh pr create`, then link the ch
 
 When Step 3 rendered a diagram, add `--attach .pr-lens/<view>-dark-<hash>.svg` for each image the body references. GitHub CLI rewrites the Markdown path to the uploaded asset.
 
-Output the PR URL when done. Log to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
+Record the pull request URL. Continue to Step 6 after creation or update.
+Log the URL to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
+
+For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, add `harlan-agent-review`.
+This requests Review in Manual Selection mode and prevents prose classification from skipping it in Auto mode.
+If the label is absent, create it with `gh label create harlan-agent-review --color 8250df --description "Requests automated Review and repair"`.
+Then add it to the pull request:
+
+```bash
+HARLAN_AGENT_PR_SKILL=1 gh pr edit NUMBER --add-label harlan-agent-review
+```
+
+Do not add the label to an outside contributor's pull request. Never treat the label as a Review outcome.
 
 ### Let the agent merge it
 
@@ -307,35 +319,90 @@ GitHub CLI replaces each local Markdown path with its uploaded URL. If every upl
 
 Only attach media for a visible change: a page, a component, a CLI frame, or a rendered email. Never attach a screenshot of passing tests or a green terminal.
 
-## Step 6: Monitor CI & Review Comments
+## Step 6: Wait for CI and Review
 
-After creating or updating a PR, enter a **fix loop** -- keep watching until CI is green and all review comments are addressed.
+Keep ownership after submitting or updating the pull request. Complete this step for the **current head SHA**.
+Green CI alone does not finish an Agent-submitted pull request tracked by `harlan-github-agent`.
+If the Service controller publishes the pull request from an implementation Agent's result, that Agent returns first.
+The controller owns Review, Repair, and this wait; waiting inside its implementation Task would stop Review from starting.
 
-### Loop
-
-1. **Wait for CI** -- poll checks until they resolve:
-   ```bash
-   gh pr checks NUMBER --watch --fail-fast --interval 30
-   ```
-
-2. **Fetch review comments** -- check for CodeRabbit, CodeQL, or any reviewer feedback:
+1. Read the current head SHA with `gh pr view NUMBER --json headRefOid --jq .headRefOid`.
+2. Wait for GitHub Actions check runs. Use `gh run list --commit HEAD_SHA` to find this head's runs.
+   Use `gh run watch RUN_ID` for each pending run, then confirm every applicable run passed.
+   Do not use `gh pr checks --watch` while Review is queued; the service's own check run can keep it waiting.
+   A Markdown-only pull request may have no check runs. Confirm that its workflows exclude the changed paths.
+3. Read the trusted `harlan-github-agent` marked comment and matching Review outcome label.
+   Read issue comments with `gh api repos/OWNER/REPO/issues/NUMBER/comments --paginate`.
+   Match `<!-- harlan-agent-kit:pr-triage -->` and `<!-- reviewed-sha: HEAD_SHA -->`.
+   Trust only the GitHub App or a repository owner, member, or collaborator, as the [review contract](../adversarial-review/references/review-contract.md) requires.
+   `REVIEWING` and `harlan-agent-review-required` mean Review has not finished.
+   `harlan-agent-review-skipped` does not satisfy an Agent-submitted pull request. Confirm the Review request was recorded and wait for Review.
+   The service may consume the request label before it posts the outcome.
+   If Review is `QUEUED`, or no current-head Task appears, check capacity and elapsed time before waiting again.
+4. Read every finding in the terminal comment, plus other review and inline comments:
    ```bash
    gh pr view NUMBER --json reviews,comments --jq '.reviews[].body, .comments[].body'
-   gh api repos/OWNER/REPO/pulls/NUMBER/comments --jq '.[].body'
+   gh api repos/OWNER/REPO/pulls/NUMBER/comments --paginate --jq '.[].body'
    ```
+5. Act on each material finding. If the service has a Repair Task running, let it finish before editing the same head.
+   Otherwise reproduce the finding, fix it in this task's worktree, run focused checks, commit, and push.
+   If a finding is false positive or not applicable, post one self-identified Agent comment naming the finding, its classification, and concrete evidence.
+   Do not change the marked comment or Review outcome label yourself. A `BLOCKED` outcome remains blocked until the service publishes a new outcome.
+6. After any new push, restart at step 1. Never reuse CI or Review evidence from the old head SHA.
+   Report success only when current-head CI passes or is correctly absent, the current-head Review is `READY`, and other material comments are handled.
+   If a finding remains `BLOCKED` after an evidence-backed false positive or not applicable comment, report that outcome and the comment link.
 
-3. **Evaluate**:
-   - **CI green + no unresolved comments** -> done, report success, exit loop
-   - **CI failed** -> read the failing check logs (`gh run view RUN_ID --log-failed`), fix the code, commit, push, go to 1
-   - **Review comments exist** (CodeRabbit suggestions, CodeQL security alerts, human reviews) -> address each comment, commit fixes, push, go to 1
+### Review queue capacity
 
-### Guidelines
+Use the [service control command](../harlan-github-agent/SKILL.md#run-and-inspect) to read `harlan-github-agent control status`.
+Match this repository, pull request number, and current head SHA in `state.queue`.
+Count `state.tasks` whose state is `Queued` and kind is `adversarial_review` or `review_fix`.
+Calculate free host slots from `state.hostCapacity`: local maximum minus active, plus desktop maximum minus active when connected.
 
-- Fix issues in **new commits** (don't amend) so reviewers can see incremental fixes.
-- If Step 0 selected a worktree, keep every fix and check there.
-- After each push, restart from step 1 of the loop.
-- **Never post a reply to a review comment yourself.** Fixing the code and pushing is your move; talking to a reviewer is not. If a comment is a question or non-actionable, draft the reply, show it to the user, and let them post it. Continue the loop while you wait; do not block on it.
-- If stuck after 3 failed attempts on the same issue, stop the loop and ask the user for guidance.
+```bash
+harlan-github-agent control status --config "$agent_config" |
+  jq --arg repo OWNER/REPO --argjson number NUMBER --arg head HEAD_SHA '
+    .state as $state |
+    {agentStart: $state.agentStart,
+     hostCapacity: $state.hostCapacity,
+     queuedWork: [$state.tasks[] | select(.state._tag == "Queued") |
+       select(.kind == "adversarial_review" or .kind == "review_fix")],
+     target: [$state.queue[] | select(.kind == "pull_request" and
+       .repository == $repo and .number == $number and .headSha == $head)][0]}'
+```
+
+Start a subagent review when this head's Review is queued and either condition holds:
+
+- At least two Review or Repair Tasks are queued, and their count exceeds free host slots.
+- `state.agentStart` is `ReserveReached` or `CapacityUnavailable`.
+
+Also start one if this head remains queued for 20 minutes, including when the control command is unavailable.
+Use the queued Task's `updatedAt` and the current time.
+If no Task appears, start one 20 minutes after this head commit's time.
+Record the capacity snapshot or elapsed time that triggered the decision.
+Do not infer saturation from `maxOpenPullRequests`; that limit controls new Issue work.
+
+Spawn one native subagent for this exact head SHA.
+Give it the pull request snapshot and disproof checks in the [review contract](../adversarial-review/references/review-contract.md#adversarial-review).
+It reads the full diff, surrounding code, author images, and current checks.
+Keep it read only. It returns material findings with path, line, proof, and next action.
+It does not post comments, set labels, approve, or merge.
+Do not cancel the service Review. If its Review starts while the subagent runs, let both finish and compare their findings.
+Refetch the head before acting on findings. Discard the subagent assessment if the head moved.
+
+Apply confirmed blockers in new commits, then restart Step 6 for the new head.
+Mark false positives or inapplicable findings in one self-identified Agent comment with evidence.
+If no confirmed blocker remains, post a self-identified Agent assessment with the head SHA and capacity reason.
+Start that comment with `🤖 Harlan Agent Kit Agent assessment of head SHA.`
+After CI passes, the submitting Agent may hand the pull request back to the service instead of holding its turn in the Queue.
+Report the subagent's result and the outstanding service Review. Never call the subagent assessment `READY` or change the service's marked status.
+
+Fix CI failures from the failing check logs (`gh run view RUN_ID --log-failed`).
+Use new commits, never amend published commits. After three failed repairs for one cause, ask the user for guidance.
+If the service cannot publish Review, report the exact blocker and keep the pull request open.
+For a repository the service does not track, use CI and the available reviewers; state that automated Review was unavailable.
+
+Do not post replies to other reviewers without approval. Draft a reply for a question or non-actionable comment and show it to the user.
 
 ## Step 7: Cleanup (after merge or user says "finish")
 
