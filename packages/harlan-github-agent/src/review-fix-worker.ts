@@ -9,7 +9,7 @@ import type { JournalStore } from './store.ts'
 import type { ClaimedReviewFixTask, MutationWorkerOutcome, RepositoryMapping, ReviewFinding } from './types.ts'
 import type { ReviewFixWorktreeManager } from './worktree.ts'
 import { createHash } from 'node:crypto'
-import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
+import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, GITHUB_MEDIA_LINES, instructionFilesLine, listInstructionFiles, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
@@ -128,8 +128,7 @@ ${merged ? 'The original pull request merged. This worktree starts at the curren
 ${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
 For a visual finding, read the pull request image and reproduce the defect at the shown viewport.
-Download images only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths).
-If a private-user-images URL returns 404 or 401, refetch it with an Authorization header carrying the repository-scoped token from the authenticated GitHub CLI.
+${GITHUB_MEDIA_LINES}
 Record any other image host in the summary without downloading it.
 Store verification media outside the worktree. Capture and inspect the repaired view before returning repaired.
 Do not mark a UI repair complete while a visible defect remains.

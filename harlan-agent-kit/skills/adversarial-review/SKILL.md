@@ -69,7 +69,7 @@ Set it to `REVIEWING · Pull request loaded`. Edit this comment after each phase
 
 Fetch the PR, base and head SHAs, complete base-to-head diff, checks, reviews, issue comments, inline comments, and every review thread.
 
-Extract every image embedded in the PR description. Retrieve each image only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths). If a `private-user-images` URL returns 404 or 401, refetch it with an `Authorization` header carrying the repository-scoped token from the authenticated GitHub CLI. Sending that header to a GitHub-hosted media URL is not an external credential transfer. Record any other image host as a material documentation finding without retrieving it. Never send repository credentials to an external host.
+Extract every image embedded in the PR description and in comments by the PR author. The `pr` skill puts verification evidence in a comment, so a description-only scan misses it. Retrieve each image only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths). Fetch every one with the authenticated GitHub CLI token: `curl -fsSL -H "Authorization: token $(gh auth token)" URL`. A private repository answers 404 to `github.com/user-attachments` without it. curl drops the header on the cross-host redirect. Sending that header to a GitHub-hosted media URL is not an external credential transfer. Record any other image host as a material documentation finding without retrieving it. Never send repository credentials to an external host.
 
 Record the initial head SHA. Never review only the latest commit.
 
@@ -99,7 +99,7 @@ Apply every adversarial check in the review contract to the complete diff and su
 
 Trace changed inputs through public boundaries, failures, cleanup, concurrency, persistence, and tests.
 
-Visually inspect every PR-description image. Use the pixels as evidence. Alt text and surrounding prose do not replace inspection.
+Visually inspect every PR-description and PR-author-comment image. Use the pixels as evidence. Alt text and surrounding prose do not replace inspection.
 
 Treat visible UI defects as material. Check clipping, overlap, overflow, alignment, contrast, missing content, and broken responsive layouts.
 
