@@ -10,6 +10,7 @@ import type { AgentSlotLimits } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunReport } from './review-check-run.ts'
+import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
 import type { JournalStore } from './store.ts'
@@ -206,6 +207,28 @@ export function createReviewCheckRunReport(
 }
 
 const REVIEW_CHECK_RUN_OPERATION = 'review_check_run'
+
+/**
+ * Files every inline finding sync against its repository.
+ *
+ * A failure warns, and the next terminal publication on the pull request
+ * syncs again. A sync that lands clears it.
+ */
+export function createReviewFindingThreadsReport(
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
+  now: () => Date,
+): ReviewFindingThreadMirror['report'] {
+  return (repository, outcome) => {
+    const at = now().toISOString()
+    const scope: IncidentScope = { _tag: 'Repository', repository }
+    if (outcome._tag === 'Written')
+      store.resolveIncidents(scope, at, REVIEW_FINDING_THREADS_OPERATION)
+    else
+      recordServiceIncident(store, at, REVIEW_FINDING_THREADS_OPERATION, outcome.message, scope)
+  }
+}
+
+const REVIEW_FINDING_THREADS_OPERATION = 'review_finding_threads'
 
 /**
  * Records one poll pass's failures, unless the pass was aborted.
@@ -577,6 +600,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
       })
   const reportCheckRun = createReviewCheckRunReport(store, now)
+  const findingThreads: ReviewFindingThreadMirror = {
+    source: workerGithub,
+    findings: (repository, pullRequestNumber, reviewRunId) =>
+      store.listReviewRuns(repository, pullRequestNumber).find(run => run.id === reviewRunId)?.findings ?? null,
+    report: createReviewFindingThreadsReport(store, now),
+  }
   const pullRequestTriage = createPullRequestTriageController({
     classification,
     github: workerGithub,
@@ -709,6 +738,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     })
     const reviewStatus = createReviewStatusController({
       checkRuns: { publisher: workerGithub, report: reportCheckRun },
+      findingThreads,
       commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
       github: workerGithub,
       leaseMilliseconds: 2 * 60_000,
@@ -886,6 +916,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
       reviewStatuses: createReviewStatusScheduler({
         checkRuns: { publisher: workerGithub, report: reportCheckRun },
+        findingThreads,
         github: workerGithub,
         intervalMilliseconds: 2_000,
         leaseMilliseconds: 2 * 60_000,

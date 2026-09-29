@@ -5,6 +5,7 @@ import type { PullRequestFile } from './merge-risk.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunPublisher, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
+import type { ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
 import { approvalLabels } from './approval-labels.ts'
@@ -18,6 +19,7 @@ import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
+import { reviewFindingThreadFingerprint } from './review-finding-threads.ts'
 
 /**
  * What the job steps say about a check run GitHub reports as failed.
@@ -428,6 +430,35 @@ function labelNames(labels: Array<string | { name?: string }>): string[] {
   return labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])
 }
 
+/** One login as GraphQL spells it: an App's slug without the REST `[bot]` suffix. */
+function botLogin(login: string): string {
+  return login.toLowerCase().replace(/\[bot\]$/, '')
+}
+
+const reviewThreadsQuery = `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id isResolved comments(first: 1) { nodes { body author { login } } } }
+      }
+    }
+  }
+}`
+
+const resolveReviewThreadMutation = `mutation($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) { thread { id } }
+}`
+
+interface ReviewThreadsPage {
+  pageInfo: { hasNextPage: boolean, endCursor: string | null }
+  nodes: Array<{ id: string, isResolved: boolean, comments: { nodes: Array<{ body: string, author: { login: string } | null } | null> | null } } | null> | null
+}
+
+interface ReviewThreadsResponse {
+  repository: { pullRequest: { reviewThreads: ReviewThreadsPage } | null } | null
+}
+
 function errorStatus(error: unknown): number | undefined {
   return typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
     ? error.status
@@ -479,7 +510,7 @@ function pullRequestItem(
   }
 }
 
-export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & ExistingReviewLabelSource & ReviewStatusIdentitySource {
+export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewStatusIdentitySource {
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
   // charges no primary quota for a 304. Only `read` access uses the cache.
@@ -956,7 +987,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
                 }]), pull.data.head.sha, options.actorLogin(repository), liveBaseSha),
           pullRequest: pullRequestItem(repository, pull.data, liveBaseSha, options.actorLogin(repository)),
           requiredChecks: { _tag: 'None' as const },
-          reviews: chronologicalPullRequestComments(reviews.flatMap(review => review.body === undefined || review.body === null
+          // An inline comment opens a review with an empty body, which says nothing.
+          reviews: chronologicalPullRequestComments(reviews.flatMap(review => review.body === undefined || review.body === null || review.body.trim() === ''
             ? []
             : [{ body: review.body, createdAt: review.submitted_at ?? '' }])),
         })
@@ -1088,6 +1120,77 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         }
         return ok({ commentId: confirmed.data.id, url: confirmed.data.html_url })
       }).catch((error: unknown) => err(message(error)))
+    },
+
+    async listReviewFindingThreads(repository, pullRequestNumber, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      // GraphQL names an App by its slug, while REST adds `[bot]`.
+      const actor = botLogin(options.actorLogin(repository))
+      const threads: ReviewFindingThread[] = []
+      let after: string | null = null
+      do {
+        const page: Result<ReviewThreadsPage, string> = await octokit.value.graphql<ReviewThreadsResponse>(reviewThreadsQuery, { owner, repo, number: pullRequestNumber, after, request: { signal } })
+          .then(response => response.repository?.pullRequest?.reviewThreads
+            ? ok(response.repository.pullRequest.reviewThreads)
+            : err(`GitHub returned no review threads for pull request #${pullRequestNumber}.`))
+          .catch((error: unknown): Result<ReviewThreadsPage, string> => err(message(error)))
+        if (page._tag === 'Err')
+          return page
+        for (const node of page.value.nodes ?? []) {
+          const first = node?.comments.nodes?.[0]
+          if (node === null || node === undefined || first === null || first === undefined || first.author === null || botLogin(first.author.login) !== actor)
+            continue
+          const fingerprint = reviewFindingThreadFingerprint(first.body)
+          if (fingerprint !== null)
+            threads.push({ threadId: node.id, fingerprint, resolved: node.isResolved })
+        }
+        after = page.value.pageInfo.hasNextPage ? page.value.pageInfo.endCursor : null
+      } while (after !== null)
+      return ok(threads)
+    },
+
+    async postReviewFindingComment(repository, pullRequestNumber, comment, signal, authorize) {
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, body: comment.body, request: { signal } }
+      // GitHub refuses a line outside the diff with 422, and a file outside
+      // the diff the same way. A line it refuses falls back to the file.
+      const post = (line: number | null): Promise<Result<'Posted' | 'Refused', string>> => {
+        const authorized = authorize()
+        if (authorized._tag === 'Err')
+          return Promise.resolve(authorized)
+        return octokit.value.rest.pulls.createReviewComment(line === null
+          ? { ...request, subject_type: 'file' }
+          : { ...request, line, side: 'RIGHT' })
+          .then((): Result<'Posted' | 'Refused', string> => ok('Posted'))
+          .catch((error: unknown): Result<'Posted' | 'Refused', string> => errorStatus(error) === 422 ? ok('Refused') : err(message(error)))
+      }
+      const onLine = await post(comment.line)
+      if (onLine._tag === 'Err' || onLine.value === 'Posted')
+        return onLine._tag === 'Err' ? onLine : ok({ _tag: 'Posted' as const })
+      if (comment.line === null)
+        return ok({ _tag: 'OutsideDiff' as const })
+      const onFile = await post(null)
+      if (onFile._tag === 'Err')
+        return onFile
+      return ok(onFile.value === 'Posted' ? { _tag: 'Posted' as const } : { _tag: 'OutsideDiff' as const })
+    },
+
+    async resolveReviewFindingThread(repository, threadId, signal, authorize) {
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const authorized = authorize()
+      if (authorized._tag === 'Err')
+        return authorized
+      return octokit.value.graphql(resolveReviewThreadMutation, { threadId, request: { signal } })
+        .then((): Result<void, string> => ok(undefined))
+        .catch((error: unknown): Result<void, string> => err(message(error)))
     },
 
     async upsertReviewCheckRun(repository, headSha, update, signal, authorize) {
