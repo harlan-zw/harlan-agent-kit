@@ -88,7 +88,7 @@ If a new repository joins, clone it as `harlan` into the matching directory, the
 2. If the Agent needs it under a different name, link it as harlan: `ssh hogwild 'ln -sf "$(command -v fdfind)" ~/.local/bin/fd'`.
 3. Record it in the tools table in `hogwild-gh-runner/hogwild/README.md`.
 
-Tools in `hogwild:~/.local/bin` today: `node`, `pnpm`, `bun`, `uv`, `gh`, `wt`, `rg`, `fd`, `ripast`, `opencode`, `codex`, `wrangler`, `sentry-cli`, `nuxtseo`, `himalaya`, `dev-browser`. No `claude`; the Agent uses `opencode`.
+Tools in `hogwild:~/.local/bin` today: `node`, `pnpm`, `bun`, `uv`, `gh`, `wt`, `rg`, `fd`, `ripast`, `opencode`, `codex`, `wrangler`, `cf`, `sentry-cli`, `nuxtseo`, `himalaya`, `dev-browser`. No `claude`; the Agent uses `opencode`.
 
 ## Control the Agent
 
