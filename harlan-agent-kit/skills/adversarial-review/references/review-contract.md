@@ -7,7 +7,7 @@ Review the entire base-to-head diff and its surrounding code. Disprove correctne
 Check:
 
 - Behavior against the linked issue and PR description.
-- Every image in the PR description, with visual inspection for UI defects.
+- Every image in the PR description and in comments by the PR author, with visual inspection for UI defects.
 - Boundary inputs, malformed data, empty states, and unexpected ordering.
 - Error propagation, silent catches, partial writes, retries, and cleanup.
 - Security boundaries, secrets, injection, authorization, and unsafe parsing.
