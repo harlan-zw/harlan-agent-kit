@@ -231,6 +231,8 @@ Log the URL to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
 For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, add `harlan-agent-review`.
 This requests Review in Manual Selection mode and prevents prose classification from skipping it in Auto mode.
+First confirm the matching Service Item is not dismissed. A Dismissal survives new head commits.
+If it is dismissed, leave the request label unset and report the Dismissal to Harlan.
 If the label is absent, create it with `gh label create harlan-agent-review --color 8250df --description "Requests automated Review and repair"`.
 Then add it to the pull request:
 
@@ -347,13 +349,17 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    gh pr view NUMBER --json reviews,comments --jq '.reviews[].body, .comments[].body'
    gh api repos/OWNER/REPO/pulls/NUMBER/comments --paginate --jq '.[].body'
    ```
-5. Act on each material finding. If the service owns a current-head Repair Task, let it finish before editing.
+5. Read each material finding's resolution from the structured Review record.
+   If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
+   Do not repair or request another Review for a Dismissal finding.
+   Act on findings with resolution `Repair`. If the service owns a current-head Repair Task, let it finish before editing.
    This includes `Queued`, `Running`, and `Publishing` Tasks. If its Queue is saturated, hand off to that durable Task.
    Otherwise reproduce the finding, fix it in this task's worktree, run focused checks, commit, and push.
    If a finding is false positive or not applicable, post one self-identified Agent comment naming the finding, its classification, and concrete evidence.
    That comment cannot change the service outcome. Ask Harlan to decide whether to dismiss or rerun the Review.
    Do not change the marked comment or Review outcome label yourself. A `BLOCKED` outcome remains blocked until the service publishes a new outcome.
-6. After a push by the submitting Agent, add `harlan-agent-review` for the new head and record a new Review request time.
+6. After a push by the submitting Agent, check the Service Item for Dismissal again.
+   If dismissed, report it and stop. Otherwise add `harlan-agent-review` for the new head and record a new Review request time.
    The Service consumes that label per head in Manual Selection mode. Then restart at step 1.
    A Service Repair commit keeps its own Approval; do not add the label for that commit.
    Never reuse CI or Review evidence from the old head SHA.
@@ -367,6 +373,8 @@ Run it on the Service host. On Hogwild, use the config path and loopback URL bel
 If that host lacks the control CLI, read its authenticated `/api/state` endpoint instead.
 The endpoint returns the same `state` object. Do not treat a failed command as an empty Queue.
 Match this repository, pull request number, and current head SHA in `state.queue` when present.
+Check the matching `state.items` entry's `dismissed` field first. A dismissed Item stops all Review work, even after a new head.
+If its Dismissal state cannot be confirmed, report the missing Service state. Do not start a fallback review.
 If that entry is missing, use a queued Review Task for this pull request as the capacity signal.
 Refetch the GitHub head before spawning; the Task alone does not identify its head SHA.
 Count `state.tasks` whose state is `Queued` and kind is `adversarial_review` or `review_fix`.
@@ -379,6 +387,9 @@ harlan-github-agent control status \
   jq --arg repo OWNER/REPO --argjson number NUMBER --arg head HEAD_SHA '
     (.state // .) as $state |
     {agentStart: $state.agentStart._tag,
+     item: ([$state.items[] | select(.kind == "pull_request" and
+       .repository == $repo and .number == $number)][0] |
+       if . then {dismissed, headSha} else null end),
      hostCapacity: $state.hostCapacity,
      queuedWork: [$state.tasks[] | select(.state._tag == "Queued") |
        select(.kind == "adversarial_review" or .kind == "review_fix")],
@@ -395,10 +406,11 @@ Start a subagent review when Review is queued for this pull request and either c
 - `state.agentStart._tag` is `ReserveReached` or `CapacityUnavailable`.
 
 Also start one 20 minutes after the recorded Review request if Review remains queued or no Task appears.
-This applies when the control command is unavailable and no trusted `REVIEWING` comment exists.
+This also applies when the control CLI is unavailable, the authenticated API works, and no trusted `REVIEWING` comment exists.
 Never start a subagent while the Service Review Task is `Running` or `Publishing`.
 If an active Review stalls, report its Service Incident or exact Task state.
-Require an open pull request and a recorded request. Exclude an intentional pause, stop, cancellation, or missing Approval.
+Require an open pull request, a recorded request, and a matching Service Item with `dismissed: false`.
+Exclude an intentional pause, stop, cancellation, or missing Approval.
 Record the capacity snapshot or elapsed time that triggered the decision.
 Do not infer saturation from `maxOpenPullRequests`; that limit controls new Issue work.
 
