@@ -353,7 +353,10 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    If a finding is false positive or not applicable, post one self-identified Agent comment naming the finding, its classification, and concrete evidence.
    That comment cannot change the service outcome. Ask Harlan to decide whether to dismiss or rerun the Review.
    Do not change the marked comment or Review outcome label yourself. A `BLOCKED` outcome remains blocked until the service publishes a new outcome.
-6. After any new push, restart at step 1. Never reuse CI or Review evidence from the old head SHA.
+6. After a push by the submitting Agent, add `harlan-agent-review` for the new head and record a new Review request time.
+   The Service consumes that label per head in Manual Selection mode. Then restart at step 1.
+   A Service Repair commit keeps its own Approval; do not add the label for that commit.
+   Never reuse CI or Review evidence from the old head SHA.
    Report success only when current-head CI passes or is correctly absent, the current-head Review is `READY`, and other material comments are handled.
    If a finding remains `BLOCKED` after an evidence-backed false positive or not applicable comment, report that outcome and the comment link.
 
@@ -386,8 +389,10 @@ Start a subagent review when Review is queued for this pull request and either c
 - At least two Review or Repair Tasks are queued, and their count exceeds free host slots.
 - `state.agentStart` is `ReserveReached` or `CapacityUnavailable`.
 
-Also start one 20 minutes after the recorded Review request if no terminal Review exists for this head.
-This applies when no Task appears or the control command is unavailable.
+Also start one 20 minutes after the recorded Review request if Review remains queued or no Task appears.
+This applies when the control command is unavailable and no trusted `REVIEWING` comment exists.
+Never start a subagent while the Service Review Task is `Running` or `Publishing`.
+If an active Review stalls, report its Service Incident or exact Task state.
 Require an open pull request and a recorded request. Exclude an intentional pause, stop, cancellation, or missing Approval.
 Record the capacity snapshot or elapsed time that triggered the decision.
 Do not infer saturation from `maxOpenPullRequests`; that limit controls new Issue work.
