@@ -87,6 +87,32 @@ if HARLAN_REPOSITORY_ENV_HOME="$source_home" \
   exit 1
 fi
 
+printf '%s\n' 'SECRET=source' 'export TOKEN=desktop' 'OTHER=kept' > "$source_repository/.env"
+overrides="$test_root/hogwild-env-overrides"
+printf '%s\n' '# Hogwild gets the read-only token.' 'TOKEN=read-only' 'ABSENT=never' > "$overrides"
+outgoing="$test_root/outgoing"
+HARLAN_REPOSITORY_ENV_HOME="$source_home" \
+HARLAN_REPOSITORY_ENV_MANIFEST="$manifest" \
+  bash "$tool" stage-outgoing "$outgoing" "$overrides" >/dev/null
+test "$(cat "$outgoing/sites/example/.env")" = "$(printf '%s\n' 'SECRET=source' 'export TOKEN=read-only' 'OTHER=kept')"
+test "$(stat -c %a "$outgoing/sites/example/.env")" = 600
+test "$(readlink "$outgoing/sites/example/app/.env")" = ../.env
+test "$(cat "$source_repository/.env")" = "$(printf '%s\n' 'SECRET=source' 'export TOKEN=desktop' 'OTHER=kept')"
+
+unchanged="$test_root/unchanged"
+HARLAN_REPOSITORY_ENV_HOME="$source_home" \
+HARLAN_REPOSITORY_ENV_MANIFEST="$manifest" \
+  bash "$tool" stage-outgoing "$unchanged" "$test_root/no-overrides" >/dev/null
+cmp --silent "$source_repository/.env" "$unchanged/sites/example/.env"
+
+printf '%s\n' 'not an assignment' > "$test_root/bad-overrides"
+if HARLAN_REPOSITORY_ENV_HOME="$source_home" \
+  HARLAN_REPOSITORY_ENV_MANIFEST="$manifest" \
+  bash "$tool" stage-outgoing "$test_root/bad-stage" "$test_root/bad-overrides" >/dev/null 2>&1; then
+  printf '%s\n' 'Repository environment accepted an invalid override line.' >&2
+  exit 1
+fi
+
 unignored_repository="$source_home/sites/unignored"
 mkdir -p "$unignored_repository"
 git init --quiet --initial-branch=main "$unignored_repository"
