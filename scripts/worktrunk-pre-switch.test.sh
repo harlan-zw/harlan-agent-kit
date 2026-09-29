@@ -10,7 +10,7 @@ export HOME="$test_root/home"
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 export GIT_CONFIG_NOSYSTEM=1
-unset HARLAN_GITHUB_AGENT
+unset HARLAN_GITHUB_AGENT XDG_CONFIG_HOME WORKTRUNK_CONFIG_PATH
 mkdir -p "$HOME"
 git config --global init.defaultBranch main
 bash "$script_dir/worktrunk-config.sh" update >/dev/null
@@ -44,13 +44,13 @@ setup() {
 
 switch() {
   local root=$1
-  wt -C "$root/repo" -y switch --create task --base origin/main --no-cd 2>"$root/stderr"
+  wt -C "$root/repo" --config "$HOME/.config/worktrunk/config.toml" -y switch --create task --base origin/main --no-cd 2>"$root/stderr"
 }
 
 assert_fetched() {
   local root=$1
   [ "$(git -C "$root/repo" rev-parse refs/remotes/origin/main)" = "$(git -C "$root/pusher" rev-parse HEAD)" ] \
-    || fail "$root: origin/main was not fetched."
+    || fail "$root: origin/main was not fetched: $(cat "$root/stderr")"
   ! git -C "$root/repo" rev-parse --verify --quiet refs/remotes/origin/gone >/dev/null \
     || fail "$root: the deleted origin branch was not pruned."
   [ "$(git -C "$root/repo.task" rev-parse HEAD)" = "$(git -C "$root/pusher" rev-parse HEAD)" ] \
