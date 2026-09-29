@@ -28,6 +28,7 @@ export function headCiFingerprint(check: string): string {
 export function headCiFinding(check: string): Extract<ReviewFinding, { _tag: 'Open' }> {
   return {
     _tag: 'Open',
+    impact: 100,
     summary: `Required check "${check}" fails on the pull request head commit.`,
     nextAction: `Read the failing "${check}" job logs on the pull request, fix the cause, and run only the focused check.`,
     resolution: 'Repair',

@@ -354,7 +354,8 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    gh pr view NUMBER --json reviews,comments --jq '.reviews[].body, .comments[].body'
    gh api repos/OWNER/REPO/pulls/NUMBER/comments --paginate --jq '.[].body'
    ```
-5. Read each material finding's resolution from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
+5. Read each scored finding from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
+   Leave findings at 80/100 or below Logged. They do not require a code change.
    If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.
    Act on findings with resolution `Repair`. If the service owns a current-head Repair Task, let it finish before editing.
@@ -370,6 +371,10 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Never reuse CI or Review evidence from the old head SHA.
    Report success only when current-head CI passes or is correctly absent, the current-head Review is `READY`, and other material comments are handled.
    If a finding remains `BLOCKED` after an evidence-backed false positive or not applicable comment, report that outcome and the comment link.
+
+Count review-driven repair pushes by this submitting Agent across the entire pull request.
+After three, stop Agent-authored refinements and report remaining findings above 80/100 to Harlan.
+Do not reset the count because a new head commit starts a new Review. CI repair attempts keep their separate limit below.
 
 ### Review queue capacity
 
@@ -422,13 +427,14 @@ Spawn one native subagent for this exact head SHA.
 Refetch targeted Item status before spawning. Stop if it became dismissed.
 Give it the pull request snapshot and disproof checks in the [review contract](../adversarial-review/references/review-contract.md#adversarial-review).
 It reads the full diff, surrounding code, author images, and current checks.
-Keep it read only. It returns material findings with path, line, proof, and next action.
+Keep it read only. It returns evidence-backed findings with impact from 0 to 100, path, line, and proof.
+Only findings above 80 need a next action. Include lower scores in the assessment as Logged.
 It does not post comments, set labels, approve, or merge.
 Do not cancel the service Review. If its Review starts while the subagent runs, let both finish and compare their findings.
 Refetch the head before acting on findings. Discard the subagent assessment if the head moved.
 Refetch targeted Item status before posting an assessment. Stop if it became dismissed.
 
-Apply confirmed blockers in new commits, then restart Step 6 for the new head.
+Apply confirmed findings above 80 in new commits, subject to the three-push limit, then restart Step 6 for the new head.
 Mark false positives or inapplicable findings in one self-identified Agent comment with evidence.
 If no confirmed blocker remains, post a self-identified Agent assessment with the head SHA and capacity reason.
 Start that comment with `🤖 Harlan Agent Kit Agent assessment of head SHA.`

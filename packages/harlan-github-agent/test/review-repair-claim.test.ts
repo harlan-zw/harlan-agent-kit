@@ -82,6 +82,42 @@ function recordOpenFinding(
 }
 
 describe('review Repair queue', () => {
+  it('keeps a logged finding in the Review without queuing Repair', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/limited-impact')
+    const recorded = store.recordReviewRun({
+      id: 'logged-review',
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId,
+      headSha: review.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'logged-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:00:02.000Z',
+      completedAt: '2026-08-13T01:00:03.000Z',
+      gates: passedReviewGates(),
+      findings: [{
+        _tag: 'Logged',
+        impact: 80,
+        summary: 'A rare empty state loses spacing.',
+        details: { fingerprint: 'empty-spacing', identity: 'empty-spacing', location: { path: 'src/view.ts', line: 14 }, proof: 'The gap disappears.' },
+      }],
+    })
+
+    expect(recorded._tag).toBe('Inserted')
+    expect(store.listReviewRuns(review.repository, review.pullRequestNumber)[0]?.outcome._tag).toBe('Ready')
+    expect(store.getReviewFixFindings(review.repository, review.pullRequestNumber, revisionId)).toEqual([])
+    expect(store.queueReviewFixTaskForReview({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:00:04.000Z',
+    })._tag).toBe('ActionRequired')
+  })
+
   it('starts Repair after the terminal Review status reaches GitHub', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'fix/publish-review-first')

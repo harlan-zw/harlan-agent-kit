@@ -257,7 +257,11 @@ describe('subject Workers', () => {
     expect(workspaceCreated).toBe(true)
   })
 
-  it.each([false, true])('queues findings when merge happens during Review: %s', async (merged) => {
+  it.each([
+    { merged: false, impact: 81 },
+    { merged: true, impact: 81 },
+    { merged: false, impact: 80 },
+  ])('handles a finding at impact $impact when merged is $merged', async ({ merged, impact }) => {
     const repository = repositoryMapping({ ownership: 'maintained' })
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let attempt: RecordReviewRunInput | undefined
@@ -269,6 +273,7 @@ describe('subject Workers', () => {
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
+          impact,
           path: 'src/parser.ts',
           line: 42,
           proof: 'A split UTF-8 sequence loses its first byte.',
@@ -368,21 +373,20 @@ describe('subject Workers', () => {
 
     expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(attempt?.findings).toEqual([expect.objectContaining({
-      _tag: 'Open',
-      resolution: 'Repair',
+      _tag: impact > 80 ? 'Open' : 'Logged',
+      impact,
       summary: 'The parser drops data.',
-      details: expect.objectContaining({
-        location: { path: 'src/parser.ts', line: 42 },
-        regressionTest: 'Split one UTF-8 sequence across two chunks and assert the original string.',
-      }),
+      details: expect.objectContaining({ location: { path: 'src/parser.ts', line: 42 } }),
     })])
-    expect(queued).toBe(true)
+    expect(queued).toBe(impact > 80)
     if (merged) {
       expect(terminal).toBe('')
     }
     else {
-      expect(terminal).toContain('### 🤖 BLOCKED')
+      expect(terminal).toContain(impact > 80 ? '### 🤖 BLOCKED' : '### 🤖 READY')
       expect(terminal).toContain('The parser drops data.')
+      if (impact <= 80)
+        expect(terminal).toContain('**Logged (80/100):**')
     }
     expect(worktreeVerified).toBe(true)
   })
@@ -400,6 +404,7 @@ describe('subject Workers', () => {
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
+          impact: 90,
           path: 'src/parser.ts',
           line: 42,
           proof: longProof,
@@ -512,6 +517,7 @@ describe('subject Workers', () => {
         },
         findings: [{
           identity: 'persisted-controller-state-removal',
+          impact: 95,
           path: 'src/store.ts',
           line: 42,
           proof: 'A second process sees no active leases when the journal uses private memory.',
@@ -616,6 +622,7 @@ describe('subject Workers', () => {
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
+          impact: 90,
           path: 'src/parser.ts',
           line: 42,
           proof: 'A split UTF-8 sequence loses its first byte.',
@@ -672,6 +679,7 @@ describe('subject Workers', () => {
             details: {
               fingerprint: 'a'.repeat(64),
               identity: 'buffered-byte-loss',
+              impact: 90,
               location: { path: 'src/parser.ts', line: 40 },
               proof: 'A split UTF-8 sequence loses its first byte.',
               regressionTest: 'Split one UTF-8 sequence across two chunks.',
