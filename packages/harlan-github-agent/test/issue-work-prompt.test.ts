@@ -32,6 +32,23 @@ const storedTriage = JSON.stringify({
 })
 
 describe('issueWorkPrompt', () => {
+  it('passes related pull request evidence to issue work', () => {
+    const prompt = issueWorkPrompt({
+      task: task(),
+      body: 'Body',
+      comments: [],
+      template: '### Description',
+      routineSource: null,
+      triage: parseStoredIssueTriage(JSON.stringify({
+        ...JSON.parse(storedTriage),
+        relatedPullRequests: [{ number: 25, reason: 'Changes the parser branch.' }],
+      })),
+      instructionFiles: [],
+    })
+
+    expect(prompt).toContain('Related pull requests: #25: Changes the parser branch.')
+  })
+
   it('carries the stored triage summary and next action so the Agent does not triage twice', () => {
     const prompt = issueWorkPrompt({
       task: task(),

@@ -38,7 +38,7 @@ import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
-import { isIssueTriageState } from './issue-triage.ts'
+import { parseStoredIssueTriage } from './issue-triage.ts'
 import { combineMergeRisk, describeMergeRisk, mergeRiskFloor } from './merge-risk.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
@@ -173,7 +173,11 @@ Investigation defaults, unless repository policy sets a narrower scope:
 - Inspect enough surrounding code to expose hidden scope. Verify that the target file and symbol exist. Do not run test suites. Do not prove library types exist.
 - Choose the route once intent, scope, and the next action are clear. Leave implementation checks to Issue work.
 - Do not start a browser or dev server. Do not install packages.
-- Use the GitHub CLI to inspect related issues, linked pull requests, and repository history when useful.
+- Search this repository's open issues and pull request history with the GitHub CLI. Read promising matches before deciding.
+- Compare the cause and required fix, not only titles or shared files. Check up to 20 issue and 20 pull request candidates.
+- Keep at most three relatedPullRequests. Give each number and a concrete reason. Return [] when no match is verified.
+- Set duplicateIssue only for an open issue with the same cause and required fix. Give its number and reason, then choose WAIT_TO_IMPLEMENT.
+- A related pull request alone does not make an issue a duplicate. If search fails, say so in the summary and continue triage.
 
 Choose exactly one route:
 - READY_TO_IMPLEMENT: desired behavior and success criteria are clear, the scope is bounded, and one implementation Agent can likely finish safely.
@@ -186,6 +190,7 @@ For every other route, make nextAction the exact next Agent or human action.
 Estimate difficulty and impact from 1 to 5.
 List relatedIssues: open issues in this repository that share a cause and need one fix. Check related open issues once, within the repository's investigation scope.
 Sharing a file alone does not mean issues need one fix. Return an empty array when none are known.
+Return duplicateIssue as null when no duplicate is verified. Return relatedPullRequests as an empty array when none are verified.
 Do not commit, push, or post comments. Return only the required JSON.`
 const skillDigest = createHash('sha256').update(reviewPolicy).digest('hex')
 
@@ -319,7 +324,7 @@ const reviewSchema = {
 const issueTriageSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['_tag', 'difficulty', 'impact', 'hasReproduction', 'needsCodebaseReview', 'summary', 'nextAction', 'relatedIssues'],
+  required: ['_tag', 'difficulty', 'impact', 'hasReproduction', 'needsCodebaseReview', 'summary', 'nextAction', 'relatedIssues', 'duplicateIssue', 'relatedPullRequests'],
   properties: {
     _tag: { type: 'string', enum: ['READY_TO_IMPLEMENT', 'READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] },
     difficulty: { type: 'integer', minimum: 1, maximum: 5 },
@@ -329,6 +334,17 @@ const issueTriageSchema = {
     summary: { type: 'string' },
     nextAction: { type: 'string' },
     relatedIssues: { type: 'array', items: { type: 'integer', minimum: 1 } },
+    duplicateIssue: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['number', 'reason'],
+      properties: { number: { type: 'integer', minimum: 1 }, reason: { type: 'string' } },
+    },
+    relatedPullRequests: {
+      type: 'array',
+      maxItems: 3,
+      items: { type: 'object', additionalProperties: false, required: ['number', 'reason'], properties: { number: { type: 'integer', minimum: 1 }, reason: { type: 'string' } } },
+    },
   },
 }
 
@@ -556,31 +572,19 @@ export function parseReviewResponse(text: string): Promise<Result<ReviewResponse
 
 function parseIssueTriageResponse(text: string): Promise<Result<IssueTriageResult, string>> {
   return Promise.resolve(text)
-    .then(value => JSON.parse(value) as Partial<IssueTriageResult>)
     .then((value): Result<IssueTriageResult, string> => {
-      if (
-        !isIssueTriageState(value._tag)
-        || !Number.isInteger(value.difficulty) || (value.difficulty ?? 0) < 1 || (value.difficulty ?? 0) > 5
-        || !Number.isInteger(value.impact) || (value.impact ?? 0) < 1 || (value.impact ?? 0) > 5
-        || typeof value.hasReproduction !== 'boolean' || typeof value.needsCodebaseReview !== 'boolean'
-        || typeof value.summary !== 'string' || typeof value.nextAction !== 'string'
-      ) {
+      const result = parseStoredIssueTriage(value)
+      if (result === null || !Number.isInteger(result.difficulty) || result.difficulty < 1 || result.difficulty > 5
+        || !Number.isInteger(result.impact) || result.impact < 1 || result.impact > 5) {
         return err('The agent returned an invalid issue triage result.')
       }
       return ok({
-        _tag: value._tag,
-        difficulty: value.difficulty as number,
-        impact: value.impact as number,
-        hasReproduction: value.hasReproduction,
-        needsCodebaseReview: value.needsCodebaseReview,
-        summary: cleanLine(value.summary),
-        nextAction: cleanText(value.nextAction),
-        relatedIssues: Array.isArray(value.relatedIssues)
-          ? [...new Set(value.relatedIssues.filter((number): number is number => Number.isInteger(number) && number > 0))]
-          : [],
+        ...result,
+        summary: cleanLine(result.summary),
+        nextAction: cleanText(result.nextAction),
+        relatedIssues: [...new Set(result.relatedIssues)],
       })
     })
-    .catch((): Result<IssueTriageResult, string> => err('The agent returned malformed issue triage JSON.'))
 }
 
 function evidence(label: string, value: string): { label: string, sha256: string } {
