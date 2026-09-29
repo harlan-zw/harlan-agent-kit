@@ -329,7 +329,7 @@ If the Service controller publishes the pull request from an implementation Agen
 The controller owns Review, Repair, and this wait; waiting inside its implementation Task would stop Review from starting.
 
 1. Read the current head SHA with `gh pr view NUMBER --json headRefOid --jq .headRefOid`.
-2. Wait for GitHub Actions check runs. Use `gh run list --commit HEAD_SHA` to find this head's runs.
+2. Wait for GitHub Actions check runs. Use `gh run list --commit HEAD_SHA --limit 100` to find this head's runs.
    Use `gh run watch RUN_ID` for each pending run, then confirm every applicable run passed.
    Do not use `gh pr checks --watch` while Review is queued; the service's own check run can keep it waiting.
    A Markdown-only pull request may have no check runs. Confirm that its workflows exclude the changed paths.
@@ -378,7 +378,7 @@ harlan-github-agent control status \
   --url http://127.0.0.1:3210 |
   jq --arg repo OWNER/REPO --argjson number NUMBER --arg head HEAD_SHA '
     (.state // .) as $state |
-    {agentStart: $state.agentStart,
+    {agentStart: $state.agentStart._tag,
      hostCapacity: $state.hostCapacity,
      queuedWork: [$state.tasks[] | select(.state._tag == "Queued") |
        select(.kind == "adversarial_review" or .kind == "review_fix")],
@@ -392,7 +392,7 @@ harlan-github-agent control status \
 Start a subagent review when Review is queued for this pull request and either condition holds:
 
 - At least two Review or Repair Tasks are queued, and their count exceeds free host slots.
-- `state.agentStart` is `ReserveReached` or `CapacityUnavailable`.
+- `state.agentStart._tag` is `ReserveReached` or `CapacityUnavailable`.
 
 Also start one 20 minutes after the recorded Review request if Review remains queued or no Task appears.
 This applies when the control command is unavailable and no trusted `REVIEWING` comment exists.
