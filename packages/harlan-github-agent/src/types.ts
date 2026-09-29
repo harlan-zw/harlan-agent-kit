@@ -304,6 +304,7 @@ export type ReviewRerunRejection
     | { _tag: 'RevisionMismatch' }
     | { _tag: 'AuthorNotAllowed' }
     | { _tag: 'ReviewNotReady' }
+    | { _tag: 'ReviewStopped' }
     | { _tag: 'DisputeCapReached' }
 
 export type ReviewRerunResult

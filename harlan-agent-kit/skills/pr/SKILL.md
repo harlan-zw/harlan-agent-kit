@@ -435,7 +435,7 @@ harlan-github-agent control stop-review \
 
 Run the command on the Service host. `Stopped` and `AlreadyStopped` permit the subagent.
 The command checks the current open head, records a durable stop for that head, and cancels its queued Review Task.
-It rejects a dismissed Item, changed head, or Running Review.
+It rejects a dismissed Item, changed head, or Review that already started.
 If the command fails, report the exact error and leave the Service Review in charge.
 Refetch the GitHub head after the command. If it moved, stop and restart Step 6.
 Spawn one native subagent for this exact head SHA.

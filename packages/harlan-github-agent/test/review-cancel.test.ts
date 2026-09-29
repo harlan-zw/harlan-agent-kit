@@ -62,6 +62,9 @@ describe('stop Service Review for a subagent', () => {
     expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: 'b'.repeat(40), at })).toEqual({ _tag: 'Rejected', reason: 'HeadChanged' })
     expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'Stopped' })
     expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'AlreadyStopped' })
+    const revisionId = store.getDashboardSnapshot(at).items.find(item => item.repository === mapping.github && item.number === 24)?.revisionId
+    expect(revisionId).toBeDefined()
+    expect(store.requestReviewRerun({ repository: mapping.github, pullRequestNumber: 24, revisionId: revisionId!, requestId: 'rerun-stopped', source: 'dashboard', requestedBy: 'dashboard', at })).toEqual({ _tag: 'Rejected', reason: { _tag: 'ReviewStopped' } })
     store.recordObservation({ externalId: 'again', observedAt: '2026-08-13T01:01:00.000Z', source: 'poll', subject })
     expect(store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:01:01.000Z', 60000)).toBeNull()
     expect(store.getDashboardSnapshot('2026-08-13T01:01:02.000Z').queue.some(item => item.repository === mapping.github && item.number === 24)).toBe(false)
@@ -80,7 +83,22 @@ describe('stop Service Review for a subagent', () => {
     store.syncRepositories([mapping], at)
     store.recordObservation({ externalId: 'open', observedAt: at, source: 'poll', subject })
     expect(store.claimNextAdversarialReviewTask('reviewer', at, 60000)?.kind).toBe('adversarial_review')
-    expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'Rejected', reason: 'ReviewRunning' })
+    expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'Rejected', reason: 'ReviewStarted' })
+    store.close()
+  })
+
+  it('leaves a completed Review in charge while its outcome is pending', () => {
+    const store = openJournalStore(':memory:')
+    const mapping = repositoryMapping()
+    const subject = pullRequestItem({ headSha: 'a'.repeat(40), mergeState: 'clean' })
+    const at = '2026-08-13T01:00:00.000Z'
+    store.syncRepositories([mapping], at)
+    store.recordObservation({ externalId: 'open', observedAt: at, source: 'poll', subject })
+    const task = store.claimNextAdversarialReviewTask('reviewer', at, 60000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, evidence: 'review-finished' })
+    expect(store.stopReviewForHead({ repository: mapping.github, pullRequestNumber: 24, headSha: subject.headSha, at })).toEqual({ _tag: 'Rejected', reason: 'ReviewStarted' })
     store.close()
   })
 })

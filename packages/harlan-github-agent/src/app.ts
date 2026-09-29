@@ -723,7 +723,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request head commit changed.' })
     if (result.reason === 'Dismissed')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request is dismissed.' })
-    throw createError({ status: 409, statusText: 'Conflict', message: 'The Service Review is running.' })
+    throw createError({ status: 409, statusText: 'Conflict', message: 'The Service Review has started. Wait for its outcome.' })
   })
 
   app.post('/api/reviews/rerun', async (event) => {
@@ -746,6 +746,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       throw createError({ status: 404, statusText: 'Not Found', message: 'The pull request is no longer open.' })
     if (result.reason._tag === 'RevisionMismatch')
       throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request head commit changed. Refresh before rerunning.' })
+    if (result.reason._tag === 'ReviewStopped')
+      throw createError({ status: 409, statusText: 'Conflict', message: 'Another Agent took this head commit Review.' })
     throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request is not ready for review.' })
   })
 
