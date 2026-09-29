@@ -20,7 +20,11 @@ Example: branch `fix/auth` in `~/pkg/app` resolves to `~/pkg/app.fix-auth`. Neve
 
 `harlan-github-agent` follows the same contract. It creates each agent worktree from the configured repository checkout with `wt`.
 
-The global `pre-switch` hook protects the primary checkout before every Worktrunk switch. It requires `main`, a clean worktree, and an `origin` remote. It fetches and prunes every `origin` ref, then fast-forwards local `main` to `origin/main`. A fetch failure, local commit, divergent branch, or dirty file stops the switch.
+The global `pre-switch` hook refreshes the primary checkout before every Worktrunk switch. It fetches and prunes every `origin` ref, so `--base origin/main` starts from current GitHub state. If the primary checkout is clean on `main`, the hook fast-forwards `main` to `origin/main`.
+
+If the primary checkout is dirty, is off `main`, or has local commits, the hook skips only the fast-forward. It prints one warning and the switch continues. The hook never edits, stashes, resets, or cleans the primary checkout. A missing `origin` remote or a failed fetch stops the switch before Worktrunk creates anything.
+
+Do not pass `--no-hooks` to get past the primary checkout. That flag also skips the fetch.
 
 ## Prepared worktrees
 

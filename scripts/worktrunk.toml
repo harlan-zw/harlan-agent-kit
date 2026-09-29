@@ -4,8 +4,11 @@
 # root, named `<repo>.<branch-slug>`.
 worktree-path = "../{{ repo }}.{{ branch | sanitize }}"
 
-# Keep the primary checkout as a clean, current control checkout. Task changes
-# belong in branch worktrees, so every switch starts from the same GitHub state.
+# Keep the primary checkout current without touching local work. Every switch
+# fetches origin, so `--base origin/main` resolves to current GitHub state. A
+# dirty, off-main, or diverged primary skips only the fast-forward and warns;
+# the hook never edits, stashes, resets, or cleans the primary checkout. A
+# pre-switch failure stops the switch before Worktrunk creates anything.
 [pre-switch]
 primary = """
 # Harlan GitHub Agent owns its checkouts and names itself here. The control
@@ -14,33 +17,29 @@ if [ -n "$HARLAN_GITHUB_AGENT" ]; then
   exit 0
 fi
 primary="{{ primary_worktree_path }}"
+repo="{{ repo }}"
 if ! git -C "$primary" remote get-url origin >/dev/null 2>&1; then
-  echo "Worktree switch stopped: the primary checkout needs an origin remote." >&2
-  exit 1
-fi
-primary_branch="$(git -C "$primary" symbolic-ref --quiet --short HEAD)" || {
-  echo "Worktree switch stopped: the primary checkout must use main." >&2
-  exit 1
-}
-if [ "$primary_branch" != main ]; then
-  echo "Worktree switch stopped: the primary checkout must use main." >&2
-  exit 1
-fi
-if [ -n "$(git -C "$primary" status --porcelain=v1 --untracked-files=normal)" ]; then
-  echo "Worktree switch stopped: primary main has local changes." >&2
+  echo "Worktree switch stopped: $repo has no origin remote." >&2
   exit 1
 fi
 if ! timeout --signal=TERM --kill-after=10s 60s git -C "$primary" -c credential.interactive=never fetch --quiet --prune origin; then
-  echo "Worktree switch stopped: origin fetch failed." >&2
+  echo "Worktree switch stopped: origin fetch failed for $repo." >&2
   exit 1
 fi
-if ! git -C "$primary" -c core.hooksPath=/dev/null merge --ff-only --quiet refs/remotes/origin/main; then
-  echo "Worktree switch stopped: primary main cannot fast-forward to origin/main." >&2
-  exit 1
+primary_branch="$(git -C "$primary" symbolic-ref --quiet --short HEAD || echo 'detached HEAD')"
+if [ "$primary_branch" != main ]; then
+  echo "Warning: $repo primary checkout is on $primary_branch, not main. Fetched origin; skipped the main fast-forward." >&2
+  exit 0
 fi
+changed="$(git -C "$primary" status --porcelain=v1 --untracked-files=normal | wc -l)"
+if [ "$changed" -gt 0 ]; then
+  echo "Warning: $repo primary checkout has $changed changed files. Fetched origin; skipped the main fast-forward." >&2
+  exit 0
+fi
+git -C "$primary" -c core.hooksPath=/dev/null merge --ff-only --quiet refs/remotes/origin/main 2>/dev/null
 if [ "$(git -C "$primary" rev-parse HEAD)" != "$(git -C "$primary" rev-parse refs/remotes/origin/main)" ]; then
-  echo "Worktree switch stopped: primary main does not match origin/main." >&2
-  exit 1
+  echo "Warning: $repo primary main has commits that origin/main does not have. Fetched origin; skipped the main fast-forward." >&2
+  exit 0
 fi
 """
 
