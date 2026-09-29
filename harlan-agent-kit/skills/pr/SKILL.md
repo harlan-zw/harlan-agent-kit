@@ -231,9 +231,13 @@ Log the URL to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
 For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, add `harlan-agent-review`.
 This requests Review in Manual Selection mode and prevents prose classification from skipping it in Auto mode.
-First read the matching Service Item with its authenticated `/api/items/pull-request-status?repository=OWNER%2FREPO&number=NUMBER` endpoint.
-Confirm `dismissed: false`. A Dismissal survives new head commits.
-If it is dismissed, leave the request label unset and report the Dismissal to Harlan.
+Read the matching Service Item with its authenticated `/api/items/pull-request-status?repository=OWNER%2FREPO&number=NUMBER` endpoint.
+If it returns `dismissed: true`, leave the request label unset and report the Dismissal to Harlan.
+A Dismissal survives new head commits.
+If this step just created the pull request, a 404 can mean the Service has not observed it yet.
+Add the Review request label, then wait for exact Item status before any fallback Review.
+For an existing pull request, retry a 404 after the next Service observation.
+Report a continuing 404 as missing Service state. For other responses, require `dismissed: false` before adding the label.
 If the label is absent, create it with `gh label create harlan-agent-review --color 8250df --description "Requests automated Review and repair"`.
 Then add it to the pull request:
 
