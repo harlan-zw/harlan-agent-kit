@@ -887,6 +887,8 @@ it('converges a sibling journal that carries no issue triage runs', () => {
           summary: 'The classification service routed this from the report alone: information is missing before work can start.',
           nextAction: 'Add what is missing. The next comment after an edit re-runs triage.',
           relatedIssues: [],
+          duplicateIssue: null,
+          relatedPullRequests: [],
         },
       },
     })

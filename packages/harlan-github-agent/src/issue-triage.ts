@@ -7,6 +7,11 @@ export const ISSUE_TRIAGE_STATES = [
 
 export type IssueTriageState = typeof ISSUE_TRIAGE_STATES[number]
 
+export interface IssueTriageReference {
+  number: number
+  reason: string
+}
+
 interface IssueTriageEvidence {
   difficulty: number
   hasReproduction: boolean
@@ -16,6 +21,10 @@ interface IssueTriageEvidence {
   summary: string
   /** Open issues in the same repository that the same change should fix. Empty when none. */
   relatedIssues: readonly number[]
+  /** An open issue with the same cause and required fix. */
+  duplicateIssue: IssueTriageReference | null
+  /** Pull requests that explain current or past work on this issue. */
+  relatedPullRequests: readonly IssueTriageReference[]
 }
 
 /** One routing decision, with the evidence the next Agent receives. */
@@ -34,6 +43,15 @@ export function issueTriageStateLabel(state: IssueTriageState): string {
     case 'NEEDS_INFO': return 'Needs info'
     case 'WAIT_TO_IMPLEMENT': return 'Wait to implement'
   }
+}
+
+function issueReference(value: unknown): IssueTriageReference | null {
+  if (typeof value !== 'object' || value === null)
+    return null
+  const record = value as Record<string, unknown>
+  if (!Number.isInteger(record.number) || (record.number as number) < 1 || typeof record.reason !== 'string' || record.reason.trim() === '')
+    return null
+  return { number: record.number as number, reason: record.reason.trim().replace(/\s+/gu, ' ') }
 }
 
 /**
@@ -70,6 +88,23 @@ export function parseStoredIssueTriage(evidence: string | null | undefined): Iss
   const relatedIssues = Array.isArray(record.relatedIssues)
     ? record.relatedIssues.filter((value): value is number => Number.isInteger(value) && (value as number) > 0)
     : []
+  const duplicateIssue = record.duplicateIssue === undefined || record.duplicateIssue === null
+    ? null
+    : issueReference(record.duplicateIssue)
+  if (record.duplicateIssue != null && duplicateIssue === null)
+    return null
+  if (duplicateIssue !== null && record._tag !== 'WAIT_TO_IMPLEMENT')
+    return null
+  const rawPullRequests = record.relatedPullRequests === undefined ? [] : record.relatedPullRequests
+  if (!Array.isArray(rawPullRequests) || rawPullRequests.length > 3)
+    return null
+  const relatedPullRequests: IssueTriageReference[] = []
+  for (const value of rawPullRequests) {
+    const reference = issueReference(value)
+    if (reference === null)
+      return null
+    relatedPullRequests.push(reference)
+  }
   return {
     _tag: record._tag,
     difficulty: record.difficulty,
@@ -79,5 +114,7 @@ export function parseStoredIssueTriage(evidence: string | null | undefined): Iss
     summary: record.summary,
     nextAction: record.nextAction,
     relatedIssues,
+    duplicateIssue,
+    relatedPullRequests,
   }
 }

@@ -78,6 +78,8 @@ export function routedResult(input: {
         summary: 'The classification service routed this from the report alone: information is missing before work can start.',
         nextAction: 'Add what is missing. The next comment after an edit re-runs triage.',
         relatedIssues: [],
+        duplicateIssue: null,
+        relatedPullRequests: [],
       }
     : {
         _tag: 'WAIT_TO_IMPLEMENT',
@@ -88,6 +90,8 @@ export function routedResult(input: {
         summary: 'The classification service routed this from the report alone: the work should wait on another change first.',
         nextAction: 'Resume this once the change it waits on lands.',
         relatedIssues: [],
+        duplicateIssue: null,
+        relatedPullRequests: [],
       }
 }
 

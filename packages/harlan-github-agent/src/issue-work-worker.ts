@@ -268,7 +268,7 @@ function storedTriageLines(triage: IssueTriageResult | null): string {
     return 'No stored Issue triage exists for this issue state. Plan from the issue data below.'
   return `Stored Issue triage follows. Start from it. Do not triage the issue again.
 Triage summary: ${triage.summary}
-Triage next action: ${triage.nextAction}`
+Triage next action: ${triage.nextAction}${triage.relatedPullRequests.length === 0 ? '' : `\nRelated pull requests: ${triage.relatedPullRequests.map(reference => `#${reference.number}: ${reference.reason}`).join('; ')}`}`
 }
 
 const pullRequestMetadataLines = `Pull request metadata contract:

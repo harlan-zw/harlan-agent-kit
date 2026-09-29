@@ -1113,6 +1113,9 @@ describe('subject Workers', () => {
         needsCodebaseReview: false,
         summary: 'The parser drops valid input.',
         nextAction,
+        relatedIssues: [],
+        duplicateIssue: null,
+        relatedPullRequests: [],
       }), capture)),
       github: {
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -1178,6 +1181,8 @@ describe('subject Workers', () => {
           summary: 'The parser drops valid input.',
           nextAction,
           relatedIssues: [],
+          duplicateIssue: null,
+          relatedPullRequests: [],
         }),
         usage: { _tag: 'Unavailable' },
       },
@@ -1202,6 +1207,8 @@ describe('subject Workers', () => {
       summary: 'The parser drops valid input.',
       nextAction,
       relatedIssues: [],
+      duplicateIssue: null,
+      relatedPullRequests: [],
     })
   })
 })
