@@ -363,6 +363,9 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 ### Review queue capacity
 
 Use the [service control command](../harlan-github-agent/SKILL.md#run-and-inspect) to read `harlan-github-agent control status`.
+Run it on the Service host. On Hogwild, use the config path and loopback URL below.
+If that host lacks the control CLI, read its authenticated `/api/state` endpoint instead.
+The endpoint returns the same `state` object. Do not treat a failed command as an empty Queue.
 Match this repository, pull request number, and current head SHA in `state.queue` when present.
 If that entry is missing, use a queued Review Task for this pull request as the capacity signal.
 Refetch the GitHub head before spawning; the Task alone does not identify its head SHA.
@@ -370,9 +373,11 @@ Count `state.tasks` whose state is `Queued` and kind is `adversarial_review` or 
 Calculate free host slots from `state.hostCapacity`: local maximum minus active, plus desktop maximum minus active when connected.
 
 ```bash
-harlan-github-agent control status --config "$agent_config" |
+harlan-github-agent control status \
+  --config /home/harlan/.config/harlan-github-agent/config.yml \
+  --url http://127.0.0.1:3210 |
   jq --arg repo OWNER/REPO --argjson number NUMBER --arg head HEAD_SHA '
-    .state as $state |
+    (.state // .) as $state |
     {agentStart: $state.agentStart,
      hostCapacity: $state.hostCapacity,
      queuedWork: [$state.tasks[] | select(.state._tag == "Queued") |
