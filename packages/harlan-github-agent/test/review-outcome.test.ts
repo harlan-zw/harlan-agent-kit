@@ -35,6 +35,25 @@ describe('reviewOutcome', () => {
     expect(reviewOutcome(gates())).toBe('READY')
   })
 
+  it('logs an 80-impact finding without an action or failed Review gate', () => {
+    const body = terminalComment('abc123', 'base123', gates(), [{
+      _tag: 'Logged',
+      impact: 80,
+      summary: 'A rare empty state loses spacing.',
+      details: {
+        fingerprint: 'empty-spacing',
+        identity: 'empty-spacing',
+        location: { path: 'src/view.ts', line: 14 },
+        proof: 'The empty list hides its gap.',
+      },
+    }], 95, [], undefined, 'harlan-zw/example')
+
+    expect(body).toContain('### 🤖 READY · 95/100')
+    expect(body).toContain('**Logged (80/100):** A rare empty state loses spacing.')
+    expect(body).toContain('[View code](https://github.com/harlan-zw/example/blob/abc123/src/view.ts#L14)')
+    expect(body).not.toContain('**Open:**')
+  })
+
   it('shows every Review gate while CI is pending', () => {
     const body = terminalComment(
       'abc123',
@@ -56,6 +75,7 @@ describe('reviewOutcome', () => {
   it('links an open finding to the reviewed code line', () => {
     const body = terminalComment('abc123', 'base123', gates({ review: failed('A defect remains.') }), [{
       _tag: 'Open',
+      impact: 81,
       summary: 'The queue can drop events.',
       nextAction: 'Preserve pending events.',
       details: {
@@ -67,6 +87,7 @@ describe('reviewOutcome', () => {
     }], undefined, [], undefined, 'harlan-zw/example')
 
     expect(body).toContain('[View code](https://github.com/harlan-zw/example/blob/abc123/src/queue%20worker.ts#L42)')
+    expect(body).toContain('**Open (81/100):**')
     expect(body).not.toContain('events..')
   })
 

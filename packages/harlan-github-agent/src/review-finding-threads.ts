@@ -95,11 +95,12 @@ function sentence(text: string): string {
  */
 export function reviewFindingThreadBody(finding: OpenFinding): string {
   const heading = finding.resolution === 'Dismissal' ? 'Dismissal recommended' : 'Open'
+  const score = finding.impact === undefined ? '' : ` (${finding.impact}/100)`
   return [
     AUTOMATED_REVIEW_MARKER,
     // The identity rides base64url encoded, so no finding text can close the HTML comment.
     `<!-- review-finding: ${finding.details.fingerprint.toLowerCase()}${finding.details.identity === undefined ? '' : ` ${Buffer.from(finding.details.identity, 'utf8').toString('base64url')}`} -->`,
-    `**${heading}:** ${sentence(finding.summary)}`,
+    `**${heading}${score}:** ${sentence(finding.summary)}`,
     '',
     `**Proof:** ${sentence(finding.details.proof)}`,
     '',

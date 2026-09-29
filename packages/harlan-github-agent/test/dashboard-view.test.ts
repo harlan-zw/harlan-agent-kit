@@ -234,6 +234,20 @@ describe('buildHistory', () => {
 })
 
 describe('history outcome visibility', () => {
+  it('names logged impact when a review is ready', () => {
+    const ready = reviewAgent({
+      outcome: { _tag: 'Ready', confidence: 95 },
+      findings: [{
+        _tag: 'Logged',
+        impact: 80,
+        summary: 'The empty state loses spacing.',
+        details: { fingerprint: 'empty-spacing', identity: 'empty-spacing', location: { path: 'src/view.ts', line: 14 }, proof: 'The list gap disappears.' },
+      }],
+    })
+
+    expect(reviewOutcomeDetail(ready)).toBe('No finding above 80/100.')
+  })
+
   it('does not promise a Repair before its Task exists', () => {
     const blocked = reviewAgent({
       outcome: { _tag: 'Blocked' },

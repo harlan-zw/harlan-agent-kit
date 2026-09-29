@@ -18,6 +18,7 @@ const soundPremise = { verdict: 'sound' as const, reason: 'The change can be rep
 function materialFinding() {
   return {
     identity: 'unsafe-parser-boundary',
+    impact: 90,
     path: 'src/parser.ts',
     line: 42,
     proof: 'Malformed input reaches the unsafe parser branch.',

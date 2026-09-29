@@ -68,6 +68,23 @@ describe('item dismissal', () => {
     expect(snapshot.items.map(item => item.dismissed)).toEqual([true])
   })
 
+  it('reads an older open pull request after 100 newer observations', () => {
+    const store = createStore()
+    observe(store, 'abc123', '2026-08-13T01:00:00.000Z')
+    for (let number = 100; number < 200; number++) {
+      store.recordObservation({
+        externalId: `newer-${number}`,
+        observedAt: '2026-08-13T02:00:00.000Z',
+        source: 'poll',
+        subject: pullRequestItem({ number }),
+      })
+    }
+    expect(store.getOpenPullRequestStatus(dismiss.repository, 24)).toEqual({ headSha: 'abc123', dismissed: false })
+    store.dismissItem(dismiss)
+    expect(store.getOpenPullRequestStatus(dismiss.repository, 24)).toEqual({ headSha: 'abc123', dismissed: true })
+    expect(store.getOpenPullRequestStatus(dismiss.repository, 999)).toBeNull()
+  })
+
   it('reports a second dismissal as a duplicate rather than a change', () => {
     const store = createStore()
     observe(store, 'abc123', '2026-08-13T01:00:00.000Z')

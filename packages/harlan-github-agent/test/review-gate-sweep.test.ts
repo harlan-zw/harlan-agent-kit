@@ -364,6 +364,7 @@ describe('refreshReviewGates head CI repair', () => {
       reviewRunId: 'run-1',
       finding: {
         _tag: 'Open',
+        impact: 100,
         summary: 'Required check "test" fails on the pull request head commit.',
         nextAction: 'Read the failing "test" job logs on the pull request, fix the cause, and run only the focused check.',
         resolution: 'Repair',

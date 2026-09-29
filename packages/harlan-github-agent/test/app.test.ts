@@ -36,6 +36,8 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
   }
 }
 const agentControls = {
+  stopReviewForHead: () => ({ _tag: 'Stopped' as const }),
+  getOpenPullRequestStatus: (_repository: string, _number: number) => null,
   getStats: (range: StatsRange, generatedAt: string) => statsSnapshot(range, generatedAt),
   listRoutines: () => [],
   openRoutineRun: () => null,
@@ -72,6 +74,69 @@ function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof c
 }
 
 describe('dashboard HTTP app', () => {
+  it('stops Service Review only for the requested head', async () => {
+    const requests: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        stopReviewForHead: (input) => {
+          requests.push(input)
+          return { _tag: 'Stopped' }
+        },
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const path = `http://${allowedHost}/api/reviews/stop`
+    const body = JSON.stringify({ repository: 'harlan-zw/example', pullRequestNumber: 24, headSha: 'a'.repeat(40) })
+    const response = await app.request(path, { method: 'POST', headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' }, body })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ _tag: 'Stopped' })
+    expect(requests).toEqual([{ repository: 'harlan-zw/example', pullRequestNumber: 24, headSha: 'a'.repeat(40), at: now().toISOString() }])
+    const unauthorized = await app.request(path, { method: 'POST', headers: { 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' }, body })
+    expect(unauthorized.status).toBe(401)
+  })
+  it('reads one tracked pull request status through the authenticated API', async () => {
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        getOpenPullRequestStatus: () => ({ headSha: 'abc123', dismissed: true }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const path = `http://${allowedHost}/api/items/pull-request-status?repository=harlan-zw%2Fexample&number=24`
+    const response = await app.request(path, { headers: { authorization, host: allowedHost } })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ headSha: 'abc123', dismissed: true })
+    const unauthorized = await app.request(path, { headers: { host: allowedHost } })
+    expect(unauthorized.status).toBe(401)
+  })
+
+  it('reports a pull request the service does not track', async () => {
+    const response = await createApp().request(
+      `http://${allowedHost}/api/items/pull-request-status?repository=harlan-zw%2Fexample&number=999`,
+      { headers: { authorization, host: allowedHost } },
+    )
+    expect(response.status).toBe(404)
+  })
+
   it('records parsed Agent feedback', async () => {
     const recorded: unknown[] = []
     const app = createAgentApp({

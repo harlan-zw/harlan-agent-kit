@@ -306,6 +306,7 @@ export type ReviewRerunRejection
     | { _tag: 'RevisionMismatch' }
     | { _tag: 'AuthorNotAllowed' }
     | { _tag: 'ReviewNotReady' }
+    | { _tag: 'ReviewStopped' }
     | { _tag: 'DisputeCapReached' }
 
 export type ReviewRerunResult
@@ -357,7 +358,20 @@ export interface ReviewGates {
 export type ReviewFinding
   = | { _tag: 'Fixed', summary: string }
     | {
+      _tag: 'Logged'
+      impact: number
+      summary: string
+      details: {
+        fingerprint: string
+        identity: string
+        location: { path: string, line: number | null }
+        proof: string
+      }
+    }
+    | {
       _tag: 'Open'
+      /** Absent on Review runs recorded before impact scoring. */
+      impact?: number
       summary: string
       nextAction: string
       /** Current Reviews choose Repair or recommend a person Dismiss the Item. */

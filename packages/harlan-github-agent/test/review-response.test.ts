@@ -7,6 +7,7 @@ function finding(overrides: Record<string, unknown> = {}) {
     path: 'src/parser.ts',
     line: 12,
     proof: 'The comment names a function the diff removed.',
+    impact: 81,
     regressionTest: 'Split one sequence across two chunks and assert the original string.',
     summary: 'The comment is stale.',
     nextAction: 'Rename the function in the comment.',
@@ -36,6 +37,8 @@ describe('parseReviewResponse', () => {
     [[finding({ summary: ' ' })], 'findings[0].summary'],
     [[finding(), finding({ line: 0 })], 'findings[1].line'],
     [[finding({ regressionTest: '' })], 'findings[0].regressionTest'],
+    [[finding({ impact: 101 })], 'findings[0].impact'],
+    [[finding({ impact: -1 })], 'findings[0].impact'],
   ])('names the field a rejected result breaks', async (findings, field) => {
     const result = await parseReviewResponse(review('sound', findings))
 

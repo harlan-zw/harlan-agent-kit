@@ -9,7 +9,7 @@ const POLICY_LINK = '[AI open source policy](https://harlanzw.com/blog/ai-in-ope
 
 /** Links a finding to the code that was reviewed, even after the branch moves. */
 export function reviewFindingCodeLink(repository: string | undefined, headSha: string, finding: ReviewFinding): string {
-  if (repository === undefined || finding._tag !== 'Open' || finding.details === undefined)
+  if (repository === undefined || finding._tag === 'Fixed' || finding.details === undefined)
     return ''
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !/^[a-f\d]{6,64}$/i.test(headSha))
     return ''

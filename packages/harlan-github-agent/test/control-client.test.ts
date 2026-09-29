@@ -84,6 +84,18 @@ describe('harlan GitHub Agent control client', () => {
     expect(requests[0]?.url).toBe(`${baseUrl}/api/external-watches/reload`)
   })
 
+  it('stops Service Review for the exact head', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ _tag: 'Stopped' })], requests)
+    expect(created._tag).toBe('Ok')
+    if (created._tag === 'Err')
+      return
+    const result = await created.value.stopReview('harlan-zw/example', 24, 'a'.repeat(40))
+    expect(result).toEqual({ _tag: 'Ok', value: { _tag: 'Stopped' } })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/reviews/stop`)
+    await expect(requests[0]?.json()).resolves.toEqual({ repository: 'harlan-zw/example', pullRequestNumber: 24, headSha: 'a'.repeat(40) })
+  })
+
   it('returns an HTTP failure as a value', async () => {
     const created = clientWith([
       Response.json({ message: 'The task already finished.' }, { status: 409 }),

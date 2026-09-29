@@ -113,17 +113,19 @@ Never run a repository-wide test suite, typecheck, build, dev server, site crawl
 
 Limit local commands to changed files, their direct dependants, and focused behavior. Run one focused test or command only to prove a material finding or verify touched behavior that CI does not cover.
 
-Ignore style-only preferences. Treat correctness, security, data loss, public API breakage, and missing regression coverage as material.
+Ignore style-only preferences. Score evidence-backed defects by harm if merged unfixed.
+Use the [review contract](references/review-contract.md#adversarial-review) impact rubric.
 
-Record every material finding. Never cap the finding count.
+Record every evidence-backed finding. Never cap the finding count.
 
-Give each finding a stable identity, exact location, proof, next action, and resolution.
+Give each finding an impact score, stable identity, exact location, and proof.
+Only findings above 80 receive a next action and `Repair` or `Dismissal` resolution.
 
 Decide the pull request premise once before classifying findings.
 
-Use a sound premise only when safe fixes preserve the pull request intent. Every finding then uses resolution `Repair`. Name the regression test Repair must write first. Record none only when no test can cover the finding, such as a stale comment or documentation.
+Use a sound premise only when safe fixes preserve the pull request intent. Findings above 80 use resolution `Repair`. Name the regression test Repair must write first. Record none only when no test can cover the finding, such as a stale comment or documentation.
 
-Use a wrong premise when safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Every finding then uses resolution `Dismissal` and records no regression test. Never mix Repair and Dismissal findings. Never Dismiss or close the pull request.
+Use a wrong premise when safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Findings above 80 use resolution `Dismissal` and record no regression test. Never mix Repair and Dismissal findings. Never Dismiss or close the pull request.
 
 ### 7. Hand off Repair and restart
 
@@ -135,14 +137,14 @@ Show the checkbox only when signed GitHub webhooks are enabled. The dashboard Ca
 Recheck each Repair finding on the current default branch in a fresh worktree.
 Open one linked Repair pull request only for confirmed bugs. Require failing regression tests before fixes.
 Deduplicate by the original pull request and reviewed head commit. Never push to the merged branch.
-If no findings remain, record completion. If fixes are unsafe, record Action required.
+If no actionable findings remain, record completion. If fixes are unsafe, record Action required.
 If the pull request closes unmerged, stop Review.
 
-When the premise is sound and findings remain, queue one fresh Repair Agent with all exact findings. Never reuse the Review session.
+When the premise is sound and findings above 80 remain, queue one fresh Repair Agent with those exact findings. Never reuse the Review session.
 
 For an outside contributor, use the existing Approval. A new external Revision invalidates Approval. The exact controller repair commit continues the workflow.
 
-The Repair Agent writes each failing regression test first. It fixes every finding, then runs focused checks. The controller verifies and publishes the artifact.
+The Repair Agent writes each failing regression test first. It fixes every actionable finding, then runs focused checks. The controller verifies and publishes the artifact.
 
 For a visual finding, reproduce the defect at the shown viewport when known. Capture and inspect the repaired view before pushing.
 
@@ -166,7 +168,7 @@ Never blame a pull request for a confirmed baseline failure. For a maintained or
 
 ### 8. Freeze the outcome
 
-Return only the premise, material findings, and confidence. The controller applies the exact `READY`, `PENDING`, or `BLOCKED` gates from the review contract.
+Return only the premise, scored findings, and confidence. The controller applies the exact `READY`, `PENDING`, or `BLOCKED` gates from the review contract.
 
 Refetch the PR immediately before posting. If the head SHA changed, restart the review.
 

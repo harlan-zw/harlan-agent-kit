@@ -239,9 +239,12 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
           </p>
           <ul v-if="findings.length > 0" class="flex flex-col gap-3" role="list">
             <li v-for="(finding, index) in findings" :key="index" class="flex items-start gap-2">
-              <StateBadge :tone="finding._tag === 'Fixed' ? 'success' : 'warning'" :label="finding._tag" class="mt-0.5" />
+              <StateBadge :tone="finding._tag === 'Fixed' ? 'success' : finding._tag === 'Logged' ? 'neutral' : 'warning'" :label="finding._tag" class="mt-0.5" />
               <div class="min-w-0 text-sm">
                 <p>{{ finding.summary }}</p>
+                <p v-if="finding._tag === 'Logged' || (finding._tag === 'Open' && finding.impact !== undefined)" class="text-muted">
+                  Impact: {{ finding.impact }}/100
+                </p>
                 <p v-if="finding._tag === 'Open'" class="text-muted">
                   Next: {{ finding.nextAction }}
                 </p>

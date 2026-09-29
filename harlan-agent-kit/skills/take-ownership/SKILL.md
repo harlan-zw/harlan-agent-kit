@@ -53,6 +53,10 @@ Use `pr` when code needs review. Use `adversarial-review` before deciding readin
 
 Restart readiness after the remote head changes.
 
+If the `pr` Skill uses a subagent review because the Service Queue is full, finish that local review and current-head CI.
+Then hand the pull request to the Service's durable Review Task. End the interactive turn with the outstanding Review named.
+Do not report `VERIFIED` or claim the Service posted `READY` until it does.
+
 ## Land and follow
 
 When authority permits, land the exact ready head through the repository's normal merge path.

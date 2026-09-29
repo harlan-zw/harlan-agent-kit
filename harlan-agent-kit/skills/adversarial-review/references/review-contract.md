@@ -19,7 +19,13 @@ Check:
 - Code comments against `../../../references/code-comments.md`.
 - Repository architecture and local instructions.
 
-Treat style-only preferences as non-blocking. Treat visible UI defects as material. This includes clipping, overlap, overflow, unreadable contrast, and missing content.
+Do not report style preferences. Record credible defects with an impact score from 0 to 100.
+Score harm if merged unfixed. Consider likelihood, affected users, blast radius, and reversibility.
+Scores from 81 to 100 require action. Scores from 0 to 80 stay Logged without Repair.
+Do not raise a score to trigger Repair. Visible UI defects can qualify when they harm use.
+Use 81 to 90 for common broken paths or wrong results without a practical workaround.
+Use 91 to 100 for credible data loss, security bypass, or broad outage.
+Use 0 to 80 for limited, recoverable defects. Log their proof without starting Repair.
 
 Treat a clearly labelled `Before` image as historical evidence. Verify the current head before recording a finding.
 
@@ -30,7 +36,7 @@ The controller records `Passed`, `Pending`, or `Failed` for three gates:
 | Gate | Passed | Pending | Failed |
 | --- | --- | --- | --- |
 | Merge | GitHub reports conflict-free | Mergeability unknown, or conflicts with repair active | Conflicts present |
-| Review | The Agent report has zero material findings | Never, a valid Agent report completes this gate | One or more material findings remain |
+| Review | The Agent report has no finding above 80/100 | Never, a valid Agent report completes this gate | One or more findings score above 80/100 |
 | CI | Every GitHub Actions check run passed | GitHub Actions CI unavailable, running, or blocked by a confirmed head or base failure with repair active | The PR caused a GitHub Actions check run to fail, or repair exhausted its attempts |
 
 Only check runs from the `github-actions` app count as CI. Ignore commit statuses
@@ -53,7 +59,7 @@ Derive one outcome without judgment:
 Gate outcomes are deterministic. Confidence never changes an outcome. Do not show
 `PENDING` or `BLOCKED` a confidence score or call either a sign-off.
 
-The Agent returns only the premise, material findings, and confidence. It never
+The Agent returns only the premise, scored findings, and confidence. It never
 returns workflow state. The controller derives every gate and the outcome.
 
 ## Confidence
@@ -108,7 +114,7 @@ The controller reads the Agent's own `▓▓▓░░ NN% next-step` line and pu
 
 Keep the reviewed SHA in hidden metadata. Render one robot emoji. Put disclosure,
 policy, waiting state, and human ownership in one blockquoted line. The visible
-review body only reports material issues found or fixed.
+review body reports actionable findings, Logged findings, and fixes.
 
 ```markdown
 <!-- harlan-agent-kit:pr-triage -->
@@ -119,12 +125,13 @@ review body only reports material issues found or fixed.
 
 ```
 
-When Review found issues, show every material finding once:
+When Review found issues, show each finding once:
 
 ```markdown
 - **Fixed:** SHORT_DESCRIPTION
-- **Open:** SHORT_DESCRIPTION. Next: NEXT_ACTION
-- **Dismissal recommended:** SHORT_DESCRIPTION. Next: Dismiss this pull request.
+- **Logged (IMPACT/100):** SHORT_DESCRIPTION
+- **Open (IMPACT/100):** SHORT_DESCRIPTION. Next: NEXT_ACTION
+- **Dismissal recommended (IMPACT/100):** SHORT_DESCRIPTION. Next: Dismiss this pull request.
 ```
 
 Do not list the reviewed SHA, base state, metadata conformance, commands, passed
@@ -138,17 +145,21 @@ an issue bullet for a clean result.
 
 ## Structured Repair handoff
 
-Record every material Review finding. Never cap the finding count.
+Record every evidence-backed Review finding. Never cap the finding count.
 
-Each finding records a stable fingerprint, exact path and line, proof, summary, next action, and resolution.
+Each finding records impact, a stable fingerprint, exact path and line, proof, and summary.
+An actionable finding also records its next action and resolution.
 
 Decide the pull request premise once before classifying findings.
 
-A sound premise means safe fixes preserve the pull request intent. Every finding uses `Repair` and records the regression test the fresh Repair Agent must write first. A finding no test can cover, such as a stale comment or documentation, records none.
+A sound premise means safe fixes preserve the pull request intent. Findings above 80 use `Repair` and record the regression test the fresh Repair Agent must write first. A finding no test can cover, such as a stale comment or documentation, records none.
 
-A wrong premise means safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Every finding uses `Dismissal` and records no regression test.
+A wrong premise means safe fixes must reverse the intent, remove a safeguard, or add unrelated root architecture. Findings above 80 use `Dismissal` and record no regression test.
 
-Never mix `Repair` and `Dismissal` findings. For a wrong premise, queue no Repair. Publish `BLOCKED` with Action required. Harlan decides whether to Dismiss.
+Findings at 80 or below use `Logged`, regardless of premise. They do not fail the Review gate or queue Repair.
+
+Never mix `Repair` and `Dismissal` findings. For an actionable wrong premise, queue no Repair.
+Publish `BLOCKED` with Action required. Harlan decides whether to Dismiss.
 
 ## Deployment extension
 

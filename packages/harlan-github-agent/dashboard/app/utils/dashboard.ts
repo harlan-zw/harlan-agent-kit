@@ -468,7 +468,7 @@ function sentence(value: string): string {
 /** Explains a Review outcome without making Review findings read as agent failure. */
 export function reviewOutcomeDetail(agent: ReviewAgent): string {
   if (agent.outcome._tag === 'Ready')
-    return 'No issues found.'
+    return agent.findings.some(finding => finding._tag === 'Logged') ? 'No finding above 80/100.' : 'No issues found.'
 
   const openFindings = agent.findings.filter(finding => finding._tag === 'Open')
   if (openFindings.length > 0) {

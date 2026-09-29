@@ -94,7 +94,7 @@ ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal
 GitHub ${action} this pull request.${disposition._tag === 'Merged'
   ? `
 
-${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map(finding => finding._tag === 'Open' ? `- ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : `- Fixed: ${cleanLine(finding.summary)}`).join('\n')}
+${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map(finding => finding._tag === 'Open' ? `- ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : finding._tag === 'Logged' ? `- Logged (${finding.impact}/100): ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)}` : `- Fixed: ${cleanLine(finding.summary)}`).join('\n')}
 
 ${cleanLine(review.reason)}`
   : ' No further automated Review will run.'}`
@@ -102,7 +102,9 @@ ${cleanLine(review.reason)}`
   if (review.taskKind === 'review_fix') {
     const findings = review.findings.map(finding => finding._tag === 'Fixed'
       ? `- **Fixed:** ${cleanLine(finding.summary)}`
-      : `- **Open:** ${cleanLine(finding.summary)}${/[.!?]$/.test(cleanLine(finding.summary)) ? '' : '.'}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${cleanLine(finding.nextAction)}`)
+      : finding._tag === 'Logged'
+        ? `- **Logged (${finding.impact}/100):** ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)}`
+        : `- **Open:** ${cleanLine(finding.summary)}${/[.!?]$/.test(cleanLine(finding.summary)) ? '' : '.'}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${cleanLine(finding.nextAction)}`)
     return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${review.headSha} -->
 ### 🤖 BLOCKED
