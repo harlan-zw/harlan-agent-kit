@@ -256,6 +256,70 @@ list_paths() {
   printf '%s\n' "${repository_files[@]}"
 }
 
+# Hogwild runs public issue text, so it must not hold the desktop's write
+# credentials. Each override replaces a key the file already sets and never
+# adds one, so a repository without the key keeps working unchanged.
+apply_overrides() {
+  local file=$1
+  local line key prefix next_path
+  next_path="$file.override.$$"
+  while IFS= read -r line || [ -n "$line" ]; do
+    prefix=''
+    key=$line
+    if [[ "$key" == 'export '* ]]; then
+      prefix='export '
+      key=${key#export }
+    fi
+    key=${key%%=*}
+    if [ "$key" != "${line#"$prefix"}" ] && [ -n "${override_values[$key]+set}" ]; then
+      printf '%s%s=%s\n' "$prefix" "$key" "${override_values[$key]}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$file" > "$next_path"
+  chmod 600 "$next_path"
+  mv -fT -- "$next_path" "$file"
+}
+
+load_overrides() {
+  local overrides=$1
+  local line key
+  [ -f "$overrides" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    key=${line%%=*}
+    [ "$key" != "$line" ] && [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+      || fail "The Hogwild environment overrides file has an invalid line."
+    override_values[$key]=${line#*=}
+  done < "$overrides"
+}
+
+stage_outgoing() {
+  local stage=$1
+  local overrides=$2
+  local index relative_path source_path target_path
+  declare -gA override_values=()
+  load_overrides "$overrides"
+  for index in "${!repository_files[@]}"; do
+    validate_source_entry "${repository_files[$index]}" "${repository_ids[$index]}"
+  done
+  (umask 077 && mkdir -p "$stage")
+  for relative_path in "${repository_files[@]}"; do
+    source_path="$repository_home/$relative_path"
+    target_path="$stage/$relative_path"
+    mkdir -p "$(dirname "$target_path")"
+    if [ -L "$source_path" ]; then
+      ln -s -- "$(readlink "$source_path")" "$target_path"
+      continue
+    fi
+    install -m 600 -- "$source_path" "$target_path"
+    apply_overrides "$target_path"
+  done
+  printf 'Repository environment staged: %s files, %s overrides.\n' "${#repository_files[@]}" "${#override_values[@]}"
+}
+
 normalize_home
 load_manifest
 
@@ -277,7 +341,11 @@ case "$command_name" in
     [ "$#" -eq 3 ] || fail "Usage: harlan-repository-env seed PRIMARY WORKTREE"
     seed_worktree "$2" "$3"
     ;;
+  stage-outgoing)
+    [ "$#" -eq 3 ] || fail "Usage: harlan-repository-env stage-outgoing STAGE OVERRIDES"
+    stage_outgoing "$2" "$3"
+    ;;
   *)
-    fail "Use validate-source, list-paths, install-staged, or seed."
+    fail "Use validate-source, list-paths, install-staged, seed, or stage-outgoing."
     ;;
 esac

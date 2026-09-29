@@ -23,6 +23,9 @@ REMOTE_OVERRIDE="$REMOTE_OVERRIDE_DIR/hogwild.conf"
 WORKTRUNK_CONFIG_FILE="$SCRIPT_DIR/worktrunk.toml"
 REPOSITORY_ENV_TOOL_FILE="$SCRIPT_DIR/repository-env.sh"
 REPOSITORY_ENV_MANIFEST_FILE="${HARLAN_REPOSITORY_ENV_MANIFEST:-$SCRIPT_DIR/repository-env-files}"
+# Values Hogwild gets in place of the desktop's, such as a read-only Cloudflare
+# token. It lives outside every repository and never leaves this machine as is.
+HOGWILD_ENV_OVERRIDES_FILE="${HARLAN_HOGWILD_ENV_OVERRIDES:-$HOME/.config/harlan-agent-kit/hogwild-env-overrides}"
 REMOTE_WORKTRUNK_CONFIG="$REMOTE_HOME/.config/worktrunk/config.toml"
 REMOTE_REPOSITORY_ENV_TOOL="$REMOTE_HOME/.local/bin/harlan-repository-env"
 REMOTE_REPOSITORY_ENV_MANIFEST="$REMOTE_HOME/.config/harlan-agent-kit/repository-env-files"
@@ -241,11 +244,18 @@ safe_restart() {
 # place. Recorded before the scp, so the EXIT trap reclaims it on every exit
 # path, including the ones set -e takes with no cleanup branch in sight.
 staged_file=''
+# The local copy of the repository environment, with Hogwild overrides applied.
+# It holds secrets, so every exit path removes it.
+outgoing_env_stage=''
 
 cleanup_staged_file() {
   if [ -n "$staged_file" ]; then
     ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$staged_file'" >/dev/null 2>&1 || true
     staged_file=''
+  fi
+  if [ -n "$outgoing_env_stage" ]; then
+    rm -rf -- "$outgoing_env_stage"
+    outgoing_env_stage=''
   fi
 }
 trap cleanup_staged_file EXIT
@@ -312,9 +322,10 @@ require_safe_repository_environment_stage() {
 }
 
 sync_repository_environment() {
+  outgoing_env_stage=$(umask 077 && mktemp -d)
   HARLAN_REPOSITORY_ENV_HOME="$REPOSITORY_ENV_HOME" \
   HARLAN_REPOSITORY_ENV_MANIFEST="$REPOSITORY_ENV_MANIFEST_FILE" \
-    bash "$REPOSITORY_ENV_TOOL_FILE" validate-source >/dev/null
+    bash "$REPOSITORY_ENV_TOOL_FILE" stage-outgoing "$outgoing_env_stage/stage" "$HOGWILD_ENV_OVERRIDES_FILE" >/dev/null
 
   if ! REMOTE_REPOSITORY_ENV_STAGE=$(ssh -o BatchMode=yes "$HOGWILD_HOST" \
     "umask 077; mkdir -p '$REMOTE_HOME/.cache'; mktemp -d '$REMOTE_HOME/.cache/harlan-repository-env.XXXXXX'"); then
@@ -326,7 +337,7 @@ sync_repository_environment() {
     --files-from=<(HARLAN_REPOSITORY_ENV_HOME="$REPOSITORY_ENV_HOME" \
       HARLAN_REPOSITORY_ENV_MANIFEST="$REPOSITORY_ENV_MANIFEST_FILE" \
       bash "$REPOSITORY_ENV_TOOL_FILE" list-paths) \
-    "$REPOSITORY_ENV_HOME/" "$HOGWILD_HOST:$REMOTE_REPOSITORY_ENV_STAGE/"; then
+    "$outgoing_env_stage/stage/" "$HOGWILD_HOST:$REMOTE_REPOSITORY_ENV_STAGE/"; then
     cleanup_repository_environment_stage || true
     echo "Hogwild could not receive the repository environment." >&2
     exit 1

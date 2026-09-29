@@ -31,6 +31,7 @@ export HOGWILD_SERVICE_TEST_LEGACY_SAFE_AFTER=1
 export HOGWILD_SERVICE_TEST_LEGACY_STATE="$test_root/legacy-state"
 export HARLAN_REPOSITORY_ENV_HOME="$test_home"
 export HARLAN_REPOSITORY_ENV_MANIFEST="$test_root/repository-env-files"
+export HARLAN_HOGWILD_ENV_OVERRIDES="$test_root/hogwild-env-overrides"
 # Without this the script reads the real ~/sites/SITES.md. A machine that has
 # one failed, and CI passed only because it has none, so the sites sync was
 # never covered anywhere.
@@ -220,6 +221,10 @@ PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" sync-e
 if ! grep -q '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" \
   || ! grep -q 'install-staged' "$HOGWILD_SERVICE_TEST_CALLS"; then
   printf '%s\n' 'Manual repository environment sync did not install the files.' >&2
+  exit 1
+fi
+if grep '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | grep -qF " $test_home/ "; then
+  printf '%s\n' 'Repository environment sync sent the desktop files without Hogwild overrides.' >&2
   exit 1
 fi
 if grep -E "prepare-update|api/service/restart" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
