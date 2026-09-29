@@ -27,7 +27,7 @@ export interface AgentAppOptions {
   /** The bounds of the Agent slot control. Absent means the control is unavailable. */
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity
-  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled'>
   settleTask?: (taskId: string) => Promise<boolean>
   ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
@@ -377,6 +377,18 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   })
 
   app.get('/api/state', () => dashboardSnapshot(options))
+
+  app.get('/api/items/pull-request-status', (event) => {
+    const query = new URL(event.req.url).searchParams
+    const repository = query.get('repository')
+    const number = Number(query.get('number'))
+    if (repository === null || !/^[^/]+\/[^/]+$/.test(repository) || !Number.isSafeInteger(number) || number < 1)
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Valid repository and number query values are required.' })
+    const item = options.store.getOpenPullRequestStatus(repository, number)
+    if (item === null)
+      throw createError({ status: 404, statusText: 'Not Found', message: 'The open pull request is not tracked.' })
+    return item
+  })
 
   app.post('/api/desktop/capacity', async (event) => {
     if (options.desktop === undefined)

@@ -231,7 +231,8 @@ Log the URL to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
 For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, add `harlan-agent-review`.
 This requests Review in Manual Selection mode and prevents prose classification from skipping it in Auto mode.
-First confirm the matching Service Item is not dismissed. A Dismissal survives new head commits.
+First read the matching Service Item with its authenticated `/api/items/pull-request-status?repository=OWNER%2FREPO&number=NUMBER` endpoint.
+Confirm `dismissed: false`. A Dismissal survives new head commits.
 If it is dismissed, leave the request label unset and report the Dismissal to Harlan.
 If the label is absent, create it with `gh label create harlan-agent-review --color 8250df --description "Requests automated Review and repair"`.
 Then add it to the pull request:
@@ -349,7 +350,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    gh pr view NUMBER --json reviews,comments --jq '.reviews[].body, .comments[].body'
    gh api repos/OWNER/REPO/pulls/NUMBER/comments --paginate --jq '.[].body'
    ```
-5. Read each material finding's resolution from the structured Review record.
+5. Read each material finding's resolution from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
    If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.
    Act on findings with resolution `Repair`. If the service owns a current-head Repair Task, let it finish before editing.
@@ -358,7 +359,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    If a finding is false positive or not applicable, post one self-identified Agent comment naming the finding, its classification, and concrete evidence.
    That comment cannot change the service outcome. Ask Harlan to decide whether to dismiss or rerun the Review.
    Do not change the marked comment or Review outcome label yourself. A `BLOCKED` outcome remains blocked until the service publishes a new outcome.
-6. After a push by the submitting Agent, check the Service Item for Dismissal again.
+6. After a push by the submitting Agent, check the targeted Service Item endpoint for Dismissal again.
    If dismissed, report it and stop. Otherwise add `harlan-agent-review` for the new head and record a new Review request time.
    The Service consumes that label per head in Manual Selection mode. Then restart at step 1.
    A Service Repair commit keeps its own Approval; do not add the label for that commit.
@@ -373,9 +374,11 @@ Run it on the Service host. On Hogwild, use the config path and loopback URL bel
 If that host lacks the control CLI, read its authenticated `/api/state` endpoint instead.
 The endpoint returns the same `state` object. Do not treat a failed command as an empty Queue.
 Match this repository, pull request number, and current head SHA in `state.queue` when present.
-Check the matching `state.items` entry's `dismissed` field first. A dismissed Item stops all Review work, even after a new head.
-If its Dismissal state cannot be confirmed, report the missing Service state. Do not start a fallback review.
-If that entry is missing, use a queued Review Task for this pull request as the capacity signal.
+Check the targeted Item endpoint's `dismissed` field first. A dismissed Item stops all Review work, even after a new head.
+The dashboard snapshot lists only 100 recent Items, so absence from `state.items` proves nothing.
+If the targeted Item request fails, report the missing Service state. Do not start a fallback review.
+Use the Control API's configured Basic authentication for both requests. Never print the password.
+If the matching Queue entry is missing, use a queued Review Task for this pull request as the capacity signal.
 Refetch the GitHub head before spawning; the Task alone does not identify its head SHA.
 Count `state.tasks` whose state is `Queued` and kind is `adversarial_review` or `review_fix`.
 Calculate free host slots from `state.hostCapacity`: local maximum minus active, plus desktop maximum minus active when connected.
@@ -387,9 +390,6 @@ harlan-github-agent control status \
   jq --arg repo OWNER/REPO --argjson number NUMBER --arg head HEAD_SHA '
     (.state // .) as $state |
     {agentStart: $state.agentStart._tag,
-     item: ([$state.items[] | select(.kind == "pull_request" and
-       .repository == $repo and .number == $number)][0] |
-       if . then {dismissed, headSha} else null end),
      hostCapacity: $state.hostCapacity,
      queuedWork: [$state.tasks[] | select(.state._tag == "Queued") |
        select(.kind == "adversarial_review" or .kind == "review_fix")],
@@ -409,18 +409,20 @@ Also start one 20 minutes after the recorded Review request if Review remains qu
 This also applies when the control CLI is unavailable, the authenticated API works, and no trusted `REVIEWING` comment exists.
 Never start a subagent while the Service Review Task is `Running` or `Publishing`.
 If an active Review stalls, report its Service Incident or exact Task state.
-Require an open pull request, a recorded request, and a matching Service Item with `dismissed: false`.
+Require an open pull request, a recorded request, and targeted Item status with `dismissed: false`.
 Exclude an intentional pause, stop, cancellation, or missing Approval.
 Record the capacity snapshot or elapsed time that triggered the decision.
 Do not infer saturation from `maxOpenPullRequests`; that limit controls new Issue work.
 
 Spawn one native subagent for this exact head SHA.
+Refetch targeted Item status before spawning. Stop if it became dismissed.
 Give it the pull request snapshot and disproof checks in the [review contract](../adversarial-review/references/review-contract.md#adversarial-review).
 It reads the full diff, surrounding code, author images, and current checks.
 Keep it read only. It returns material findings with path, line, proof, and next action.
 It does not post comments, set labels, approve, or merge.
 Do not cancel the service Review. If its Review starts while the subagent runs, let both finish and compare their findings.
 Refetch the head before acting on findings. Discard the subagent assessment if the head moved.
+Refetch targeted Item status before posting an assessment. Stop if it became dismissed.
 
 Apply confirmed blockers in new commits, then restart Step 6 for the new head.
 Mark false positives or inapplicable findings in one self-identified Agent comment with evidence.

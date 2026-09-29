@@ -881,6 +881,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   listOpenIssueNumbers: (github: string) => number[]
   /** Whether one item carries a Dismissal, which outranks every planner and classifier. */
   isItemDismissed: (github: string, kind: GitHubItem['kind'], itemNumber: number) => boolean
+  /** Exact open pull request state, including Items beyond the dashboard limit. */
+  getOpenPullRequestStatus: (github: string, pullRequestNumber: number) => { headSha: string, dismissed: boolean } | null
   /** Whether the routines table names one issue as a Routine's tracking issue. */
   isRoutineTrackingIssue: (github: string, issueNumber: number) => boolean
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
@@ -7952,6 +7954,20 @@ export function openJournalStore(
     JOIN repositories ON repositories.id = subjects.repository_id
     WHERE repositories.github = ? AND subjects.kind = ? AND subjects.github_number = ?
   `).get(github, kind, itemNumber) !== undefined
+
+  const getOpenPullRequestStatus: JournalStore['getOpenPullRequestStatus'] = (github, pullRequestNumber) => {
+    const row = database.prepare(`
+      SELECT json_extract(revisions.payload, '$.headSha') AS head_sha,
+        EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id) AS dismissed
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND repositories.enabled = 1
+        AND subjects.kind = 'pull_request' AND subjects.github_number = ?
+        AND json_extract(revisions.payload, '$.state') = 'open'
+    `).get(github, pullRequestNumber) as { head_sha: string, dismissed: number } | undefined
+    return row === undefined ? null : { headSha: row.head_sha, dismissed: row.dismissed === 1 }
+  }
 
   const isRoutineTrackingIssue: JournalStore['isRoutineTrackingIssue'] = (github, issueNumber) => routineTrackingIssueInDatabase(database, github, issueNumber)
 
@@ -15427,6 +15443,7 @@ export function openJournalStore(
     prepareForRestart,
     isSafeToRestart,
     dismissItem,
+    getOpenPullRequestStatus,
     restoreItem,
     getSelectionMode,
     setSelectionMode,

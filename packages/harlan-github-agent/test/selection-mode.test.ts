@@ -203,6 +203,7 @@ describe('selection mode route', () => {
         listRoutines: () => [],
         openRoutineRun: () => null,
         getDashboardSnapshot: () => dashboardSnapshot(),
+        getOpenPullRequestStatus: () => null,
         getStats: () => { throw new Error('Unexpected Stats request.') },
         listReviewRuns: () => [],
         listWorkflowEvents: () => [],
