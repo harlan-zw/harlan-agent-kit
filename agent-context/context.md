@@ -58,6 +58,16 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - Scratch output stays out of the repository. Screenshots, one-off reports, and exploratory notes go to the session scratchpad. A one-off script goes in a gitignored `scripts/scratchpad/`; only durable, referenced tooling lives in `scripts/` proper.
 - Run a repository binary with `pnpm exec`, never `npx`. npm's npx does not read pnpm's layout as a local install, falls back to a cached copy in `~/.npm/_npx`, and fails with resolution errors that read as a broken tree. If `pnpm exec <bin>` works where `npx <bin>` fails, purge the matching `~/.npm/_npx` entry.
 
+## Cloudflare CLI: cf, v20260928
+
+`cf` is the current Cloudflare CLI. It covers the whole Cloudflare platform. Prefer it over Wrangler.
+
+- Create a project with `cf init`. Develop with `cf dev`. Deploy with `cf deploy`.
+- Manage account resources with `cf <product> …`, for example `cf d1 list`.
+- Use Wrangler only if the project already has `wrangler.jsonc`, `wrangler.json`, or `wrangler.toml`, or if I ask for it. Keep Wrangler there until I ask to migrate; then use `cf migrate`.
+- `cf` commands differ from Wrangler commands. Check `cf --help` or `cf cli search <task>`; never guess.
+- If a `cf` command fails in a project without Wrangler, do not fall back to Wrangler (`pnpm dlx wrangler` included). Offer to report the failure first.
+
 ## Worktrees
 
 `wt` (worktrunk) owns every worktree. Never `git worktree add`. Never `EnterWorktree` or `isolation: "worktree"`; those write to the banned `.claude/worktrees/`.
