@@ -375,6 +375,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 Count review-driven repair pushes by this submitting Agent across the entire pull request.
 After three, stop Agent-authored refinements and report remaining findings above 80/100 to Harlan.
 Do not reset the count because a new head commit starts a new Review. CI repair attempts keep their separate limit below.
+At that limit, do not start another fallback subagent Review. Hand the pull request to its Service Review Task.
 
 ### Review queue capacity
 
