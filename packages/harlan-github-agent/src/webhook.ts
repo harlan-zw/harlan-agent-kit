@@ -19,6 +19,8 @@ export const HINTED_WEBHOOK_EVENTS = new Set([
   'issues',
   'pull_request',
   'pull_request_review',
+  // A reply on a finding thread asks for a fresh Review.
+  'pull_request_review_comment',
   'push',
   'status',
 ])

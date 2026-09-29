@@ -57,6 +57,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
     body: 'Fixes the bug.',
     checks: { _tag: 'Available', checks: input.headChecks },
     comments: [],
+    findingDiscussions: [],
     priorAutomatedReview: { _tag: 'None' },
     pullRequest,
     requiredChecks: { _tag: 'Declared', contexts: ['ci / test'] },

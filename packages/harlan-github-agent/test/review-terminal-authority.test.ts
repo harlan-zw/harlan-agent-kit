@@ -191,6 +191,7 @@ function publicationHarness(test: Pick<TerminalStatus, 'store' | 'pullRequest' |
           comments: [],
           priorAutomatedReview: { _tag: 'None' as const },
           pullRequest: { ...test.pullRequest, baseSha: 'ordinary-base-movement' },
+          findingDiscussions: [],
           requiredChecks: { _tag: 'None' as const },
           reviews: [],
         }))

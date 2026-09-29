@@ -130,6 +130,7 @@ describe('terminal Review publication', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
+          findingDiscussions: [],
           requiredChecks: { _tag: 'None' as const },
           reviews: [],
         })),

@@ -38,6 +38,7 @@ function reviewSnapshot(): PullRequestReviewSnapshot {
     comments: [],
     priorAutomatedReview: { _tag: 'None' },
     pullRequest: pullRequestItem({ mergeState: 'clean' }),
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' },
     reviews: [],
   }

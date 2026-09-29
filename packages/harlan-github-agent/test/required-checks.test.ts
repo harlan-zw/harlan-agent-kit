@@ -47,6 +47,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
   const snapshot: PullRequestReviewSnapshot = {
     baseChecks: { _tag: 'Available', checks: [passingBaseCheck] },
     body: 'Fixes the bug.',
+    findingDiscussions: [],
     checks: { _tag: 'Available', checks: input.headChecks },
     comments: [],
     priorAutomatedReview: { _tag: 'None' },

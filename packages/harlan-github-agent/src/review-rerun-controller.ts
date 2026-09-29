@@ -41,7 +41,8 @@ export function syncReviewRerunRequests(
         repository: repository.github,
         pullRequestNumber: request.pullRequestNumber,
         revisionId: subject.revisionId,
-        requestId: `github-comment:${repository.github}:${request.commentId}:${request.updatedAt}`,
+        // Conversation and review comment ids are separate GitHub sequences.
+        requestId: `${request.origin === 'Command' ? 'github-comment' : 'github-review-comment'}:${repository.github}:${request.commentId}:${request.updatedAt}`,
         source: 'github_comment',
         requestedBy: request.author,
         at,

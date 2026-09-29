@@ -1,6 +1,7 @@
 import type { ReviewPublicationAuthority } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
+import { Buffer } from 'node:buffer'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
@@ -49,13 +50,34 @@ export interface ReviewFindingThreadMirror {
   report: (repository: string, outcome: ReviewFindingThreadsOutcome) => void
 }
 
-const FINDING_MARKER_PATTERN = /<!-- review-finding: ([a-f\d]{64}) -->/i
+const FINDING_MARKER_PATTERN = /<!-- review-finding: ([a-f\d]{64})(?: ([\w-]+))? -->/i
+const FINDING_SUMMARY_PATTERN = /^\*\*(?:Open|Dismissal recommended):\*\* (.+)$/m
+
+/** What one finding thread's first comment says about its finding. */
+export interface ReviewFindingThreadMarker {
+  fingerprint: string
+  /** The Review's own name for the finding, so a later Review can reuse it exactly. */
+  identity: string | null
+  summary: string | null
+}
+
+/** Reads the finding one inline comment opened, or null on any other comment. */
+export function reviewFindingThreadMarker(body: string): ReviewFindingThreadMarker | null {
+  if (!body.includes(AUTOMATED_REVIEW_MARKER))
+    return null
+  const marker = FINDING_MARKER_PATTERN.exec(body)
+  if (marker?.[1] === undefined)
+    return null
+  return {
+    fingerprint: marker[1].toLowerCase(),
+    identity: marker[2] === undefined ? null : Buffer.from(marker[2], 'base64url').toString('utf8'),
+    summary: FINDING_SUMMARY_PATTERN.exec(body)?.[1]?.trim() ?? null,
+  }
+}
 
 /** The finding fingerprint one inline comment carries, or null on any other comment. */
 export function reviewFindingThreadFingerprint(body: string): string | null {
-  if (!body.includes(AUTOMATED_REVIEW_MARKER))
-    return null
-  return FINDING_MARKER_PATTERN.exec(body)?.[1]?.toLowerCase() ?? null
+  return reviewFindingThreadMarker(body)?.fingerprint ?? null
 }
 
 type OpenFinding = Extract<ReviewFinding, { _tag: 'Open' }> & { details: NonNullable<Extract<ReviewFinding, { _tag: 'Open' }>['details']> }
@@ -75,7 +97,8 @@ export function reviewFindingThreadBody(finding: OpenFinding): string {
   const heading = finding.resolution === 'Dismissal' ? 'Dismissal recommended' : 'Open'
   return [
     AUTOMATED_REVIEW_MARKER,
-    `<!-- review-finding: ${finding.details.fingerprint.toLowerCase()} -->`,
+    // The identity rides base64url encoded, so no finding text can close the HTML comment.
+    `<!-- review-finding: ${finding.details.fingerprint.toLowerCase()}${finding.details.identity === undefined ? '' : ` ${Buffer.from(finding.details.identity, 'utf8').toString('base64url')}`} -->`,
     `**${heading}:** ${sentence(finding.summary)}`,
     '',
     `**Proof:** ${sentence(finding.details.proof)}`,
@@ -172,4 +195,72 @@ async function syncReviewFindingThreads(
       return { _tag: 'Failed', message: result.error }
   }
   return { _tag: 'Written', posted, outsideDiff, resolved: plan.resolve.length }
+}
+
+/** One inline review comment as GitHub lists it, reduced to what a finding discussion reads. */
+export interface InlineReviewComment {
+  id: number
+  inReplyToId: number | null
+  author: string
+  body: string
+  path: string
+  line: number | null
+  updatedAt: string
+}
+
+/** One inline review comment as the finding discussion reads it. */
+export function inlineReviewComment(comment: { id: number, in_reply_to_id?: number, user: { login: string } | null, body: string, path: string, line?: number | null, updated_at: string }): InlineReviewComment {
+  return {
+    id: comment.id,
+    inReplyToId: comment.in_reply_to_id ?? null,
+    author: comment.user?.login ?? '',
+    body: comment.body,
+    path: comment.path,
+    line: comment.line ?? null,
+    updatedAt: comment.updated_at,
+  }
+}
+
+/** One reply a person left on a finding thread. */
+export interface FindingReply {
+  commentId: number
+  author: string
+  body: string
+  updatedAt: string
+}
+
+/** The replies on one finding thread this service opened. */
+export interface FindingDiscussion {
+  fingerprint: string
+  identity: string | null
+  summary: string | null
+  path: string
+  line: number | null
+  replies: FindingReply[]
+}
+
+/**
+ * Groups the replies people left on this service's finding threads.
+ *
+ * GitHub points every reply at the thread's first comment, so the root decides
+ * which finding a reply answers. This service's own comments never count as a
+ * reply, or a thread it writes would answer itself.
+ */
+export function findingDiscussions(comments: InlineReviewComment[], actorLogin: string): FindingDiscussion[] {
+  const actor = actorLogin.toLowerCase().replace(/\[bot\]$/, '')
+  const own = (comment: InlineReviewComment): boolean => comment.author.toLowerCase().replace(/\[bot\]$/, '') === actor
+  const roots = new Map<number, FindingDiscussion>()
+  for (const comment of comments) {
+    const marker = comment.inReplyToId === null && own(comment) ? reviewFindingThreadMarker(comment.body) : null
+    if (marker !== null)
+      roots.set(comment.id, { ...marker, path: comment.path, line: comment.line, replies: [] })
+  }
+  for (const comment of comments) {
+    const root = comment.inReplyToId === null ? undefined : roots.get(comment.inReplyToId)
+    if (root !== undefined && !own(comment))
+      root.replies.push({ commentId: comment.id, author: comment.author, body: comment.body, updatedAt: comment.updatedAt })
+  }
+  return [...roots.values()]
+    .filter(discussion => discussion.replies.length > 0)
+    .map(discussion => ({ ...discussion, replies: discussion.replies.toSorted((left, right) => left.commentId - right.commentId) }))
 }

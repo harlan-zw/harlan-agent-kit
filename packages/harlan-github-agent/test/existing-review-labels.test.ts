@@ -39,6 +39,7 @@ it('requires fresh Review before publishing a READY label for an unscoped commen
         comments: [],
         priorAutomatedReview: pullRequest.priorAutomatedReview,
         pullRequest,
+        findingDiscussions: [],
         requiredChecks: { _tag: 'None' },
         reviews: [],
       })),

@@ -189,6 +189,7 @@ describe('live pull request base', () => {
 
     expect(result).toEqual(ok(expect.objectContaining({
       checks: { _tag: 'Available', checks: [expect.objectContaining({ name: 'test' })] },
+      findingDiscussions: [],
       requiredChecks: { _tag: 'None' },
     })))
   })

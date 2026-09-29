@@ -16,6 +16,7 @@ import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
+import { findingDiscussions, inlineReviewComment } from './review-finding-threads.ts'
 import { isReviewRerunCommand } from './review-rerun.ts'
 import { isRoutineTrackingIssue } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
@@ -29,6 +30,8 @@ export interface GitHubReadError {
 export interface GitHubReviewRerunRequest {
   author: string
   commentId: number
+  /** A rerun command on the conversation, or a reply on a finding thread beside the code. */
+  origin: 'Command' | 'FindingReply'
   pullRequestNumber: number
   updatedAt: string
 }
@@ -435,21 +438,41 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
       const octokit = await client(repository.github, signal)
       if (octokit._tag === 'Err')
         return octokit
-      return octokit.value.rest.issues.listCommentsForRepo({
+      const request = {
         owner,
         repo,
-        sort: 'updated',
-        direction: 'desc',
+        sort: 'updated' as const,
+        direction: 'desc' as const,
         per_page: 100,
         ...(signal === undefined ? {} : { request: { signal } }),
-      }).then(response => ok(response.data.flatMap((comment): GitHubReviewRerunRequest[] => {
-        const body = comment.body ?? ''
-        const author = comment.user?.login
-        const pullRequestNumber = Number(comment.issue_url.split('/').at(-1))
-        return author === undefined || !Number.isSafeInteger(pullRequestNumber) || !isReviewRerunCommand(body)
-          ? []
-          : [{ author, commentId: comment.id, pullRequestNumber, updatedAt: comment.updated_at }]
-      }))).catch((error: unknown): Result<GitHubReviewRerunRequest[], GitHubReadError> => {
+      }
+      return Promise.all([
+        octokit.value.rest.issues.listCommentsForRepo(request),
+        octokit.value.rest.pulls.listReviewCommentsForRepo(request),
+      ]).then(([issueComments, reviewComments]) => ok([
+        ...issueComments.data.flatMap((comment): GitHubReviewRerunRequest[] => {
+          const body = comment.body ?? ''
+          const author = comment.user?.login
+          const pullRequestNumber = Number(comment.issue_url.split('/').at(-1))
+          return author === undefined || !Number.isSafeInteger(pullRequestNumber) || !isReviewRerunCommand(body)
+            ? []
+            : [{ author, commentId: comment.id, origin: 'Command' as const, pullRequestNumber, updatedAt: comment.updated_at }]
+        }),
+        // A reply whose thread root fell off this page is missed until the
+        // root reappears; the next Review still reads it from its snapshot.
+        ...Object.values(Object.groupBy(reviewComments.data, comment => comment.pull_request_url)).flatMap((comments) => {
+          const pullRequestNumber = Number(comments?.[0]?.pull_request_url.split('/').at(-1))
+          return comments === undefined || !Number.isSafeInteger(pullRequestNumber)
+            ? []
+            : findingDiscussions(comments.map(inlineReviewComment), options.actorLogin(repository)).flatMap(discussion => discussion.replies.map((reply): GitHubReviewRerunRequest => ({
+                author: reply.author,
+                commentId: reply.commentId,
+                origin: 'FindingReply',
+                pullRequestNumber,
+                updatedAt: reply.updatedAt,
+              })))
+        }),
+      ])).catch((error: unknown): Result<GitHubReviewRerunRequest[], GitHubReadError> => {
         const status = errorStatus(error)
         return err({
           repository: repository.github,
