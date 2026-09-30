@@ -35,6 +35,7 @@ interface WorkerInput {
   checks?: GitHubCheck[]
   finalChecks?: GitHubCheck[]
   template?: PullRequestTemplate
+  templateError?: string
   openRepair?: { number: number, url: string } | null
   job?: Result<FailedJobContext, string>
   workspace?: { hasAgentsFile: boolean, nodeOptions: string | null }
@@ -80,7 +81,7 @@ function runWorker(input: WorkerInput = {}) {
     github: {
       findOpenPullRequestForBranch: () => Promise.resolve(ok(input.openRepair ?? null)),
       getFailedJobContext: () => Promise.resolve(input.job ?? ok(jobContext())),
-      getPullRequestTemplate: () => Promise.resolve(ok(input.template ?? { _tag: 'Missing' })),
+      getPullRequestTemplate: () => Promise.resolve(input.templateError === undefined ? ok(input.template ?? { _tag: 'Missing' }) : err(input.templateError)),
       getDefaultBranchSnapshot: () => {
         snapshotReads += 1
         return Promise.resolve(ok({
@@ -110,6 +111,20 @@ function runWorker(input: WorkerInput = {}) {
 }
 
 describe('baseline repair worker', () => {
+  it.each([
+    { defaultBases: ['new-default'], unreadableChecks: true },
+    { defaultBases: ['new-default'], templateError: 'Template unavailable.' },
+    { checks: [actionsCheck({ conclusion: 'success' })], templateError: 'Template unavailable.' },
+  ])('retires proven obsolete work without ancillary CI or template access: %j', async (input) => {
+    let commits = 0
+    const { result, agentStarted } = await runWorker({ ...input, onCommit: () => {
+      commits += 1
+    } })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Superseded' })))
+    expect(agentStarted).toBe(false)
+    expect(commits).toBe(0)
+  })
+
   it.each([
     { checks: [] },
     { checks: [actionsCheck({ status: 'in_progress', conclusion: null })] },

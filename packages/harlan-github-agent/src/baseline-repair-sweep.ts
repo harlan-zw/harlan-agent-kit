@@ -9,12 +9,12 @@ export interface BaselineRepairSweepOptions {
   github: DefaultBranchSource
   now: () => Date
   repository: RepositoryMapping
-  store: Pick<JournalStore, 'listActionRequiredBaselineRepairs' | 'retireActionRequiredBaselineRepair'>
+  store: Pick<JournalStore, 'listBaselineRepairRetirementCandidates' | 'retireBaselineRepairCandidate'>
 }
 
-/** Settles obsolete attention without starting another Agent turn. */
+/** Retires obsolete Baseline repair and releases its current waiting Reviews. */
 export async function retireObsoleteBaselineRepairs(options: BaselineRepairSweepOptions, signal: AbortSignal): Promise<Result<number, string>> {
-  const candidates = options.store.listActionRequiredBaselineRepairs(options.repository.github)
+  const candidates = options.store.listBaselineRepairRetirementCandidates(options.repository.github)
   if (candidates.length === 0)
     return ok(0)
   if (candidates.some(candidate => candidate.defaultBranch !== options.repository.defaultBranch))
@@ -29,7 +29,7 @@ export async function retireObsoleteBaselineRepairs(options: BaselineRepairSweep
   for (const candidate of candidates) {
     if (candidate.baseSha === snapshot.value.baseSha && !passed)
       continue
-    if (options.store.retireActionRequiredBaselineRepair({
+    if (options.store.retireBaselineRepairCandidate({
       candidate,
       evidence: { _tag: candidate.baseSha === snapshot.value.baseSha ? 'ChecksPassed' : 'BaseChanged', baseSha: snapshot.value.baseSha },
       at: options.now().toISOString(),

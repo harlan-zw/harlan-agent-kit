@@ -300,23 +300,18 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       const prefix = validated.value.writablePullRequestHeadPrefixes[0]
       if (!canRepairBaseline(validated.value) || prefix === undefined)
         return err('Repository policy no longer authorizes Baseline repair.')
-      const [snapshot, template] = await Promise.all([
-        options.github.getDefaultBranchSnapshot(validated.value, signal),
-        options.github.getPullRequestTemplate(validated.value, signal),
-      ])
+      const snapshot = await options.github.getDefaultBranchSnapshot(validated.value, signal)
       if (snapshot._tag === 'Err')
         return snapshot
-      if (template._tag === 'Err')
-        return template
-      if (snapshot.value.baseChecks._tag === 'Unavailable')
-        return err(snapshot.value.baseChecks.reason)
-      const checks = failedChecks(snapshot.value.baseChecks)
       // A Baseline repair exists for one red base commit. If that commit moved on,
       // or its CI went green, there is nothing left to repair.
       if (snapshot.value.baseSha !== task.pullRequest.baseSha)
         return ok({ _tag: 'Superseded', reason: `The default branch moved to ${snapshot.value.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
+      if (snapshot.value.baseChecks._tag === 'Unavailable')
+        return err(snapshot.value.baseChecks.reason)
       if (baselineChecksPassed(snapshot.value.baseChecks))
         return ok({ _tag: 'Superseded', reason: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
+      const checks = failedChecks(snapshot.value.baseChecks)
       if (checks.length === 0)
         return err('Default branch CI has not finished for this Baseline repair.')
       // One Baseline repair per base commit. The Journal learns about a
@@ -328,6 +323,9 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         return published
       if (published.value !== null)
         return ok({ _tag: 'Completed', evidence: `GitHub reports Baseline repair pull request #${published.value.number}: ${published.value.url}` })
+      const template = await options.github.getPullRequestTemplate(validated.value, signal)
+      if (template._tag === 'Err')
+        return template
       const contexts = await Promise.all(checks.map(async (check): Promise<FailedCheckContext> => {
         if (check.source._tag !== 'CheckRun' || check.source.appId !== GITHUB_ACTIONS_APP_ID)
           return { _tag: 'Unavailable', check, reason: 'the check is not a GitHub Actions job' }
