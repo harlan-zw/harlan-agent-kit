@@ -110,6 +110,34 @@ function runWorker(input: WorkerInput = {}) {
 }
 
 describe('baseline repair worker', () => {
+  it.each([
+    { checks: [] },
+    { checks: [actionsCheck({ status: 'in_progress', conclusion: null })] },
+    { checks: [actionsCheck({ status: 'queued', conclusion: 'success' })] },
+    { checks: [actionsCheck({ status: 'in_progress', conclusion: 'failure' })] },
+    { checks: [actionsCheck({ conclusion: 'success', failure: { _tag: 'RunnerLost', incompleteSteps: 2 } })] },
+  ])('keeps unresolved initial default branch checks retryable: %j', async ({ checks }) => {
+    const { result, agentStarted } = await runWorker({ checks })
+    expect(result).toEqual(err('Default branch CI has not finished for this Baseline repair.'))
+    expect(agentStarted).toBe(false)
+  })
+
+  it.each([
+    { finalChecks: [] },
+    { finalChecks: [actionsCheck({ status: 'in_progress', conclusion: null })] },
+    { finalChecks: [actionsCheck({ status: 'queued', conclusion: 'success' })] },
+    { finalChecks: [actionsCheck({ status: 'in_progress', conclusion: 'failure' })] },
+    { finalChecks: [actionsCheck({ conclusion: 'success', failure: { _tag: 'RunnerLost', incompleteSteps: 2 } })] },
+  ])('keeps unresolved final default branch checks retryable without committing: %j', async ({ finalChecks }) => {
+    let commits = 0
+    const { result, agentStarted } = await runWorker({ finalChecks, onCommit: () => {
+      commits += 1
+    } })
+    expect(result).toEqual(err('Default branch CI has not finished for this Baseline repair.'))
+    expect(agentStarted).toBe(true)
+    expect(commits).toBe(0)
+  })
+
   it('publishes the verified fix under the Agent title with a controller-owned body', async () => {
     let commitMessage = ''
     const { result, pullRequest } = await runWorker({
@@ -328,17 +356,20 @@ describe('baseline repair worker', () => {
     }))
   })
 
-  it.each([
-    ['the default branch went green', { checks: [] }, 'Default branch CI no longer fails'],
-    ['the default branch moved past the failing commit', { preparedHead: 'f'.repeat(40) }, 'The default branch moved to'],
-  ])('retires the repair when %s', async (_name, input: WorkerInput, expected) => {
+  it.each(['success', 'skipped', 'neutral'])('retires before an Agent turn after completed %s CI', async (conclusion) => {
+    const { result, agentStarted } = await runWorker({ checks: [actionsCheck({ conclusion })] })
+    expect(agentStarted).toBe(false)
+    expect(result).toEqual(ok({ _tag: 'Superseded', reason: expect.stringContaining('Default branch CI no longer fails') }))
+  })
+
+  it('retires the repair when the prepared default branch moved past the failing commit', async () => {
     const { result, agentStarted } = await runWorker({
-      ...input,
+      preparedHead: 'f'.repeat(40),
       onCommit: () => { throw new Error('A retired repair must not commit.') },
     })
 
     expect(agentStarted).toBe(false)
-    expect(result).toEqual(ok({ _tag: 'Superseded', reason: expect.stringContaining(expected) }))
+    expect(result).toEqual(ok({ _tag: 'Superseded', reason: expect.stringContaining('The default branch moved to') }))
   })
 })
 

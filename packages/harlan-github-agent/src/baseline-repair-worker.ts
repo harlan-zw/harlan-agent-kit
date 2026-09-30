@@ -14,7 +14,7 @@ import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runRepairedAgentTurn } from './agent-turn.ts'
-import { withBaselineRepairMarker } from './baseline-repair-state.ts'
+import { baselineChecksPassed, withBaselineRepairMarker } from './baseline-repair-state.ts'
 import { classifyCheckFailureWithResidual } from './failure.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -105,7 +105,7 @@ const failedConclusions = new Set(['action_required', 'cancelled', 'error', 'fai
 
 function failedChecks(snapshot: GitHubChecksSnapshot): GitHubCheck[] {
   return snapshot._tag === 'Available'
-    ? snapshot.checks.filter(check => failedConclusions.has(check.conclusion ?? ''))
+    ? snapshot.checks.filter(check => check.status === 'completed' && failedConclusions.has(check.conclusion ?? ''))
     : []
 }
 
@@ -315,8 +315,10 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       // or its CI went green, there is nothing left to repair.
       if (snapshot.value.baseSha !== task.pullRequest.baseSha)
         return ok({ _tag: 'Superseded', reason: `The default branch moved to ${snapshot.value.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
-      if (checks.length === 0)
+      if (baselineChecksPassed(snapshot.value.baseChecks))
         return ok({ _tag: 'Superseded', reason: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
+      if (checks.length === 0)
+        return err('Default branch CI has not finished for this Baseline repair.')
       // One Baseline repair per base commit. The Journal learns about a
       // published repair only when it next observes the pull request, so a
       // second Task for the same commit asks GitHub before it spends a turn.
@@ -425,8 +427,10 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
         return err('Default branch changed before the controller committed the Baseline repair.')
       if (frozen.value.baseChecks._tag === 'Unavailable')
         return err(frozen.value.baseChecks.reason)
-      if (failedChecks(frozen.value.baseChecks).length === 0)
+      if (baselineChecksPassed(frozen.value.baseChecks))
         return ok({ _tag: 'Superseded', reason: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
+      if (failedChecks(frozen.value.baseChecks).length === 0)
+        return err('Default branch CI has not finished for this Baseline repair.')
       const committed = await options.worktrees.commit(task, prepared.value, verified.value, response.commitMessage, signal)
       if (committed._tag === 'Err')
         return committed

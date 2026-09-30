@@ -10,7 +10,7 @@ afterEach(() => stores.splice(0).forEach(store => store.close()))
 const at = (second: number) => new Date(Date.parse('2026-09-30T06:00:00Z') + second * 1000).toISOString()
 const check = (conclusion: string | null, status = 'completed'): GitHubCheck => ({ id: 1, name: 'test', conclusion, status, failure: { _tag: 'NotAsked' }, source: { _tag: 'CheckRun', appId: 15368 } })
 
-function setup(mutationsEnabled = true) {
+function setup(mutationsEnabled = true, advanceBase = true, actionRequired = true) {
   const store = openJournalStore(':memory:', mutationsEnabled)
   stores.push(store)
   const mapping = repositoryMapping()
@@ -23,9 +23,11 @@ function setup(mutationsEnabled = true) {
     throw new Error('Expected Baseline repair.')
   const repair = store.claimNextBaselineRepairTask('baseline', at(4), 600_000)!
   store.completeReviewTask({ taskId: review.id, workerId: 'reviewer', fence: review.state.fence, at: at(5), evidence: 'Waiting for Baseline repair.', resolution: { _tag: 'WaitingForBaselineRepair', taskId: repair.id } })
-  store.needsAttentionTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(6), reason: 'The runner is unavailable.', evidence: 'Runner lost the job.' })
-  store.recordObservation({ externalId: 'new-base', observedAt: at(7), source: 'poll', subject: pullRequestItem({ baseSha: 'new-base', mergeState: 'clean', updatedAt: at(7) }) })
-  return { store, mapping, repair }
+  if (actionRequired)
+    store.needsAttentionTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(6), reason: 'The runner is unavailable.', evidence: 'Runner lost the job.' })
+  if (advanceBase)
+    store.recordObservation({ externalId: 'new-base', observedAt: at(7), source: 'poll', subject: pullRequestItem({ baseSha: 'new-base', mergeState: 'clean', updatedAt: at(7) }) })
+  return { store, mapping, repair, review }
 }
 
 function sweep(fixture: ReturnType<typeof setup>, baseSha: string, baseChecks: GitHubChecksSnapshot, onRead: () => void = () => undefined) {
@@ -38,6 +40,85 @@ function sweep(fixture: ReturnType<typeof setup>, baseSha: string, baseChecks: G
 }
 
 describe('obsolete Baseline repair attention', () => {
+  it('preserves an operator cancellation recorded while Review waits', async () => {
+    const fixture = setup(true, false)
+    expect(fixture.store.cancelReviewForHead({ repository: fixture.mapping.github, pullRequestNumber: 24, headSha: fixture.review.pullRequest.headSha, requestId: 'operator-cancel', requestedBy: 'harlan-zw', at: at(8) })).toBe(true)
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)).toBe(null)
+    expect(fixture.store.getDashboardSnapshot(at(10)).tasks.find(task => task.id === fixture.review.id)?.state._tag).toBe('Completed')
+  })
+
+  it('requires Approval before the resumed Review can start in manual mode', async () => {
+    const fixture = setup(true, false)
+    fixture.store.setSelectionMode('manual')
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)).toBe(null)
+    expect(fixture.store.approvePullRequest({ repository: fixture.mapping.github, pullRequestNumber: 24, revisionId: fixture.review.revisionId, kind: 'review', at: at(11) })._tag).toBe('Approved')
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(12), 600_000)?.id).toBe(fixture.review.id)
+  })
+
+  it('resumes all current Reviews sharing the recovered base commit', async () => {
+    const fixture = setup(true, false)
+    fixture.store.recordObservation({ externalId: 'second-item', observedAt: at(7), source: 'poll', subject: pullRequestItem({ number: 25, baseSha: 'old-base', mergeState: 'clean' }) })
+    const second = fixture.store.claimNextAdversarialReviewTask('second-reviewer', at(7), 600_000)!
+    expect(fixture.store.queueBaselineRepairForReview({ taskId: second.id, workerId: 'second-reviewer', fence: second.state.fence, baseSha: 'old-base', at: at(7) })._tag).toBe('Existing')
+    expect(fixture.store.completeReviewTask({ taskId: second.id, workerId: 'second-reviewer', fence: second.state.fence, at: at(8), evidence: 'Waiting for shared Baseline repair.', resolution: { _tag: 'WaitingForBaselineRepair', taskId: fixture.repair.id } })).toBe(true)
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
+    const resumed = [fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)!.id, fixture.store.claimNextAdversarialReviewTask('second-reviewer', at(10), 600_000)!.id]
+    expect(resumed.sort()).toEqual([fixture.review.id, second.id].sort())
+  })
+
+  it('resumes a same-base Review when the running Baseline repair verifies recovery', () => {
+    const fixture = setup(true, false, false)
+    expect(fixture.store.supersedeTask({ taskId: fixture.repair.id, workerId: 'baseline', fence: fixture.repair.state.fence, at: at(9), reason: 'Default branch CI passed.' })).toBe(true)
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)?.id).toBe(fixture.review.id)
+  })
+
+  it('preserves the Review cancellation after recovery and duplicate observations', async () => {
+    const fixture = setup(true, false)
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
+    expect(fixture.store.cancelTask({ taskId: fixture.review.id, at: at(10) })._tag).toBe('Cancelled')
+    fixture.store.recordObservation({ externalId: 'duplicate', observedAt: at(11), source: 'poll', subject: pullRequestItem({ baseSha: 'old-base', mergeState: 'clean' }) })
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(0))
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(12), 600_000)).toBe(null)
+  })
+
+  it('preserves a newer running Review after the head changes during the branch read', async () => {
+    const fixture = setup(true, false)
+    let newerId = ''
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] }, () => {
+      fixture.store.recordObservation({ externalId: 'new-head', observedAt: at(8), source: 'poll', subject: pullRequestItem({ baseSha: 'old-base', headSha: 'new-head', mergeState: 'clean' }) })
+      newerId = fixture.store.claimNextAdversarialReviewTask('new-reviewer', at(8), 600_000)!.id
+    })).toEqual(ok(1))
+    const tasks = fixture.store.getDashboardSnapshot(at(10)).tasks
+    expect(tasks.find(task => task.id === newerId)?.state._tag).toBe('Running')
+    expect(tasks.find(task => task.id === fixture.review.id)?.state._tag).toBe('Completed')
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)).toBe(null)
+  })
+
+  it('keeps a published same-head verdict and releases its Baseline wait without another Agent turn', async () => {
+    const fixture = setup(true, false)
+    const passed = { _tag: 'Passed' as const, evidence: [{ label: 'verified', sha256: 'a'.repeat(64) }] }
+    expect(fixture.store.recordReviewRun({ id: 'saved-review', repository: fixture.mapping.github, pullRequestNumber: 24, revisionId: fixture.review.revisionId, headSha: fixture.review.pullRequest.headSha, provider: 'codex', sessionId: 'saved-session', model: 'gpt-5.6-sol', agentVersion: '0.0.0', skillDigest: 'c'.repeat(64), startedAt: at(2), completedAt: at(7), gates: { merge: passed, review: passed, ci: passed }, confidence: 95, findings: [] })._tag).toBe('Inserted')
+    expect(fixture.store.recordReviewPublication({ id: 'saved-publication', reviewRunId: 'saved-review', body: '### READY', at: at(8), result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' } })._tag).toBe('Inserted')
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)).toBe(null)
+    expect(fixture.store.listReviewGateRefreshes().map(refresh => refresh.reviewRunId)).toEqual(['saved-review'])
+    expect(fixture.store.getDashboardSnapshot(at(10)).queue.some(entry => entry.state._tag === 'Pending' && entry.state.reason === 'Waiting for Baseline repair.')).toBe(false)
+  })
+
+  it('resumes the dependent Review when the same base becomes green', async () => {
+    const fixture = setup(true, false)
+    expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
+    const resumed = fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)
+    expect(resumed?.id).toBe(fixture.review.id)
+    expect(resumed?.state.fence).toBe(fixture.review.state.fence + 1)
+    expect(fixture.store.failWorkerTask({ taskId: resumed!.id, workerId: 'reviewer', fence: resumed!.state.fence, at: at(11), reason: 'GitHub timed out.' })).toBe('Retrying')
+    const retry = fixture.store.claimNextAdversarialReviewTask('reviewer', at(12), 600_000)!
+    expect(fixture.store.failWorkerTask({ taskId: retry.id, workerId: 'reviewer', fence: retry.state.fence, at: at(13), reason: 'GitHub timed out.' })).toBe('Retrying')
+    expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(14), 600_000)?.id).toBe(fixture.review.id)
+  })
+
   it('retires attention for a live default branch that moved and releases Review', async () => {
     const fixture = setup()
     expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(8), 600_000)).toBe(null)

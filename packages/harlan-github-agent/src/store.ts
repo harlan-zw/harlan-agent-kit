@@ -11601,6 +11601,83 @@ export function openJournalStore(
     }
   }
 
+  const resumeReviewsWaitingForBaseline = (baselineTaskId: string, at: string): void => {
+    if (!mutationsEnabled)
+      return
+    // Retirement releases only the current Review that recorded this wait.
+    // A newer head, verdict, cancellation, or Review keeps its own authority.
+    const waitingReviews = database.prepare(`
+    SELECT worker_tasks.id, worker_tasks.fence, worker_tasks.subject_id, worker_tasks.revision_id,
+      (SELECT review_runs.id FROM review_runs
+        JOIN review_evidence_scopes ON review_evidence_scopes.review_run_id = review_runs.id
+        WHERE review_runs.subject_id = subjects.id AND review_runs.kind = 'adversarial_review'
+          AND review_runs.head_sha = json_extract(revisions.payload, '$.headSha')
+          AND review_runs.base_ref IS json_extract(revisions.payload, '$.baseRef')
+          AND review_evidence_scopes.policy_digest = repositories.policy_digest
+          AND NOT EXISTS (SELECT 1 FROM review_runs AS settled WHERE settled.supersedes_review_run_id = review_runs.id)
+        ORDER BY review_runs.completed_at DESC, review_runs.id DESC LIMIT 1) AS review_run_id
+    FROM review_resolutions
+    JOIN worker_tasks ON worker_tasks.id = review_resolutions.task_id
+    JOIN subjects ON subjects.id = worker_tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = subjects.current_revision_id
+    WHERE review_resolutions.resolution_tag = 'WaitingForBaselineRepair'
+      AND review_resolutions.baseline_task_id = ?
+      AND review_resolutions.subject_id = worker_tasks.subject_id
+      AND review_resolutions.revision_id = worker_tasks.revision_id
+      AND review_resolutions.task_fence = worker_tasks.fence
+      AND worker_tasks.kind = 'adversarial_review' AND worker_tasks.state_tag = 'Completed'
+      AND worker_tasks.revision_id = subjects.current_revision_id
+      AND json_extract(revisions.payload, '$.state') = 'open'
+      AND repositories.enabled = 1 AND repositories.writes_enabled = 1 AND repositories.paused = 0
+      AND repositories.ownership != 'external'
+      AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+      AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = ?)
+      AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+      AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = worker_tasks.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM review_stops
+        WHERE subject_id = subjects.id AND head_sha = json_extract(revisions.payload, '$.headSha')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM review_cancel_requests
+        WHERE subject_id = subjects.id AND head_sha = json_extract(revisions.payload, '$.headSha')
+          AND requested_at >= worker_tasks.updated_at
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM worker_tasks AS newer
+        WHERE newer.subject_id = subjects.id AND newer.revision_id = subjects.current_revision_id
+          AND newer.kind = 'adversarial_review' AND newer.id != worker_tasks.id
+          AND newer.state_tag != 'Superseded' AND newer.updated_at >= worker_tasks.updated_at
+      )
+  `).all(baselineTaskId, baselineTaskId) as unknown as Array<{ id: string, fence: number, subject_id: number, revision_id: string, review_run_id: string | null }>
+    for (const review of waitingReviews) {
+      if (review.review_run_id !== null) {
+        database.prepare(`
+        UPDATE review_resolutions
+        SET resolution_tag = 'Reviewed', review_run_id = ?, baseline_task_id = NULL,
+          github_url = NULL, reason = NULL, created_at = ?
+        WHERE subject_id = ? AND revision_id = ? AND task_id = ? AND task_fence = ?
+          AND resolution_tag = 'WaitingForBaselineRepair' AND baseline_task_id = ?
+      `).run(review.review_run_id, at, review.subject_id, review.revision_id, review.id, review.fence, baselineTaskId)
+        continue
+      }
+      database.prepare(`
+      UPDATE worker_tasks
+      SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
+        worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
+        progress_label = 'Starting', updated_at = ?
+      WHERE id = ? AND state_tag = 'Completed' AND fence = ?
+    `).run(at, review.id, review.fence)
+      database.prepare(`
+      DELETE FROM review_resolutions
+      WHERE subject_id = ? AND revision_id = ? AND task_id = ? AND task_fence = ?
+        AND resolution_tag = 'WaitingForBaselineRepair' AND baseline_task_id = ?
+    `).run(review.subject_id, review.revision_id, review.id, review.fence, baselineTaskId)
+      recordWorkerTransition(database, { taskId: review.id, from: 'Completed', to: 'Queued', reason: 'Baseline repair no longer blocks this Review.', fence: review.fence, at })
+    }
+  }
+
   const supersedeTask: JournalStore['supersedeTask'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -11623,6 +11700,8 @@ export function openJournalStore(
           at: input.at,
         })
         resolveTaskIncidents(database, input.taskId, input.at)
+        if (database.prepare('SELECT 1 FROM tasks WHERE id = ? AND kind = \'baseline_repair\'').get(input.taskId) !== undefined)
+          resumeReviewsWaitingForBaseline(input.taskId, input.at)
       }
       database.exec('COMMIT')
       return result.changes === 1
@@ -11720,6 +11799,7 @@ export function openJournalStore(
       `).run(reason, JSON.stringify(evidence), input.at, candidate.taskId, candidate.fence, candidate.updatedAt)
       recordTransition(database, { taskId: candidate.taskId, from: 'ActionRequired', to: 'Superseded', reason, fence: candidate.fence, at: input.at })
       resolveTaskIncidents(database, candidate.taskId, input.at)
+      resumeReviewsWaitingForBaseline(candidate.taskId, input.at)
       database.exec('COMMIT')
       return true
     }
