@@ -107,12 +107,43 @@ describe('shared Baseline repair completion', () => {
     expect(store.heartbeatTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(7), leaseMilliseconds: 600_000 })).toBe(false)
   })
 
-  it('replaces a running failure when another Item reports a new default branch failure', () => {
+  it.each(['Queued', 'Running'] as const)('keeps a newer %s repair when an older Review queues late', (state) => {
     const store = setup()
-    const first = review(store, 24)
+    store.recordObservation({ externalId: 'old-trigger', observedAt: at(1), source: 'poll', subject: pullRequestItem({ number: 24, baseSha: 'old-base', mergeState: 'clean' }) })
+    const oldReview = store.claimNextAdversarialReviewTask('old-review', at(2), 600_000)!
+    const current = review(store, 25, 'new-base')
+    const running = state === 'Running' ? store.claimNextBaselineRepairTask('baseline', at(4), 600_000)! : null
+    expect(store.queueBaselineRepairForReview({ taskId: oldReview.id, workerId: 'old-review', fence: oldReview.state.fence, at: at(5), baseSha: 'old-base' })._tag).toBe('Queued')
+    if (running !== null)
+      expect(store.heartbeatTask({ taskId: running.id, workerId: 'baseline', fence: running.state.fence, at: at(6), leaseMilliseconds: 600_000 })).toBe(true)
+    else
+      expect(store.claimNextBaselineRepairTask('baseline', at(6), 600_000)?.id).toBe(current.baseline.taskId)
+  })
+
+  it('rejects an older same-Item snapshot after the current repair starts', () => {
+    const store = setup()
+    store.recordObservation({ externalId: 'old-trigger', observedAt: at(1), source: 'poll', subject: pullRequestItem({ number: 24, baseSha: 'old-base', mergeState: 'clean' }) })
+    const currentReview = store.claimNextAdversarialReviewTask('reviewer', at(2), 600_000)!
+    store.recordObservation({ externalId: 'new-trigger', observedAt: at(3), source: 'poll', subject: pullRequestItem({ number: 24, baseSha: 'new-base', mergeState: 'clean', updatedAt: at(3) }) })
+    const input = { taskId: currentReview.id, workerId: 'reviewer', fence: currentReview.state.fence, at: at(4) }
+    expect(store.queueBaselineRepairForReview({ ...input, baseSha: 'new-base' })._tag).toBe('Queued')
+    const repair = store.claimNextBaselineRepairTask('baseline', at(5), 600_000)!
+    expect(store.queueBaselineRepairForReview({ ...input, baseSha: 'old-base', at: at(6) })._tag).toBe('Rejected')
+    expect(store.heartbeatTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(7), leaseMilliseconds: 600_000 })).toBe(true)
+  })
+
+  it('waits for the active Item repair to retire before queuing another base', () => {
+    const store = setup()
+    const first = review(store, 24, 'old-base')
     const repair = store.claimNextBaselineRepairTask('baseline', at(4), 600_000)!
-    review(store, 25, 'new-default')
-    expect(store.heartbeatTask({ taskId: first.baseline.taskId, workerId: 'baseline', fence: repair.state.fence, at: at(5), leaseMilliseconds: 600_000 })).toBe(false)
+    expect(store.completeReviewTask({ taskId: first.task.id, workerId: 'reviewer', fence: first.task.state.fence, at: at(5), evidence: 'Waiting for Baseline repair.', resolution: { _tag: 'WaitingForBaselineRepair', taskId: first.baseline.taskId } })).toBe(true)
+    store.recordObservation({ externalId: 'advanced-trigger', observedAt: at(6), source: 'poll', subject: pullRequestItem({ number: 24, baseSha: 'new-base', mergeState: 'clean', updatedAt: at(6) }) })
+    const currentReview = store.claimNextAdversarialReviewTask('reviewer', at(7), 600_000)!
+    const input = { taskId: currentReview.id, workerId: 'reviewer', fence: currentReview.state.fence, baseSha: 'new-base', at: at(8) }
+    expect(store.queueBaselineRepairForReview(input)).toEqual({ _tag: 'Rejected', reason: 'Another Baseline repair is active for this pull request.' })
+    expect(store.heartbeatTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(9), leaseMilliseconds: 600_000 })).toBe(true)
+    expect(store.supersedeTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(10), reason: 'The live default branch moved.' })).toBe(true)
+    expect(store.queueBaselineRepairForReview({ ...input, at: at(11) })._tag).toBe('Queued')
   })
 
   it('settles the owned lease when completion throws so a restart can proceed', async () => {

@@ -9616,16 +9616,18 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Existing', taskId }
       }
-      const olderRepairs = database.prepare(`
-        SELECT DISTINCT tasks.subject_id FROM tasks
-        JOIN subjects ON subjects.id = tasks.subject_id
-        JOIN repositories ON repositories.id = subjects.repository_id
-        JOIN revisions ON revisions.id = tasks.revision_id
-        WHERE repositories.github = ? AND tasks.kind = 'baseline_repair'
-          AND json_extract(revisions.payload, '$.baseSha') != ?
-          AND tasks.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
-      `).all(row.github, input.baseSha) as Array<{ subject_id: number }>
-      olderRepairs.forEach(repair => supersedeTasks(database, repair.subject_id, input.at, 'A newer base commit replaced this Baseline repair.', undefined, 'baseline_repair'))
+      // Review snapshots do not order different base commits. Only the live
+      // default branch read in the Baseline repair Agent can retire old work.
+      // Keep the Item's unique active Task slot until that read settles it.
+      const active = database.prepare(`
+        SELECT 1 FROM tasks
+        WHERE subject_id = ? AND kind = 'baseline_repair' AND id != ?
+          AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+      `).get(row.subject_id, taskId)
+      if (active !== undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'Another Baseline repair is active for this pull request.' }
+      }
       if (existing !== undefined) {
         // A dead Baseline repair leaves every review of this base commit waiting forever.
         const fence = existing.fence + 1
