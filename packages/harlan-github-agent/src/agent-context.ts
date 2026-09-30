@@ -337,7 +337,9 @@ export function checkBudgetLines(scope: CheckScope): string {
   return `Check budget: ${scope}
 ${fullSuiteRule}${lastResort}
 Run test commands without pipes. If you pipe output, set pipefail in the same shell command and report the program's exit code.
-Failures outside the changed files are pre-existing. Do not stash changes to verify them.`
+If matching base evidence proves the failure existed, report it as pre-existing. Otherwise, report its cause as unknown.
+A filtered diagnostic list does not prove the command passed. Report its original exit code and the verification limit.
+Do not stash changes to verify the base. Use available base CI evidence.`
 }
 
 /** The core of the unit-tests skill, inlined so no Agent reads the file each session. */
