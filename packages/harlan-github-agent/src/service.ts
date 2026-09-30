@@ -28,6 +28,7 @@ import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
+import { retireObsoleteBaselineRepairs } from './baseline-repair-sweep.ts'
 import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-repair-worker.ts'
 import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
@@ -1076,6 +1077,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     workerId: randomUUID(),
   })
   const refreshRepositoryReviewGates = async (repository: RepositoryMapping, signal: AbortSignal): Promise<Result<void, string>> => {
+    const baseline = await retireObsoleteBaselineRepairs({ github: workerGithub, now, repository, store }, signal)
+    if (baseline._tag === 'Err')
+      options.logger.error(`Baseline repair: ${baseline.error}`)
     const settled = await refreshReviewGates({
       github: workerGithub,
       now,
@@ -1107,7 +1111,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     })
     if (signal.aborted)
       return err('Review gate refresh was aborted.')
-    const messages = settled.flatMap(result => result._tag === 'Err' ? [result.error] : [])
+    const messages = [
+      ...(baseline._tag === 'Err' ? [baseline.error] : []),
+      ...settled.flatMap(result => result._tag === 'Err' ? [result.error] : []),
+    ]
     const scope = { _tag: 'Repository' as const, repository: repository.github }
     const at = now().toISOString()
     messages.forEach(message => recordServiceIncident(store, at, 'review_gate_refresh', message, scope))
