@@ -14,6 +14,34 @@ const noFinalRead = {
 }
 
 describe('gitHub reconciliation', () => {
+  it('records repeated unknown mergeability after the base moves without a poll conflict', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-08-13T00:00:00.000Z')
+    let minute = 0
+    let subject = pullRequestItem({ mergeState: 'clean', baseSha: 'base-a' })
+    const poll = () => reconcileRepository(repository, {
+      github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([subject])) },
+      store,
+      now: () => new Date(`2026-08-13T01:0${minute++}:00.000Z`),
+    })
+    try {
+      expect((await poll())._tag).toBe('Ok')
+      subject = { ...subject, mergeState: 'unknown' }
+      expect((await poll())._tag).toBe('Ok')
+      subject = { ...subject, baseSha: 'base-b' }
+      expect((await poll())._tag).toBe('Ok')
+      subject = { ...subject, baseSha: 'base-a' }
+      expect((await poll())._tag).toBe('Ok')
+      expect((await poll())._tag).toBe('Ok')
+      expect(store.listIncidents()).toEqual([])
+      expect(store.listOpenPullRequestNumbers(repository.github)).toEqual([subject.number])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('keeps a failed Review refresh visible until its own operation recovers', async () => {
     const store = openJournalStore(':memory:', true)
     const repository = repositoryMapping()

@@ -7,7 +7,6 @@ import type { PullRequestTriageController, PullRequestTriageDecision } from './p
 import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
-import { createHash } from 'node:crypto'
 import { isEligibleGitHubSubjectAuthor } from './github.ts'
 import { err, ok } from './result.ts'
 import { revisionIdFor } from './store.ts'
@@ -38,14 +37,6 @@ export interface ReconciliationDependencies {
   store: JournalStore
   now: () => Date
   signal?: AbortSignal
-}
-
-const observationIdentityVersion = 'subject-revision-v2'
-
-function observationId(repository: string, subject: { kind: string, number: number }): string {
-  return createHash('sha256')
-    .update(`${observationIdentityVersion}:${repository}:${subject.kind}:${subject.number}:${JSON.stringify(subject)}`)
-    .digest('hex')
 }
 
 function countResults(results: RecordObservationResult[]): Pick<ReconciliationSummary, 'inserted' | 'duplicates' | 'stale'> {
@@ -177,10 +168,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   const eligibleWrites = eligibleItems.map((subject) => {
     const verdict = subject.kind === 'pull_request' ? triageVerdicts.get(subject.number) : undefined
     const issueDecision = subject.kind === 'issue' ? issueDecisions.get(subject.number) : undefined
-    return dependencies.store.recordObservation({
-      externalId: observationId(repository.github, subject),
+    return dependencies.store.recordPollObservation({
       observedAt,
-      source: 'poll',
       subject,
       ...(verdict === undefined
         ? {}
@@ -191,14 +180,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       ...(issueDecision === undefined ? {} : { issueTriage: issueDecision }),
     })
   })
-  const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordObservation({
-    externalId: observationId(repository.github, subject),
+  const finalIssueWrites = finalIssues.map(subject => dependencies.store.recordPollObservation({
     observedAt,
-    source: 'poll',
     subject,
   }))
-  const finalPullRequestWrites = finalPullRequests.map(subject => dependencies.store.recordExactPullRequestObservation({
-    externalId: observationId(repository.github, subject),
+  const finalPullRequestWrites = finalPullRequests.map(subject => dependencies.store.recordPollObservation({
     observedAt,
     subject,
   }))

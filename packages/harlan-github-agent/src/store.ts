@@ -1142,6 +1142,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   mayWriteRepository: (github: string) => boolean
   /** Trusts, or stops trusting, the controller to write to one repository. */
   setRepositoryWritesEnabled: (github: string, writesEnabled: boolean) => boolean
+  /** Records a poll with identity derived from the normalized subject. */
+  recordPollObservation: (input: Omit<Parameters<JournalStore['recordObservation']>[0], 'externalId' | 'source'>) => RecordObservationResult
   recordObservation: (input: {
     externalId: string
     observedAt: string
@@ -7568,10 +7570,17 @@ export function openJournalStore(
   }
 
   const writeObservation = (
-    observed: Parameters<JournalStore['recordObservation']>[0],
+    observed: Omit<Parameters<JournalStore['recordObservation']>[0], 'externalId'> & { externalId?: string },
     exactPullRequest: boolean,
   ): RecordObservationResult => {
-    const input = { ...observed, subject: settledMergeability(observed.subject) }
+    const normalized = settledMergeability(observed.subject)
+    // Normalize once for both identities. A poll has no external delivery ID.
+    // Webhook delivery IDs retain their explicit replay-conflict contract.
+    const input = {
+      ...observed,
+      subject: normalized,
+      externalId: observed.externalId ?? digest(`normalized-poll-v3:${JSON.stringify(normalized)}`),
+    }
     const payload = canonicalPayload(input.subject)
     const revisionId = revisionIdFor(input.subject)
     database.exec('BEGIN IMMEDIATE')
@@ -7850,6 +7859,11 @@ export function openJournalStore(
     }
     return { ...subject, mergeState: prior.mergeState }
   }
+
+  const recordPollObservation: JournalStore['recordPollObservation'] = input => writeObservation({
+    ...input,
+    source: 'poll',
+  }, input.subject.kind === 'pull_request')
 
   const recordObservation: JournalStore['recordObservation'] = input => writeObservation(input, false)
 
@@ -15573,6 +15587,7 @@ export function openJournalStore(
     mayWriteRepository,
     setRepositoryWritesEnabled,
     recordObservation,
+    recordPollObservation,
     recordIncident,
     resolveIncidents,
     listIncidents,

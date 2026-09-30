@@ -1,7 +1,7 @@
 import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { createConflictWorker } from '../src/conflict-worker.ts'
+import { conflictResolutionPrompt, createConflictWorker } from '../src/conflict-worker.ts'
 import { ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
@@ -45,6 +45,16 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 }
 
 describe('conflict worker', () => {
+  it('requires base evidence for an unchanged consumer failure and blocks repair outside the merge scope', () => {
+    const task = conflictTask()
+    const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict-prompt', conflictedFiles: ['src/producer.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
+
+    expect(prompt).toMatch(/matching base evidence.*pre-existing/)
+    expect(prompt).toMatch(/Otherwise, report its cause as unknown/)
+    expect(prompt).not.toMatch(/A failure in a file that neither side of the merge changed is pre-existing/)
+    expect(prompt).toMatch(/verification fails outside the files the merge touched.*outcome blocked/)
+  })
+
   it('completes a clean merge without an agent turn and asks GitHub to recompute once', async () => {
     const repository = repositoryMapping()
     const current = pullRequestItem({ baseSha: 'current-base' })

@@ -77,7 +77,8 @@ ${memoryLines === '' ? '' : `\n${memoryLines}\n`}
 ${checkBudgetLines(CHECK_SCOPES.conflictedFiles)}
 ${TOOLCHAIN_LINES}
 Do not install or update the toolchain. The controller prepared this worktree.
-A failure in a file that neither side of the merge changed is pre-existing. Do not chase it.
+Unchanged tests and call sites can fail because the merge changed their dependencies.
+If verification fails outside the files the merge touched, report the failure and return outcome blocked.
 If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
 
 Do not stage files. The controller stages verified conflict files.

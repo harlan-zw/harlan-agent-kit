@@ -27,12 +27,18 @@ const findings: ReviewFinding[] = [{
 }]
 
 describe('reviewFixPrompt', () => {
+  it('requires base evidence before classifying failures and preserves failed check limits', () => {
+    const prompt = reviewFixPrompt({ task: task(), findings, instructionFiles: [] })
+
+    expect(prompt).toContain('If matching base evidence proves the failure existed, report it as pre-existing. Otherwise, report its cause as unknown.')
+    expect(prompt).toContain('A filtered diagnostic list does not prove the command passed. Report its original exit code and the verification limit.')
+  })
+
   it('names the check budget and inlines the unit test rules instead of a skill load', () => {
     const prompt = reviewFixPrompt({ task: task(), findings, instructionFiles: [] })
 
     expect(prompt).toContain('Check budget: run the regression test file, its direct dependants, and lint and typecheck on the changed files only.')
     expect(prompt).toContain('Do not run the full test suite, the full typecheck, or a build. CI runs those.')
-    expect(prompt).toContain('Failures outside the changed files are pre-existing. Do not stash changes to verify them.')
     expect(prompt).toContain('Use pnpm for every package command. Never use npx.')
     expect(prompt).toContain('Never add debug output to tracked files.')
     expect(prompt).toContain('Delete a test that can fail while the code is correct.')
