@@ -522,6 +522,21 @@ export type BaselineRepairQueueResult
     | { _tag: 'Rejected', reason: string }
     | { _tag: 'NotAuthorized', reason: string }
 
+export interface BaselineRepairActionRequiredCandidate {
+  taskId: string
+  repository: string
+  baseSha: string
+  fence: number
+  updatedAt: string
+  policyDigest: string
+  policyJson: string
+  defaultBranch: string
+}
+
+export type BaselineRepairRetirementEvidence
+  = | { _tag: 'BaseChanged', baseSha: string }
+    | { _tag: 'ChecksPassed', baseSha: string }
+
 /** The pull request Revision one Baseline repair is queued for. */
 interface BaselineRepairSubjectRow {
   subject_id: number
@@ -838,6 +853,12 @@ export interface JournalStore extends BatchStore, PackageReleaseStore {
   claimNextPublication: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedPublicationCommand | null
   claimIssueTriageComment: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueTriageCommentCommand | null
   claimReviewStatus: (commandId: string, workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
+  listActionRequiredBaselineRepairs: (repository: string) => BaselineRepairActionRequiredCandidate[]
+  retireActionRequiredBaselineRepair: (input: {
+    candidate: BaselineRepairActionRequiredCandidate
+    evidence: BaselineRepairRetirementEvidence
+    at: string
+  }) => boolean
   /** Claims one terminal Publication whose Agent Task no longer runs. */
   claimNextTerminalReviewStatus: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
   close: () => void
@@ -11622,6 +11643,71 @@ export function openJournalStore(
     }
   }
 
+  const baselineActionRequiredAuthoritySql = `
+    tasks.kind = 'baseline_repair' AND tasks.state_tag = 'ActionRequired'
+    AND repositories.enabled = 1 AND repositories.writes_enabled = 1 AND repositories.paused = 0
+    AND repositories.ownership != 'external'
+    AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+    AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+    AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id)
+  `
+
+  const listActionRequiredBaselineRepairs: JournalStore['listActionRequiredBaselineRepairs'] = repository => !mutationsEnabled
+    ? []
+    : (database.prepare(`
+    SELECT tasks.id AS taskId, repositories.github AS repository,
+      json_extract(revisions.payload, '$.baseSha') AS baseSha,
+      tasks.fence, tasks.updated_at AS updatedAt, repositories.policy_digest AS policyDigest,
+      repositories.policy_json AS policyJson,
+      json_extract(repositories.policy_json, '$.defaultBranch') AS defaultBranch
+    FROM tasks
+    JOIN subjects ON subjects.id = tasks.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = tasks.revision_id
+    WHERE repositories.github = ? AND ${baselineActionRequiredAuthoritySql}
+    ORDER BY tasks.updated_at, tasks.id
+  `).all(repository) as unknown as BaselineRepairActionRequiredCandidate[])
+
+  const retireActionRequiredBaselineRepair: JournalStore['retireActionRequiredBaselineRepair'] = (input) => {
+    if (!mutationsEnabled)
+      return false
+    const { candidate, evidence } = input
+    if ((evidence._tag === 'BaseChanged') === (evidence.baseSha === candidate.baseSha))
+      return false
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const authorized = database.prepare(`
+        SELECT 1 FROM tasks
+        JOIN subjects ON subjects.id = tasks.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = tasks.revision_id
+        WHERE tasks.id = ? AND repositories.github = ?
+          AND tasks.fence = ? AND tasks.updated_at = ?
+          AND json_extract(revisions.payload, '$.baseSha') = ?
+          AND repositories.policy_digest = ? AND repositories.policy_json = ? AND ${baselineActionRequiredAuthoritySql}
+      `).get(candidate.taskId, candidate.repository, candidate.fence, candidate.updatedAt, candidate.baseSha, candidate.policyDigest, candidate.policyJson)
+      if (authorized === undefined) {
+        database.exec('COMMIT')
+        return false
+      }
+      const reason = evidence._tag === 'BaseChanged'
+        ? 'The default branch moved beyond this Baseline repair.'
+        : 'Default branch CI passed for this Baseline repair.'
+      database.prepare(`
+        UPDATE tasks SET state_tag = 'Superseded', reason = ?, evidence = ?, updated_at = ?
+        WHERE id = ? AND state_tag = 'ActionRequired' AND fence = ? AND updated_at = ?
+      `).run(reason, JSON.stringify(evidence), input.at, candidate.taskId, candidate.fence, candidate.updatedAt)
+      recordTransition(database, { taskId: candidate.taskId, from: 'ActionRequired', to: 'Superseded', reason, fence: candidate.fence, at: input.at })
+      resolveTaskIncidents(database, candidate.taskId, input.at)
+      database.exec('COMMIT')
+      return true
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const failTask: JournalStore['failTask'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -15502,6 +15588,8 @@ export function openJournalStore(
     repairRoundPlan,
     recordCiRepairFinding,
     recordRepairReport,
+    listActionRequiredBaselineRepairs,
+    retireActionRequiredBaselineRepair,
     queueBaselineRepairForReview,
     queueBaselineRepairForGate,
     retireBaselineRepairForReview,
