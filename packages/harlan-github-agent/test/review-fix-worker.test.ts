@@ -99,7 +99,10 @@ describe('review fix Worker', () => {
     { merged: true, outcome: 'disputed', existing: false },
     { merged: true, outcome: 'blocked', existing: false },
     { merged: true, outcome: 'repaired', existing: true },
-  ])('repairs stored findings: %j', async ({ merged, outcome, existing }) => {
+    { merged: true, outcome: 'repaired', existing: false, pickup: true },
+    { merged: true, outcome: 'disputed', existing: false, pickup: true },
+    { merged: true, outcome: 'repaired', existing: true, pickup: true },
+  ])('repairs stored findings: %j', async ({ merged, outcome, existing, pickup }) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean', ...(merged ? { state: 'closed', mergedAt: '2026-08-13T00:59:00.000Z' } as const : {}) })
     const mapping = repositoryMapping({ ownership: 'maintained' })
     const task: ClaimedReviewFixTask = {
@@ -125,6 +128,14 @@ describe('review fix Worker', () => {
         regressionTest: 'Split one UTF-8 sequence across two chunks and assert the original string.',
       },
     }]
+    if (pickup) {
+      task.pickup = { _tag: 'LoggedFinding', finding: {
+        _tag: 'Logged',
+        impact: 40,
+        summary: 'The parser drops buffered bytes.',
+        details: { fingerprint: 'f'.repeat(64), identity: 'buffered bytes', location: { path: 'src/parser.ts', line: 42 }, proof: 'Split one UTF-8 sequence across two chunks and observe dropped bytes.' },
+      } }
+    }
     const capture: ProviderCapture = { requests: [] }
     let committedMessage = ''
 
@@ -152,7 +163,11 @@ describe('review fix Worker', () => {
       }), capture)),
       status: { publishRepair: () => Promise.resolve(ok(undefined)) },
       store: {
-        getReviewFixFindings: () => findings,
+        getReviewFixFindings: () => {
+          if (pickup)
+            throw new Error('Selected finding work must use its sealed scope.')
+          return findings
+        },
         recordRepairReport: () => true,
         getWorkerSession: () => 'review-session-must-not-resume',
         requestReviewRerun: () => { throw new Error('A successful Repair must not queue another Review.') },

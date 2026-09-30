@@ -856,7 +856,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
     async prepareFix(task, signal) {
       if (task.pullRequest.state === 'closed' && task.pullRequest.mergedAt !== null) {
         const ref = `refs/harlan-github-agent/fixes/${task.pullRequestNumber}/merged-base`
-        return prepareRepository(task, `fix-${task.pullRequestNumber}`, [`+refs/heads/${task.repositoryMapping.defaultBranch}:${ref}`], ref, signal)
+        return prepareRepository(task, `fix-${task.pullRequestNumber}${task.pickup === undefined ? '' : `-${task.pickup.finding.details.fingerprint.slice(0, 12)}`}`, [`+refs/heads/${task.repositoryMapping.defaultBranch}:${ref}`], ref, signal)
       }
       const headRef = `refs/harlan-github-agent/fixes/${task.pullRequestNumber}/head`
       const baseRef = `refs/harlan-github-agent/fixes/${task.pullRequestNumber}/base`
