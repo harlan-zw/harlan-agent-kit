@@ -287,6 +287,18 @@ Use the dashboard `Cancel` control for active or queued tasks. Store that cancel
 
 When required CI fails on the current base of an owned repository, dispatch a separate baseline repair task. Use a fresh worktree and `../pr/SKILL.md`. Keep the original review waiting until the repair merges, then resume its existing review worker.
 
+## Selected Review findings
+
+Offer one pickup checkbox beside each Logged Review finding when signed webhooks are active.
+Only Harlan's click authorizes the selected finding.
+Bind it to the canonical comment, exact head commit, base branch, and finding identity.
+Reject other comment edits and stale selections.
+Keep selections across restarts. Never queue the same selection twice.
+After merge, run each selection as separate Repair work on the current default branch.
+Require a failing regression test before editing. Record disputed findings without opening a pull request.
+Open a separate linked pull request for each confirmed fix.
+Replace its checkbox with progress and the resulting pull request link.
+
 ## Package releases
 
 Use an explicit `repositories[].release` policy for stable patch and minor npm releases.

@@ -15,6 +15,7 @@ import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseChecks, currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
+import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -346,7 +347,7 @@ export interface GitHubAgentSource {
    * what was written, which catches a writer that landed after the edit, but
    * the window between the read and the write cannot be closed here.
    */
-  editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, expectedBody: string, body: string, signal: AbortSignal) => Promise<Result<EditedReviewStatus, string>>
+  editReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, expectedBody: string, body: string, signal: AbortSignal, authorize?: () => Result<void, string>) => Promise<Result<EditedReviewStatus, string>>
   upsertReviewStatus: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number | null, body: string, replacePriorReview: boolean, signal: AbortSignal, authorize?: ReviewPublicationAuthority) => Promise<Result<PublishedReviewStatus, string>>
   /**
    * Mirrors one Review publication onto the Review check run for that head.
@@ -1024,7 +1025,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       }).catch((error: unknown) => err(message(error)))
     },
 
-    async editReviewStatus(repository, pullRequestNumber, commentId, expectedBody, body, signal) {
+    async editReviewStatus(repository, pullRequestNumber, commentId, expectedBody, body, signal, authorize) {
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -1049,15 +1050,21 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             && existingHead === nextHead
           if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another GitHub actor.' as const })
-          if (existing.data.body === body && existing.data.html_url !== undefined)
+          if ((existing.data.body === body || (expectedBody === body
+            && withoutLoggedFindingControls(existing.data.body ?? '') === withoutLoggedFindingControls(body)))
+          && existing.data.html_url !== undefined) {
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
-          if (normalizeReviewControl(existing.data.body ?? '') !== normalizeReviewControl(expectedBody))
+          }
+          if (withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? '')) !== withoutLoggedFindingControls(normalizeReviewControl(expectedBody)))
             return ok({ _tag: 'Changed' as const })
           const writer = legacyOwned && legacyActor !== undefined
             ? await clientWith(legacyActor.tokens, repository.github, 'item_write', signal)
             : octokit
           if (writer._tag === 'Err')
             return writer
+          const authority = authorize?.()
+          if (authority?._tag === 'Err')
+            return authority
           await writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
           // The compare and swap above is a client side read then write, so a
           // concurrent writer can land between the two. Reading back is the

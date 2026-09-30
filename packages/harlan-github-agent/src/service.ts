@@ -55,6 +55,7 @@ import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
+import { publishLoggedFindingPickups } from './logged-finding-sweep.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
@@ -742,6 +743,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       checkRuns: { publisher: workerGithub, report: reportCheckRun },
       findingThreads,
       commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
+      loggedFindings: store,
+      loggedFindingControls: () => releaseWebhookReady,
       github: workerGithub,
       leaseMilliseconds: 2 * 60_000,
       now,
@@ -1328,6 +1331,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        if (releaseWebhookReady) {
+          const errors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
+            github: workerGithub,
+            store,
+            repositories: config.repositories,
+            now,
+            workerId: 'logged-finding-status',
+          }, signal), ['The finding status update failed.'])
+          errors.forEach(error => options.logger.error(error))
+        }
         const positions = await guarded('Queue position comments', () => publishQueuePositions({
           github: workerGithub,
           now,
@@ -1555,6 +1568,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             },
             apply: (request) => { store.requestPackageRelease(request) },
             command: command => store.queuePackageReleaseCommand(command),
+          },
+          loggedFindingPickup: {
+            allowedAuthor: userLogin,
+            actorLogin: (name) => {
+              const repository = config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase() && repository.enabled)
+              return repository === undefined || !config.mutationsEnabled || !repository.pullRequestReview
+                ? null
+                : actorLogin(repository)
+            },
+            apply: (request) => { store.requestLoggedFindingPickup({ ...request, at: now().toISOString() }) },
           },
           reviewCancellation: {
             actorLogin: (name) => {

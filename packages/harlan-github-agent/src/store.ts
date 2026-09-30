@@ -5,6 +5,7 @@ import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type { IssueClassificationDecision } from './issue-classification.ts'
 import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
+import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
@@ -123,6 +124,7 @@ import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetr
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
+import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
@@ -753,7 +755,7 @@ export type StoredIssueTriageRun
       decidedAt: string
     }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore {
   /**
    * Approves one exact issue state from an outside author. The Approval unlocks
    * Issue triage, and Issue work follows on its own when triage says ready.
@@ -3820,6 +3822,7 @@ function supersedeTasks(
   reason: string,
   exceptRevisionId?: string,
   kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' = 'resolve_conflict',
+  preserveLoggedPickups = false,
 ): void {
   const rows = database.prepare(`
     SELECT id, state_tag, fence FROM tasks
@@ -3827,7 +3830,8 @@ function supersedeTasks(
       AND kind = ?
       AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
       AND (? IS NULL OR revision_id != ?)
-  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null) as unknown as Array<{ id: string, state_tag: TaskRow['state_tag'], fence: number }>
+      AND (NOT ? OR id NOT IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL))
+  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null, preserveLoggedPickups ? 1 : 0) as unknown as Array<{ id: string, state_tag: TaskRow['state_tag'], fence: number }>
 
   const update = database.prepare(`
     UPDATE tasks
@@ -4135,7 +4139,7 @@ function planReviewFix(
   mapping: RepositoryMapping,
 ): ReviewFixPlan {
   const refuse = (reason: string): ReviewFixPlan => {
-    supersedeTasks(database, subjectId, observedAt, 'The pull request no longer has an approved repair.', undefined, 'review_fix')
+    supersedeTasks(database, subjectId, observedAt, 'The pull request no longer has an approved repair.', undefined, 'review_fix', true)
     return { _tag: 'Refused', reason }
   }
   if (!mapping.enabled || !mapping.pullRequestReview)
@@ -4155,6 +4159,11 @@ function planReviewFix(
   `).get(subjectId, revisionId) !== undefined
   if (!reviewAuthorized)
     return refuse(REVIEW_REPAIR_REFUSALS.approval)
+  if (database.prepare(`SELECT 1 FROM tasks WHERE subject_id = ? AND kind = 'review_fix'
+    AND state_tag IN ('Queued', 'Running', 'Publishing')
+    AND id IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL)`).get(subjectId) !== undefined) {
+    return { _tag: 'Refused', reason: 'The selected finding already has Repair work.' }
+  }
   const openFindings = openReviewFindings(database, subjectId, revisionId)
   const dismissal = openFindings.find(finding => finding.resolution === 'Dismissal')
   if (dismissal !== undefined)
@@ -4177,6 +4186,7 @@ function planReviewFix(
       EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id) AS cancelled
     FROM tasks
     WHERE subject_id = ? AND kind = 'review_fix' AND revision_id = ?
+      AND id NOT IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL)
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], fence: number, cancelled: number } | undefined
   if (existing === undefined) {
     const taskId = digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:review_fix`)
@@ -6816,7 +6826,11 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 81
   }
-  if (version === 81)
+  if (version === 81) {
+    applyMigration(database, `${loggedFindingSchema} PRAGMA user_version = 82;`)
+    version = 82
+  }
+  if (version === 82)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7100,6 +7114,11 @@ export function openJournalStore(
   const packageReleaseStore = createPackageReleaseStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
+  const loggedFindingStore = createLoggedFindingStore(database, {
+    writeAuthoritySql: repositoryWriteAuthoritySql,
+    digest,
+    transition: (taskId, at) => recordTransition(database, { taskId, from: null, to: 'Queued', reason: null, fence: 0, at }),
+  })
   // Retained gates answer the current head, target, and policy through stored Review evidence.
   const reviewGateEvidenceAuthoritySql = `
     subjects.kind = 'pull_request'
@@ -9356,7 +9375,8 @@ export function openJournalStore(
       const task = { ...taskBase, kind, pullRequestNumber: row.github_number, pullRequest: subject }
       if (kind === 'review_fix') {
         const prior = reviewFixRounds(database, row.subject_id, subject.headSha)
-        return { ...task, kind, rounds: { number: prior.length + 1, limit: REPAIR_ROUND_LIMIT, prior } }
+        const finding = loggedFindingStore.getLoggedFindingForTask(row.id)
+        return { ...task, kind, ...(finding === null ? {} : { pickup: { _tag: 'LoggedFinding' as const, finding } }), rounds: finding === null ? { number: prior.length + 1, limit: REPAIR_ROUND_LIMIT, prior } : { number: 1, limit: 1, prior: [] } }
       }
       if (kind === 'resolve_conflict')
         return { ...task, kind }
@@ -9390,6 +9410,7 @@ export function openJournalStore(
   }
 
   const claimNextReviewFixTask: JournalStore['claimNextReviewFixTask'] = (workerId, now, leaseMilliseconds) => {
+    loggedFindingStore.planLoggedFindingPickups(now)
     const task = claimMutationTask('review_fix', workerId, now, leaseMilliseconds)
     if (task === null || task.kind === 'review_fix')
       return task
@@ -13870,6 +13891,7 @@ export function openJournalStore(
       FROM tasks
       JOIN revisions ON revisions.id = tasks.revision_id
       WHERE tasks.kind = 'review_fix'
+        AND tasks.id NOT IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL)
     ), stopped AS (
       SELECT stopped_candidates.*,
         ROW_NUMBER() OVER (
@@ -14006,6 +14028,7 @@ export function openJournalStore(
           WHERE repair.subject_id = stopped.subject_id
             AND repair.revision_id = stopped.revision_id
             AND repair.kind = 'review_fix'
+            AND repair.id NOT IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL)
         )
       )
       -- A live review posts its own comment, so leave the pull request to it.
@@ -15516,6 +15539,7 @@ export function openJournalStore(
   }
 
   return {
+    ...loggedFindingStore,
     approveIssue,
     syncRoutines,
     listRoutines,
