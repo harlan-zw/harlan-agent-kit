@@ -4,19 +4,7 @@ source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 install_dir="$HOME/.local/share/harlan-agent-kit/notes-viewer"
 unit_dir="$HOME/.config/systemd/user"
 mkdir -p "$install_dir/.vitepress" "$unit_dir" "$HOME/notes"
-cp "$source_dir/package.json" "$source_dir/start.mjs" "$install_dir/"
-cp "$source_dir/.vitepress/config.mjs" "$install_dir/.vitepress/"
-# Resolve workspace catalog dependencies to the versions verified in this checkout.
-node --input-type=module - "$source_dir" "$install_dir" <<'JS'
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-const [source, target] = process.argv.slice(2)
-const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
-for (const name of Object.keys(manifest.dependencies)) {
-  manifest.dependencies[name] = JSON.parse(readFileSync(join(source, 'node_modules', name, 'package.json'), 'utf8')).version
-}
-writeFileSync(join(target, 'package.json'), JSON.stringify(manifest, null, 2))
-JS
+node "$source_dir/stage-install.mjs" "$source_dir" "$install_dir"
 pnpm --dir "$install_dir" install --ignore-scripts
 portless_bin=$(command -v portless)
 node_bin=$(command -v node)

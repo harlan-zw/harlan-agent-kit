@@ -57,6 +57,9 @@ jobs:
       - uses: ./.github/actions/setup
       - run: pnpm build
 
+      # notes-viewer is a deployed service; its vitepress build has no other gate.
+      - run: pnpm --filter notes-viewer build
+
   # This job mirrors `pnpm test`, plus the hook suites that aggregate leaves out.
   # Add a new suite here when you add one to `package.json`.
   test:
@@ -126,8 +129,14 @@ jobs:
       - name: Service scripts
         run: pnpm test:service
 
+      - name: Lockfile vite graph
+        run: pnpm test:lockfile
+
       - name: Classification package
         run: pnpm --filter advocaat test:run
 
       - name: Service package
         run: pnpm --filter harlan-github-agent test:run
+
+      - name: Notes viewer build smoke
+        run: pnpm test:notes-viewer
