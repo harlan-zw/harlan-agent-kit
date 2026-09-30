@@ -114,7 +114,7 @@ Latest APIs (reactive prop destructure, array event defines). Prefer vueuse over
 
 My review rate is the bottleneck, not tool limits. Agents prove their own work (passing test, screenshot, typecheck) so review covers only what needs a human.
 
-Self-hosted runners run on Hogwild. Never start `harlan-desktop-github-runner.service` on the desktop.
+Self-hosted runners run on Hogwild (`hogwild-github-runner.service`) and on the desktop (`harlan-desktop-github-runner.service`).
 
 Every change opens a pull request. A Markdown-only change is no exception.
 Never push to `origin/main` directly.
