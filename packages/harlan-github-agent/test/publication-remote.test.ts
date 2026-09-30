@@ -27,9 +27,17 @@ function git(checkout: string, ...args: string[]): string {
   }).trim()
 }
 
-/** The change identity the controller signs: raw lines, full blob names. */
+/** The change identity the controller signs: exact NUL records and full blob names. */
 function contentDigest(checkout: string, from: string, to: string): string {
-  return createHash('sha256').update(git(checkout, 'diff', '--raw', '--no-abbrev', '--no-renames', from, to)).digest('hex')
+  const output = execFileSync('git', ['-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', '-C', checkout, 'diff', '--raw', '-z', '--no-abbrev', '--no-renames', from, to], {
+    env: {
+      PATH: process.env.PATH,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_TERMINAL_PROMPT: '0',
+    },
+  })
+  return createHash('sha256').update(output).digest('hex')
 }
 
 function fixture(changedPath = 'base.txt'): { bare: string, checkout: string, command: Extract<ClaimedPublicationCommand, { _tag: 'UpdatePullRequest' }>, expectedHeadSha: string, root: string } {
