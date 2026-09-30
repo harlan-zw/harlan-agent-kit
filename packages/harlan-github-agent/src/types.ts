@@ -628,6 +628,7 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
   rounds: { number: number, limit: number, prior: RepairRound[] }
+  pickup?: { _tag: 'LoggedFinding', finding: Extract<ReviewFinding, { _tag: 'Logged' }> }
 }
 
 /**

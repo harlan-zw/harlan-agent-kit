@@ -1,6 +1,6 @@
 import type { Octokit } from 'octokit'
 import { describe, expect, it, vi } from 'vitest'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const hoisted = vi.hoisted(() => {
@@ -66,6 +66,23 @@ describe('editReviewStatus compare and swap', () => {
     const result = await source().editReviewStatus(repositoryMapping(), 24, 5, publishedBody, 'updated body', new AbortController().signal)
     expect(hoisted.state.writes).toBe(1)
     expect(result).toEqual(ok({ _tag: 'Edited', commentId: 5, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-5' }))
+  })
+
+  it('keeps finding controls when the gate refresh only confirms its original body', async () => {
+    hoisted.state.writes = 0
+    hoisted.state.remoteBody = `${publishedBody}\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${'f'.repeat(64)} -->`
+    const result = await source().editReviewStatus(repositoryMapping(), 24, 5, publishedBody, publishedBody, new AbortController().signal)
+    expect(result).toEqual(ok({ _tag: 'Edited', commentId: 5, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-5' }))
+    expect(hoisted.state.writes).toBe(0)
+    expect(hoisted.state.remoteBody).toContain('Ask an agent')
+  })
+
+  it('refuses a finding status write after its publication lease is lost', async () => {
+    hoisted.state.writes = 0
+    hoisted.state.remoteBody = publishedBody
+    const result = await source().editReviewStatus(repositoryMapping(), 24, 5, publishedBody, 'updated body', new AbortController().signal, () => err('The lease expired.'))
+    expect(result).toEqual(err('The lease expired.'))
+    expect(hoisted.state.writes).toBe(0)
   })
 
   it('reports Changed when a concurrent writer replaces the comment around the edit', async () => {
