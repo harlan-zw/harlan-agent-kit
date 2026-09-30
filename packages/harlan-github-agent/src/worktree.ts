@@ -693,9 +693,11 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     message: string,
     signal: AbortSignal,
   ): Promise<Result<PreparedConflictPublication, string>> {
-    const add = await runGit(worktree.path, ['add', '--all'], signal)
-    if (add.exitCode !== 0)
-      return err(`Could not stage the conflict resolution: ${add.stderr}`)
+    const indexed = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
+    if (indexed.exitCode !== 0)
+      return err(`Could not inspect the verified conflict index: ${indexed.stderr}`)
+    if (indexed.digest !== patch.digest)
+      return err('The conflict index changed after verification.')
     const committed = await runGit(worktree.path, [
       '-c',
       `user.name=${gitIdentity.name}`,
@@ -731,10 +733,15 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
       return err('The worker changed HEAD. Workers must not commit or rewrite history.')
 
-    const workerChanged = await runGit(worktree.path, ['diff', '--name-only'], signal)
+    const workerChanged = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', 'HEAD'], signal)
     if (workerChanged.exitCode !== 0)
       return err(`Could not inspect the conflict fix: ${workerChanged.stderr}`)
-    const workerChangedPaths = workerChanged.stdout.split('\n').filter(Boolean).sort()
+    const indexed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '--no-renames', '-z', 'HEAD'], signal)
+    if (indexed.exitCode !== 0)
+      return err(`Could not inspect the conflict index: ${indexed.stderr}`)
+    // A staged edit can be hidden by restoring HEAD in the working tree.
+    // Inspect both views so it cannot enter the verified index unnoticed.
+    const workerChangedPaths = [...new Set([...workerChanged.stdout.split('\0'), ...indexed.stdout.split('\0')])].filter(Boolean).sort()
     // The merge, not the conflict list, bounds what a resolution may touch. A
     // marker is only where two edits met: reconciling them often means the test
     // or the call site the base branch moved, and refusing those killed correct
@@ -743,10 +750,10 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     const mergeBase = await runGit(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
     if (mergeBase.exitCode !== 0)
       return err(`Could not resolve the merge base: ${mergeBase.stderr}`)
-    const merged = await runGit(worktree.path, ['diff', '--name-only', mergeBase.stdout, worktree.baseSha], signal)
+    const merged = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', mergeBase.stdout, worktree.baseSha], signal)
     if (merged.exitCode !== 0)
       return err(`Could not inspect what the base branch changed: ${merged.stderr}`)
-    const writablePaths = new Set([...worktree.conflictedFiles, ...merged.stdout.split('\n').filter(Boolean)])
+    const writablePaths = new Set([...worktree.conflictedFiles, ...merged.stdout.split('\0').filter(Boolean)])
     const unexpectedPath = workerChangedPaths.find(path => !writablePaths.has(path))
     if (unexpectedPath !== undefined)
       return err(`The worker changed a file the merge did not touch: ${unexpectedPath}.`)
@@ -756,15 +763,23 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     if (untracked.stdout.length > 0)
       return err(`The worker created an untracked file: ${untracked.stdout.split('\n')[0]}.`)
 
-    const diffCheck = await runGit(worktree.path, ['diff', '--check'], signal)
+    const diffCheck = await runGit(worktree.path, ['diff', '--check', 'HEAD'], signal)
     if (diffCheck.exitCode !== 0)
       return err(`Resolved patch failed git diff check: ${diffCheck.stdout || diffCheck.stderr}`)
 
-    // Conflicted files stage even when the worker left one side untouched, or
-    // the merge stays unresolved. Everything the worker touched stages with them.
-    const staged = await runGit(worktree.path, ['add', '--', ...new Set([...worktree.conflictedFiles, ...workerChangedPaths])], signal)
-    if (staged.exitCode !== 0)
-      return err(`Could not stage the conflict fix: ${staged.stderr}`)
+    // Stage only verified paths still in the index. A worker's `git rm` already
+    // stages a deletion and removes its index entry, so naming it fails git add.
+    // An unstaged deletion keeps its entry and must still stage here.
+    const tracked = await runGit(worktree.path, ['ls-files', '-z'], signal)
+    if (tracked.exitCode !== 0)
+      return err(`Could not inspect the conflict index: ${tracked.stderr}`)
+    const trackedPaths = new Set(tracked.stdout.split('\0').filter(Boolean))
+    const stagePaths = [...new Set([...worktree.conflictedFiles, ...workerChangedPaths])].filter(path => trackedPaths.has(path))
+    if (stagePaths.length > 0) {
+      const staged = await runGit(worktree.path, ['--literal-pathspecs', 'add', '--', ...stagePaths], signal)
+      if (staged.exitCode !== 0)
+        return err(`Could not stage the conflict fix: ${staged.stderr}`)
+    }
     const unmerged = await runGit(worktree.path, ['diff', '--name-only', '--diff-filter=U'], signal)
     if (unmerged.exitCode !== 0 || unmerged.stdout.length > 0)
       return err(`Merge conflicts remain: ${unmerged.stdout || unmerged.stderr}`)

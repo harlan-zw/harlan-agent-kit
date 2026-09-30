@@ -188,6 +188,110 @@ describe('conflict worktree', () => {
     expect(git(prepared.path, 'diff', '--name-only', '--diff-filter=U')).toBe('')
   })
 
+  it.each([
+    ['working tree', 'text'],
+    ['index', 'text'],
+    ['working tree', 'modify/delete'],
+    ['index', 'modify/delete'],
+  ] as const)('accepts a conflict deletion from the %s after a %s conflict', async (location, conflict) => {
+    const { checkout, remote, root, task } = fixture()
+    if (conflict === 'modify/delete') {
+      git(checkout, 'rm', '--', 'file.txt')
+      git(checkout, 'commit', '-m', 'delete the base file')
+      git(checkout, 'push', 'origin', 'main')
+    }
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await conflicted(manager, task)
+    if (location === 'index')
+      git(prepared.path, 'rm', '--force', '--', 'file.txt')
+    else
+      rmSync(join(prepared.path, 'file.txt'))
+
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
+
+    expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 1 }) }))
+    if (verified._tag === 'Err')
+      throw new Error(verified.error)
+    const committed = await manager.commit(task, prepared, verified.value, 'fix: resolve by deleting the file', new AbortController().signal)
+    expect(committed).toEqual(expect.objectContaining({ _tag: 'Ok' }))
+    expect(git(prepared.path, 'ls-tree', '--name-only', 'HEAD')).not.toContain('file.txt')
+  })
+
+  it.each(['edit', 'delete', 'reverted edit'] as const)('rejects an unrelated staged %s', async (change) => {
+    const { remote, root, task } = fixture()
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    if (change === 'delete') {
+      git(prepared.path, 'rm', '--', 'keep.ts')
+    }
+    else {
+      writeFileSync(join(prepared.path, 'keep.ts'), 'export const kept = false\n')
+      git(prepared.path, 'add', '--', 'keep.ts')
+      if (change === 'reverted edit')
+        writeFileSync(join(prepared.path, 'keep.ts'), 'export const kept = true\n')
+    }
+
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
+
+    expect(verified).toEqual({ _tag: 'Err', error: 'The worker changed a file the merge did not touch: keep.ts.' })
+  })
+
+  it('commits only the verified index when files change after verification', async () => {
+    const { remote, root, task } = fixture()
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
+    if (verified._tag === 'Err')
+      throw new Error(verified.error)
+    writeFileSync(join(prepared.path, 'keep.ts'), 'export const kept = false\n')
+
+    const committed = await manager.commit(task, prepared, verified.value, 'fix: resolve conflicts', new AbortController().signal)
+
+    expect(committed).toEqual(expect.objectContaining({ _tag: 'Ok' }))
+    expect(git(prepared.path, 'show', 'HEAD:keep.ts')).toBe('export const kept = true')
+    expect(git(prepared.path, 'diff', '--name-only')).toBe('keep.ts')
+  })
+
+  it('rejects an index changed after verification before creating a commit', async () => {
+    const { remote, root, task } = fixture()
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
+    if (verified._tag === 'Err')
+      throw new Error(verified.error)
+    writeFileSync(join(prepared.path, 'keep.ts'), 'export const kept = false\n')
+    git(prepared.path, 'add', '--', 'keep.ts')
+
+    const committed = await manager.commit(task, prepared, verified.value, 'fix: resolve conflicts', new AbortController().signal)
+
+    expect(committed).toEqual({ _tag: 'Err', error: 'The conflict index changed after verification.' })
+    expect(git(prepared.path, 'rev-parse', 'HEAD')).toBe(task.pullRequest.headSha)
+    expect(git(prepared.path, 'rev-parse', 'MERGE_HEAD')).toBe(prepared.baseSha)
+  })
+
   it('verifies conflict patches larger than the child process output buffer', async () => {
     const { remote, root, task } = fixture()
     const manager = createConflictWorktreeManager({
