@@ -14,7 +14,7 @@ const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-g
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
 const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued' as const, requestedBy: 'harlan-zw' } }
 
-function fixture(repository: RepositoryMapping = mapping) {
+function fixture(repository: RepositoryMapping = mapping, files = [{ filename: 'src/index.ts', patch: '+return []' }] as Array<{ filename: string, patch?: string }>) {
   const writes: Array<{ path: string, body: Record<string, unknown> }> = []
   const refs = new Map<string, string>([['heads/main', sha], ['tags/v1.0.0', mergeSha]])
   let ready = false
@@ -58,13 +58,13 @@ function fixture(repository: RepositoryMapping = mapping) {
       data = { tree: { sha: changedTree ? 'unexpected-tree' : 'release-tree' } }
     }
     else if (path === '/pulls/24') {
-      data = { merged: !sourceOpen, draft: false, state: sourceOpen ? 'open' : 'closed', commits: 1, changed_files: 1, merge_commit_sha: sourceOpen ? null : mergeSha, base: { ref: 'main' }, title: sourceTitle, body: '', head: { sha: sourceHead } }
+      data = { merged: !sourceOpen, draft: false, state: sourceOpen ? 'open' : 'closed', commits: 1, changed_files: files.length, merge_commit_sha: sourceOpen ? null : mergeSha, base: { ref: 'main' }, title: sourceTitle, body: '', head: { sha: sourceHead } }
     }
     else if (path === '/pulls/24/commits') {
       data = [{ sha: sourceHead, commit: { message: sourceTitle } }]
     }
     else if (path === '/pulls/24/files') {
-      data = [{ filename: 'src/index.ts', patch: '+return []' }]
+      data = files
     }
     else if (path === '/actions/runs') {
       data = { total_count: 1, workflow_runs: [{ id: 10, check_suite_id: 10, head_sha: url.searchParams.get('head_sha'), event: checkEvent, head_branch: checkBranch, status: mainChecks ? 'completed' : 'in_progress', conclusion: mainChecks ? 'success' : null }] }
@@ -73,7 +73,7 @@ function fixture(repository: RepositoryMapping = mapping) {
       data = { type: 'file', content: Buffer.from(path.endsWith('.yml') ? 'on:\n  push:\n    tags: [\'v*\']\n' : JSON.stringify({ name: 'example', version: url.searchParams.get('ref') === 'c'.repeat(40) ? '1.0.1' : '1.0.0' })).toString('base64') }
     }
     else if (path.startsWith('/compare/')) {
-      data = { status: 'ahead', total_commits: 1, commits: [{ sha: rangeSha, commit: { message: 'fix: handle input' } }], files: [{ filename: 'src/index.ts', patch: '+return []' }] }
+      data = { status: 'ahead', total_commits: 1, commits: [{ sha: rangeSha, commit: { message: 'fix: handle input' } }], files }
     }
     else if (path.endsWith('/check-runs')) {
       const main = { id: 10, name: 'test', check_suite: { id: 10 }, app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success' }
@@ -228,6 +228,25 @@ it.each(['fix: handle input', 'feat: add input'])('offers the matching selection
   const task = fixture()
   task.openSource(title)
   expect(await task.source.inspect(24)).toMatchObject({ _tag: 'BeforeMerge', bump: title.startsWith('feat') ? 'minor' : 'patch', headSha: 'f'.repeat(40) })
+  expect(task.writes).toEqual([])
+})
+
+it.each([false, true])('offers a release when GitHub omits a pnpm lockfile patch, open: %s', async (open) => {
+  const task = fixture(mapping, [
+    { filename: 'src/index.ts', patch: '+return []' },
+    { filename: 'test/fixtures/nuxt5/pnpm-lock.yaml' },
+  ])
+  if (open)
+    task.openSource()
+  expect(await task.source.inspect(24)).toMatchObject({ _tag: open ? 'BeforeMerge' : 'Available', bump: 'patch', version: '1.0.1' })
+  expect(task.writes).toEqual([])
+})
+
+it.each(['src/index.ts', 'package.json', 'pnpm-workspace.yaml', 'images/example.png'])('refuses a release when GitHub omits the patch for %s', async (filename) => {
+  const task = fixture(mapping, [{ filename }])
+  expect(await task.source.inspect(24)).toEqual({ _tag: 'Unavailable', reason: 'The complete release range could not be read.' })
+  task.openSource()
+  expect(await task.source.inspect(24)).toEqual({ _tag: 'Unavailable', reason: 'The complete release range could not be read.' })
   expect(task.writes).toEqual([])
 })
 

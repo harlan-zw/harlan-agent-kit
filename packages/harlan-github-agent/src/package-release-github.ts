@@ -10,6 +10,12 @@ import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMer
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
 
+function hasReleasePatch(file: { filename: string, patch?: string }): boolean {
+  // GitHub omits large generated lockfile patches. Classification uses commit
+  // messages, and the public API removal check needs source patches only.
+  return file.patch !== undefined || /(?:^|\/)pnpm-lock\.yaml$/.test(file.filename)
+}
+
 /** One GitHub identity: the login it writes as, and the credential that proves it. */
 export interface PackageReleaseActor {
   login: string
@@ -168,7 +174,7 @@ export function createPackageReleaseSource(options: {
       files: (range.files ?? []).map(file => ({ filename: file.filename, patch: file.patch ?? '' })),
       complete: ['ahead', 'identical'].includes(range.status) && range.total_commits === range.commits.length
         && range.commits.length < 250 && range.files !== undefined && range.files.length < 300
-        && range.files.every(file => file.patch !== undefined),
+        && range.files.every(hasReleasePatch),
     }
     if (!pull.merged) {
       const [commits, files] = await Promise.all([
@@ -183,7 +189,7 @@ export function createPackageReleaseSource(options: {
         return unavailable('The pull request changed while reading its release range.')
       }
       return planPackageReleaseBeforeMerge({ ...common, commits: [...common.commits, ...commits.map(commit => commit.commit.message)], files: [...common.files, ...files.map(file => ({ filename: file.filename, patch: file.patch ?? '' }))], complete: common.complete && commits.length === pull.commits && commits.length < 250
-        && files.length === pull.changed_files && files.length < 300 && files.every(file => file.patch !== undefined) })
+        && files.length === pull.changed_files && files.length < 300 && files.every(hasReleasePatch) })
     }
     return planPackageRelease({ ...common, merged: true, sourceIncluded: pull.merge_commit_sha !== null && range.commits.some(commit => commit.sha === pull.merge_commit_sha), sourceSha: sha, mergeSha: pull.merge_commit_sha ?? '' })
   }
