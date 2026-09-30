@@ -269,6 +269,10 @@ export type ExistingReviewLabelFailure
   = | { _tag: 'Permanent', message: string }
     | { _tag: 'Transient', message: string }
 
+export interface DefaultBranchSource {
+  getDefaultBranchSnapshot: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<{ baseSha: string, baseChecks: GitHubChecksSnapshot }, string>>
+}
+
 export interface ExistingReviewLabelSource {
   /** Reads the latest trusted review for the pinned head and base branch without editing its comment. */
   readExistingReviewLabel: (repository: RepositoryMapping, pullRequestNumber: number, commentId: number, headSha: string, baseRef: string, signal: AbortSignal) => Promise<Result<ExistingReviewLabel, ExistingReviewLabelFailure>>
@@ -512,7 +516,7 @@ function pullRequestItem(
   }
 }
 
-export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewStatusIdentitySource {
+export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & DefaultBranchSource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewStatusIdentitySource {
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
   // charges no primary quota for a 304. Only `read` access uses the cache.
@@ -533,6 +537,53 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
   }
   const client = (repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> =>
     clientWith(options.tokens, repository, access, signal)
+
+  const checksForRef = async (repository: RepositoryMapping, ref: string, signal: AbortSignal): Promise<GitHubChecksSnapshot> => {
+    const { owner, repo } = repositoryParts(repository.github)
+    const checksClient = await client(repository.github, 'checks_read', signal)
+    return checksClient._tag === 'Err'
+      ? Promise.resolve({ _tag: 'Unavailable', reason: checksClient.error })
+      : Promise.all([
+          checksClient.value.paginate(checksClient.value.rest.checks.listForRef, { owner, repo, ref, per_page: 100, request: { signal } }),
+          checksClient.value.paginate(checksClient.value.rest.actions.listWorkflowRunsForRepo, { owner, repo, head_sha: ref, per_page: 100, request: { signal } }),
+        ]).then(async ([allRuns, workflowRuns]): Promise<GitHubChecksSnapshot> => {
+          const derivedSuites = derivedCheckSuiteIds(workflowRuns)
+          const completedWorkflows = new Map(workflowRuns.flatMap(run => run.status === 'completed' && run.conclusion && run.check_suite_id
+            ? [[run.check_suite_id, run.conclusion] as const]
+            : []))
+          // This app's own check runs report the Review, so reading them
+          // as CI would make a Review gate on its own progress and stall.
+          const runs = allRuns.filter(check => check.app?.slug === ACTIONS_APP_SLUG && check.app?.id !== options.ownAppId
+            && (check.check_suite?.id === undefined || check.check_suite.id === null || !derivedSuites.has(check.check_suite.id)))
+          const current = currentGitHubChecks(runs.map((check) => {
+            // GitHub can leave jobs queued after their workflow has finished.
+            const workflowConclusion = check.status !== 'completed' && check.check_suite?.id
+              ? completedWorkflows.get(check.check_suite.id)
+              : undefined
+            return {
+              id: check.id,
+              failure: { _tag: 'NotAsked' as const },
+              source: { _tag: 'CheckRun' as const, appId: check.app?.id ?? null },
+              name: check.name,
+              status: workflowConclusion ? 'completed' : check.status,
+              conclusion: workflowConclusion || check.conclusion,
+            }
+          }))
+          // Only a failing Actions check run can have lost its runner, and
+          // only the `failure` conclusion can. GitHub reports a job a person
+          // cancelled as `cancelled` with no failed step, which is the same
+          // step shape for a different reason. Reading that one here would
+          // report every cancelled job as a lost runner.
+          const currentCheckRunIds = new Set(current.flatMap(check => check.source._tag === 'CheckRun' ? [check.id] : []))
+          const failedActionsJobs = runs.flatMap(check => check.conclusion === 'failure'
+            && check.app?.slug === ACTIONS_APP_SLUG
+            && currentCheckRunIds.has(check.id)
+            ? [check.id]
+            : [])
+          const evidence = await resolveFailedJobs(checksClient.value, owner, repo, failedActionsJobs, signal)
+          return { _tag: 'Available', checks: current.map(check => ({ ...check, failure: evidence.get(check.id) ?? check.failure })) }
+        }).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
+  }
 
   return {
     async findOpenPullRequestForBranch(repository, headRef, signal) {
@@ -901,6 +952,20 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown) => err(message(error)))
     },
 
+    async getDefaultBranchSnapshot(repository, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return currentBaseSha(octokit.value, owner, repo, repository.defaultBranch, signal)
+        .then(async (baseSha) => {
+          const baseChecks = await currentBaseChecks(baseSha, ref => checksForRef(repository, ref, signal), (sha, count) => octokit.value.rest.repos.listCommits({ owner, repo, sha, per_page: count, request: { signal } })
+            .then(response => response.data.map(commit => commit.sha)))
+          return ok({ baseSha, baseChecks })
+        })
+        .catch((error: unknown) => err(message(error)))
+    },
+
     async getPullRequestReviewSnapshot(repository, pullRequestNumber, signal) {
       const octokit = await client(repository.github, 'read', signal)
       if (octokit._tag === 'Err')
@@ -913,49 +978,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         octokit.value.paginate(octokit.value.rest.pulls.listReviews, { ...request, per_page: 100 }),
         octokit.value.paginate(octokit.value.rest.pulls.listReviewComments, { ...request, per_page: 100 }),
       ]).then(async ([pull, issueComments, reviews, reviewComments]) => {
-        const checksClient = await client(repository.github, 'checks_read', signal)
-        const checksFor = (ref: string): Promise<GitHubChecksSnapshot> => checksClient._tag === 'Err'
-          ? Promise.resolve({ _tag: 'Unavailable', reason: checksClient.error })
-          : Promise.all([
-              checksClient.value.paginate(checksClient.value.rest.checks.listForRef, { owner, repo, ref, per_page: 100, request: { signal } }),
-              checksClient.value.paginate(checksClient.value.rest.actions.listWorkflowRunsForRepo, { owner, repo, head_sha: ref, per_page: 100, request: { signal } }),
-            ]).then(async ([allRuns, workflowRuns]): Promise<GitHubChecksSnapshot> => {
-              const derivedSuites = derivedCheckSuiteIds(workflowRuns)
-              const completedWorkflows = new Map(workflowRuns.flatMap(run => run.status === 'completed' && run.conclusion && run.check_suite_id
-                ? [[run.check_suite_id, run.conclusion] as const]
-                : []))
-              // This app's own check runs report the Review, so reading them
-              // as CI would make a Review gate on its own progress and stall.
-              const runs = allRuns.filter(check => check.app?.slug === ACTIONS_APP_SLUG && check.app?.id !== options.ownAppId
-                && (check.check_suite?.id === undefined || check.check_suite.id === null || !derivedSuites.has(check.check_suite.id)))
-              const current = currentGitHubChecks(runs.map((check) => {
-                // GitHub can leave jobs queued after their workflow has finished.
-                const workflowConclusion = check.status !== 'completed' && check.check_suite?.id
-                  ? completedWorkflows.get(check.check_suite.id)
-                  : undefined
-                return {
-                  id: check.id,
-                  failure: { _tag: 'NotAsked' as const },
-                  source: { _tag: 'CheckRun' as const, appId: check.app?.id ?? null },
-                  name: check.name,
-                  status: workflowConclusion ? 'completed' : check.status,
-                  conclusion: workflowConclusion || check.conclusion,
-                }
-              }))
-              // Only a failing Actions check run can have lost its runner, and
-              // only the `failure` conclusion can. GitHub reports a job a person
-              // cancelled as `cancelled` with no failed step, which is the same
-              // step shape for a different reason. Reading that one here would
-              // report every cancelled job as a lost runner.
-              const currentCheckRunIds = new Set(current.flatMap(check => check.source._tag === 'CheckRun' ? [check.id] : []))
-              const failedActionsJobs = runs.flatMap(check => check.conclusion === 'failure'
-                && check.app?.slug === ACTIONS_APP_SLUG
-                && currentCheckRunIds.has(check.id)
-                ? [check.id]
-                : [])
-              const evidence = await resolveFailedJobs(checksClient.value, owner, repo, failedActionsJobs, signal)
-              return { _tag: 'Available', checks: current.map(check => ({ ...check, failure: evidence.get(check.id) ?? check.failure })) }
-            }).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
+        const checksFor = (ref: string): Promise<GitHubChecksSnapshot> => checksForRef(repository, ref, signal)
         const liveBaseSha = await currentBaseSha(octokit.value, owner, repo, pull.data.merged_at === null ? pull.data.base.ref : repository.defaultBranch, signal)
         const baseCommits = (sha: string, count: number): Promise<string[]> => octokit.value.rest.repos
           .listCommits({ owner, repo, sha, per_page: count, request: { signal } })

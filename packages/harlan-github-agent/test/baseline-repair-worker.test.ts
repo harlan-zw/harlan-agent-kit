@@ -33,11 +33,15 @@ interface WorkerInput {
   events?: AgentEvent[]
   capture?: ProviderCapture
   checks?: GitHubCheck[]
+  finalChecks?: GitHubCheck[]
   template?: PullRequestTemplate
   openRepair?: { number: number, url: string } | null
   job?: Result<FailedJobContext, string>
   workspace?: { hasAgentsFile: boolean, nodeOptions: string | null }
   preparedHead?: string
+  defaultBases?: string[]
+  trigger?: Partial<GitHubPullRequestItem>
+  unreadableChecks?: boolean
   onCommit?: (message: string) => void
   onActivity?: (taskId: string, item: unknown) => void
 }
@@ -58,7 +62,9 @@ function baselineTask(pullRequest: GitHubPullRequestItem): ClaimedBaselineRepair
 }
 
 function runWorker(input: WorkerInput = {}) {
-  const pullRequest = pullRequestItem({ mergeState: 'clean' })
+  const pullRequest = pullRequestItem({ mergeState: 'clean', ...input.trigger })
+  const defaultBases = [...(input.defaultBases ?? ['base123', 'base123'])]
+  let snapshotReads = 0
   const agentStarted = { value: false }
   const events = input.events ?? turnEvents(repaired)
   const provider = stubProvider(events, input.capture)
@@ -75,17 +81,13 @@ function runWorker(input: WorkerInput = {}) {
       findOpenPullRequestForBranch: () => Promise.resolve(ok(input.openRepair ?? null)),
       getFailedJobContext: () => Promise.resolve(input.job ?? ok(jobContext())),
       getPullRequestTemplate: () => Promise.resolve(ok(input.template ?? { _tag: 'Missing' })),
-      getPullRequestReviewSnapshot: () => Promise.resolve(ok({
-        baseChecks: { _tag: 'Available', checks: input.checks ?? [actionsCheck()] },
-        body: '',
-        checks: { _tag: 'Available', checks: [] },
-        comments: [],
-        priorAutomatedReview: { _tag: 'None' },
-        pullRequest,
-        findingDiscussions: [],
-        requiredChecks: { _tag: 'None' },
-        reviews: [],
-      })),
+      getDefaultBranchSnapshot: () => {
+        snapshotReads += 1
+        return Promise.resolve(ok({
+          baseSha: defaultBases.shift() ?? 'base123',
+          baseChecks: input.unreadableChecks ? { _tag: 'Unavailable', reason: 'GitHub checks unavailable' } : { _tag: 'Available', checks: (snapshotReads > 1 ? input.finalChecks : undefined) ?? input.checks ?? [actionsCheck()] },
+        }))
+      },
     },
     inspectWorkspace: () => Promise.resolve(input.workspace ?? { hasAgentsFile: false, nodeOptions: null }),
     now: () => new Date('2026-08-13T01:00:00.000Z'),
@@ -128,6 +130,43 @@ describe('baseline repair worker', () => {
         pullRequestBody: `${BASELINE_REPAIR_MARKER}\n### Description\n\n### Linked Issues\n\n${repaired.pullRequestBody}\n\n${disclosure}`,
       }),
     }))
+  })
+
+  it('repairs the default branch after the triggering pull request retargets', async () => {
+    const { result, agentStarted } = await runWorker({ trigger: { baseRef: 'feature/parent', state: 'closed' } })
+    expect(agentStarted).toBe(true)
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Publish' })))
+  })
+
+  it('retires the old failure before starting when the default branch moved', async () => {
+    const { result, agentStarted } = await runWorker({ defaultBases: ['new-default'] })
+    expect(agentStarted).toBe(false)
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Superseded' })))
+  })
+
+  it('refuses to commit when the default branch moves during repair', async () => {
+    let committed = false
+    const { result, agentStarted } = await runWorker({ defaultBases: ['base123', 'new-default'], onCommit: () => {
+      committed = true
+    } })
+    expect(agentStarted).toBe(true)
+    expect(committed).toBe(false)
+    expect(result).toEqual(err('Default branch changed before the controller committed the Baseline repair.'))
+  })
+
+  it('retires the repair when default branch CI turns green during the Agent turn', async () => {
+    let committed = false
+    const { result } = await runWorker({ finalChecks: [actionsCheck({ conclusion: 'success' })], onCommit: () => {
+      committed = true
+    } })
+    expect(committed).toBe(false)
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Superseded' })))
+  })
+
+  it('keeps unreadable default branch checks retryable', async () => {
+    const { result, agentStarted } = await runWorker({ unreadableChecks: true })
+    expect(agentStarted).toBe(false)
+    expect(result).toEqual(err('GitHub checks unavailable'))
   })
 
   it('completes with the open pull request as evidence instead of repairing the same base commit again', async () => {
@@ -198,16 +237,9 @@ describe('baseline repair worker', () => {
         findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getFailedJobContext: (_repository, jobId) => Promise.resolve(ok(jobs.get(jobId) ?? jobContext())),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
-        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+        getDefaultBranchSnapshot: () => Promise.resolve(ok({
+          baseSha: pullRequest.baseSha,
           baseChecks: { _tag: 'Available', checks: [actionsCheck({ id: 1, name: 'build' }), actionsCheck({ id: 2, name: 'typecheck' })] },
-          body: '',
-          checks: { _tag: 'Available', checks: [] },
-          comments: [],
-          priorAutomatedReview: { _tag: 'None' },
-          pullRequest,
-          findingDiscussions: [],
-          requiredChecks: { _tag: 'None' },
-          reviews: [],
         })),
       },
       inspectWorkspace: () => Promise.resolve({ hasAgentsFile: false, nodeOptions: null }),

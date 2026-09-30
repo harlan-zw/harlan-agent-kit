@@ -3,7 +3,7 @@ import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase } from './agent-progress.ts'
 import type { ClassificationSource } from './classification.ts'
-import type { FailedJobContext, GitHubAgentSource, GitHubCheck, PullRequestReviewSnapshot, PullRequestTemplate } from './github-agent-source.ts'
+import type { DefaultBranchSource, FailedJobContext, GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
@@ -71,7 +71,7 @@ export interface BaselineRepairWorkerOptions {
    * Absent means no memory reaches the turn, which is how a test runs.
    */
   claudeHome?: string
-  github: Pick<GitHubAgentSource, 'findOpenPullRequestForBranch' | 'getFailedJobContext' | 'getPullRequestReviewSnapshot' | 'getPullRequestTemplate'>
+  github: Pick<GitHubAgentSource, 'findOpenPullRequestForBranch' | 'getFailedJobContext' | 'getPullRequestTemplate'> & DefaultBranchSource
   /** Reads the prepared worktree. `inspectWorkspaceFiles` reads it from disk. */
   inspectWorkspace: (path: string) => Promise<WorkspaceFacts>
   now: () => Date
@@ -103,9 +103,9 @@ const outputSchema = {
 const disclosure = '> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
 const failedConclusions = new Set(['action_required', 'cancelled', 'error', 'failure', 'stale', 'timed_out'])
 
-function failedChecks(snapshot: PullRequestReviewSnapshot): GitHubCheck[] {
-  return snapshot.baseChecks._tag === 'Available'
-    ? snapshot.baseChecks.checks.filter(check => failedConclusions.has(check.conclusion ?? ''))
+function failedChecks(snapshot: GitHubChecksSnapshot): GitHubCheck[] {
+  return snapshot._tag === 'Available'
+    ? snapshot.checks.filter(check => failedConclusions.has(check.conclusion ?? ''))
     : []
 }
 
@@ -301,18 +301,20 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       if (!canRepairBaseline(validated.value) || prefix === undefined)
         return err('Repository policy no longer authorizes Baseline repair.')
       const [snapshot, template] = await Promise.all([
-        options.github.getPullRequestReviewSnapshot(validated.value, task.pullRequestNumber, signal),
+        options.github.getDefaultBranchSnapshot(validated.value, signal),
         options.github.getPullRequestTemplate(validated.value, signal),
       ])
       if (snapshot._tag === 'Err')
         return snapshot
       if (template._tag === 'Err')
         return template
-      const checks = failedChecks(snapshot.value)
+      if (snapshot.value.baseChecks._tag === 'Unavailable')
+        return err(snapshot.value.baseChecks.reason)
+      const checks = failedChecks(snapshot.value.baseChecks)
       // A Baseline repair exists for one red base commit. If that commit moved on,
       // or its CI went green, there is nothing left to repair.
-      if (snapshot.value.pullRequest.baseSha !== task.pullRequest.baseSha)
-        return ok({ _tag: 'Superseded', reason: `The pull request now builds on ${snapshot.value.pullRequest.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
+      if (snapshot.value.baseSha !== task.pullRequest.baseSha)
+        return ok({ _tag: 'Superseded', reason: `The default branch moved to ${snapshot.value.baseSha}, not the failing ${task.pullRequest.baseSha}.` })
       if (checks.length === 0)
         return ok({ _tag: 'Superseded', reason: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
       // One Baseline repair per base commit. The Journal learns about a
@@ -416,11 +418,15 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       const verified = await options.worktrees.verify(task, prepared.value, signal)
       if (verified._tag === 'Err')
         return verified
-      const frozen = await options.github.getPullRequestReviewSnapshot(validated.value, task.pullRequestNumber, signal)
+      const frozen = await options.github.getDefaultBranchSnapshot(validated.value, signal)
       if (frozen._tag === 'Err')
         return frozen
-      if (frozen.value.pullRequest.baseSha !== prepared.value.baseSha)
+      if (frozen.value.baseSha !== prepared.value.baseSha)
         return err('Default branch changed before the controller committed the Baseline repair.')
+      if (frozen.value.baseChecks._tag === 'Unavailable')
+        return err(frozen.value.baseChecks.reason)
+      if (failedChecks(frozen.value.baseChecks).length === 0)
+        return ok({ _tag: 'Superseded', reason: `Default branch CI no longer fails at ${task.pullRequest.baseSha}.` })
       const committed = await options.worktrees.commit(task, prepared.value, verified.value, response.commitMessage, signal)
       if (committed._tag === 'Err')
         return committed

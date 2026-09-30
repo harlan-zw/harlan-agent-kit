@@ -3752,6 +3752,10 @@ const COMBINED_ISSUE_AUTHORITY_SQL = `NOT EXISTS (
  *
  * Expects `tasks`, `subjects` and `repositories` to be in scope.
  */
+// Baseline repair answers a repository commit. Its triggering Item is provenance.
+// Other mutation Tasks still answer the current Item revision.
+const mutationRevisionAuthoritySql = `(tasks.kind = 'baseline_repair' OR tasks.revision_id = subjects.current_revision_id)`
+
 const PUBLICATION_AUTHORITY_SQL = `
   (
     (tasks.kind = 'resolve_conflict' AND json_extract(repositories.policy_json, '$.conflictResolution') = 1
@@ -4430,16 +4434,17 @@ function cancelStoredTask(database: DatabaseSync, taskId: string, at: string, re
   return { _tag: 'Cancelled' }
 }
 
-function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: string, reason: string, preserveMergedReview = false): void {
+function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: string, reason: string, preserveMergedReview = false, preserveBaseline = false): void {
   const taskIds = database.prepare(`
     SELECT id FROM tasks
     WHERE subject_id = ? AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing', 'Failed')
+      AND NOT (? AND kind = 'baseline_repair')
       AND NOT (? AND kind = 'review_fix' AND revision_id IN (SELECT id FROM revisions WHERE json_extract(payload, '$.mergedAt') IS NOT NULL))
     UNION ALL
     SELECT id FROM worker_tasks
     WHERE subject_id = ? AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Failed')
       AND NOT (? AND kind = 'adversarial_review' AND revision_id IN (SELECT id FROM revisions WHERE json_extract(payload, '$.mergedAt') IS NOT NULL))
-  `).all(subjectId, preserveMergedReview ? 1 : 0, subjectId, preserveMergedReview ? 1 : 0) as unknown as Array<{ id: string }>
+  `).all(subjectId, preserveBaseline ? 1 : 0, preserveMergedReview ? 1 : 0, subjectId, preserveMergedReview ? 1 : 0) as unknown as Array<{ id: string }>
   taskIds.forEach(task => cancelStoredTask(database, task.id, at, reason))
 }
 
@@ -7634,6 +7639,7 @@ export function openJournalStore(
             input.observedAt,
             input.subject.kind === 'pull_request' ? 'The pull request closed.' : 'The issue closed.',
             merged,
+            true,
           )
           return
         }
@@ -7651,14 +7657,6 @@ export function openJournalStore(
             'A newer pull request Revision replaced this Repair.',
             revisionId,
             'review_fix',
-          )
-          supersedeTasks(
-            database,
-            subject.id,
-            input.observedAt,
-            'A newer pull request Revision replaced this Baseline repair.',
-            revisionId,
-            'baseline_repair',
           )
           supersedeTasks(
             database,
@@ -9181,7 +9179,7 @@ export function openJournalStore(
             JOIN publication_commands AS commands ON commands.id = combined.command_id
             WHERE combined.task_id = tasks.id AND commands.state_tag IN ('Pending', 'Running')
           )
-          AND tasks.revision_id = subjects.current_revision_id
+          AND ${mutationRevisionAuthoritySql}
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
           AND repositories.paused = 0
@@ -9575,6 +9573,10 @@ export function openJournalStore(
         return { _tag: 'NotAuthorized', reason: 'Repository policy does not authorize Baseline repair for this base commit.' }
       }
       const taskId = digest(`${row.github}:baseline:${input.baseSha}`)
+      if (database.prepare('SELECT 1 FROM task_cancellations WHERE task_id = ?').get(taskId) !== undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'This Baseline repair was cancelled.' }
+      }
       const existing = database.prepare('SELECT state_tag, fence FROM tasks WHERE id = ?').get(taskId) as
         { state_tag: TaskRow['state_tag'], fence: number } | undefined
       const openRepair = database.prepare(`
@@ -9614,7 +9616,16 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Existing', taskId }
       }
-      supersedeTasks(database, row.subject_id, input.at, 'A newer base commit replaced this Baseline repair.', row.revision_id, 'baseline_repair')
+      const olderRepairs = database.prepare(`
+        SELECT DISTINCT tasks.subject_id FROM tasks
+        JOIN subjects ON subjects.id = tasks.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = tasks.revision_id
+        WHERE repositories.github = ? AND tasks.kind = 'baseline_repair'
+          AND json_extract(revisions.payload, '$.baseSha') != ?
+          AND tasks.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+      `).all(row.github, input.baseSha) as Array<{ subject_id: number }>
+      olderRepairs.forEach(repair => supersedeTasks(database, repair.subject_id, input.at, 'A newer base commit replaced this Baseline repair.', undefined, 'baseline_repair'))
       if (existing !== undefined) {
         // A dead Baseline repair leaves every review of this base commit waiting forever.
         const fence = existing.fence + 1
@@ -11521,7 +11532,7 @@ export function openJournalStore(
           lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-          AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id)
+          AND (kind = 'baseline_repair' OR revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id))
       `).run(input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
         recordTransition(database, { taskId: input.taskId, from: 'Running', to: 'Completed', reason: null, fence: input.fence, at: input.at })
@@ -11546,7 +11557,7 @@ export function openJournalStore(
           command_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-          AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id)
+          AND (kind = 'baseline_repair' OR revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id))
       `).run(input.reason, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
         recordTransition(database, {
@@ -11578,7 +11589,7 @@ export function openJournalStore(
           lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-          AND revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id)
+          AND (kind = 'baseline_repair' OR revision_id = (SELECT current_revision_id FROM subjects WHERE subjects.id = tasks.subject_id))
       `).run(input.reason, input.evidence, input.at, input.taskId, input.workerId, input.fence, input.at)
       if (result.changes === 1) {
         recordTransition(database, {
@@ -11711,7 +11722,7 @@ export function openJournalStore(
         WHERE tasks.id = ? AND tasks.state_tag = 'Running'
           AND tasks.worker_id = ? AND tasks.fence = ?
           AND tasks.lease_expires_at > ?
-          AND tasks.revision_id = subjects.current_revision_id
+          AND ${mutationRevisionAuthoritySql}
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
           AND ${PUBLICATION_AUTHORITY_SQL}
@@ -11901,7 +11912,7 @@ export function openJournalStore(
         WHERE publication_commands.state_tag = 'Pending'
           AND tasks.state_tag = 'Publishing'
           AND tasks.command_id = publication_commands.id
-          AND tasks.revision_id = subjects.current_revision_id
+          AND ${mutationRevisionAuthoritySql}
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
           AND ${PUBLICATION_AUTHORITY_SQL}
@@ -11996,7 +12007,7 @@ export function openJournalStore(
       AND publication_commands.worker_id = ? AND publication_commands.fence = ?
       AND publication_commands.lease_expires_at > ?
       AND tasks.state_tag = 'Publishing' AND tasks.command_id = publication_commands.id
-      AND tasks.revision_id = subjects.current_revision_id
+      AND ${mutationRevisionAuthoritySql}
       AND repositories.enabled = 1
       ${repositoryWriteAuthoritySql}
       AND ${PUBLICATION_AUTHORITY_SQL}
@@ -12024,7 +12035,7 @@ export function openJournalStore(
             SELECT tasks.id FROM tasks
             JOIN subjects ON subjects.id = tasks.subject_id
             WHERE tasks.state_tag = 'Publishing' AND tasks.command_id = publication_commands.id
-              AND tasks.revision_id = subjects.current_revision_id
+              AND ${mutationRevisionAuthoritySql}
           )
       `).run(input.at, input.at, input.pullRequestNumber ?? null, input.commandId, input.workerId, input.fence)
       if (command.changes !== 1) {

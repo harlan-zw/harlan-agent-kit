@@ -552,6 +552,20 @@ describe('base checks behind a commit that ran no CI', () => {
     } as unknown as Octokit
   }
 
+  it('reads default branch CI without depending on a triggering pull request', async () => {
+    const checkedRefs: string[] = []
+    const client = clientReadingHistory({
+      [lastCodeBaseSha]: [{ id: 2, name: 'test', status: 'completed', conclusion: 'failure', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 8 } }],
+    }, checkedRefs)
+    Object.assign(client.rest.pulls, { get: () => {
+      throw new Error('The triggering pull request is unavailable.')
+    } })
+    const source = createGitHubAgentSource({ actorLogin: () => 'harlan-github-agent[bot]', ownAppId: 98114, createClient: () => client, tokens: tokens() })
+    const result = await source.getDefaultBranchSnapshot(repositoryMapping(), new AbortController().signal)
+    expect(result).toEqual(ok({ baseSha: docsOnlyBaseSha, baseChecks: { _tag: 'Available', checks: [expect.objectContaining({ name: 'test', conclusion: 'failure' })] } }))
+    expect(checkedRefs).toEqual([docsOnlyBaseSha, lastCodeBaseSha])
+  })
+
   it('reads the newest base commit that has a check run when the head ran none', async () => {
     // gscdump#55 on 2026-09-10: a docs-only merge became the main head, the
     // test workflow ignores Markdown, and the CI gate reported "Base branch CI
