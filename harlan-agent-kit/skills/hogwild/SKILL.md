@@ -114,7 +114,6 @@ Logs: `ssh hogwild 'journalctl --user -u harlan-github-agent -n 200'`.
 
 ## Do not
 
-- Do not start `harlan-desktop-github-runner.service` on the desktop. Hogwild is the only runner host.
 - Do not add `harlan` to `sudo` or `docker`.
 - Do not edit a primary checkout under `~/pkg` or `~/sites` on the host. The Agent owns them.
 - Do not reboot without draining the runner: `sudo systemctl stop hogwild-github-runner.service`, then `sudo reboot`.

@@ -107,7 +107,7 @@ Do not load workflow Skills. Use the controller's inlined rules.
 Do not suppress warnings broadly, weaken assertions, skip tests, or add `continue-on-error` to obtain green checks.
 Preserve command exit codes when capturing output. Never use a successful formatting command as proof of success.
 Use narrowly scoped handling only when the diagnostic is proven expected and the report explains why.
-Do not change secrets, branch protection, permissions, or runner services. Self-hosted runners belong on Hogwild.
+Do not change secrets, branch protection, permissions, or runner services. Self-hosted runners run on Hogwild and on the desktop.
 Do not deploy, re-run workflows, or edit another pull request's branch.
 Do not stage, commit, push, publish, or change GitHub metadata. The controller owns those actions.
 If the cause cannot be reproduced or verified, return the limitation. Never claim the warning or error was fixed.
