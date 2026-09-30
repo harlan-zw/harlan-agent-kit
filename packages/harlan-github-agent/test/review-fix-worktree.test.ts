@@ -145,7 +145,7 @@ describe('review fix worktree', () => {
     })
   })
 
-  it.each([false, true])('publishes a verified Repair with merged=%s', async (merged) => {
+  it.each([{ merged: false, pickup: false }, { merged: true, pickup: false }, { merged: true, pickup: true }])('publishes a verified Repair: %j', async ({ merged, pickup }) => {
     const { remote, root, task } = fixture()
     if (merged) {
       const checkout = task.repositoryMapping.checkout
@@ -156,6 +156,14 @@ describe('review fix worktree', () => {
       git(checkout, 'commit', '-m', 'later change')
       git(checkout, 'push', 'origin', 'main', ':fix/review')
       task.pullRequest = { ...task.pullRequest, state: 'closed', mergedAt: '2026-08-13T01:00:00.000Z' }
+    }
+    if (pickup) {
+      task.pickup = { _tag: 'LoggedFinding', finding: {
+        _tag: 'Logged',
+        impact: 40,
+        summary: 'Buffered bytes disappear.',
+        details: { fingerprint: 'f'.repeat(64), identity: 'buffered bytes', location: { path: 'file.ts', line: 1 }, proof: 'The parser loses bytes.' },
+      } }
     }
     const profile = signingProfile(root)
     const manager = createReviewFixWorktreeManager({

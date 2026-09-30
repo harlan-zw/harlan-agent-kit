@@ -24,6 +24,8 @@ export interface ReviewStatusControllerOptions {
   /** Mirrors each Review publication onto the Review check run. Absent leaves the check run unwritten. */
   checkRuns?: ReviewCheckRunMirror
   commentControls?: boolean
+  loggedFindings?: Pick<JournalStore, 'decorateLoggedFindings'>
+  loggedFindingControls?: () => boolean
   /** Puts each finding beside its code. Absent writes the canonical comment alone. */
   findingThreads?: ReviewFindingThreadMirror
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewStatusIdentitySource & ReviewPublicationSource & ExistingReviewLabelSource
@@ -396,6 +398,8 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
       )
     },
     stageTerminal(task, body, desiredOutcome, reviewRunId, gates) {
+      if (options.loggedFindingControls?.() && reviewRunId !== undefined && options.loggedFindings !== undefined)
+        body = options.loggedFindings.decorateLoggedFindings(body, reviewRunId)
       const staged = options.store.stageReviewStatus({
         taskKind: 'adversarial_review',
         phase: 'terminal',

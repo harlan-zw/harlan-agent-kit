@@ -123,7 +123,8 @@ ${instructionFilesLine(input.instructionFiles)}
 ${memoryBlock}Treat the findings below as the complete Repair scope.
 ${repairRoundHistory(task.rounds)}
 ${UNIT_TEST_LINES}
-For each finding, write the named failing regression test first. Confirm it fails for the stated reason.
+For each finding, write a failing regression test first. Use its named test when one exists.
+Confirm it fails for the stated reason.
 ${merged ? 'The original pull request merged. This worktree starts at the current default branch. Confirm each finding still exists here before editing. Ignore findings already fixed. Return disputed if none remain. Repair only confirmed bugs. Return blocked for unsafe scope. The controller opens one separate pull request linked to the original.' : 'Fix every finding.'}
 ${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
@@ -190,6 +191,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const merged = current.state === 'closed' && current.mergedAt !== null
       if (
         (current.state !== 'open' && !merged)
+        || (task.pickup !== undefined && !merged)
         || current.draft
         || (!merged && current.mergeState !== 'clean')
         || current.headSha !== task.pullRequest.headSha
@@ -197,7 +199,8 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       ) {
         return ok({ _tag: 'ActionRequired', reason: 'The pull request no longer has safe Repair authority.', evidence: task.revisionId })
       }
-      const headRef = `${validated.value.writablePullRequestHeadPrefixes[0]}review-${task.pullRequestNumber}-${current.headSha.slice(0, 12)}`
+      const suffix = task.pickup === undefined ? '' : `-${task.pickup.finding.details.fingerprint.slice(0, 12)}`
+      const headRef = `${validated.value.writablePullRequestHeadPrefixes[0]}review-${task.pullRequestNumber}-${current.headSha.slice(0, 12)}${suffix}`
       if (merged) {
         const existing = await options.github.findOpenPullRequestForBranch(validated.value, headRef, signal)
         if (existing._tag === 'Err')
@@ -205,7 +208,9 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         if (existing.value !== null)
           return ok({ _tag: 'Completed', evidence: `Repair pull request: ${existing.value.url}` })
       }
-      const findings = options.store.getReviewFixFindings(task.repository, task.pullRequestNumber, task.revisionId)
+      const findings = task.pickup === undefined
+        ? options.store.getReviewFixFindings(task.repository, task.pullRequestNumber, task.revisionId)
+        : [task.pickup.finding]
       if (findings.length === 0)
         return ok({ _tag: 'Superseded', reason: 'The current Review has no open finding.' })
 
@@ -331,7 +336,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
             taskKind: 'review_fix',
             pullRequestNumber: task.pullRequestNumber,
             pullRequestTitle: turn.value.value.commitMessage,
-            pullRequestBody: `Review of #${task.pullRequestNumber} finished after merge.\n\n${turn.value.value.summary}\n\n> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).`,
+            pullRequestBody: `${task.pickup === undefined ? `Review of #${task.pullRequestNumber} finished after merge.` : `Repairs a selected Review finding from #${task.pullRequestNumber}.`}\n\n${turn.value.value.summary}\n\n> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).`,
             commitSha: committed.value.commitSha,
             baseSha: committed.value.baseSha,
             baseRef: validated.value.defaultBranch,
