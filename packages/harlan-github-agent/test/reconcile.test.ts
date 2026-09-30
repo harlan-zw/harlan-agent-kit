@@ -498,7 +498,6 @@ describe('gitHub reconciliation', () => {
       _tag: 'Ok',
       value: { repository: repository.github, subjects: 0, inserted: 0, duplicates: 0, stale: 0, closed: 1 },
     })
-    expect(store.resolveStaleTaskIncidents('2026-08-13T01:00:01.000Z')).toBe(1)
     expect(store.listIncidents()).toEqual([])
     store.close()
   })

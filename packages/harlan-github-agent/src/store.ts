@@ -1194,7 +1194,9 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   recordIncident: (input: RecordIncidentInput) => Incident
   /** Clears every open Incident for one scope once the work behind it succeeds. */
   resolveIncidents: (scope: IncidentScope, at: string, operation?: string, exceptMessages?: readonly string[]) => number
+  resolveRunnerLostIncident: (input: { incident: Incident, repository: RepositoryMapping, at: string }) => boolean
   listIncidents: () => Incident[]
+  listRunnerLostIncidents: (repository: string) => Incident[]
   recordReviewRun: (input: RecordReviewRunInput) => RecordReviewRunResult
   /** Atomically stores a refreshed Review and its published GitHub projection. */
   supersedeReviewRun: (input: SupersedeReviewRunInput) => SupersedeReviewRunResult
@@ -4465,7 +4467,25 @@ function cancelStoredTask(database: DatabaseSync, taskId: string, at: string, re
 
   database.prepare('INSERT INTO task_cancellations (task_id, cancelled_at, reason) VALUES (?, ?, ?)')
     .run(taskId, at, reason)
+  resolveTaskIncidents(database, taskId, at)
   return { _tag: 'Cancelled' }
+}
+
+function mergedReviewCanContinue(worker: {
+  state_tag: Exclude<TaskRow['state_tag'], 'Publishing'>
+  fence: number
+  recovery_attempts: number
+  reason: string | null
+}): boolean {
+  if (worker.state_tag === 'Running'
+    || (worker.state_tag === 'Queued' && worker.fence > 0)) {
+    return true
+  }
+  if (worker.state_tag !== 'Failed' || worker.reason === null)
+    return false
+  const failure = classifyFailure({ message: worker.reason })
+  return failure._tag === 'Transient'
+    && (worker.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS || failure.kind === 'agent_provider')
 }
 
 function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: string, reason: string, preserveMergedReview = false, preserveBaseline = false): void {
@@ -4474,11 +4494,31 @@ function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: strin
     WHERE subject_id = ? AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing', 'Failed')
       AND NOT (? AND kind = 'baseline_repair')
       AND NOT (? AND kind = 'review_fix' AND revision_id IN (SELECT id FROM revisions WHERE json_extract(payload, '$.mergedAt') IS NOT NULL))
-    UNION ALL
-    SELECT id FROM worker_tasks
-    WHERE subject_id = ? AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Failed')
-      AND NOT (? AND kind = 'adversarial_review' AND revision_id IN (SELECT id FROM revisions WHERE json_extract(payload, '$.mergedAt') IS NOT NULL))
-  `).all(subjectId, preserveBaseline ? 1 : 0, preserveMergedReview ? 1 : 0, subjectId, preserveMergedReview ? 1 : 0) as unknown as Array<{ id: string }>
+  `).all(subjectId, preserveBaseline ? 1 : 0, preserveMergedReview ? 1 : 0) as unknown as Array<{ id: string }>
+  const workers = database.prepare(`
+    SELECT worker_tasks.id, worker_tasks.kind, worker_tasks.state_tag, worker_tasks.fence,
+      worker_tasks.recovery_attempts, worker_tasks.reason,
+      json_extract(revisions.payload, '$.mergedAt') AS merged_at
+    FROM worker_tasks JOIN revisions ON revisions.id = worker_tasks.revision_id
+    WHERE worker_tasks.subject_id = ? AND worker_tasks.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Failed')
+  `).all(subjectId) as unknown as Array<{
+    id: string
+    kind: 'adversarial_review' | 'issue_triage'
+    state_tag: Exclude<TaskRow['state_tag'], 'Publishing'>
+    fence: number
+    recovery_attempts: number
+    reason: string | null
+    merged_at: string | null
+  }>
+  workers.forEach((worker) => {
+    // Merge preserves a report already in progress, including bounded recovery.
+    // A terminal failure cannot finish that report and must retire its Incident.
+    if (preserveMergedReview && worker.kind === 'adversarial_review'
+      && worker.merged_at !== null && mergedReviewCanContinue(worker)) {
+      return
+    }
+    taskIds.push(worker)
+  })
   taskIds.forEach(task => cancelStoredTask(database, task.id, at, reason))
 }
 
@@ -8262,6 +8302,28 @@ export function openJournalStore(
     return rows.map(incidentFromRow)
   }
 
+  const resolveRunnerLostIncident: JournalStore['resolveRunnerLostIncident'] = (input) => {
+    if (!mutationsEnabled || input.incident.scope._tag !== 'Repository'
+      || input.incident.scope.repository !== input.repository.github) {
+      return false
+    }
+    return database.prepare(`
+      UPDATE incidents SET resolved_at = ?
+      WHERE id = ? AND resolved_at IS NULL AND scope_tag = 'Repository'
+        AND repository = ? AND kind = 'runner_lost' AND operation = 'read_checks'
+        AND occurrences = ? AND last_seen_at = ?
+        AND EXISTS (SELECT 1 FROM repositories
+          WHERE github = incidents.repository AND enabled = 1 AND writes_enabled = 1
+            AND paused = 0 AND ownership != 'external' AND policy_json = ?)
+    `).run(input.at, input.incident.id, input.repository.github, input.incident.occurrences, input.incident.lastSeenAt, JSON.stringify(input.repository)).changes === 1
+  }
+
+  const listRunnerLostIncidents: JournalStore['listRunnerLostIncidents'] = repository => (database.prepare(`
+    SELECT * FROM incidents WHERE resolved_at IS NULL AND scope_tag = 'Repository'
+      AND repository = ? AND kind = 'runner_lost' AND operation = 'read_checks'
+    ORDER BY last_seen_at, id
+  `).all(repository) as unknown as IncidentRow[]).map(incidentFromRow)
+
   const recordPollAttempt = (github: string, at: string): void => {
     database.prepare('UPDATE repositories SET last_attempt_at = ? WHERE github = ?').run(at, github)
   }
@@ -10189,6 +10251,39 @@ export function openJournalStore(
   const retryRecoverableWorkerFailures: JournalStore['retryRecoverableWorkerFailures'] = (at) => {
     database.exec('BEGIN IMMEDIATE')
     try {
+      // Verified closed PRs leave the poll set. Retire their terminal Reviews
+      // here so deployment also repairs journals written before merge retirement.
+      if (mutationsEnabled) {
+        const merged = database.prepare(`
+          SELECT worker_tasks.id, worker_tasks.state_tag, worker_tasks.fence,
+            worker_tasks.recovery_attempts, worker_tasks.reason
+          FROM worker_tasks
+          JOIN subjects ON subjects.id = worker_tasks.subject_id
+          JOIN revisions ON revisions.id = subjects.current_revision_id
+          JOIN repositories ON repositories.id = subjects.repository_id
+          JOIN pull_request_closure_verifications AS verified
+            ON verified.subject_id = subjects.id AND verified.revision_id = revisions.id
+              AND verified.disposition_tag = 'Merged'
+              AND verified.head_sha = json_extract(revisions.payload, '$.headSha')
+              AND verified.base_sha = json_extract(revisions.payload, '$.baseSha')
+          WHERE worker_tasks.kind = 'adversarial_review'
+            AND worker_tasks.revision_id = subjects.current_revision_id
+            AND worker_tasks.state_tag IN ('Queued', 'ActionRequired', 'Failed')
+            AND json_extract(revisions.payload, '$.state') = 'closed'
+            AND json_extract(revisions.payload, '$.mergedAt') IS NOT NULL
+            AND repositories.enabled = 1 AND repositories.writes_enabled = 1
+            AND repositories.paused = 0 AND repositories.ownership != 'external'
+            AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+        `).all() as unknown as Array<{
+          id: string
+          state_tag: Exclude<TaskRow['state_tag'], 'Publishing'>
+          fence: number
+          recovery_attempts: number
+          reason: string | null
+        }>
+        merged.filter(worker => !mergedReviewCanContinue(worker))
+          .forEach(worker => cancelStoredTask(database, worker.id, at, 'The pull request merged.'))
+      }
       // Every Failed Task on the current revision is a candidate. What it says
       // decides whether it retries, not a list of failures someone saw before.
       const rows = (database.prepare(`
@@ -15794,7 +15889,9 @@ export function openJournalStore(
     recordPollObservation,
     recordIncident,
     resolveIncidents,
+    resolveRunnerLostIncident,
     listIncidents,
+    listRunnerLostIncidents,
     recordPollAttempt,
     recordPollFailure,
     recordPollSuccess,

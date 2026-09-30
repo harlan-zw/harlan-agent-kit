@@ -84,6 +84,7 @@ import { planRoutineRuns, retireUnmappedRoutines, syncRepositoryRoutines } from 
 import { createRoutineReportController } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 import { createRoutineScanWorker } from './routine-worker.ts'
+import { resolveRecoveredRunnerIncidents } from './runner-lost-recovery.ts'
 import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
@@ -1381,7 +1382,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         const results = await reconcileAllRepositories([repository], {
           ...(mutationSchedulers === undefined
             ? {}
-            : { approvals: mutationSchedulers.approvals, autoMerge: mutationSchedulers.autoMerge, refreshReviewGates: refreshRepositoryReviewGates }),
+            : {
+                approvals: mutationSchedulers.approvals,
+                autoMerge: mutationSchedulers.autoMerge,
+                refreshReviewGates: refreshRepositoryReviewGates,
+                recoverRunnerIncidents: (mapping, recoverySignal) => resolveRecoveredRunnerIncidents({
+                  repository: mapping,
+                  github: workerGithub,
+                  store,
+                  now,
+                }, recoverySignal),
+              }),
           // A read-only deployment runs no classification and settles nothing.
           mutationsEnabled: config.mutationsEnabled,
           ...(pullRequestTriage === null ? {} : { pullRequestTriage }),
