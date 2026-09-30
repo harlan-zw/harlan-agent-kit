@@ -9749,6 +9749,15 @@ export function openJournalStore(
         JOIN revisions ON revisions.id = worker_tasks.revision_id
         WHERE (? IS NULL OR worker_tasks.kind = ?) AND worker_tasks.state_tag = 'Queued'
           AND worker_tasks.revision_id = subjects.current_revision_id
+          -- A different base needs the Item's active Baseline repair slot.
+          -- Wait before claiming Review, so it spends no retry attempts.
+          AND (worker_tasks.kind != 'adversarial_review' OR NOT EXISTS (
+            SELECT 1 FROM tasks AS baseline
+            JOIN revisions AS baseline_revision ON baseline_revision.id = baseline.revision_id
+            WHERE baseline.subject_id = worker_tasks.subject_id AND baseline.kind = 'baseline_repair'
+              AND baseline.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+              AND json_extract(baseline_revision.payload, '$.baseSha') != json_extract(revisions.payload, '$.baseSha')
+          ))
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
           AND repositories.paused = 0

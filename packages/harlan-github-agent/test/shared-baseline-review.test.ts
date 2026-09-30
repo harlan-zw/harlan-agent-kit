@@ -132,18 +132,31 @@ describe('shared Baseline repair completion', () => {
     expect(store.heartbeatTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(7), leaseMilliseconds: 600_000 })).toBe(true)
   })
 
-  it('waits for the active Item repair to retire before queuing another base', () => {
+  it.each(['Superseded', 'Cancelled'] as const)('waits without spending Review attempts until the other base repair is %s', (retirement) => {
     const store = setup()
     const first = review(store, 24, 'old-base')
     const repair = store.claimNextBaselineRepairTask('baseline', at(4), 600_000)!
     expect(store.completeReviewTask({ taskId: first.task.id, workerId: 'reviewer', fence: first.task.state.fence, at: at(5), evidence: 'Waiting for Baseline repair.', resolution: { _tag: 'WaitingForBaselineRepair', taskId: first.baseline.taskId } })).toBe(true)
     store.recordObservation({ externalId: 'advanced-trigger', observedAt: at(6), source: 'poll', subject: pullRequestItem({ number: 24, baseSha: 'new-base', mergeState: 'clean', updatedAt: at(6) }) })
-    const currentReview = store.claimNextAdversarialReviewTask('reviewer', at(7), 600_000)!
-    const input = { taskId: currentReview.id, workerId: 'reviewer', fence: currentReview.state.fence, baseSha: 'new-base', at: at(8) }
-    expect(store.queueBaselineRepairForReview(input)).toEqual({ _tag: 'Rejected', reason: 'Another Baseline repair is active for this pull request.' })
-    expect(store.heartbeatTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(9), leaseMilliseconds: 600_000 })).toBe(true)
-    expect(store.supersedeTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(10), reason: 'The live default branch moved.' })).toBe(true)
-    expect(store.queueBaselineRepairForReview({ ...input, at: at(11) })._tag).toBe('Queued')
+    for (let second = 7; second < 17; second++)
+      expect(store.claimNextAdversarialReviewTask('reviewer', at(second), 600_000)).toBe(null)
+    expect(store.heartbeatTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(17), leaseMilliseconds: 600_000 })).toBe(true)
+    if (retirement === 'Superseded')
+      expect(store.supersedeTask({ taskId: repair.id, workerId: 'baseline', fence: repair.state.fence, at: at(18), reason: 'The live default branch moved.' })).toBe(true)
+    else
+      expect(store.cancelTask({ taskId: repair.id, at: at(18) })._tag).toBe('Cancelled')
+    const currentReview = store.claimNextAdversarialReviewTask('reviewer', at(19), 600_000)!
+    expect(currentReview?.pullRequest.baseSha).toBe('new-base')
+    expect(store.queueBaselineRepairForReview({ taskId: currentReview.id, workerId: 'reviewer', fence: currentReview.state.fence, baseSha: 'new-base', at: at(20) })._tag).toBe('Queued')
+  })
+
+  it('lets a queued Baseline repair claim while the next base Review waits', () => {
+    const store = setup()
+    const first = review(store, 24, 'old-base')
+    expect(store.completeReviewTask({ taskId: first.task.id, workerId: 'reviewer', fence: first.task.state.fence, at: at(4), evidence: 'Waiting for Baseline repair.', resolution: { _tag: 'WaitingForBaselineRepair', taskId: first.baseline.taskId } })).toBe(true)
+    store.recordObservation({ externalId: 'advanced-trigger', observedAt: at(5), source: 'poll', subject: pullRequestItem({ number: 24, baseSha: 'new-base', mergeState: 'clean', updatedAt: at(5) }) })
+    expect(store.claimNextAdversarialReviewTask('reviewer', at(6), 600_000)).toBe(null)
+    expect(store.claimNextBaselineRepairTask('baseline', at(7), 600_000)?.id).toBe(first.baseline.taskId)
   })
 
   it('settles the owned lease when completion throws so a restart can proceed', async () => {
