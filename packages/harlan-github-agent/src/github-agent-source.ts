@@ -293,6 +293,13 @@ export interface ReviewStatusIdentitySource {
   getPullRequestStatusIdentity: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<Pick<GitHubPullRequestItem, 'state' | 'headSha' | 'baseRef'>, string>>
 }
 
+export interface RunnerLostRecoverySource extends DefaultBranchSource {
+  /** Complete open PR identities, including authors outside the work policy. */
+  getOpenPullRequestCheckSources: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<Array<Pick<GitHubPullRequestItem, 'number' | 'headSha' | 'baseSha' | 'baseRef'>>, string>>
+  /** Head checks answer for that commit. Base checks retain the existing ancestor fallback. */
+  getCommitChecks: (repository: RepositoryMapping, sha: string, role: 'head' | 'base', signal: AbortSignal) => Promise<GitHubChecksSnapshot>
+}
+
 export interface GitHubAgentSource {
   /** Finds the open pull request whose head is `headRef`, if one exists. */
   findOpenPullRequestForBranch: (repository: RepositoryMapping, headRef: string, signal: AbortSignal) => Promise<Result<OpenPullRequestReference | null, string>>
@@ -517,7 +524,7 @@ function pullRequestItem(
   }
 }
 
-export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & DefaultBranchSource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewStatusIdentitySource {
+export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & RunnerLostRecoverySource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewStatusIdentitySource {
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
   // charges no primary quota for a 304. Only `read` access uses the cache.
@@ -965,6 +972,35 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           return ok({ baseSha, baseChecks })
         })
         .catch((error: unknown) => err(message(error)))
+    },
+
+    async getOpenPullRequestCheckSources(repository, signal) {
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      return octokit.value.paginate(octokit.value.rest.pulls.list, { owner, repo, state: 'open', per_page: 100, request: { signal } })
+        .then(async (pulls) => {
+          const bases = new Map<string, string>()
+          for (const pull of pulls) {
+            if (!bases.has(pull.base.ref))
+              bases.set(pull.base.ref, await currentBaseSha(octokit.value, owner, repo, pull.base.ref, signal))
+          }
+          return ok(pulls.map(pull => ({ number: pull.number, headSha: pull.head.sha, baseSha: bases.get(pull.base.ref)!, baseRef: pull.base.ref })))
+        })
+        .catch((error: unknown) => err(message(error)))
+    },
+
+    async getCommitChecks(repository, sha, role, signal) {
+      if (role === 'head')
+        return checksForRef(repository, sha, signal)
+      const octokit = await client(repository.github, 'read', signal)
+      if (octokit._tag === 'Err')
+        return { _tag: 'Unavailable', reason: octokit.error }
+      const { owner, repo } = repositoryParts(repository.github)
+      return currentBaseChecks(sha, ref => checksForRef(repository, ref, signal), (base, count) => octokit.value.rest.repos.listCommits({ owner, repo, sha: base, per_page: count, request: { signal } })
+        .then(response => response.data.map(commit => commit.sha)))
+        .catch((error: unknown) => ({ _tag: 'Unavailable' as const, reason: message(error) }))
     },
 
     async getPullRequestReviewSnapshot(repository, pullRequestNumber, signal) {

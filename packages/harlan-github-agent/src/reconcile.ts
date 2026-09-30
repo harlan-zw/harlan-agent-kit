@@ -33,6 +33,7 @@ export interface ReconciliationDependencies {
   mutationsEnabled?: boolean
   pullRequestTriage?: PullRequestTriageController
   refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
+  recoverRunnerIncidents?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<number, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
   store: JournalStore
   now: () => Date
@@ -313,6 +314,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     observedAt,
   )
   dependencies.store.recordPollSuccess(repository.github, observedAt)
+  if (writesEnabled && dependencies.recoverRunnerIncidents !== undefined) {
+    const recovery = await dependencies.recoverRunnerIncidents(repository, dependencies.signal ?? AbortSignal.timeout(30_000))
+    if (recovery._tag === 'Err')
+      return err({ repository: repository.github, message: recovery.error })
+  }
   return ok({
     repository: repository.github,
     subjects: eligibleItems.length,
