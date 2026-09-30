@@ -27,7 +27,7 @@ function git(checkout: string, ...args: string[]): string {
   }).trim()
 }
 
-function fixture(): { checkout: string, currentBaseSha: string, remote: string, root: string, task: ClaimedConflictResolutionTask } {
+function fixture(conflictPath = 'file.txt', extraPath?: string): { checkout: string, currentBaseSha: string, remote: string, root: string, task: ClaimedConflictResolutionTask } {
   const directory = mkdtempSync(join(tmpdir(), 'harlan-conflict-worktree-'))
   temporaryDirectories.push(directory)
   const remote = join(directory, 'remote.git')
@@ -38,7 +38,9 @@ function fixture(): { checkout: string, currentBaseSha: string, remote: string, 
   git(checkout, 'config', 'user.name', 'Test Agent')
   git(checkout, 'config', 'user.email', 'agent@example.com')
   git(checkout, 'checkout', '-b', 'main')
-  writeFileSync(join(checkout, 'file.txt'), 'original\n')
+  writeFileSync(join(checkout, conflictPath), 'original\n')
+  if (extraPath !== undefined)
+    writeFileSync(join(checkout, extraPath), 'pull request\n')
   // `helper.ts` is what the base branch moves under a resolution. `keep.ts` is
   // what neither side touches, so nothing may edit it.
   writeFileSync(join(checkout, 'helper.ts'), 'export const limit = 1\n')
@@ -49,13 +51,13 @@ function fixture(): { checkout: string, currentBaseSha: string, remote: string, 
   const staleBaseSha = git(checkout, 'rev-parse', 'HEAD')
 
   git(checkout, 'checkout', '-b', 'fix/conflict')
-  writeFileSync(join(checkout, 'file.txt'), 'pull request\n')
+  writeFileSync(join(checkout, conflictPath), 'pull request\n')
   git(checkout, 'commit', '-am', 'pull request change')
   const headSha = git(checkout, 'rev-parse', 'HEAD')
   git(checkout, 'push', 'origin', 'HEAD:refs/pull/1/head')
 
   git(checkout, 'checkout', 'main')
-  writeFileSync(join(checkout, 'file.txt'), 'current base\n')
+  writeFileSync(join(checkout, conflictPath), 'current base\n')
   git(checkout, 'commit', '-am', 'base change')
   git(checkout, 'push', 'origin', 'main')
   const currentBaseSha = git(checkout, 'rev-parse', 'HEAD')
@@ -247,6 +249,69 @@ describe('conflict worktree', () => {
     expect(verified).toEqual({ _tag: 'Err', error: 'The worker changed a file the merge did not touch: keep.ts.' })
   })
 
+  it.each(['\n', ' ', '\t'])('rejects an unrelated path with prefix %j', async (prefix) => {
+    const unrelatedPath = `${prefix}file.txt`
+    const { remote, root, task } = fixture('file.txt', unrelatedPath)
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    writeFileSync(join(prepared.path, unrelatedPath), 'unauthorized\n')
+    git(prepared.path, 'add', '--', unrelatedPath)
+
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
+
+    expect(verified).toEqual({ _tag: 'Err', error: `The worker changed a file the merge did not touch: ${unrelatedPath}.` })
+    expect(git(prepared.path, 'rev-parse', 'HEAD')).toBe(task.pullRequest.headSha)
+  })
+
+  it('rejects Git path bytes that cannot be decoded without replacement', async () => {
+    const { remote, root, task } = fixture('�file.txt')
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, '�file.txt'), 'resolved\n')
+    const invalidPath = Buffer.concat([Buffer.from(`${prepared.path}/`), Buffer.from([0xFF]), Buffer.from('file.txt')])
+    writeFileSync(invalidPath, 'unauthorized\n')
+    git(prepared.path, 'add', '--all')
+
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
+
+    expect(verified).toEqual({ _tag: 'Err', error: 'Could not inspect the conflict fix: Git output contains invalid UTF-8.' })
+    expect(git(prepared.path, 'rev-parse', 'HEAD')).toBe(task.pullRequest.headSha)
+  })
+
+  it('rejects an index path changed only by trailing whitespace after verification', async () => {
+    const { remote, root, task } = fixture('file.txt', 'file.txt ')
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const prepared = await conflicted(manager, task)
+    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    const verified = await manager.verify(task, prepared, new AbortController().signal)
+    if (verified._tag === 'Err')
+      throw new Error(verified.error)
+    git(prepared.path, 'restore', '--source=HEAD', '--staged', '--', 'file.txt')
+    writeFileSync(join(prepared.path, 'file.txt '), 'resolved\n')
+    git(prepared.path, 'add', '--', 'file.txt ')
+
+    const committed = await manager.commit(task, prepared, verified.value, 'fix: resolve conflicts', new AbortController().signal)
+
+    expect(committed).toEqual({ _tag: 'Err', error: 'The conflict index changed after verification.' })
+    expect(git(prepared.path, 'rev-parse', 'HEAD')).toBe(task.pullRequest.headSha)
+  })
+
   it('commits only the verified index when files change after verification', async () => {
     const { remote, root, task } = fixture()
     const manager = createConflictWorktreeManager({
@@ -330,11 +395,11 @@ describe('conflict worktree', () => {
     expect(git(prepared.path, 'show', '--no-patch', '--format=%an <%ae>')).toBe('Harlan Wilton <harlan@harlanzw.com>')
     expect(git(prepared.path, 'show', '--no-patch', '--format=%s')).toBe('merge: reconcile parser changes')
   })
-  it('publishes a resolution whose digest was read where blob names abbreviate differently', async () => {
+  it.each(['file.txt', '\nfile.txt', ' file.txt', '\tfile.txt', 'file.txt ', 'file.txt\t', 'file.txt\n', 'éfile.txt', '\uFEFFfile.txt'])('publishes a resolution with the exact path %j across Git settings', async (conflictPath) => {
     // Git scales blob name abbreviation with the object count of a repository,
     // so the checkout that resolves a conflict and the controller mirror that
     // publishes it disagreed on the same commit and every publication failed.
-    const { remote, root, task } = fixture()
+    const { remote, root, task } = fixture(conflictPath)
     const options = {
       gitIdentity: { name: 'Harlan Wilton', email: 'harlan@harlanzw.com' },
       remoteUrl: () => remote,
@@ -343,8 +408,10 @@ describe('conflict worktree', () => {
     }
     const manager = createConflictWorktreeManager(options)
     const prepared = await conflicted(manager, task)
+    expect(prepared.conflictedFiles).toEqual([conflictPath])
     git(prepared.path, 'config', 'core.abbrev', '20')
-    writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    git(prepared.path, 'config', 'core.quotePath', 'false')
+    writeFileSync(join(prepared.path, conflictPath), 'resolved\n')
     const verified = await manager.verify(task, prepared, new AbortController().signal)
     if (verified._tag === 'Err')
       throw new Error(verified.error)
@@ -384,6 +451,7 @@ describe('conflict worktree', () => {
     }, new AbortController().signal)
 
     expect(pushed).toEqual(ok(undefined))
+    expect(git(remote, 'show', `refs/heads/fix/conflict:${conflictPath}`)).toBe('resolved')
     expect(git(remote, 'rev-parse', 'refs/heads/fix/conflict')).toBe(committed.value.commitSha)
   })
   it('lets a resolution follow the base branch into a file that never conflicted', async () => {

@@ -10,7 +10,6 @@ import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
-import { StringDecoder } from 'node:string_decoder'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -212,14 +211,31 @@ function runGit(checkout: string, args: string[], signal: AbortSignal, githubTok
     execFile(
       'git',
       ['-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', ...protocols, '-C', checkout, ...args],
-      { encoding: 'utf8', env: gitEnvironment(githubToken), signal },
-      (error, stdout, stderr) => resolve({
-        exitCode: error === null ? 0 : typeof error.code === 'number' ? error.code : 1,
-        stdout: stdout.trim(),
-        stderr: stderr.trim() || error?.message.trim() || '',
-      }),
+      { encoding: 'buffer', env: gitEnvironment(githubToken), signal },
+      (error, stdout, stderr) => {
+        // Replacement decoding can alias two distinct Git paths.
+        let output: string
+        try {
+          output = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(stdout)
+        }
+        catch {
+          resolve({ exitCode: 1, stdout: '', stderr: 'Git output contains invalid UTF-8.' })
+          return
+        }
+        resolve({
+          exitCode: error === null ? 0 : typeof error.code === 'number' ? error.code : 1,
+          stdout: output,
+          stderr: stderr.toString('utf8').trim() || error?.message.trim() || '',
+        })
+      },
     )
   })
+}
+
+/** Git scalar protocols use whitespace-delimited values, unlike path lists. */
+async function runGitScalar(checkout: string, args: string[], signal: AbortSignal): Promise<CommandResult> {
+  const result = await runGit(checkout, args, signal)
+  return { ...result, stdout: result.stdout.trim() }
 }
 
 /**
@@ -254,41 +270,20 @@ function runWt(checkout: string, args: string[], signal: AbortSignal): Promise<C
 function runGitDigest(checkout: string, args: string[], signal: AbortSignal): Promise<CommandDigestResult> {
   return new Promise((resolve) => {
     const hash = createHash('sha256')
-    const decoder = new StringDecoder('utf8')
     const stderr: Buffer[] = []
-    let started = false
-    let trailingWhitespace = ''
     let spawnError = ''
-
-    const update = (value: string) => {
-      let text = trailingWhitespace + value
-      trailingWhitespace = ''
-      if (!started) {
-        text = text.trimStart()
-        if (text.length === 0)
-          return
-        started = true
-      }
-      const trailing = text.match(/\s+$/u)?.[0] ?? ''
-      if (trailing.length > 0) {
-        trailingWhitespace = trailing
-        text = text.slice(0, -trailing.length)
-      }
-      hash.update(text)
-    }
 
     const child = spawn(
       'git',
       ['-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-C', checkout, ...args],
       { env: gitEnvironment(), signal, stdio: ['ignore', 'pipe', 'pipe'] },
     )
-    child.stdout.on('data', (chunk: Buffer) => update(decoder.write(chunk)))
+    child.stdout.on('data', (chunk: Buffer) => hash.update(chunk))
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
     child.on('error', (error: Error) => {
       spawnError = error.message
     })
     child.on('close', (code) => {
-      update(decoder.end())
       resolve({
         digest: hash.digest('hex'),
         exitCode: code ?? 1,
@@ -306,11 +301,11 @@ function runGitDigest(checkout: string, args: string[], signal: AbortSignal): Pr
  * index line abbreviation with the object count of the repository, so a large
  * checkout wrote 11 character blob names where the mirror wrote 9, and every
  * publication of that repository failed on a digest that described the same
- * commit. Raw lines carry full blob names, the mode, and the path, and no diff
+ * commit. NUL-delimited records carry full blob names, the mode, and the path. No diff
  * setting, `.gitattributes` driver, or object count can change them.
  */
 function contentDiffArgs(...args: string[]): string[] {
-  return ['diff', '--raw', '--no-abbrev', '--no-renames', ...args]
+  return ['diff', '--raw', '-z', '--no-abbrev', '--no-renames', ...args]
 }
 
 function repositoryGitDirectory(root: string, repository: string): string {
@@ -446,7 +441,7 @@ async function prepareWtWorktree(
   if (prepared === undefined)
     return err('wt did not report the prepared agent worktree.')
 
-  const head = await runGit(prepared.path, ['rev-parse', 'HEAD'], signal)
+  const head = await runGitScalar(prepared.path, ['rev-parse', 'HEAD'], signal)
   if (head.exitCode !== 0 || head.stdout !== baseSha)
     return err('The wt worktree does not match the required head commit.')
   return ok(prepared.path)
@@ -576,7 +571,7 @@ function isSafeGitRef(ref: string): boolean {
 async function ensureControllerRepository(root: string, repositoryName: string, signal: AbortSignal): Promise<Result<string, string>> {
   const repository = repositoryGitDirectory(root, repositoryName)
   await mkdir(repository, { recursive: true, mode: 0o700 })
-  const initialized = await runGit(repository, ['rev-parse', '--is-bare-repository'], signal)
+  const initialized = await runGitScalar(repository, ['rev-parse', '--is-bare-repository'], signal)
   if (initialized.exitCode === 0)
     return ok(repository)
   const init = await runGit(repository, ['init', '--bare', '.'], signal)
@@ -638,10 +633,10 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     if (fetch.exitCode !== 0)
       return err(`Git fetch failed: ${fetch.stderr}`)
 
-    const head = await runGit(repository, ['rev-parse', headRef], signal)
+    const head = await runGitScalar(repository, ['rev-parse', headRef], signal)
     if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
       return err('Fetched pull request head no longer matches the claimed commit SHA.')
-    const base = await runGit(repository, ['rev-parse', baseRef], signal)
+    const base = await runGitScalar(repository, ['rev-parse', baseRef], signal)
     if (base.exitCode !== 0)
       return err(`Could not resolve the base branch: ${base.stderr}`)
     const worktree = await prepareWtWorktree(repository, branch, head.stdout, signal)
@@ -664,7 +659,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       await runGit(worktree.value, ['merge', '--abort'], signal)
       return ok({ _tag: 'CleanMerge', headSha: head.stdout, baseSha: base.stdout, baseRef: baseBranch })
     }
-    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '--diff-filter=U'], signal)
+    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '-z', '--diff-filter=U'], signal)
     if (unmerged.exitCode !== 0)
       return err(`Could not list the conflicted files: ${unmerged.stderr}`)
     // A merge that never started, for unrelated histories or a file in the way,
@@ -681,7 +676,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
         path: worktree.value,
         headSha: head.stdout,
         baseSha: base.stdout,
-        conflictedFiles: unmerged.stdout.split('\n').filter(Boolean).sort(),
+        conflictedFiles: unmerged.stdout.split('\0').filter(Boolean).sort(),
       },
     })
   }
@@ -709,10 +704,10 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     ], signal)
     if (committed.exitCode !== 0)
       return err(`Could not commit the conflict resolution: ${committed.stderr || committed.stdout}`)
-    const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+    const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
     if (commitSha.exitCode !== 0)
       return err(`Could not resolve the conflict commit: ${commitSha.stderr}`)
-    const parents = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+    const parents = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
     const expectedParents = [worktree.headSha, worktree.baseSha]
     if (parents.exitCode !== 0 || !expectedParents.every(parent => parents.stdout.split(' ').includes(parent)))
       return err('The conflict commit does not contain the expected head and base parents.')
@@ -729,7 +724,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     worktree: PreparedConflictWorktree,
     signal: AbortSignal,
   ): Promise<Result<VerifiedConflictPatch, string>> {
-    const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+    const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
     if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
       return err('The worker changed HEAD. Workers must not commit or rewrite history.')
 
@@ -747,7 +742,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     // or the call site the base branch moved, and refusing those killed correct
     // resolutions outright. Anything the merge did not touch is still unrelated
     // work that has no place in a merge commit.
-    const mergeBase = await runGit(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
+    const mergeBase = await runGitScalar(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
     if (mergeBase.exitCode !== 0)
       return err(`Could not resolve the merge base: ${mergeBase.stderr}`)
     const merged = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', mergeBase.stdout, worktree.baseSha], signal)
@@ -757,11 +752,11 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     const unexpectedPath = workerChangedPaths.find(path => !writablePaths.has(path))
     if (unexpectedPath !== undefined)
       return err(`The worker changed a file the merge did not touch: ${unexpectedPath}.`)
-    const untracked = await runGit(worktree.path, ['ls-files', '--others', '--exclude-standard'], signal)
+    const untracked = await runGit(worktree.path, ['ls-files', '-z', '--others', '--exclude-standard'], signal)
     if (untracked.exitCode !== 0)
       return err(`Could not inspect untracked files: ${untracked.stderr}`)
     if (untracked.stdout.length > 0)
-      return err(`The worker created an untracked file: ${untracked.stdout.split('\n')[0]}.`)
+      return err(`The worker created an untracked file: ${untracked.stdout.split('\0')[0]}.`)
 
     const diffCheck = await runGit(worktree.path, ['diff', '--check', 'HEAD'], signal)
     if (diffCheck.exitCode !== 0)
@@ -780,15 +775,17 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       if (staged.exitCode !== 0)
         return err(`Could not stage the conflict fix: ${staged.stderr}`)
     }
-    const unmerged = await runGit(worktree.path, ['diff', '--name-only', '--diff-filter=U'], signal)
+    const unmerged = await runGit(worktree.path, ['diff', '--name-only', '-z', '--diff-filter=U'], signal)
     if (unmerged.exitCode !== 0 || unmerged.stdout.length > 0)
       return err(`Merge conflicts remain: ${unmerged.stdout || unmerged.stderr}`)
 
     const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
     if (patch.exitCode !== 0)
       return err(`Could not read the conflict resolution patch: ${patch.stderr}`)
-    const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', 'HEAD'], signal)
-    const changedPaths = changed.stdout.split('\n').filter(Boolean).sort()
+    const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
+    if (changed.exitCode !== 0)
+      return err(`Could not inspect the conflict resolution files: ${changed.stderr}`)
+    const changedPaths = changed.stdout.split('\0').filter(Boolean).sort()
     const changedFiles = changedPaths.length
 
     return ok({
@@ -818,7 +815,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
     if (fetch.exitCode !== 0)
       return err(`Git fetch failed: ${fetch.stderr}`)
 
-    const head = await runGit(repository, ['rev-parse', headRef], signal)
+    const head = await runGitScalar(repository, ['rev-parse', headRef], signal)
     if (head.exitCode !== 0)
       return err(`Could not resolve the Worker head: ${head.stderr}`)
     const branch = agentWorktreeBranch(label, { taskId: task.id, fence: task.state.fence })
@@ -890,7 +887,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       if (prepared.value.headSha !== task.pullRequest.headSha)
         return err('Fetched pull request head no longer matches the approved repair commit SHA.')
       const repository = task.repositoryMapping.checkout
-      const base = await runGit(repository, ['rev-parse', baseRef], signal)
+      const base = await runGitScalar(repository, ['rev-parse', baseRef], signal)
       if (base.exitCode !== 0 || base.stdout !== task.pullRequest.baseSha)
         return err('Fetched base branch no longer matches the approved repair base commit SHA.')
       return ok({ ...prepared.value, baseSha: base.stdout })
@@ -914,7 +911,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       )
       if (prepared._tag === 'Err')
         return prepared
-      const defaultBranch = await runGit(task.repositoryMapping.checkout, ['rev-parse', defaultRef], signal)
+      const defaultBranch = await runGitScalar(task.repositoryMapping.checkout, ['rev-parse', defaultRef], signal)
       if (defaultBranch.exitCode !== 0)
         return err(`Could not resolve the default branch: ${defaultBranch.stderr}`)
       if (stacked && prepared.value.baseSha !== base.headSha)
@@ -940,14 +937,14 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       if (prepared.value.headSha !== task.pullRequest.headSha)
         return err('Fetched pull request head no longer matches the claimed review commit SHA.')
       const repository = task.repositoryMapping.checkout
-      const base = await runGit(repository, ['rev-parse', baseRef], signal)
+      const base = await runGitScalar(repository, ['rev-parse', baseRef], signal)
       if (base.exitCode !== 0 || base.stdout !== task.pullRequest.baseSha)
         return err('Fetched base branch no longer matches the claimed review base commit SHA.')
       return ok({ ...prepared.value, baseSha: base.stdout })
     },
 
     async verifyReview(task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
         return err('The Review Agent changed HEAD. Review must stay read only.')
       const tracked = await runGit(worktree.path, ['status', '--porcelain=v1', '--untracked-files=all'], signal)
@@ -970,7 +967,7 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
     prepare: workspaces.prepareFix,
 
     async verify(task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== worktree.headSha)
         return err('The agent changed HEAD. Agents must not commit or rewrite history.')
       const staged = await runGit(worktree.path, ['diff', '--cached', '--quiet'], signal)
@@ -1014,10 +1011,10 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
       ], signal)
       if (committed.exitCode !== 0)
         return err(`Could not commit the verified repair: ${committed.stderr || committed.stdout}`)
-      const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (commitSha.exitCode !== 0)
         return err(`Could not resolve the repair commit: ${commitSha.stderr}`)
-      const parent = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+      const parent = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
       if (parent.exitCode !== 0 || parent.stdout !== worktree.headSha)
         return err('The repair commit does not have the approved head commit as its parent.')
       const artifactRef = await pinPublicationArtifact(options.root, task.repository, task.id, worktree.path, commitSha.stdout, signal)
@@ -1038,7 +1035,7 @@ export function createBaselineRepairWorktreeManager(options: ConflictWorktreeMan
     prepare: workspaces.prepareBaseline,
 
     async verify(_task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== worktree.baseSha)
         return err('The agent changed HEAD. Agents must not commit or rewrite history.')
       const staged = await runGit(worktree.path, ['diff', '--cached', '--quiet'], signal)
@@ -1074,10 +1071,10 @@ export function createBaselineRepairWorktreeManager(options: ConflictWorktreeMan
       ], signal)
       if (committed.exitCode !== 0)
         return err(`Could not commit the verified Baseline repair: ${committed.stderr || committed.stdout}`)
-      const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (commitSha.exitCode !== 0)
         return err(`Could not resolve the Baseline repair commit: ${commitSha.stderr}`)
-      const parent = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+      const parent = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
       if (parent.exitCode !== 0 || parent.stdout !== worktree.baseSha)
         return err('The Baseline repair commit does not have the failing base commit as its parent.')
       const artifactRef = await pinPublicationArtifact(options.root, task.repository, task.id, worktree.path, commitSha.stdout, signal)
@@ -1098,7 +1095,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
     prepare: workspaces.prepareIssue,
 
     async verify(task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== worktree.baseSha)
         return err('The agent changed HEAD. Agents must not commit or rewrite history.')
       const staged = await runGit(worktree.path, ['diff', '--cached', '--quiet'], signal)
@@ -1151,7 +1148,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       )
       if (fetched.exitCode !== 0)
         return ok({ _tag: 'Unstacked', reason: `Could not fetch the stack base branch: ${cleanLine(fetched.stderr)}` })
-      const stackHead = await runGit(worktree.path, ['rev-parse', stackRef], signal)
+      const stackHead = await runGitScalar(worktree.path, ['rev-parse', stackRef], signal)
       if (stackHead.exitCode !== 0)
         return ok({ _tag: 'Unstacked', reason: `Could not resolve the stack base branch: ${cleanLine(stackHead.stderr)}` })
       if (stackHead.stdout !== target.headSha)
@@ -1169,7 +1166,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       ], signal)
       if (captured.exitCode !== 0)
         return err(`Could not capture the verified change: ${captured.stderr || captured.stdout}`)
-      const capturedSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const capturedSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (capturedSha.exitCode !== 0)
         return err(`Could not resolve the captured change: ${capturedSha.stderr}`)
 
@@ -1224,10 +1221,10 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       ], signal)
       if (committed.exitCode !== 0)
         return err(`Could not commit the verified change: ${committed.stderr || committed.stdout}`)
-      const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (commitSha.exitCode !== 0)
         return err(`Could not resolve the issue work commit: ${commitSha.stderr}`)
-      const parent = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+      const parent = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
       if (parent.exitCode !== 0 || parent.stdout !== worktree.baseSha)
         return err('The issue work commit does not have the approved base commit as its parent.')
       const artifactRef = await pinPublicationArtifact(options.root, task.repository, task.id, worktree.path, commitSha.stdout, signal)
@@ -1402,10 +1399,10 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       if (!isSafeGitRef(command.headRef))
         return err('Pull request head ref is unsafe.')
       const repository = repositoryGitDirectory(options.root, command.repository)
-      const artifact = await runGit(repository, ['rev-parse', command.artifactRef], signal)
+      const artifact = await runGitScalar(repository, ['rev-parse', command.artifactRef], signal)
       if (artifact.exitCode !== 0 || artifact.stdout !== command.commitSha)
         return err('The pinned publication artifact does not match the prepared commit.')
-      const parents = await runGit(repository, ['show', '--no-patch', '--format=%P', command.commitSha], signal)
+      const parents = await runGitScalar(repository, ['show', '--no-patch', '--format=%P', command.commitSha], signal)
       const expectedParents = command.taskKind === 'resolve_conflict'
         ? `${command.expectedHeadSha} ${command.baseSha}`
         : command.expectedHeadSha
@@ -1414,8 +1411,8 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       const patch = await runGitDigest(repository, contentDiffArgs(command.expectedHeadSha, command.commitSha), signal)
       if (patch.exitCode !== 0 || patch.digest !== command.patchDigest)
         return err('The publication artifact patch digest does not match.')
-      const changed = await runGit(repository, ['diff', '--name-only', command.expectedHeadSha, command.commitSha], signal)
-      if (changed.exitCode !== 0 || changed.stdout.split('\n').filter(Boolean).length !== command.changedFiles)
+      const changed = await runGit(repository, ['diff', '--name-only', '-z', command.expectedHeadSha, command.commitSha], signal)
+      if (changed.exitCode !== 0 || changed.stdout.split('\0').filter(Boolean).length !== command.changedFiles)
         return err('The publication artifact changed file count does not match.')
       const ancestor = await runGit(repository, [
         'merge-base',
