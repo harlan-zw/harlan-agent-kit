@@ -1,8 +1,10 @@
+import type { LoggedFindingPickup } from './logged-finding-pickup.ts'
 import type { PackageReleaseCommand, PackageReleaseRequest } from './package-release.ts'
 import type { ReviewCancellation } from './review-cancel.ts'
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
+import { loggedFindingPickup } from './logged-finding-pickup.ts'
 import { packageReleaseCommand, releaseRequest } from './package-release.ts'
 import { reviewCancellation } from './review-cancel.ts'
 
@@ -153,6 +155,11 @@ export interface WebhookAppOptions {
     apply: (request: PackageReleaseRequest & { requestId: string }) => void
     command?: (command: PackageReleaseCommand) => void
   }
+  loggedFindingPickup?: {
+    allowedAuthor: string
+    actorLogin: (repository: string) => string | null
+    apply: (request: LoggedFindingPickup & { requestId: string }) => void
+  }
   secret: string
   now?: () => number
 }
@@ -215,6 +222,12 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         && release.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
         && options.packageRelease.actorLogin(hint.repository)?.toLowerCase() === release.commentAuthor.toLowerCase()) {
         options.packageRelease.apply({ ...release, requestId: delivery })
+      }
+      const pickup = loggedFindingPickup(name, payload)
+      if (pickup !== null && options.loggedFindingPickup !== undefined
+        && pickup.requestedBy.toLowerCase() === options.loggedFindingPickup.allowedAuthor.toLowerCase()
+        && options.loggedFindingPickup.actorLogin(hint.repository)?.toLowerCase() === pickup.commentAuthor.toLowerCase()) {
+        options.loggedFindingPickup.apply({ ...pickup, requestId: delivery })
       }
       const cancellation = reviewCancellation(name, payload)
       if (cancellation !== null
