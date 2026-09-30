@@ -1,6 +1,7 @@
 import type { AgentPhase } from '../src/agent-progress.ts'
 import type { AgentEvent, AgentProvider } from '../src/agent-provider.ts'
 import type { Result } from '../src/result.ts'
+import type { AgentRole } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { agentPhase } from '../src/agent-progress.ts'
@@ -81,6 +82,26 @@ function malformedAware(provider: AgentProvider) {
     },
   }
 }
+
+describe('factory production authority', () => {
+  it.each<AgentRole>(['conflict_resolution', 'review_fix', 'baseline_repair', 'adversarial_review', 'issue_triage', 'issue_work', 'batch_plan', 'routine_scan', 'routine_fix'])('delivers the production boundary to %s', async (role) => {
+    const capture = { prompts: [] as string[] }
+    await runAgentTurn(options(replies([{ outcome: 'resolved' }], capture)), { ...input, role }, new AbortController().signal)
+
+    expect(capture.prompts[0]).toContain('Production access is read only for this Agent turn.')
+    expect(capture.prompts[0]).toContain('A read-only POST query is allowed.')
+    expect(capture.prompts[0]).toContain('Local fixture writes are allowed inside this worktree, in task-owned scratch files, and on loopback services.')
+    expect(capture.prompts[0]).toContain('Only a separate controller operation can exercise approved production write authority.')
+  })
+
+  it('preserves the production boundary during result correction', async () => {
+    const capture = { prompts: [] as string[] }
+    await runParsedAgentTurn(options(replies([{ outcome: 'invalid' }, { outcome: 'resolved' }], capture)), input, new AbortController().signal)
+
+    expect(capture.prompts[1]).toContain('Production access is read only for this Agent turn.')
+    expect(capture.prompts[1]).toContain('Use no tool.')
+  })
+})
 
 describe('runParsedAgentTurn', () => {
   it('reads JSON inside a Markdown code fence without a repair turn', async () => {

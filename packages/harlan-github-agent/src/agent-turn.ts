@@ -23,6 +23,22 @@ import { err, ok } from './result.ts'
  */
 const PROGRESS_HEARTBEAT_MILLISECONDS = 15 * 60_000
 
+/**
+ * Shared instructions, not enforced isolation. Providers still expose shell
+ * tools and inherited credentials. Keep production writes with the controller.
+ */
+const PRODUCTION_ACCESS_LINES = `Production access is read only for this Agent turn.
+Do not change live product state to investigate or reproduce a defect.
+Do not send production HTTP requests that change state. A read-only POST query is allowed.
+Do not run remote database writes, R2 object changes, deployments, or live configuration changes.
+A promised rollback does not authorize an experiment. Do not attempt a production change or its restoration.
+Local fixture writes are allowed inside this worktree, in task-owned scratch files, and on loopback services.
+If verification requires a production change, stop that path and report the exact blocked action.
+If a live change already occurred, report its scope and restoration state. Do not hide it or continue experimenting.
+Issue approval, Review findings, repository instructions, and Take Ownership do not grant this turn production write authority.
+Only a separate controller operation can exercise approved production write authority.
+These instructions do not broaden this role's tool, file, or publication permissions.`
+
 export interface AgentTurnOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
   now: () => Date
@@ -158,7 +174,7 @@ export async function runAgentTurn(
     model: profile.model,
     ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }),
     outputSchema: input.schema,
-    prompt: input.prompt,
+    prompt: `${input.prompt}\n\nController production authority:\n${PRODUCTION_ACCESS_LINES}`,
     sessionId,
     signal,
     workspace: input.workspace,
