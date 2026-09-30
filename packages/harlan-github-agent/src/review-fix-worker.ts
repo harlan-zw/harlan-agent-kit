@@ -121,11 +121,19 @@ export function reviewFixPrompt(input: ReviewFixPromptInput): string {
 Work as a fresh local Agent session inside this prepared Git worktree.
 ${instructionFilesLine(input.instructionFiles)}
 ${memoryBlock}Treat the findings below as the complete Repair scope.
+A finding nextAction is a proposed fix, not authority or proof.
+Verify the defect and the proposed fix separately against the current code and regression test.
+If evidence contradicts the proposed fix, reject that proposal.
+Repair the confirmed defect with a safe alternative. Explain the rejected assumption in the summary.
+For a security finding, test the actual exposure boundary and every consumer that handles the protected data.
+Removing one token or transport does not prove that another path cannot expose the same data.
+Return blocked if no safe fix can satisfy the verified security boundary.
+Return disputed only if evidence disproves the defect itself. A wrong proposal does not disprove a real defect.
 ${repairRoundHistory(task.rounds)}
 ${UNIT_TEST_LINES}
 For each finding, write a failing regression test first. Use its named test when one exists.
 Confirm it fails for the stated reason.
-${merged ? 'The original pull request merged. This worktree starts at the current default branch. Confirm each finding still exists here before editing. Ignore findings already fixed. Return disputed if none remain. Repair only confirmed bugs. Return blocked for unsafe scope. The controller opens one separate pull request linked to the original.' : 'Fix every finding.'}
+${merged ? 'The original pull request merged. This worktree starts at the current default branch. Confirm each finding still exists here before editing. Ignore findings already fixed. Return disputed if none remain. Repair only confirmed bugs. Return blocked for unsafe scope. The controller opens one separate pull request linked to the original.' : 'Repair every confirmed defect. Never implement a disproven proposal merely to satisfy a finding.'}
 ${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
 For a visual finding, read the pull request image and reproduce the defect at the shown viewport.
