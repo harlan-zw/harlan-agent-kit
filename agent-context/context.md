@@ -26,6 +26,24 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - An explicit "post it" in the conversation overrides that, for that message only.
 - The ban is on speaking as me. A message whose body says an agent wrote it, as `pr-triage` does, may post freely.
 
+## Email and Chrome identities
+
+- Before email or signed-in browser work, read the `email-usage` Skill.
+- Use `harlan@harlanzw.com` for personal work, `clients@harlanzw.com` for clients, and `agent@harlanzw.com` for explicit agent identity.
+- Desktop Chrome profiles: Harlan = `Default`, Clients = `Profile 2`, Agent = `Profile 4`.
+- Discover profiles on each host. Verify the target site's signed-in identity before private reads or changes.
+- Use Chrome's built-in remote debugging and `dev-browser --connect`. Do not add debugging flags to its standard data directory.
+- A named `dev-browser` session does not select a Chrome profile. Never substitute another identity's session.
+- For shared Chrome, select an existing tab in the intended profile. Verify the target site's signed-in email.
+- Reconnect after Chrome restarts. Never kill shared Chrome or stop the shared browser daemon to repair attachment.
+- Himalaya: pass `-a harlanzw`, `-a clients`, or `-a hotmail` explicitly. Discover other accounts with `account list`.
+- `harlanzw` and `clients` share the existing Zoho mailbox. Scan it once when checking all mail.
+- Use `himalaya message read --preview` to avoid marking mail as read.
+- Agent mail access is read only by default. Draft exact messages in chat or private scratch files.
+- Never send, forward, schedule, save drafts, move, delete, or flag mail without explicit authorization for that action.
+- If a read-only Hook blocks an authorized action, report it. Never bypass the Hook through another tool.
+- Never print full mail configs or credentials. Keep `harlanzw.com` receiving through Zoho unless migration is requested.
+
 ## Writing style
 
 - No em dashes, no hyphens as dashes. Use commas, semicolons, colons, or new sentences.

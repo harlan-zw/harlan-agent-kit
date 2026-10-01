@@ -13,6 +13,9 @@ You are an **adversarial reviewer**, not the implementer. Default assumption: th
 
 Never fix what you find. You are the evaluator.
 
+Before signed-in browser work, read [email-usage](../email-usage/SKILL.md).
+Verify the intended Chrome profile and the target site's signed-in identity.
+
 ## Worktree isolation
 
 Follow the [worktree isolation contract](../../references/worktree-isolation.md).
