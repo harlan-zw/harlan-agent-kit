@@ -26,6 +26,28 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - An explicit "post it" in the conversation overrides that, for that message only.
 - The ban is on speaking as me. A message whose body says an agent wrote it, as `pr-triage` does, may post freely.
 
+## Email and Chrome identities
+
+- Before email work, read the `email-usage` Skill. Before browser work, read the `browser` Skill.
+- Use `harlan@harlanzw.com` for personal work, `clients@harlanzw.com` for clients, and `agent@harlanzw.com` for explicit agent identity.
+- Default signed-in browser work to Agent. Use Clients for client work. Explicit user choices take precedence.
+- If a site requires `harlan@harlanzw.com`, use Harlan's existing main profile.
+- Identity selection needs no extra approval for an authorized task. Honor Chrome's main-profile connection approval.
+- Desktop Chrome profiles: Harlan = `Default`, Clients = `Profile 2`, Agent = `Profile 4`.
+- Discover profiles on each host. Verify the target site's signed-in identity before private reads or changes.
+- For Clients and Agent, use their dedicated automation launchers and `harlan-browser connect <identity> <task-name>`.
+- For existing Harlan Chrome, use built-in remote debugging and `dev-browser --connect`. Do not add flags to its standard directory.
+- A named `dev-browser` session does not select a Chrome profile. Never substitute another identity's session.
+- For ordinary shared Chrome, select an existing tab in the intended profile. Verify the target site's signed-in email.
+- Reconnect after Chrome restarts. Never kill shared Chrome or stop the shared browser daemon to repair attachment.
+- Himalaya: pass `-a harlanzw`, `-a clients`, or `-a hotmail` explicitly. Discover other accounts with `account list`.
+- `harlanzw` and `clients` share the existing Zoho mailbox. Scan it once when checking all mail.
+- Use `himalaya message read --preview` to avoid marking mail as read.
+- Agent mail access is read only by default. Draft exact messages in chat or private scratch files.
+- Never send, forward, schedule, save drafts, move, delete, or flag mail without explicit authorization for that action.
+- If a read-only Hook blocks an authorized action, report it. Never bypass the Hook through another tool.
+- Never print full mail configs or credentials. Keep `harlanzw.com` receiving through Zoho unless migration is requested.
+
 ## Writing style
 
 - No em dashes, no hyphens as dashes. Use commas, semicolons, colons, or new sentences.

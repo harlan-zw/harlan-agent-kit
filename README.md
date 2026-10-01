@@ -114,9 +114,11 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 |-------|-------------|
 | [`adversarial-review`](./harlan-agent-kit/skills/adversarial-review/SKILL.md) | Review one PR adversarially, hand defects to Repair, publish the bot status |
 | [`agent-feedback`](./harlan-agent-kit/skills/agent-feedback/SKILL.md) | Improve one Agent Skill from explicit Review feedback |
+| [`browser`](./harlan-agent-kit/skills/browser/SKILL.md) | Select Chrome identities, use prompt-free debugging, and clean up task tabs |
 | [`close-off`](./harlan-agent-kit/skills/close-off/SKILL.md) | Finish loose ends, verify delivery, clean task-owned Git state |
 | [`content-refresh`](./harlan-agent-kit/skills/content-refresh/SKILL.md) | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks |
-| [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Triage inbox email with [Himalaya](https://github.com/pimalaya/himalaya) |
+| [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Review inbox email with [Himalaya](https://github.com/pimalaya/himalaya) and propose actions |
+| [`email-usage`](./harlan-agent-kit/skills/email-usage/SKILL.md) | Choose email addresses, Himalaya accounts, and mail permissions |
 | [`glossary`](./harlan-agent-kit/skills/glossary/SKILL.md) | Create or audit `GLOSSARY.md` and catch vocabulary drift |
 | [`harlan-github-agent`](./harlan-agent-kit/skills/harlan-github-agent/SKILL.md) | Drive or diagnose the local GitHub service |
 | [`humanize-writing`](./harlan-agent-kit/skills/humanize-writing/SKILL.md) | Strip AI tells from prose before it goes out |

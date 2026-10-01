@@ -20,6 +20,9 @@ Read these completely when they apply:
 
 Follow repository instructions and delivery configuration. Use `dev-browser` for browser smoke tests.
 
+Before browser work, read [browser](../browser/SKILL.md).
+Verify the intended Chrome profile and the target site's signed-in identity.
+
 Delegate detailed permissions, review gates, worktree isolation, publication, and cleanup to those contracts.
 
 If `harlan-github-agent` already controls the repository, resume its existing worker. Do not start another watcher.

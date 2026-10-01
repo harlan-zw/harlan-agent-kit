@@ -82,6 +82,14 @@ Not every checkout is mapped. `config.yml` lists the active `repositories` and t
 
 If a new repository joins, clone it as `harlan` into the matching directory, then add a `repositories` entry and restart the Agent.
 
+## Email and browser identities
+
+Before email work, read [email-usage](../email-usage/SKILL.md).
+Before browser work, read [browser](../browser/SKILL.md).
+Discover accounts on Hogwild. Its Himalaya configuration intentionally has no send backend.
+Desktop Chrome profiles do not imply signed-in sessions on Hogwild.
+Never copy desktop credentials or browser sessions to the server.
+
 ## Install a tool for the Agent
 
 1. Install as admin: `ssh hogwild-admin 'sudo apt-get install -y <package>'`.
