@@ -74,7 +74,9 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 - Find and search files: ripgrep (`rg`).
 - Rename, move, or import update spanning 2+ files: `pnpm dlx @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
-- Browser testing and automation: `dev-browser` (`--help`). If `$DISPLAY` is empty, pass `--headless`; a headed launch exits with "launched a headed browser without having a XServer".
+- Browser testing and automation: `dev-browser` (`--help`). Always pass `--headless` for unattended tests, even with `$DISPLAY`.
+- Launch dedicated Agent and Clients Chrome headless with `harlan-browser open <identity>`. Visible work requires an explicit user request.
+- `--headless` does not hide attached Chrome. Use `harlan-browser connect` to enforce headless connections. Never bring tabs to the foreground.
 - Wait for CI with `gh run watch <run-id>` or `gh pr checks <number> --watch`. Never poll with `sleep`; the shell tool times out first.
 - Give each task its own `dev-browser` name. Close every named page when browser work ends. Never run `dev-browser stop`; it stops shared browsers.
 - Scratch output stays out of the repository. Screenshots, one-off reports, and exploratory notes go to the session scratchpad. A one-off script goes in a gitignored `scripts/scratchpad/`; only durable, referenced tooling lives in `scripts/` proper.
