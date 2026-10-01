@@ -71,6 +71,11 @@ A mailbox configuration request permits the requested local config edit, not sen
 
 Before browser work, read [browser](../browser/SKILL.md).
 That Skill owns Chrome profiles, dedicated Clients and Agent connections, recovery, and tab cleanup.
+Signed-in browser work defaults to Agent Chrome. Client work uses Clients Chrome.
+If a site requires `harlan@harlanzw.com`, use Harlan's existing main profile.
+An explicit user choice takes precedence.
+Identity selection needs no extra approval for an authorized task. Honor Chrome's main-profile connection approval.
+This browser default does not change the email sender rules above.
 A Chrome profile or debugging connection grants no additional email authority.
 Verify the target site's signed-in account before reading mail in a browser.
 

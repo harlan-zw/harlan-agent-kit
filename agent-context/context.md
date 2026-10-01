@@ -30,6 +30,9 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 - Before email work, read the `email-usage` Skill. Before browser work, read the `browser` Skill.
 - Use `harlan@harlanzw.com` for personal work, `clients@harlanzw.com` for clients, and `agent@harlanzw.com` for explicit agent identity.
+- Default signed-in browser work to Agent. Use Clients for client work. Explicit user choices take precedence.
+- If a site requires `harlan@harlanzw.com`, use Harlan's existing main profile.
+- Identity selection needs no extra approval for an authorized task. Honor Chrome's main-profile connection approval.
 - Desktop Chrome profiles: Harlan = `Default`, Clients = `Profile 2`, Agent = `Profile 4`.
 - Discover profiles on each host. Verify the target site's signed-in identity before private reads or changes.
 - For Clients and Agent, use their dedicated automation launchers and `harlan-browser connect <identity> <task-name>`.

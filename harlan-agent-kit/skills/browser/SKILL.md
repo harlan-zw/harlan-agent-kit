@@ -6,7 +6,13 @@ user_invocable: true
 
 # Browser
 
-Choose the identity before connecting.
+Use Agent Chrome by default for signed-in browser work.
+If the user requests client work, use Clients Chrome.
+If the site requires `harlan@harlanzw.com`, use Harlan's existing main profile.
+An explicit user choice takes precedence.
+Verify the signed-in account before private reads or changes.
+Do not ask permission to select the required identity for an authorized task.
+Chrome's main-profile connection approval still applies.
 Read [email-usage](../email-usage/SKILL.md) when the task involves email or choosing a sender.
 Prefer the user's explicitly requested browser tool. Follow its connection instructions.
 For `dev-browser`, read `dev-browser --help` before unfamiliar operations.
@@ -53,7 +59,8 @@ console.log(await page.snapshotForAI());
 JS
 ```
 
-Use `agent` in both commands when the task requires Agent identity.
+Use `agent` in both commands for the default browser identity.
+Use `clients` for client work.
 The helper verifies Chrome's process, data directory, and listening socket before attachment.
 It refuses another application's endpoint and never restarts Chrome to recover a connection.
 Reconnect through the same HTTP endpoint after a browser restart.
@@ -67,6 +74,8 @@ Use the desktop defaults for ordinary work.
 
 ## Shared Harlan Chrome
 
+Use Harlan's existing `Default` profile when the site requires `harlan@harlanzw.com`.
+This fallback needs no separate identity-selection approval for an authorized task.
 Use Chrome's built-in remote debugging at `chrome://inspect/#remote-debugging`.
 Connect with `dev-browser --browser <task-name> --connect`.
 Built-in debugging requests permission for each new connection.

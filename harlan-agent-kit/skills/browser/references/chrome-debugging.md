@@ -14,6 +14,12 @@ A process argument and a reachable port are insufficient when another applicatio
 
 ## Connect to existing sessions
 
+Default signed-in browser work to Agent. Use Clients for client work.
+If the site requires `harlan@harlanzw.com`, use Harlan's existing main profile.
+Honor an explicit user choice.
+Identity selection needs no extra approval for an authorized task.
+Chrome's built-in connection approval still applies.
+
 For Chrome 144+, use the built-in setting at `chrome://inspect/#remote-debugging`.
 Use `dev-browser --connect` to discover its current WebSocket endpoint.
 Read `dev-browser --help` before connecting.
