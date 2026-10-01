@@ -1,5 +1,17 @@
 # Chrome debugging
 
+## Prompt-free dedicated browsers
+
+Clients and Agent use separate nonstandard user-data directories and fixed localhost debugging ports.
+The desktop helper supplies classic debugging flags on every launch.
+Classic mode accepts repeat connections without a built-in approval dialog.
+Built-in mode uses a separate approval-only server mode.
+Do not try to remove its permission prompt.
+
+Connect through `harlan-browser connect <identity> <task-name>`.
+The helper verifies the dedicated Chrome process owns its listening socket before it delegates to dev-browser.
+A process argument and a reachable port are insufficient when another application already owns that port.
+
 ## Connect to existing sessions
 
 For Chrome 144+, use the built-in setting at `chrome://inspect/#remote-debugging`.
@@ -42,11 +54,11 @@ A 404 response from `/json/version` alone does not prove built-in debugging is u
 Never repair attachment by killing Chrome, stopping the shared daemon, clearing sessions, or rewriting preferences.
 Do not keep adding classic debugging flags to the standard Chrome profile directory.
 
-## Unattended isolation
+## Separate sessions
 
 For unattended browser isolation, use one nonstandard user-data directory per identity.
 Use explicit localhost debugging endpoints and durable launchers for those directories.
-Treat this as a separate browser setup change.
+Use the desktop helper and menu launchers from the browser Skill.
 Separate profile directories within one shared user-data directory do not provide independent browser processes.
 New user-data directories need their own sign-ins.
 Never copy live cookies or profiles to manufacture an authenticated session.

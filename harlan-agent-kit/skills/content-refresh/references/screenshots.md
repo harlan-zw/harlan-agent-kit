@@ -16,7 +16,7 @@ Record missing account features as unavailable in that inspection. Never fabrica
 If the user or brief requires a screenshot, capture failure leaves that requirement outstanding.
 Record the blocker and next action. Do not silently replace the required screenshot with prose.
 Capture with one browser operator; other agents use the sanitized evidence.
-Before signed-in capture, read [email-usage](../../email-usage/SKILL.md) for Chrome profile selection.
+Before signed-in capture, read [browser](../../browser/SKILL.md) for Chrome profile selection.
 Inspect the signed-in page before interacting. Use only authorized accounts and actions.
 Prefer opening controls and cancelling forms when submitting data is unnecessary.
 

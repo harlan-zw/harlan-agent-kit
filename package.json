@@ -6,7 +6,7 @@
     "build": "pnpm --filter harlan-github-agent build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "pnpm test:release && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:skill-doc-paths && pnpm test:service && pnpm test:lockfile && pnpm --filter advocaat test:run && pnpm --filter harlan-github-agent test:run && pnpm test:notes-viewer",
+    "test": "pnpm test:release && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:browser && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:skill-doc-paths && pnpm test:service && pnpm test:lockfile && pnpm --filter advocaat test:run && pnpm --filter harlan-github-agent test:run && pnpm test:notes-viewer",
     "test:lockfile": "vitest run scripts/lockfile.test.ts",
     "test:notes-viewer": "vitest run packages/notes-viewer",
     "typecheck": "pnpm --filter harlan-github-agent typecheck",
@@ -37,7 +37,9 @@
     "release": "node --experimental-strip-types scripts/release.ts",
     "test:opencode-hooks": "vitest run harlan-agent-kit/plugins/opencode",
     "test:hogwild": "vitest run harlan-agent-kit/skills/hogwild/scripts",
-    "test:skill-doc-paths": "vitest run scripts/skill-doc-paths.test.ts"
+    "test:skill-doc-paths": "vitest run scripts/skill-doc-paths.test.ts",
+    "test:browser": "python3 scripts/harlan-browser.test.py",
+    "browser:install": "python3 scripts/harlan-browser.py install"
   },
   "dependencies": {
     "@antfu/eslint-config": "catalog:",

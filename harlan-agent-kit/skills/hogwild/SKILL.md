@@ -84,7 +84,8 @@ If a new repository joins, clone it as `harlan` into the matching directory, the
 
 ## Email and browser identities
 
-Before email or signed-in browser work, read [email-usage](../email-usage/SKILL.md).
+Before email work, read [email-usage](../email-usage/SKILL.md).
+Before browser work, read [browser](../browser/SKILL.md).
 Discover accounts on Hogwild. Its Himalaya configuration intentionally has no send backend.
 Desktop Chrome profiles do not imply signed-in sessions on Hogwild.
 Never copy desktop credentials or browser sessions to the server.

@@ -20,7 +20,7 @@ Read these completely when they apply:
 
 Follow repository instructions and delivery configuration. Use `dev-browser` for browser smoke tests.
 
-Before signed-in browser work, read [email-usage](../email-usage/SKILL.md).
+Before browser work, read [browser](../browser/SKILL.md).
 Verify the intended Chrome profile and the target site's signed-in identity.
 
 Delegate detailed permissions, review gates, worktree isolation, publication, and cleanup to those contracts.
