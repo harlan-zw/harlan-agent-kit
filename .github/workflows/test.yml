@@ -103,6 +103,9 @@ jobs:
       - name: Himalaya read only
         run: pnpm test:himalaya
 
+      - name: Browser identities
+        run: pnpm test:browser
+
       - name: Opencode hooks
         run: pnpm test:opencode-hooks
 
