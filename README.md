@@ -140,10 +140,9 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`seo-review`](./harlan-agent-kit/skills/seo-review/SKILL.md) | Triage a Site's NuxtSEO actions and repair the ones the code owns |
 | [`vitals-review`](./harlan-agent-kit/skills/vitals-review/SKILL.md) | File a Site's poor field vitals and persistent lab drops from NuxtSEO, then repair them |
 | [`sentry-checkin`](./harlan-agent-kit/skills/sentry-checkin/SKILL.md) | Triage open Sentry issues and repair them with verified PRs |
-| [`social-presence`](./harlan-agent-kit/skills/social-presence/SKILL.md) | Plan social content and launch posts |
 | [`take-ownership`](./harlan-agent-kit/skills/take-ownership/SKILL.md) | Own current work through merge, CI, deploy, and smoke checks |
 | [`ts-design-patterns`](./harlan-agent-kit/skills/ts-design-patterns/SKILL.md) | Apply the Effect-inspired TypeScript design principles |
-| [`tweet`](./harlan-agent-kit/skills/tweet/SKILL.md) | Draft and polish tweets with visual direction |
+| [`tweet`](./harlan-agent-kit/skills/tweet/SKILL.md) | Find tweet ideas, plan launch posts, and draft tweets with visuals |
 | [`unit-tests`](./harlan-agent-kit/skills/unit-tests/SKILL.md) | Write or review unit tests through exported behavior |
 
 ## Hooks
