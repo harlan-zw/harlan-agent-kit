@@ -1,0 +1,4 @@
+interface:
+  display_name: I Don't Know, Just Keep Working
+  short_description: Find and rank related gaps, bugs, and improvements
+  default_prompt: Use $i-dont-know-just-keep-working to inspect related gaps, opportunities, bugs, and improvements around this work. Challenge the findings, then rank next steps by impact, effort, and confidence. Preserve existing scope and action authority.

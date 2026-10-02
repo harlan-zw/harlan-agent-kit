@@ -118,10 +118,10 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`content-refresh`](./harlan-agent-kit/skills/content-refresh/SKILL.md) | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks |
 | [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Review inbox email with [Himalaya](https://github.com/pimalaya/himalaya) and propose actions |
 | [`email-usage`](./harlan-agent-kit/skills/email-usage/SKILL.md) | Choose email addresses, Himalaya accounts, and mail permissions |
-| [`expand-work-scope`](./harlan-agent-kit/skills/expand-work-scope/SKILL.md) | Find related gaps, bugs, and improvements, then rank next steps by impact, effort, and confidence |
 | [`glossary`](./harlan-agent-kit/skills/glossary/SKILL.md) | Create or audit `GLOSSARY.md` and catch vocabulary drift |
 | [`harlan-github-agent`](./harlan-agent-kit/skills/harlan-github-agent/SKILL.md) | Drive or diagnose the local GitHub service |
 | [`humanize-writing`](./harlan-agent-kit/skills/humanize-writing/SKILL.md) | Strip AI tells from prose before it goes out |
+| [`i-dont-know-just-keep-working`](./harlan-agent-kit/skills/i-dont-know-just-keep-working/SKILL.md) | Find related gaps, bugs, and improvements, then rank next steps by impact, effort, and confidence |
 | [`improve-ts-pkg-architecture`](./harlan-agent-kit/skills/improve-ts-pkg-architecture/SKILL.md) | Find architecture improvements in a TypeScript package |
 | [`issue-triage`](./harlan-agent-kit/skills/issue-triage/SKILL.md) | Rank open issues by impact and difficulty |
 | [`nuxt-frontend-design`](./harlan-agent-kit/skills/nuxt-frontend-design/SKILL.md) | Build and polish Nuxt UI v4+ pages and design systems |
