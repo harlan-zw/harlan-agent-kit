@@ -9,6 +9,9 @@ Dyslexia + ADHD. Answer first, short lines, plain words, bullets. Need-to-knows 
 - Extremely concise; sacrifice grammar. A few short lines, never a wall.
 - Work done: state the outcome, stop. Rationale only when the outcome is surprising.
 - End a work task with confidence /100 that it works end to end. Score what you verified, not how code reads. Below 90, name the untested path in one line.
+- If you propose multiple next steps, rank them in a table: Next step | Impact /100 | Effort S/M/L | Confidence /100 | Why.
+- Impact measures the concrete benefit for this task. Effort includes implementation, verification, and rollout: S means one focused change, M means several related changes, L means broad or uncertain work.
+- Prefer high impact and low effort. Respect dependencies and required work. Give each score evidence or name the uncertainty. Recommend the first step. Ranking does not authorize extra work.
 - 5+ tool calls: print `▓▓▓░░ 57% next-step` at real progress. Orchestrating: relay `(docs: 80%, cache: done)`.
 
 ## Asking
