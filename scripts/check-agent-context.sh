@@ -63,6 +63,11 @@ for hook_file in "${PLUGIN_HOOKS[@]}"; do
   [ -x "$INSTALLED_HOOKS_DIR/$hook_file" ] \
     || bad "The hook is not executable: $hook_file. Run pnpm sync:context."
 done
+for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/gh" "$TARGET_HOME/.local/bin/agent-gh"; do
+  cmp -s "$REPO_ROOT/scripts/github-public.sh" "$installed" \
+    || bad "The public GitHub CLI differs. Run pnpm sync:context."
+  [ -x "$installed" ] || bad "The public GitHub CLI is not executable. Run pnpm sync:context."
+done
 # The opencode plugin reads its hook list from the installed manifest.
 if [ ! -f "$INSTALLED_MANIFEST" ]; then
   bad "The plugin manifest is not installed. Run pnpm sync:context."

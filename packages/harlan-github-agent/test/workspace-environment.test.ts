@@ -111,3 +111,19 @@ describe('daily check-in evidence directories', () => {
     expect(workspaceEnvironment(base, workspace, 'review-task')).toBe(base)
   })
 })
+
+describe('public GitHub access for Agents', () => {
+  it('routes gh through the installed wrapper before repository binaries', () => {
+    const home = mkdtempSync(join(tmpdir(), 'agent-home-'))
+    const workspace = mkdtempSync(join(tmpdir(), 'agent-worktree-'))
+    const wrapper = join(home, '.local/share/harlan-agent-kit/github-bin')
+    mkdirSync(wrapper, { recursive: true })
+    mkdirSync(join(workspace, 'node_modules/.bin'), { recursive: true })
+    writeFileSync(join(workspace, '.env'), 'GH_TOKEN=personal\nGITHUB_TOKEN=personal\nGH_HOST=other.example\n')
+    const environment = workspaceEnvironment({ HOME: home, PATH: '/usr/bin:/bin' }, workspace)
+    expect(environment.PATH).toBe(`${wrapper}:${join(workspace, 'node_modules/.bin')}:/usr/bin:/bin`)
+    expect(environment.GH_TOKEN).toBeUndefined()
+    expect(environment.GITHUB_TOKEN).toBeUndefined()
+    expect(environment.GH_HOST).toBeUndefined()
+  })
+})

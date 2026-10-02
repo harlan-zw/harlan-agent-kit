@@ -17,6 +17,11 @@ const REFUSED_NAMES = new Set([
   'CURL_CA_BUNDLE',
   'ENV',
   'GH_CONFIG_DIR',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_HOST',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
   'GITHUB_API_URL',
   'HOME',
   'HTTP_PROXY',
@@ -119,9 +124,16 @@ export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string,
   // find them. The service unit carries a bare PATH, so a check-in script that
   // shelled out to `wrangler` found nothing and reported every probe as failed.
   const binaries = join(workspace, 'node_modules', '.bin')
-  const PATH = isDirectory(binaries)
+  const repositoryPath = isDirectory(binaries)
     ? [binaries, base.PATH].filter(entry => entry !== undefined && entry !== '').join(delimiter)
     : base.PATH
+  // Only Agent processes receive this PATH. The controller retains its own gh.
+  const publicGitHub = base.HOME && isAbsolute(base.HOME)
+    ? join(base.HOME, '.local/share/harlan-agent-kit/github-bin')
+    : undefined
+  const PATH = publicGitHub && isDirectory(publicGitHub)
+    ? [publicGitHub, repositoryPath].filter(Boolean).join(delimiter)
+    : repositoryPath
   if (Object.keys(values).length === 0 && PATH === base.PATH)
     return base
   return { ...base, ...values, ...(PATH === undefined ? {} : { PATH }) }
