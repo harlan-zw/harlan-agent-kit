@@ -29,7 +29,14 @@ Stamp `harlan-agent-review-skipped` when Review is skipped.
 Stamp `harlan-agent-review-required` when Pull request triage requires Review.
 Replace that route label with exactly one Review outcome label when Review finishes.
 
-Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review. Bind Approval to the exact head commit; never let the label approve a head commit twice.
+Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review.
+If signed webhooks are ready, offer `Review and repair` in the paused comment.
+Only Harlan's isolated checkbox click adds that label.
+Store its exact head and target branch before adding it.
+Consume a checkbox-added label once. Reject it if the head or target branch changed.
+Match the recorded comment, current head commit, and target branch before adding it.
+Reject clicks from other accounts and stale or modified comments.
+Bind Approval to the exact head commit; never let the label approve a head commit twice.
 
 Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. A repository block with `auto_merge.pull_requests: every` drops the label condition and uses its own `minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
 
@@ -253,6 +260,11 @@ If Repair returns Action required or exhausts retries, replace its progress comm
 Record duration and Agent provider token usage for every completed Review run. Store `Unavailable` when the Agent provider reports no usage. Show these values only in History.
 
 Carry Approval to the exact commit published by that approved repair. Do not carry it to any other new head commit.
+
+Publish each completed App-authenticated Review as a native GitHub `COMMENT` review.
+Link it to the canonical comment so the bot appears in GitHub's Reviewers sidebar.
+Reuse one native review per head commit. Update it when Review runs again.
+Never submit it through Harlan's user token.
 
 When a pull request review starts, create its single marked bot comment. Edit it in place as phases change. Never add separate progress comments.
 

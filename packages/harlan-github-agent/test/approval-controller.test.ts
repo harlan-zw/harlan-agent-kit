@@ -68,6 +68,26 @@ describe('approval controller', () => {
     expect(body).toContain('head commit `abc123`')
   })
 
+  it.each([false, true])('offers Approval only when signed webhook controls are ready: %s', async (enabled) => {
+    let body = ''
+    const controller = createApprovalController({
+      reviewApprovalControls: () => enabled,
+      github: {
+        clearAgentLabels: () => Promise.resolve(ok(undefined)),
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label consumption.')),
+        ensureApprovalLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewStatus: (_repository, _number, _commentId, value) => {
+          body = value
+          return Promise.resolve(ok({ commentId: 1, url: 'url' }))
+        },
+      },
+      now: () => new Date('2026-10-02T00:00:00.000Z'),
+      store: { ...unusedIssueApproval, hasApprovalPromptComment: () => false, recordApprovalPromptComment: () => true, getSelectionMode: () => 'auto' as const, hasPullRequestApproval: () => false, approvePullRequest: () => { throw new Error('Unexpected Approval.') } },
+    })
+    expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
+    expect(body.includes('- [ ] Review and repair')).toBe(enabled)
+  })
+
   it('clears the verdict label of the head this prompt replaces', async () => {
     const calls: string[] = []
     const controller = createApprovalController({

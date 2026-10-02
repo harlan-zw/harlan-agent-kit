@@ -2,6 +2,7 @@ import type { Octokit } from 'octokit'
 import type { AgentLabelState } from './agent-label.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { PullRequestFile } from './merge-risk.ts'
+import type { NativeReviewPublisher } from './native-review.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunPublisher, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
@@ -16,6 +17,7 @@ import { currentBaseChecks, currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
+import { writeNativeReview } from './native-review.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -293,6 +295,10 @@ export interface ReviewStatusIdentitySource {
   getPullRequestStatusIdentity: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<Pick<GitHubPullRequestItem, 'state' | 'headSha' | 'baseRef'>, string>>
 }
 
+export interface ReviewApprovalSource extends ReviewStatusIdentitySource {
+  addApprovalLabel: (repository: RepositoryMapping, pullRequestNumber: number, label: string, signal: AbortSignal) => Promise<Result<void, string>>
+}
+
 export interface RunnerLostRecoverySource extends DefaultBranchSource {
   /** Complete open PR identities, including authors outside the work policy. */
   getOpenPullRequestCheckSources: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<Array<Pick<GitHubPullRequestItem, 'number' | 'headSha' | 'baseSha' | 'baseRef'>>, string>>
@@ -524,7 +530,7 @@ function pullRequestItem(
   }
 }
 
-export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & RunnerLostRecoverySource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewStatusIdentitySource {
+export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & RunnerLostRecoverySource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewApprovalSource & NativeReviewPublisher {
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
   // charges no primary quota for a 304. Only `read` access uses the cache.
@@ -593,6 +599,20 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         }).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
   }
 
+  const approvalLabelWrites = new Map<string, Promise<void>>()
+  const serializeApprovalLabel = (repository: string, number: number, write: () => Promise<Result<void, string>>): Promise<Result<void, string>> => {
+    const key = `${repository.toLowerCase()}:${number}`
+    const active = (approvalLabelWrites.get(key) ?? Promise.resolve()).then(write)
+    // Each caller receives its failure. A failed write must release the queue.
+    const settled = active.then(() => undefined, () => undefined)
+    approvalLabelWrites.set(key, settled)
+    void settled.then(() => {
+      if (approvalLabelWrites.get(key) === settled)
+        approvalLabelWrites.delete(key)
+    })
+    return active
+  }
+
   return {
     async findOpenPullRequestForBranch(repository, headRef, signal) {
       const octokit = await client(repository.github, 'read', signal)
@@ -655,22 +675,24 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async consumeApprovalLabel(repository, _subjectKind, itemNumber, label, signal) {
-      const octokit = await client(repository.github, 'item_write', signal)
-      if (octokit._tag === 'Err')
-        return octokit
-      const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, issue_number: itemNumber, request: { signal } }
-      const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
-        .then((): Result<void, string> => ok(undefined))
-        .catch((error: unknown): Result<void, string> => err(message(error)))
-      const current = await octokit.value.rest.issues.get(request)
-        .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
-        .catch((error: unknown): Result<string[], string> => err(message(error)))
-      if (current._tag === 'Err')
-        return current
-      if (current.value.some(value => value.toLowerCase() === label.toLowerCase()))
-        return removed._tag === 'Err' ? removed : err(`GitHub did not remove the ${label} label.`)
-      return ok(undefined)
+      return serializeApprovalLabel(repository.github, itemNumber, async () => {
+        const octokit = await client(repository.github, 'item_write', signal)
+        if (octokit._tag === 'Err')
+          return octokit
+        const { owner, repo } = repositoryParts(repository.github)
+        const request = { owner, repo, issue_number: itemNumber, request: { signal } }
+        const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
+          .then((): Result<void, string> => ok(undefined))
+          .catch((error: unknown): Result<void, string> => err(message(error)))
+        const current = await octokit.value.rest.issues.get(request)
+          .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
+          .catch((error: unknown): Result<string[], string> => err(message(error)))
+        if (current._tag === 'Err')
+          return current
+        if (current.value.some(value => value.toLowerCase() === label.toLowerCase()))
+          return removed._tag === 'Err' ? removed : err(`GitHub did not remove the ${label} label.`)
+        return ok(undefined)
+      })
     },
 
     async clearAgentLabels(repository, pullRequestNumber, signal) {
@@ -838,6 +860,20 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return settled.add === null && settled.remove.length === 0
         ? ok(undefined)
         : err(`GitHub did not stamp the ${AGENT_LABELS[state].name} label. GitHub answered with ${held.length === 0 ? 'no labels' : held.join(', ')}.`)
+    },
+
+    async addApprovalLabel(repository, pullRequestNumber, label, signal) {
+      return serializeApprovalLabel(repository.github, pullRequestNumber, async () => {
+        const octokit = await client(repository.github, 'item_write', signal)
+        if (octokit._tag === 'Err')
+          return octokit
+        const { owner, repo } = repositoryParts(repository.github)
+        return octokit.value.rest.issues.addLabels({ owner, repo, issue_number: pullRequestNumber, labels: [label], request: { signal } })
+          .then(({ data }) => data.some(value => value.name.toLowerCase() === label.toLowerCase())
+            ? ok(undefined)
+            : err(`GitHub did not confirm the ${label} label.`))
+          .catch((error: unknown) => err(message(error)))
+      })
     },
 
     async ensureApprovalLabel(repository, label, signal) {
@@ -1263,6 +1299,16 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return octokit.value.graphql(resolveReviewThreadMutation, { threadId, request: { signal } })
         .then((): Result<void, string> => ok(undefined))
         .catch((error: unknown): Result<void, string> => err(message(error)))
+    },
+
+    async upsertNativeReview(repository, pullRequestNumber, headSha, body, signal, authorize) {
+      // Native reviews must use the App identity, never Harlan's user token.
+      if (repository.authentication !== 'app')
+        return ok(undefined)
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      return writeNativeReview(octokit.value, { repository: repository.github, pullRequestNumber, actorLogin: options.actorLogin(repository), headSha, body }, signal, authorize)
     },
 
     async upsertReviewCheckRun(repository, headSha, update, signal, authorize) {

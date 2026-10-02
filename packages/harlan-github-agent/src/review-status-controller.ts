@@ -1,11 +1,13 @@
 import type { AgentPhase, AgentPhaseTag } from './agent-progress.ts'
 import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource, ReviewStatusIdentitySource } from './github-agent-source.ts'
+import type { NativeReviewMirror } from './native-review.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunMirror } from './review-check-run.ts'
 import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
+import { nativeReviewBody } from './native-review.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
@@ -22,6 +24,7 @@ export interface ReviewStatusController {
 
 export interface ReviewStatusControllerOptions {
   /** Mirrors each Review publication onto the Review check run. Absent leaves the check run unwritten. */
+  nativeReviews?: NativeReviewMirror
   checkRuns?: ReviewCheckRunMirror
   commentControls?: boolean
   loggedFindings?: Pick<JournalStore, 'decorateLoggedFindings'>
@@ -36,6 +39,7 @@ export interface ReviewStatusControllerOptions {
 }
 
 export interface ReviewStatusPublicationOptions {
+  nativeReviews?: NativeReviewMirror
   checkRuns?: ReviewCheckRunMirror
   findingThreads?: ReviewFindingThreadMirror
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewStatusIdentitySource & ReviewPublicationSource & ExistingReviewLabelSource
@@ -313,6 +317,21 @@ export async function publishClaimedReviewStatus(
       signal,
       () => authorizeWrite(options, command),
     )
+  }
+  if (options.nativeReviews !== undefined && command.phase === 'terminal'
+    && command.taskKind === 'adversarial_review' && command.reviewRunId !== null) {
+    const authority = authorizeWrite(options, command)
+    if (authority._tag === 'Err')
+      return authority
+    const result = await options.nativeReviews.publisher.upsertNativeReview(
+      command.repositoryMapping,
+      command.pullRequestNumber,
+      command.expectedHeadSha,
+      nativeReviewBody(command.expectedHeadSha, command.desiredOutcome, published.value.url),
+      signal,
+      () => authorizeWrite(options, command),
+    )
+    options.nativeReviews.report(command.repository, result)
   }
   const completed = options.store.completeReviewStatus({
     commandId: command.id,
