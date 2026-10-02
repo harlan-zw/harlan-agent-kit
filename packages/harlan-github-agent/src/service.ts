@@ -73,6 +73,7 @@ import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCh
 import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
 import { err, ok } from './result.ts'
+import { applyReviewApproval } from './review-approval.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
 import { refreshReviewGates } from './review-gate-sweep.ts'
@@ -741,6 +742,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
     })
     const reviewStatus = createReviewStatusController({
+      nativeReviews: {
+        publisher: workerGithub,
+        report: (repository, result) => {
+          if (result._tag === 'Err')
+            options.logger.error(`${repository}: native Review failed: ${result.error}`)
+        },
+      },
       checkRuns: { publisher: workerGithub, report: reportCheckRun },
       findingThreads,
       commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
@@ -801,6 +809,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     }
     return {
       approvals: createApprovalController({
+        reviewApprovalControls: () => releaseWebhookReady,
         github: workerGithub,
         now,
         store,
@@ -921,6 +930,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
+        nativeReviews: {
+          publisher: workerGithub,
+          report: (repository, result) => {
+            if (result._tag === 'Err')
+              options.logger.error(`${repository}: native Review failed: ${result.error}`)
+          },
+        },
         checkRuns: { publisher: workerGithub, report: reportCheckRun },
         findingThreads,
         github: workerGithub,
@@ -1589,6 +1605,21 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                 : actorLogin(repository)
             },
             apply: (request) => { store.requestLoggedFindingPickup({ ...request, at: now().toISOString() }) },
+          },
+          reviewApproval: {
+            allowedAuthor: userLogin,
+            actorLogin: (name) => {
+              const repository = config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase())
+              return repository === undefined || !repository.enabled || !config.mutationsEnabled || !repository.pullRequestReview || !store.mayWriteRepository(repository.github)
+                ? null
+                : actorLogin(repository)
+            },
+            apply: (request) => {
+              const repository = config.repositories.find(repository => repository.github.toLowerCase() === request.repository.toLowerCase())
+              if (repository === undefined)
+                return Promise.resolve(ok(undefined))
+              return applyReviewApproval({ github: workerGithub, store }, repository, request, AbortSignal.timeout(30_000))
+            },
           },
           reviewCancellation: {
             actorLogin: (name) => {

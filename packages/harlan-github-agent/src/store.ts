@@ -10,6 +10,7 @@ import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
+import type { ReviewApproval } from './review-approval.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type {
   AdversarialReviewTask,
@@ -1064,6 +1065,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * whether the head is new to the prompt, not whether the Revision is new.
    */
   hasApprovalPromptComment: (repository: string, pullRequestNumber: number, revisionId: string) => boolean
+  /** Matches a checkbox click to the canonical prompt for the current open Revision. */
+  getApprovalPrompt: (request: ReviewApproval) => { revisionId: string, baseRef: string } | null
   /** Records the Queue position this service published on the canonical comment. */
   recordQueuedReviewStatus: (input: {
     taskId: string
@@ -13683,6 +13686,19 @@ export function openJournalStore(
       AND approval_prompt_comments.revision_id = ?
   `).get(repository, pullRequestNumber, revisionId) !== undefined
 
+  const getApprovalPrompt: JournalStore['getApprovalPrompt'] = request => (database.prepare(`
+    SELECT revisions.id AS revisionId, json_extract(revisions.payload, '$.baseRef') AS baseRef
+    FROM approval_prompt_comments AS prompt
+    JOIN subjects ON subjects.id = prompt.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = subjects.current_revision_id
+    WHERE repositories.github = ? COLLATE NOCASE AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+      AND prompt.revision_id = revisions.id AND prompt.github_comment_id = ? AND prompt.body = ?
+      AND json_extract(revisions.payload, '$.headSha') = ?
+      AND json_extract(revisions.payload, '$.state') = 'open'
+      AND repositories.enabled = 1 AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
+  `).get(request.repository, request.pullRequestNumber, request.commentId, request.beforeBody, request.headSha) as { revisionId: string, baseRef: string } | undefined) ?? null
+
   const recordApprovalPromptComment: JournalStore['recordApprovalPromptComment'] = (input) => {
     const subject = database.prepare(`
       SELECT subjects.id
@@ -15782,6 +15798,7 @@ export function openJournalStore(
     listActiveTaskLeases,
     listRunningTaskItems,
     listQueuedReviewStatuses,
+    getApprovalPrompt,
     hasApprovalPromptComment,
     recordApprovalPromptComment,
     listReviewGateRefreshes,

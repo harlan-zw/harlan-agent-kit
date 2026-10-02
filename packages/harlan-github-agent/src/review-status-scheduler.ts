@@ -1,3 +1,4 @@
+import type { NativeReviewMirror } from './native-review.ts'
 import type { ReviewCheckRunMirror } from './review-check-run.ts'
 import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { ReviewStatusPublicationOptions } from './review-status-controller.ts'
@@ -11,6 +12,7 @@ export interface ReviewStatusScheduler {
 }
 
 export interface ReviewStatusSchedulerOptions {
+  nativeReviews?: NativeReviewMirror
   checkRuns?: ReviewCheckRunMirror
   findingThreads?: ReviewFindingThreadMirror
   github: ReviewStatusPublicationOptions['github']

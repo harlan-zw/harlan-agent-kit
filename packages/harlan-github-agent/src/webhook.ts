@@ -1,11 +1,14 @@
 import type { LoggedFindingPickup } from './logged-finding-pickup.ts'
 import type { PackageReleaseCommand, PackageReleaseRequest } from './package-release.ts'
+import type { Result } from './result.ts'
+import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewCancellation } from './review-cancel.ts'
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
 import { loggedFindingPickup } from './logged-finding-pickup.ts'
 import { packageReleaseCommand, releaseRequest } from './package-release.ts'
+import { reviewApproval } from './review-approval.ts'
 import { reviewCancellation } from './review-cancel.ts'
 
 /**
@@ -145,6 +148,11 @@ export interface WebhookAppOptions {
   allowedOwners: readonly string[]
   logger: { info: (message: string) => void }
   onHint: (repository: string) => void
+  reviewApproval?: {
+    allowedAuthor: string
+    actorLogin: (repository: string) => string | null
+    apply: (request: ReviewApproval & { requestId: string }) => Promise<Result<void, string>>
+  }
   reviewCancellation?: {
     actorLogin: (repository: string) => string | null
     apply: (request: ReviewCancellation & { requestId: string }) => void
@@ -228,6 +236,16 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         && pickup.requestedBy.toLowerCase() === options.loggedFindingPickup.allowedAuthor.toLowerCase()
         && options.loggedFindingPickup.actorLogin(hint.repository)?.toLowerCase() === pickup.commentAuthor.toLowerCase()) {
         options.loggedFindingPickup.apply({ ...pickup, requestId: delivery })
+      }
+      const approval = reviewApproval(name, payload)
+      if (approval !== null && options.reviewApproval !== undefined
+        && approval.requestedBy.toLowerCase() === options.reviewApproval.allowedAuthor.toLowerCase()
+        && options.reviewApproval.actorLogin(hint.repository)?.toLowerCase() === approval.commentAuthor.toLowerCase()) {
+        const applied = await options.reviewApproval.apply({ ...approval, requestId: delivery })
+        if (applied._tag === 'Err') {
+          options.logger.info(`Review Approval failed: ${applied.error}`)
+          return new Response('Review Approval failed. Retry this delivery.', { status: 503 })
+        }
       }
       const cancellation = reviewCancellation(name, payload)
       if (cancellation !== null
