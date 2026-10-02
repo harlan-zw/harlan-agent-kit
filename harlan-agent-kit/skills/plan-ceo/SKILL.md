@@ -34,9 +34,10 @@ Audit the plan for trust and reliability.
 2.  **Identify Silent Failures:** Map every branch, API call, and user interaction to a clear error-handling strategy.
 
 ## Step 4: Strategic Report
-Generate the final report using the **Gold Standard Template** in `templates/ceo-report.md`.
+Use the applicable sections of `templates/ceo-report.md` for the final report.
+If the mode is Hold Scope or Scope Reduction, omit expansion proposals and delight items.
 
-*   **10x Version:** One sentence on what the most ambitious version looks like.
+*   **10x Version:** Include the ambitious version only in an expansion mode.
 *   **Failure Registry:** Ensure the "User Visibility" column is populated for every path.
 *   **Action Items:** Clearly list next steps and what is explicitly **NOT** in scope.
 

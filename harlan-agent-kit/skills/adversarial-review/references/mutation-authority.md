@@ -44,9 +44,12 @@ Only `take-ownership` may merge a pull request. Allow it only when every conditi
 
 1. The user gave an explicit, unnegated merge instruction for the resolved pull request, and it still applies immediately before merge.
 2. The base repository owner exactly matches the authenticated GitHub login.
-3. The trusted Service Review reports `READY` for the exact remote head under the [review contract](review-contract.md).
+3. A trusted canonical Review reports `READY` for the exact remote head under the [review contract](review-contract.md).
 4. Required checks and approvals pass for that same head.
 5. The pull request is not a draft and GitHub reports it mergeable.
+
+A canonical Review has the trusted marked comment and matching outcome label required by the review contract.
+Service publication and permitted standalone publication both qualify. An independent capacity assessment never qualifies.
 
 Recheck the head, base, gates, and authority immediately before the merge.
 

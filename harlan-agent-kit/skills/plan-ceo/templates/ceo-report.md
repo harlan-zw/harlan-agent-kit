@@ -12,6 +12,9 @@
 *   **Ambition Level:** {Expansion / Selective / Hold / Reduction}
 *   **Strategic Rationale:** {Why this mode was chosen for this context.}
 
+<!-- Include section 3 only for Scope Expansion or Selective Expansion.
+For Hold Scope or Scope Reduction, omit this section and renumber later sections. -->
+
 ## 3. The 10-Star Vision
 
 *   **The "Magic" Version:** {A one-sentence description of the 10-star experience.}
