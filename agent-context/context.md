@@ -114,6 +114,9 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 ## TypeScript
 
+- Always use TypeScript for new code, including scripts, automation, data processing, and one-off scratch tools.
+- Never fall back to Python or JavaScript for convenience. Run TypeScript with the repository runtime or Node type stripping.
+- Use another language only when I request it or an existing tool requires it.
 - Functional, actively avoid classes.
 - No backwards compatibility unless asked. All projects are in development; delete freely.
 - No inline or dynamic imports without a strong treeshaking reason.
