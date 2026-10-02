@@ -69,7 +69,7 @@ interface PipelineHooks {
 
 **Seam**: every module top-level is declarations and exports only. Any work happens inside an exported function the caller invokes. Heavy/optional deps are imported lazily (`await import('heavy-sdk')`) inside the factory method that needs them, or routed behind a separate subpath / conditional export so consumers opt in. Polyfills imported via a named function the caller decides to call, not as a side-effect import.
 
-**Measure, don't guess**: `npx -y publint` (publish-shape checks), `npx -y @arethetypeswrong/cli --pack .` (type-export sanity across module systems), `du -sh dist/` and per-entry sizes. For runtime cost, `node --prof` or `0x` on the import path. Bundle size and import-time are part of the interface — track them.
+**Measure, don't guess**: `pnpm dlx publint` (publish-shape checks), `pnpm dlx @arethetypeswrong/cli --pack .` (type-export sanity across module systems), `du -sh dist/` and per-entry sizes. For runtime cost, `node --prof` or `0x` on the import path. Bundle size and import-time are part of the interface — track them.
 
 **Reject**: top-level `await` in published source (breaks CJS interop and lazy import); module-level instantiation of caches, singletons, or hook buses (move into the factory body so each `createX()` gets its own); `import './polyfill'` at top level (export `applyPolyfill()` and let the consumer choose); a heavy dep landing on the package's root entry when only one subpath uses it (move the dep into that subpath's implementation).
 
@@ -137,7 +137,7 @@ In monorepos, each `packages/*` has its own `test/` and `vitest.config.ts`. Cros
 
 **Seam**: dependency direction is a DAG, declared in each package's `dependencies` / `peerDependencies`. Cross-package imports go through the package name (`@org/b`), never relative. Shared types/utilities used by ≥2 packages with no logic of their own go in a `packages/shared` or are inlined.
 
-**Reject**: any relative import that crosses a workspace package boundary (confirm with `npx -y @ripast/cli scan <symbol> --graph mermaid`).
+**Reject**: any relative import that crosses a workspace package boundary (confirm with `pnpm dlx @ripast/cli scan <symbol> --graph mermaid`).
 
 ---
 

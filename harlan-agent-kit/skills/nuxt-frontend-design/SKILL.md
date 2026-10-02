@@ -151,7 +151,7 @@ Emit `DESIGN.md` at the project root after writing `app.config.ts`, `main.css`, 
 4. **Prose sections**: fill every section below the front matter from the decisions just made, no placeholders.
 5. Write to `DESIGN.md` at the project root.
 6. **Verify placeholders removed**: `grep -cE '\{\{|TODO|placeholder' DESIGN.md` returns 0. (Single-brace `{colors.primary}` token refs are legitimate and stay.)
-7. **Verify tokens lint**: `npx --yes @google/design.md lint DESIGN.md 2>/dev/null | jq -r '.summary.errors'` returns `0`. If the linter crashes (`raw.match is not a function`) because a component prop holds a float or `rgba()`, quote floats and convert `rgba()` to 8-digit hex. Contrast warnings on button-primary are informational here; if the theme's signature colour intentionally trades 4.5:1 for aesthetic, log it in `docs/design-decisions.md`.
+7. **Verify tokens lint**: run `pnpm dlx @google/design.md lint DESIGN.md` without hiding stderr or piping away its exit status. Require a successful exit and zero reported errors. If the linter crashes, preserve the diagnostic and repair its input before retrying. For `raw.match is not a function`, quote floats and convert `rgba()` values to 8-digit hex. Record intentional button-primary contrast tradeoffs in `docs/design-decisions.md`.
 8. **Verify budget**: `DESIGN.md` is at or under 300 lines, and every section is at or under 40. The caps and the audit live in the [root docs contract](../../references/root-docs.md#size-budgets).
 
 Modifying an existing design system: update `DESIGN.md` in place.
@@ -284,7 +284,7 @@ Review's mechanical checks are the authoritative list (hardcoded hex/rgb, `slate
 Lead with the class-token inventory, the same command review runs:
 
 ```bash
-npx -y @ripast/cli css-class-scan --glob 'app/**' --sort count-desc --json
+pnpm dlx @ripast/cli css-class-scan --glob 'app/**' --sort count-desc --json
 ```
 
 Look for:

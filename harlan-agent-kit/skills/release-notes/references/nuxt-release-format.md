@@ -47,7 +47,7 @@ newWay()
 Run the following command to upgrade:
 
 ```bash
-npx nuxi upgrade
+pnpm dlx nuxi upgrade
 ```
 
 Or update manually:

@@ -83,9 +83,16 @@ Use `pr` when code needs review. Use `adversarial-review` before deciding readin
 
 Restart readiness after the remote head changes.
 
-If the `pr` Skill uses a subagent review because the Service Queue is full, finish that local review and current-head CI.
-Then hand the pull request to the Service's durable Review Task. End the interactive turn with the outstanding Review named.
-Do not report `VERIFIED` or claim the Service posted `READY` until it does.
+If `pr` uses the capacity fallback, finish the independent assessment and current-head CI.
+That fallback stops the exact-head Service Review and cancels its queued Task.
+Report the assessment, stopped Service Review, and outstanding human decision. End the interactive wait.
+Do not await the cancelled Task or request another Review for that stopped head.
+An independent assessment does not satisfy the `READY` merge gate or grant merge authority.
+Retain ownership of the target for the human decision or a new head.
+Do not report `VERIFIED` before all applicable delivery and smoke stages complete.
+
+If an active Service Review or Repair Task still owns the work, hand off to that durable Task.
+Name its exact state and next action. Never edit while its Repair Task is active.
 
 ## Land and follow
 
@@ -105,7 +112,8 @@ Add a failing test first for behavior or validation regressions. Apply the small
 
 Use `chore: <specific problem>` for CI or delivery pipeline repairs. Use `fix:` for deployed product behavior.
 
-Let the loaded contracts choose a direct push, branch repair, or repair pull request.
+Use the task branch for pre-merge repair. After merge, open a focused repair pull request from the current remote default branch.
+Never push directly to the default branch.
 
 If production remains unsafe, choose the safest viable recovery: repair, rollback, or block with evidence.
 

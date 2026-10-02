@@ -7,10 +7,10 @@ Run all of these on the changed files. Report each result, even when clean.
 AST-aware tokenization across `.vue`/`.ts`/`.tsx` (strings, class attrs, `@apply`). Catches Vue template class bindings and kebab-case component tags that grep misses.
 
 ```bash
-npx -y @ripast/cli css-class-scan --glob 'app/**' --sort count-desc --json \
+pnpm dlx @ripast/cli css-class-scan --glob 'app/**' --sort count-desc --json \
   | jq '[.tokens[] | select(.token | test("^(slate|gray|zinc|stone|bg-white|text-black|border-gray)"))]'
 
-npx -y @ripast/cli css-class-scan --pattern 'font-inter,font-roboto,font-arial,font-system-ui' --glob 'app/**' --json
+pnpm dlx @ripast/cli css-class-scan --pattern 'font-inter,font-roboto,font-arial,font-system-ui' --glob 'app/**' --json
 ```
 
 Cross-reference `slate-/gray-/zinc-/stone-` hits against the project's configured neutral in `app.config.ts`; exclude that neutral.
@@ -18,7 +18,7 @@ Cross-reference `slate-/gray-/zinc-/stone-` hits against the project's configure
 ## Dead code (catches generator-left scaffolding)
 
 ```bash
-npx -y @ripast/cli unused --tsconfig .nuxt/tsconfig.json --exports local --json
+pnpm dlx @ripast/cli unused --tsconfig .nuxt/tsconfig.json --exports local --json
 ```
 
 Any hit in a file the generator created or modified is a RUBRIC violation.
@@ -44,7 +44,7 @@ Every custom token found needs justification. Flag any that duplicates a `--ui-*
 Every component in `app/components/` touched by the diff needs ≥2 unrelated callers, otherwise it should be colocated as `_Component.vue` next to its sole consumer.
 
 ```bash
-npx -y @ripast/cli scan <ComponentName> --kind jsx,identifier-reference --tsconfig .nuxt/tsconfig.json --json
+pnpm dlx @ripast/cli scan <ComponentName> --kind jsx,identifier-reference --tsconfig .nuxt/tsconfig.json --json
 ```
 
 Single caller in a single feature dir is a RUBRIC violation: "global auto-import without cross-feature consumers."

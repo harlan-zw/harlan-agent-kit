@@ -44,7 +44,7 @@ Only `take-ownership` may merge a pull request. Allow it only when every conditi
 
 1. The user gave an explicit, unnegated merge instruction for the resolved pull request, and it still applies immediately before merge.
 2. The base repository owner exactly matches the authenticated GitHub login.
-3. `adversarial-review` reports `PASS` for the exact remote head.
+3. The trusted Service Review reports `READY` for the exact remote head under the [review contract](review-contract.md).
 4. Required checks and approvals pass for that same head.
 5. The pull request is not a draft and GitHub reports it mergeable.
 
@@ -76,14 +76,12 @@ This authority belongs to the service alone. It never applies to `adversarial-re
 
 ## Default branch repair
 
-Direct default branch repair has a narrower boundary. Allow it only when every condition holds:
+Every repair uses a pull request. Never push directly to the default branch.
 
-1. The base repository owner exactly matches the authenticated GitHub login.
-2. The configured canonical checkout is under `~/sites`.
-3. `take-ownership` was active for the exact pull request or revision before repair.
-4. The failure belongs to the merge, deployment, or smoke verification being monitored.
-5. The repair is minimal and verified locally.
+If delivery fails after merge, use a fresh task-owned worktree from the current remote default branch.
+Prove the failure belongs to the owned change, repair it, and verify the repair locally.
+Open a focused repair pull request through [pr](../../pr/SKILL.md).
+Keep the original delivery target and link its repair pull request.
+Apply the same current-head Review, checks, and merge authority before landing the repair.
 
-Never directly push to `nuxt/nuxt`, `unjs/unhead`, another `unjs/*` repository, or any repository owned by another account or organization.
-
-Use a normal commit on the current remote default branch. Never bypass branch protection, force push, or disable hooks.
+Never bypass branch protection, force push, or disable hooks.

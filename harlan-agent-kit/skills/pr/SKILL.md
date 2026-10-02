@@ -59,19 +59,10 @@ git branch --show-current
 
 Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
 
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Every mutation uses a task-owned `wt` worktree:
-
-1. Run `wt list --format=json`.
-2. Reuse this task's existing worktree with `wt switch BRANCH` when one exists.
-3. Otherwise derive a branch name such as `feat/add-widget` or `fix/login-bug`.
-4. Choose `BASE`. Use `origin/main` for independent work. Use `origin/PARENT` or the exact parent SHA for stacked work.
-5. Create it with `wt switch --create BRANCH --base BASE`.
-6. Run `wt list --format=json` again. Read the branch's absolute `path`.
-7. Pass that path as `workdir` to every later command, including CI repairs.
+Keep the primary checkout read only. Mutate only in this task's `wt` worktree with a live claim.
+Use `origin/main` for independent work, or the intended parent ref for stacked work.
+Read the absolute worktree `path` from `wt list --format=json` and use it for every later command.
+The shared contract owns creation, acquisition, renewal, and cleanup.
 
 If this task's changes already exist in the primary checkout, leave that checkout untouched. List every verified task-owned path. Export `git diff --cached --binary -- PATHS` and `git diff --binary -- PATHS` separately. Apply the cached patch with `git apply --index`, then apply the unstaged patch. Copy owned untracked files individually. Compare every owned source path with its destination before continuing. Never reset, clean, stash, or overwrite the source checkout.
 
@@ -286,47 +277,8 @@ Keep it to the checks a reviewer would otherwise have to repeat. Prose lines, no
 
 ### Screenshots and video
 
-A visible change earns media in the same comment. GitHub CLI 2.99.0 or later uploads it to the pull request:
-
-```bash
-HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
-  --body "Checked the visible change in the running app." \
-  --attach './.playwright/after.png#The updated page'
-```
-
-Use `--attach` for images and videos. Repeat the flag for up to 50 files. GitHub hosts the files with the pull request. Never upload pull request media to another service.
-
-Match each Markdown image path exactly to its attachment path, including relative versus absolute spelling.
-After posting, read the published body and check that every image uses its uploaded GitHub URL.
-If uploads succeeded but local links remain, repair the same body using those returned URLs. Do not upload duplicates.
-
-Visually inspect every screenshot before attaching it. Check the full-resolution image and the intended display size.
-
-Look for clipping, overlap, overflow, alignment, contrast, missing content, and broken responsive layouts. Treat every visible defect as task scope.
-
-If inspection finds a defect, do not upload that screenshot. Repair the UI in the task worktree. Run Step 4 and a focused browser check.
-
-Commit and push the repair without amending. Recapture the same view and inspect it again. Repeat until the attached result is clean.
-
-Keep a labelled `Before` image only when it explains the repaired defect. Its matching `After` image must show the same area.
-
-Take the picture before you need it. [nuxt-frontend-review](../nuxt-frontend-review/SKILL.md) already captures the running page. Two images beat one, labelled `Before` and `After`:
-
-```bash
-HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
-  --body "$(cat <<'EOF'
-| Before | After |
-| --- | --- |
-| ![Before](./.playwright/before.png) | ![After](./.playwright/after.png) |
-EOF
-)" \
-  --attach ./.playwright/before.png \
-  --attach ./.playwright/after.png
-```
-
-GitHub CLI replaces each local Markdown path with its uploaded URL. If every upload fails, it posts no comment. If a later upload fails, it posts the successful files and exits with an error. Check the printed comment URL before retrying.
-
-Only attach media for a visible change: a page, a component, a CLI frame, or a rendered email. Never attach a screenshot of passing tests or a green terminal.
+For a visible change, read and follow [media](references/media.md) before capture, inspection, or upload.
+Keep verification evidence in a self-identified Agent comment. Do not attach screenshots of passing checks.
 
 ## Step 6: Wait for CI and Review
 
@@ -375,85 +327,16 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 Count review-driven repair pushes by this submitting Agent across the entire pull request.
 After three, stop Agent-authored refinements and report remaining findings above 80/100 to Harlan.
 Do not reset the count because a new head commit starts a new Review. CI repair attempts keep their separate limit below.
-At that limit, do not start another fallback subagent Review. Hand the pull request to its Service Review Task.
+At that limit, do not start another fallback subagent Review.
+If an active Service Review Task owns the current head, hand off to that Task.
+If its Review is stopped, report the stopped Review and outstanding human decision. Never wait for a cancelled Task.
 
 ### Review queue capacity
 
-Use the [service control command](../harlan-github-agent/SKILL.md#run-and-inspect) to read `harlan-github-agent control status`.
-Run it on the Service host. On Hogwild, use the config path and loopback URL below.
-If that host lacks the control CLI, read its authenticated `/api/state` endpoint instead.
-The endpoint returns the same `state` object. Do not treat a failed command as an empty Queue.
-Match this repository, pull request number, and current head SHA in `state.queue` when present.
-Check the targeted Item endpoint's `dismissed` field first. A dismissed Item stops all Review work, even after a new head.
-The dashboard snapshot lists only 100 recent Items, so absence from `state.items` proves nothing.
-If the targeted Item request fails, report the missing Service state. Do not start a fallback review.
-Use the Control API's configured Basic authentication for both requests. Never print the password.
-If the matching Queue entry is missing, use a queued Review Task for this pull request as the capacity signal.
-Refetch the GitHub head before spawning; the Task alone does not identify its head SHA.
-Count `state.tasks` whose state is `Queued` and kind is `adversarial_review` or `review_fix`.
-Calculate free host slots from `state.hostCapacity`: local maximum minus active, plus desktop maximum minus active when connected.
-
-```bash
-harlan-github-agent control status \
-  --config /home/harlan/.config/harlan-github-agent/config.yml \
-  --url http://127.0.0.1:3210 |
-  jq --arg repo OWNER/REPO --argjson number NUMBER --arg head HEAD_SHA '
-    (.state // .) as $state |
-    {agentStart: $state.agentStart._tag,
-     hostCapacity: $state.hostCapacity,
-     queuedWork: [$state.tasks[] | select(.state._tag == "Queued") |
-       select(.kind == "adversarial_review" or .kind == "review_fix")],
-     targetTask: [$state.tasks[] | select(.kind == "adversarial_review" and
-       .repository == $repo and .pullRequestNumber == $number and
-       .state._tag == "Queued")][0],
-     target: [$state.queue[] | select(.kind == "pull_request" and
-       .repository == $repo and .number == $number and .headSha == $head)][0]}'
-```
-
-Start a subagent review when Review is queued for this pull request and either condition holds:
-
-- At least two Review or Repair Tasks are queued, and their count exceeds free host slots.
-- `state.agentStart._tag` is `ReserveReached` or `CapacityUnavailable`.
-
-Also start one 20 minutes after the recorded Review request if Review remains queued or no Task appears.
-This also applies when the control CLI is unavailable, the authenticated API works, and no trusted `REVIEWING` comment exists.
-Never start a subagent while the Service Review Task is `Running` or `Publishing`.
-If an active Review stalls, report its Service Incident or exact Task state.
-Require an open pull request, a recorded request, and targeted Item status with `dismissed: false`.
-Exclude an intentional pause, stop, cancellation, or missing Approval.
-Record the capacity snapshot or elapsed time that triggered the decision.
-Do not infer saturation from `maxOpenPullRequests`; that limit controls new Issue work.
-
-Before spawning, stop the Service Review for this exact head:
-
-```bash
-harlan-github-agent control stop-review \
-  --repository OWNER/REPO --number NUMBER --head HEAD_SHA \
-  --config /home/harlan/.config/harlan-github-agent/config.yml \
-  --url http://127.0.0.1:3210
-```
-
-Run the command on the Service host. `Stopped` and `AlreadyStopped` permit the subagent.
-The command checks the current open head, records a durable stop for that head, and cancels its queued Review Task.
-It rejects a dismissed Item, changed head, or Review that already started.
-If the command fails, report the exact error and leave the Service Review in charge.
-Refetch the GitHub head after the command. If it moved, stop and restart Step 6.
-Spawn one native subagent for this exact head SHA.
-Give it the pull request snapshot and disproof checks in the [review contract](../adversarial-review/references/review-contract.md#adversarial-review).
-It reads the full diff, surrounding code, author images, and current checks.
-Keep it read only. It returns evidence-backed findings with impact from 0 to 100, path, line, and proof.
-Only findings above 80 need a next action. Include lower scores in the assessment as Logged.
-It does not post comments, set labels, approve, or merge.
-The Service Review is stopped for this head. A new head needs a new Review request.
-Refetch the head before acting on findings. Discard the subagent assessment if the head moved.
-Refetch targeted Item status before posting an assessment. Stop if it became dismissed.
-
-Apply confirmed findings above 80 in new commits, subject to the three-push limit, then restart Step 6 for the new head.
-Mark false positives or inapplicable findings in one self-identified Agent comment with evidence.
-If no confirmed blocker remains, post a self-identified Agent assessment with the head SHA and capacity reason.
-Start that comment with `🤖 Harlan Agent Kit Agent assessment of head SHA.`
-After CI passes, report the subagent's result and the stopped Service Review.
-Never call the subagent assessment `READY` or change the service's marked status.
+If Review is queued or its current-head Task is missing, read and follow [Review queue capacity](references/review-queue.md).
+That Reference owns the capacity snapshot, fallback thresholds, exact-head stop, and independent subagent assessment.
+Never delegate fallback Review before its stop and authority checks pass.
+A stopped exact-head Review stays stopped. Report the independent assessment separately from Service `READY`.
 
 Fix CI failures from the failing check logs (`gh run view RUN_ID --log-failed`).
 Use new commits, never amend published commits. After three failed repairs for one cause, ask the user for guidance.

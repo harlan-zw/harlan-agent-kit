@@ -107,7 +107,7 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - run: npx changelogithub
+      - run: pnpm dlx changelogithub
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
 
@@ -150,7 +150,7 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - run: npx changelogithub
+      - run: pnpm dlx changelogithub
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
 
