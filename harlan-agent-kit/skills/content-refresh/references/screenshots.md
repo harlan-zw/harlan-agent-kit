@@ -27,10 +27,10 @@ When the user specifies Chrome or its extension, use that connection first if av
 In Codex, check the exposed browser control tools and follow their connection instructions.
 If that connection is unavailable, use dev-browser as a supported fallback. Read dev-browser --help before connecting.
 Use a unique task page name and the intended signed-in browser when needed.
-If DISPLAY is empty, pass --headless only when launching a browser.
+Always pass --headless when launching an unattended test browser.
 After the user restarts or reconnects the browser, recheck availability before retaining an earlier blocker.
 Record locale, account type, report, filters, period, selected metrics, and capture date.
-Wait for loading and animation. Bring the page to the foreground when capture stalls.
+Wait for loading and animation. If capture stalls, inspect loading state and retry without foreground activation.
 Use native PNG capture with device scaling.
 
 Require at least two captured pixels per intended CSS display pixel.

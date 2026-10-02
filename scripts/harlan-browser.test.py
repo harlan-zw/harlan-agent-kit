@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -6,8 +7,13 @@ import socket
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("harlan-browser.py")
+
+SPEC = importlib.util.spec_from_file_location("harlan_browser", SCRIPT)
+CLI = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CLI)
 
 
 class BrowserCliTests(unittest.TestCase):
@@ -50,8 +56,64 @@ class BrowserCliTests(unittest.TestCase):
             args = json.loads(self.record.read_text())
             self.assertIn(f"--user-data-dir={self.root / 'profiles' / identity}", args)
             self.assertIn(f"--remote-debugging-port={port}", args)
+            self.assertIn("--headless", args)
             self.assertEqual(args[-1], "https://example.com")
             self.assertEqual((self.root / "profiles" / identity).stat().st_mode & 0o777, 0o700)
+
+    def test_open_defaults_to_headless_without_a_display(self):
+        self.env.pop("DISPLAY", None)
+        self.env.pop("WAYLAND_DISPLAY", None)
+        result = self.call("open", "agent")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--headless", json.loads(self.record.read_text()))
+
+    def test_headed_open_requires_a_display(self):
+        self.env.pop("DISPLAY", None)
+        self.env.pop("WAYLAND_DISPLAY", None)
+        result = self.call("open", "agent", "--headed")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("desktop session", result.stderr)
+        self.assertFalse(self.record.exists())
+
+    def test_headed_open_is_explicit(self):
+        result = self.call("open", "clients", "--headed", "https://example.com")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--headless", json.loads(self.record.read_text()))
+
+    def test_open_reuses_a_running_headless_browser_without_launching(self):
+        with patch.dict(os.environ, self.env), patch.object(CLI, "owner", return_value={
+            "pid": 123, "debugging": True, "headless": True
+        }), patch.object(CLI.os, "execvp") as launch:
+            CLI.main(["open", "agent"])
+            launch.assert_not_called()
+
+    def test_open_refuses_to_change_a_running_browser_mode(self):
+        for headless, flags in [(False, []), (True, ["--headed"])]:
+            with patch.dict(os.environ, self.env), patch.object(CLI, "owner", return_value={
+                "pid": 123, "debugging": True, "headless": headless
+            }), patch.object(CLI.os, "execvp") as launch:
+                with self.assertRaises(SystemExit):
+                    CLI.main(["open", "agent", *flags])
+                launch.assert_not_called()
+
+    def test_connect_refuses_a_visible_browser_without_explicit_opt_in(self):
+        with patch.object(CLI, "status", return_value={
+            "ready": True, "headless": False, "endpoint": "http://127.0.0.1:9224"
+        }), patch.object(CLI.os, "execvp") as connect:
+            with self.assertRaises(SystemExit):
+                CLI.main(["connect", "agent", "test-task"])
+            connect.assert_not_called()
+            CLI.main(["connect", "agent", "test-task", "--headed"])
+            connect.assert_called_once_with("dev-browser", ["dev-browser", "--browser",
+                "agent-test-task", "--connect", "http://127.0.0.1:9224"])
+
+    def test_connect_delegates_to_the_verified_headless_endpoint(self):
+        with patch.object(CLI, "status", return_value={
+            "ready": True, "headless": True, "endpoint": "http://127.0.0.1:9224"
+        }), patch.object(CLI.os, "execvp") as connect:
+            CLI.main(["connect", "agent", "test-task"])
+            connect.assert_called_once_with("dev-browser", ["dev-browser", "--browser",
+                "agent-test-task", "--connect", "http://127.0.0.1:9224"])
 
     def test_connect_does_not_use_an_unavailable_profile(self):
         result = self.call("connect", "agent", "test-task")

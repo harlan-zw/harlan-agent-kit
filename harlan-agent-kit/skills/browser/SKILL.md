@@ -44,9 +44,14 @@ pnpm browser:install
 ```
 
 Open `Chrome Clients Automation` or `Chrome Agent Automation` from the desktop menu.
-Alternatively run `harlan-browser open clients` or `harlan-browser open agent` in a desktop session.
-The open command runs Chrome until its process exits.
-For a background launch, use the desktop menu or a task-owned shell process.
+For unattended work, run `harlan-browser open clients` or `harlan-browser open agent` headless.
+The desktop menu launches visible Chrome for manual sign-in.
+The open command defaults to headless Chrome and runs until its process exits.
+Use `harlan-browser open agent --headed` only when the user requests visible work.
+Do not change display modes while the dedicated browser is running.
+Ask the user to close that dedicated browser before changing modes.
+Never stop shared Chrome to change modes.
+For a headless background launch, use a task-owned shell process.
 Do not launch the dedicated data directory without the helper's debugging flags.
 
 Check and connect explicitly:
@@ -62,6 +67,9 @@ JS
 Use `agent` in both commands for the default browser identity.
 Use `clients` for client work.
 The helper verifies Chrome's process, data directory, and listening socket before attachment.
+It rejects visible browsers by default because attaching cannot hide their windows.
+Use `harlan-browser connect agent <task-name> --headed` only for requested visible work.
+Never call `bringToFront()` or activate a tab during unattended work.
 It refuses another application's endpoint and never restarts Chrome to recover a connection.
 Reconnect through the same HTTP endpoint after a browser restart.
 Do not cache the WebSocket URL, which changes with the browser process.
@@ -89,7 +97,8 @@ Never substitute another identity's session because it is already connected.
 ## Testing and cleanup
 
 For signed-out frontend tests, use a separate task-named `dev-browser` browser.
-If DISPLAY is empty, pass `--headless` when launching a test browser.
+Always pass `--headless` when launching a test browser, even when DISPLAY is set.
+Launch a visible test browser only when the user explicitly requests it.
 A headless test browser does not inherit authenticated desktop sessions.
 Never use a signed-in identity for a public-page test that does not need it.
 
