@@ -72,6 +72,14 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 ## Tools
 
+- For public GitHub reads, use `agent-gh`. It uses `harlan-agent-beep` and a separate API quota.
+- GitHub Agent workers route `gh` reads through the same CLI automatically.
+- The token file is `~/.config/harlan-agent-kit/github-public-token`. Keep it owner-only with mode `600`.
+- Use a fine-grained token with Public repositories access and no account permissions.
+- If that token fails, stop. Never switch to Harlan's credentials to finish a public read.
+- The public CLI refuses writes and raw GraphQL. Use `pr view`, `issue view`, or `search` for GraphQL reads.
+- Authorized controller writes and private access keep their existing GitHub credentials.
+
 - Find and search files: ripgrep (`rg`).
 - Rename, move, or import update spanning 2+ files: `pnpm dlx @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
 - Browser testing and automation: `dev-browser` (`--help`). Always pass `--headless` for unattended tests, even with `$DISPLAY`.

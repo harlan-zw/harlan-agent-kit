@@ -22,6 +22,9 @@ installed_hook_files=()
 hooks_install_suffix='.local/share/harlan-agent-kit/hooks'
 manifest_install_suffix='.local/share/harlan-agent-kit/.claude-plugin/plugin.json'
 plugin_install_suffix='.config/opencode/plugins/harlan-hooks.ts'
+github_wrapper="$script_dir/github-public.sh"
+github_install_suffix='.local/share/harlan-agent-kit/github-bin/gh'
+github_cli_suffix='.local/bin/agent-gh'
 # The site inventory the sentry-checkin skill reads first. The desktop owns it;
 # a worker on Hogwild starts without one and every routine run reports that.
 sites_inventory="${HARLAN_AGENT_CONTEXT_SITES_FILE:-$HOME/sites/SITES.md}"
@@ -66,6 +69,7 @@ require_sources() {
   [ -f "$template_claude" ] || fail "Claude template is missing: $template_claude"
   [ -f "$template_codex" ] || fail "Codex template is missing: $template_codex"
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
+  [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
   [ -f "$opencode_plugin" ] || fail "The opencode plugin is missing: $opencode_plugin"
   [ -f "$plugin_manifest" ] || fail "The plugin manifest is missing: $plugin_manifest"
   mapfile -t installed_hook_files < <(agent_context_installed_hooks "$plugin_hooks_dir" "$plugin_manifest")
@@ -136,6 +140,9 @@ sync_local() {
   done
   install -m 644 "$plugin_manifest" "$target_home/$manifest_install_suffix"
   install -m 644 "$opencode_plugin" "$target_home/$plugin_install_suffix"
+  mkdir -p "$target_home/$(dirname "$github_install_suffix")" "$target_home/.local/bin"
+  install -m 755 "$github_wrapper" "$target_home/$github_install_suffix"
+  install -m 755 "$github_wrapper" "$target_home/$github_cli_suffix"
   if [ -f "$sites_inventory" ] && [ "$sites_inventory" != "$target_home/$sites_install_suffix" ]; then
     mkdir -p "$target_home/$(dirname "$sites_install_suffix")"
     install -m 644 "$sites_inventory" "$target_home/$sites_install_suffix"
@@ -151,6 +158,8 @@ opencode_remote_targets() {
   done
   printf '%s\n' "$hogwild_home/$manifest_install_suffix"
   printf '%s\n' "$hogwild_home/$plugin_install_suffix"
+  printf '%s\n' "$hogwild_home/$github_install_suffix"
+  printf '%s\n' "$hogwild_home/$github_cli_suffix"
 }
 
 # Local sources in the same order, so the two hash lists line up.
@@ -161,6 +170,8 @@ opencode_local_sources() {
   done
   printf '%s\n' "$plugin_manifest"
   printf '%s\n' "$opencode_plugin"
+  printf '%s\n' "$github_wrapper"
+  printf '%s\n' "$github_wrapper"
 }
 
 sync_hogwild() {
@@ -174,7 +185,7 @@ sync_hogwild() {
   hook_hash=$(sha256sum "$commit_hook" | cut -d' ' -f1)
 
   ssh -o BatchMode=yes "$hogwild_host" \
-    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$manifest_install_suffix")' '$hogwild_home/$(dirname "$plugin_install_suffix")'"
+    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$manifest_install_suffix")' '$hogwild_home/$(dirname "$plugin_install_suffix")' '$hogwild_home/$(dirname "$github_install_suffix")' '$hogwild_home/.local/bin'"
   record_staged "$hogwild_home/.claude/CLAUDE.md.$stage_token"
   if ! scp "$local_staging/CLAUDE.md" "$hogwild_host:$hogwild_home/.claude/CLAUDE.md.$stage_token"; then
     fail 'Hogwild did not receive Claude instructions.'

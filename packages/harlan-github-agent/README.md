@@ -443,3 +443,30 @@ Issue work checks a definition's changed-path policy before committing.
 Agent feedback keeps its repository restriction and exact Skill target.
 [Sentry](https://sentry.io) keeps its required report and mode-specific resolution instructions.
 Dependency updates keep one combined Candidate and a shared open-issue fingerprint.
+
+
+## Public GitHub reads
+
+`pnpm sync:context` installs `agent-gh` for public GitHub reads.
+`pnpm sync:context:hogwild` installs it on Hogwild.
+Agents use `harlan-agent-beep` for these reads.
+The Service gives worker processes the same CLI as `gh`.
+The controller keeps its existing credentials and publication rules.
+
+Create a fine-grained token on `harlan-agent-beep`.
+Select **Public repositories** and add no account permissions.
+Save it in `~/.config/harlan-agent-kit/github-public-token` on each Agent host.
+Run `chmod 600` on that file.
+Never put the token in Git, Agent instructions, or repository environment files.
+
+Check the account with `agent-gh api user --jq .login`.
+Check its quota with `agent-gh api rate_limit`.
+Tokens on this account share its quota across hosts.
+
+The CLI permits read commands and REST `GET` requests.
+API fields keep `GET`, rather than changing the request to `POST`.
+Use `pr view`, `issue view`, or `search` instead of raw GraphQL.
+Missing credentials, denied access, and rate limits never select another account.
+
+The wrapper prevents accidental writes and credential selection.
+It does not isolate processes running under the same operating system account.
