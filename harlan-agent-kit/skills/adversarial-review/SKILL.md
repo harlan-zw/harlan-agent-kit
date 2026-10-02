@@ -11,15 +11,10 @@ Returning findings without confirming the status comment and matching Review out
 
 ## Worktree isolation
 
-Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Review may use it. Every Repair uses a task-owned worktree. Run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
-
-Keep Review read only. A separate fresh Repair Agent owns every permitted edit.
+Review stays read only and may use the primary checkout.
+A separate fresh Repair Agent owns every permitted edit.
+Before Repair, read and follow the [worktree isolation contract](../../references/worktree-isolation.md).
+Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary checkout read only.
 
 ## Load contracts
 

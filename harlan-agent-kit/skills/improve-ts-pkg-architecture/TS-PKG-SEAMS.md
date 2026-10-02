@@ -37,7 +37,7 @@ Each seam below has: **Shape** (what it looks like), **Use when** (the condition
 
 **Anti-pattern**: a workspace package with a single consumer "for future reuse" — pay the toolchain cost (tsconfig, vitest, build, version, release) when the second consumer arrives, not before. Until then, a subpath export suffices.
 
-**Anti-pattern 2**: workspace packages importing from each other via relative paths (`../../core/src/foo`). The other package's `exports` map IS its interface; reaching past it is a leak. Confirm with `npx -y @ripast/cli scan <symbol> --graph mermaid`.
+**Anti-pattern 2**: workspace packages importing from each other via relative paths (`../../core/src/foo`). The other package's `exports` map IS its interface; reaching past it is a leak. Confirm with `pnpm dlx @ripast/cli scan <symbol> --graph mermaid`.
 
 ## Catalogs (`pnpm-workspace.yaml` `catalogs:`)
 

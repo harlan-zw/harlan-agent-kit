@@ -15,10 +15,12 @@ git diff "$HASH" -- DESIGN.md | sed -n '/^---$/,/^---$/p'
 ## Structural + contrast lint (preferred)
 
 ```bash
-npx --yes @google/design.md lint DESIGN.md 2>/dev/null
+pnpm dlx @google/design.md lint DESIGN.md
 ```
 
-Parse the JSON. Hard rejects:
+Preserve stderr and check the exit status before parsing JSON.
+If the command fails without valid JSON, record the diagnostic and use the fallback below.
+Hard rejects:
 - any `severity: "error"` (broken refs, invalid hex, section-order violations)
 - contrast-ratio warnings on `components.*` pairs below 4.5:1, unless the decisions log explicitly accepts that pairing (e.g. "button-primary contrast 3.96:1 accepted: large text only, signature purple is theme-defining")
 

@@ -380,7 +380,8 @@ Workers must not use `gh` to post, push, approve, merge, label, close, reopen, o
 
 Never approve a pull request. Merge only through `take-ownership` with explicit authority recorded for the exact revision.
 
-Allow direct default branch repair only through `take-ownership`. This applies only to eligible personal site repositories.
+Every default branch repair uses a focused pull request through `pr`. Never push directly to the default branch.
+Use `take-ownership` to follow the original delivery target and its repair.
 
 Self-identify every automated GitHub comment. Keep comments to the minimum required by the linked contract.
 

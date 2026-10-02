@@ -11,13 +11,9 @@ Turn the owned PR backlog into a ranked merge queue. Never merge.
 
 ## Worktree isolation
 
-Before repair edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Discovery stays read only and may use the primary checkout. Every Repair uses a task-owned worktree. Run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+Discovery stays read only and may use the primary checkout.
+Before Repair, read and follow the [worktree isolation contract](../../references/worktree-isolation.md).
+Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary checkout read only.
 
 ## Load contracts
 
@@ -49,15 +45,15 @@ Treat one trusted marked comment for the current head commit as the active revie
 
 For a personal repository mapped under `~/sites`, use `take-ownership` by convention unless repository policy or the user disables it. Other PRs stop after adversarial review.
 
-Continue to the next PR after a confirmed `READY`, `WAITING`, or `BLOCKED` status. Preserve exact failure evidence.
+Continue to the next PR after a confirmed `READY`, `PENDING`, or `BLOCKED` status. Preserve exact failure evidence.
 
-Finish repairs across the backlog, then revisit `WAITING` pull requests once. Never sign off a stale SHA.
+Finish repairs across the backlog, then revisit `PENDING` pull requests once. Never sign off a stale SHA.
 
 When required CI also fails on the current base of an owned repository, dispatch one focused baseline repair worker. Open its repair pull request, link it from the original PR status, and revisit the original after merge.
 
 ## Return the merge queue
 
-List `READY` pull requests first, sorted by confidence. Then list `WAITING` and
+List `READY` pull requests first, sorted by confidence. Then list `PENDING` and
 `BLOCKED` pull requests without confidence scores.
 
 ```text

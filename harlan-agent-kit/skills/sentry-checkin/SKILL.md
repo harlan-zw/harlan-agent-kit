@@ -12,13 +12,9 @@ The controller supplies one repository, its prepared worktree, the Routine run I
 
 ## Worktree isolation
 
-Before site edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep each primary site checkout read only. Run `wt list --format=json`. Reuse a worktree only when it belongs to the same frozen site task. Otherwise create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+Before site edits, read and follow the [worktree isolation contract](../../references/worktree-isolation.md).
+Reuse a worktree only for the same frozen site task.
+Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary checkout read only.
 
 ## Load the contracts
 

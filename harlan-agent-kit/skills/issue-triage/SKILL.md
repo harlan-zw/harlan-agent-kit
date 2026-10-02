@@ -9,13 +9,9 @@ Triage all open issues and rank by difficulty/impact.
 
 ## Worktree isolation
 
-Before follow-on edits, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Triage stays read only and may use the primary checkout. Every follow-on implementation uses a task-owned worktree. Run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command.
+Triage stays read only and may use the primary checkout.
+Before follow-on implementation, read and follow the [worktree isolation contract](../../references/worktree-isolation.md).
+Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary checkout read only.
 
 ## Gotchas
 
@@ -52,9 +48,12 @@ On subsequent runs, read the log and highlight what changed since last triage.
    ```
 
 3. **Parallel batch analysis**
-   Split issues into batches of 10 and spawn parallel `haiku` classification agents (one per batch). Classification is cheap, mechanical extraction — `haiku` is the right tier. If <=10 issues, use a single agent.
+   Split issues into batches of 10. This Skill permits read-only classification and verification delegation.
+   Use the active provider's available agent tools and configured model policy. Do not require a specific model or orchestration tool.
+   Bound parallel work by available slots. If delegation is unavailable, process the batches sequentially in this Agent.
 
-   For a large backlog (50+ issues), drive this with the **Workflow tool**: `pipeline` the batches through a classify stage (schema below) then a verify stage, so the schema is enforced and the verify pass runs per batch as it completes. This skill's instructions are the opt-in.
+   For 50+ issues, classify and verify each batch before combining results.
+   Keep the same schema and verification stages in both parallel and sequential execution.
 
    See [references/heuristics.md](references/heuristics.md) for the full difficulty/impact scales and signal weighting.
 
@@ -65,7 +64,10 @@ On subsequent runs, read the log and highlight what changed since last triage.
 
 4. **Merge results** from all agents into unified list.
 
-5. **Adversarially verify the candidate quick wins.** A wrong "difficulty 1, impact 4" recommendation costs the user a wasted worktree, so before presenting, spawn a `haiku` verifier per issue scored difficulty 1-2 AND impact 3+. Prompt it to *refute* the score: "Read issue #N. Is this genuinely a <=2-difficulty change with 3+ impact, or is there hidden scope (migration, API surface, cross-cutting state)? Default to downgrading if uncertain." Demote any issue the verifier refutes. Skip this pass for backlogs where no issue clears the quick-win bar.
+5. **Adversarially verify the candidate quick wins.** Verify every issue scored difficulty 1-2 AND impact 3+ before presenting.
+   Use a separate read-only verifier when available. Otherwise run a separate refutation pass in this Agent.
+   Ask it to refute the score: "Read issue #N. Does hidden scope invalidate this difficulty or impact score? Check migration, public API, and shared state. Downgrade uncertain scores."
+   Demote any issue the verifier refutes. Skip this pass only when no issue clears the quick-win bar.
 
 6. **Display table** sorted by: has repro (yes first), then impact/difficulty ratio (descending)
 

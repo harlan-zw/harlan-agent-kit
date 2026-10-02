@@ -12,13 +12,8 @@ Vocabulary, principles, and forbidden patterns live in their canonical files; th
 
 ## Worktree isolation
 
-Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Before mutation, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+Before any edit, read and follow the [worktree isolation contract](../../references/worktree-isolation.md).
+Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary checkout read only.
 
 ## Companion files
 
@@ -41,17 +36,17 @@ Opening pass — run before forming any candidate:
 
 | Command | What it surfaces |
 | --- | --- |
-| `npx -y @ripast/cli unused --tsconfig tsconfig.json --exports local` | Top-level declarations with zero project references → deletion-test slam-dunks |
-| `npx -y @ripast/cli tree --exports exported --tsconfig tsconfig.json` | Public surface per file → shallow modules + leaks (anything exported that isn't in the `exports` map is a confessed private leak) |
-| `npx -y @ripast/cli tree --exports local --tsconfig tsconfig.json` | Internals per file → locality opportunities |
+| `pnpm dlx @ripast/cli unused --tsconfig tsconfig.json --exports local` | Top-level declarations with zero project references → deletion-test slam-dunks |
+| `pnpm dlx @ripast/cli tree --exports exported --tsconfig tsconfig.json` | Public surface per file → shallow modules + leaks (anything exported that isn't in the `exports` map is a confessed private leak) |
+| `pnpm dlx @ripast/cli tree --exports local --tsconfig tsconfig.json` | Internals per file → locality opportunities |
 
 Per-candidate, before listing (`scan` is rg-driven — use `--glob` here):
 
 | Command | What it surfaces |
 | --- | --- |
-| `npx -y @ripast/cli scan <symbol> --glob ...` | Caller count + kind classification → drives deletion test + §2 thresholds |
-| `npx -y @ripast/cli scan <symbol> --kind identifier-reference,import-specifier --glob ...` | Same, minus string-literal noise |
-| `npx -y @ripast/cli scan <symbol> --graph mermaid --glob ...` | Importer graph → cross-package leaks (graph spanning `packages/a/src/` + `packages/b/src/` via deep import) |
+| `pnpm dlx @ripast/cli scan <symbol> --glob ...` | Caller count + kind classification → drives deletion test + §2 thresholds |
+| `pnpm dlx @ripast/cli scan <symbol> --kind identifier-reference,import-specifier --glob ...` | Same, minus string-literal noise |
+| `pnpm dlx @ripast/cli scan <symbol> --graph mermaid --glob ...` | Importer graph → cross-package leaks (graph spanning `packages/a/src/` + `packages/b/src/` via deep import) |
 
 Cite numbers when presenting.
 
@@ -74,7 +69,7 @@ Then use the Agent tool with `subagent_type=Explore` to walk the codebase. Note 
 - **Cross-package leaks** (monorepo) — relative or deep imports across workspace packages bypass the `exports` map. Detect with `scan <symbol> --graph mermaid` straddling two `packages/*`. See [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) `Workspace packages`.
 - **`exports` map leaks** — deep paths (`pkg/dist/internal/foo`) instead of declared subpaths. Either expose a subpath or stop the leak.
 - **Cross-module coupling that should flow through a hook bus** — two modules importing each other to coordinate, or fan-in to a coordinator module. `hookable` is the answer. Detect via two-way edges in `scan --graph mermaid`.
-- **Treeshake / bundle-size signals** — heavy SDK statically imported at module top when only one path uses it. Move the import inside the function, or behind a conditional export. Run `npx -y publint && npx -y @arethetypeswrong/cli --pack .` plus `du -sh dist/`.
+- **Treeshake / bundle-size signals** — heavy SDK statically imported at module top when only one path uses it. Move the import inside the function, or behind a conditional export. Run `pnpm dlx publint && pnpm dlx @arethetypeswrong/cli --pack .` plus `du -sh dist/`.
 - **Repeated import-time work** (regex/schema/table compilation) running whether the module is used or not. Move into a memoised getter inside the factory.
 
 ### 2. Present candidates
@@ -114,16 +109,16 @@ Side effects happen inline as decisions crystallize:
 - **Sharpening a fuzzy term during the conversation?** Update `GLOSSARY.md` right there.
 - **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing — skip ephemeral reasons ("not worth it right now") and self-evident ones. Write it to `docs/adr/NNNN-slug.md` with context, decision, and consequences.
 - **Want to explore alternative interfaces for the deepened module?** See [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md). Sub-agents are pre-seeded with TS-pkg-native shapes (single factory, factory + hook bus, subpath-exposed surface, ports & adapters) so the design space is grounded in what the ecosystem already offers.
-- **Need to know the true blast radius of a rename/move before committing?** `npx -y @ripast/cli scan <symbol>` (counts) or `npx -y @ripast/cli scan <symbol> --graph mermaid` (importer graph). Quote numbers before promising scope.
+- **Need to know the true blast radius of a rename/move before committing?** `pnpm dlx @ripast/cli scan <symbol>` (counts) or `pnpm dlx @ripast/cli scan <symbol> --graph mermaid` (importer graph). Quote numbers before promising scope.
 - **Decision crystallized into a concrete refactor?** Execute through ripast, not Edit. Pick the primitive:
 
   Pass `--tsconfig tsconfig.json` (or the per-package one) on `rename`, `move`, and `rename-file` so all callers are rewritten.
 
   | Refactor | Command |
   | --- | --- |
-  | Rename a symbol across files | `npx -y @ripast/cli rename <from> <to> --tsconfig tsconfig.json --apply` (add `--scope <file>` if multi-declared) |
-  | Move an exported declaration | `npx -y @ripast/cli move <symbol> --from <a> --to <b> --tsconfig tsconfig.json --apply` |
-  | Move a file (e.g. `src/utils/foo.ts` → `src/pipeline/foo.ts` to close a leak) | `npx -y @ripast/cli rename-file <old> <new> --tsconfig tsconfig.json --apply` |
+  | Rename a symbol across files | `pnpm dlx @ripast/cli rename <from> <to> --tsconfig tsconfig.json --apply` (add `--scope <file>` if multi-declared) |
+  | Move an exported declaration | `pnpm dlx @ripast/cli move <symbol> --from <a> --to <b> --tsconfig tsconfig.json --apply` |
+  | Move a file (e.g. `src/utils/foo.ts` → `src/pipeline/foo.ts` to close a leak) | `pnpm dlx @ripast/cli rename-file <old> <new> --tsconfig tsconfig.json --apply` |
 
   All mutating commands default to dry-run — preview the diff, then `--apply`. `--verify` (default on for `rename`/`move`) blocks the apply on new type diagnostics; fix them, never `--no-verify` past them. Edit is only correct for single-file or <5-match changes. ripast carries out the move; it does not justify the deepening.
 
