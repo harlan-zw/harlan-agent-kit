@@ -23,6 +23,8 @@ Resolve one current work item from the conversation and `$ARGUMENTS`.
 | Work has delivered and needs records or cleanup | Completion | Read [completion](references/completion.md). |
 
 Completion mode resolves remaining work before cleanup.
+For related gaps, opportunities, or improvements, use [i-dont-know-just-keep-working](../i-dont-know-just-keep-working/SKILL.md).
+For a bare "what's next", check required completion work before proposing expansion.
 If delivery remains required, follow the Delivery sections below, then return to the same completion ledger.
 Preserve the target, evidence, and original authority when changing modes.
 Do not restart target selection or create another watcher.
