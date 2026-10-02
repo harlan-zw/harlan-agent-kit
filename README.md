@@ -115,7 +115,6 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`adversarial-review`](./harlan-agent-kit/skills/adversarial-review/SKILL.md) | Review one PR adversarially, hand defects to Repair, publish the bot status |
 | [`agent-feedback`](./harlan-agent-kit/skills/agent-feedback/SKILL.md) | Improve one Agent Skill from explicit Review feedback |
 | [`browser`](./harlan-agent-kit/skills/browser/SKILL.md) | Select Chrome identities, use prompt-free debugging, and clean up task tabs |
-| [`close-off`](./harlan-agent-kit/skills/close-off/SKILL.md) | Finish loose ends, verify delivery, clean task-owned Git state |
 | [`content-refresh`](./harlan-agent-kit/skills/content-refresh/SKILL.md) | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks |
 | [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Review inbox email with [Himalaya](https://github.com/pimalaya/himalaya) and propose actions |
 | [`email-usage`](./harlan-agent-kit/skills/email-usage/SKILL.md) | Choose email addresses, Himalaya accounts, and mail permissions |
@@ -140,7 +139,7 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`seo-review`](./harlan-agent-kit/skills/seo-review/SKILL.md) | Triage a Site's NuxtSEO actions and repair the ones the code owns |
 | [`vitals-review`](./harlan-agent-kit/skills/vitals-review/SKILL.md) | File a Site's poor field vitals and persistent lab drops from NuxtSEO, then repair them |
 | [`sentry-checkin`](./harlan-agent-kit/skills/sentry-checkin/SKILL.md) | Triage open Sentry issues and repair them with verified PRs |
-| [`take-ownership`](./harlan-agent-kit/skills/take-ownership/SKILL.md) | Own current work through merge, CI, deploy, and smoke checks |
+| [`take-ownership`](./harlan-agent-kit/skills/take-ownership/SKILL.md) | Finish delivery, reconcile loose ends, and clean task-owned Git state |
 | [`ts-design-patterns`](./harlan-agent-kit/skills/ts-design-patterns/SKILL.md) | Apply the Effect-inspired TypeScript design principles |
 | [`tweet`](./harlan-agent-kit/skills/tweet/SKILL.md) | Find tweet ideas, plan launch posts, and draft tweets with visuals |
 | [`unit-tests`](./harlan-agent-kit/skills/unit-tests/SKILL.md) | Write or review unit tests through exported behavior |

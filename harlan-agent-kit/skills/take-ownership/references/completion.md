@@ -1,37 +1,8 @@
----
-name: close-off
-description: "Finish remaining task work, verify delivery, reconcile records, and safely clean task-owned worktrees and branches. Use after a merge or deploy, or when the user asks what remains, asks for follow-up, or says close off, wrap up, or finish up."
-user_invocable: true
-argument-hint: "[work item, pull request, or branch]"
----
+# Completion
 
-# Close Off
-
-Close one current work item completely.
-
-Finish required loose ends before reconciling records and cleaning task-owned state.
-
-## Use existing contracts
-
-Read these contracts completely when they apply:
-
-1. `../take-ownership/SKILL.md` for an open pull request, revision, delivery, release, or smoke path.
-2. `../pr/SKILL.md` when local changes need review or an existing pull request needs updates.
-3. `../adversarial-review/SKILL.md` before any readiness or merge decision.
-4. `../unit-tests/SKILL.md` before repairing behavior or validation.
-5. `../../references/worktree-isolation.md` before local mutation or cleanup.
-
-Use the matching domain skill for repairs. Do not copy loaded workflows here.
-
-## Authority
-
-Closing off authorizes safe cleanup of task-owned integrated Git state.
-
-This includes the exact merged pull request branch in an owned repository.
-
-It grants no merge, issue mutation, publication, or unrelated delivery authority.
-
-Existing user instructions can grant those actions for the current work item.
+Use this Reference after delivery or for a completion request.
+Load the applicable contracts listed in the parent Skill before mutation.
+Completion adds no merge or publication authority.
 
 ## 1. Fix the closure target
 
@@ -132,7 +103,8 @@ For task-owned local changes, separate exact paths from unknown work.
 
 Complete them, run applicable checks, then use `pr` when review is required.
 
-For an open pull request or revision, resume `take-ownership`.
+For an open pull request or revision, follow the parent Skill's Delivery sections.
+Keep this ledger and return here after the required delivery stages finish.
 
 For a merged pull request, verify its revision on the default branch.
 
@@ -212,7 +184,7 @@ Never switch or rewrite a checkout during cleanup.
 
 ## 8. Close with evidence
 
-Use one terminal state from `take-ownership`:
+Use one terminal state:
 
 1. `VERIFIED`: the intended result works and no actionable task-owned loose end remains.
 2. `BLOCKED`: progress needs new authority or external state. Name the blocker and next action.
