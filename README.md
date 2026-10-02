@@ -6,7 +6,7 @@
 
 <h1>harlan-agent-kit</h1>
 
-> 🤖 My agent kit for Nuxt and TypeScript work. 27 Skills, 8 hooks, and a service that works my [GitHub](https://github.com) repos on its own.
+> 🤖 My agent kit for Nuxt and TypeScript work. 36 Skills, 8 hooks, and a service that works my [GitHub](https://github.com) repos on its own.
 
 It installs as a [Claude Code](https://claude.com/code) plugin. Codex reads the
 same directory and picks up the Skills.
@@ -118,6 +118,7 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`content-refresh`](./harlan-agent-kit/skills/content-refresh/SKILL.md) | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks |
 | [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Review inbox email with [Himalaya](https://github.com/pimalaya/himalaya) and propose actions |
 | [`email-usage`](./harlan-agent-kit/skills/email-usage/SKILL.md) | Choose email addresses, Himalaya accounts, and mail permissions |
+| [`expand-work-scope`](./harlan-agent-kit/skills/expand-work-scope/SKILL.md) | Find related gaps, bugs, and improvements, then rank next steps by impact, effort, and confidence |
 | [`glossary`](./harlan-agent-kit/skills/glossary/SKILL.md) | Create or audit `GLOSSARY.md` and catch vocabulary drift |
 | [`harlan-github-agent`](./harlan-agent-kit/skills/harlan-github-agent/SKILL.md) | Drive or diagnose the local GitHub service |
 | [`humanize-writing`](./harlan-agent-kit/skills/humanize-writing/SKILL.md) | Strip AI tells from prose before it goes out |

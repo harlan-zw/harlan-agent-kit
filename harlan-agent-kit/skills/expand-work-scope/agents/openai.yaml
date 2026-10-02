@@ -1,0 +1,4 @@
+interface:
+  display_name: Expand Work Scope
+  short_description: Find and rank related gaps, bugs, and improvements
+  default_prompt: Use $expand-work-scope to inspect related gaps, opportunities, bugs, and improvements around this work. Challenge the findings, then rank next steps by impact, effort, and confidence. Preserve existing scope and action authority.
