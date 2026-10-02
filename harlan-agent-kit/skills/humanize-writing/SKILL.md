@@ -20,7 +20,7 @@ These are the well-known signatures. Fix them, but know they are the easy half.
 - **Em-dashes and hyphens-as-dashes** -- restructure with commas, semicolons, colons, or separate sentences.
 - **"It's not X, it's Y"** contrast pattern -- banned. State Y directly.
 - **Overused vocabulary** -- delve, tapestry, testament, realm, navigate, leverage, robust, seamless, crucial, vibrant, ever-evolving, "in today's fast-paced".
-- **Dead metaphors and stock phrases** -- figures of speech you're used to seeing in print: "game changer", "unlock the power of", "at the end of the day", "low-hanging fruit", "double-edged sword", "the landscape of". Say it plainly or find a fresh, specific image.
+- **Clichés and stock metaphors:** Never use them in your own prose. Examples: "game changer", "unlock the power of", "at the end of the day", "low-hanging fruit", "double-edged sword", "the landscape of". Prefer plain language. When a metaphor helps, create a fresh, specific image that fits the subject. Compare it with the plain version. Keep it only if it makes the point easier to understand. Remove it if it feels forced. Preserve the source meaning; never invent capabilities or evidence to make the rewrite concrete.
 - **Pompous diction** -- long or latinate word where a short one works: utilize (use), facilitate (help), commence (start), prior to (before), in order to (to), "a variety of" (give the number or drop it). Never a long word where a short one will do.
 - **Agentless passive** -- "it was decided", "mistakes can be made", "improvements were introduced". Name the actor when the actor matters.
 - **Padding constructions** -- "the fact that", "there is/are ... that", nominalizations ("perform an installation of" instead of "install"). If a word can be cut, cut it.
@@ -78,4 +78,4 @@ canonical assets, so it will sometimes paraphrase a tagline while genuinely impr
 
 ## Guardrail
 
-Break any rule above sooner than write something stilted. The goal is prose that reads human, and humans keep deliberate voice, rhythm, humor, and the occasional ornament. If a "tell" is doing real work (a metaphor that lands, a triple with punch), keep it and say why. Preserve the user's meaning, tone, and explicit constraints; never sand text into flat sameness.
+Break any rule above sooner than write something stilted, except the ban on clichés in your own prose. Preserve clichés in direct quotes or when the user explicitly requires the wording. The goal is prose that reads human, and humans keep deliberate voice, rhythm, humor, and the occasional ornament. If a "tell" is doing real work (a fresh metaphor that lands, a triple with punch), keep it and say why. Preserve the user's meaning, tone, and explicit constraints; never sand text into flat sameness.
