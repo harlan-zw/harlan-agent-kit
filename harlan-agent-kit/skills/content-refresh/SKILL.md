@@ -105,7 +105,7 @@ Change a reviewed parent for a foundation correction, not merely to append downs
 Do not add automatic merge labels to Skills or Agent instructions.
 
 Use [adversarial-review](../adversarial-review/SKILL.md) for final PR review.
-Use [take-ownership](../take-ownership/SKILL.md) for authorized delivery, then [close-off](../close-off/SKILL.md).
+Use [take-ownership](../take-ownership/SKILL.md) for authorized delivery and its Completion mode for remaining work and cleanup.
 Wait for CI using gh run watch or gh pr checks --watch, never sleep-based polling.
 
 Verify every published route, title, description, canonical, internal link, and downloadable example.
