@@ -12,6 +12,7 @@ export interface ReviewApproval {
   repository: string
   pullRequestNumber: number
   headSha: string
+  baseRef: string
   commentId: number
   beforeBody: string
   requestedBy: string
@@ -37,6 +38,19 @@ export function reviewApproval(event: string, payload: unknown): ReviewApproval 
     || after.replace(/^- \[[xX]\] Review and repair$/m, REVIEW_APPROVAL_CONTROL) !== before) {
     return null
   }
+  const encodedBranch = before.match(/^<!-- target-branch: (\S+) -->$/m)?.[1]
+  if (encodedBranch === undefined)
+    return null
+  let baseRef: string
+  try {
+    baseRef = decodeURIComponent(encodedBranch)
+  }
+  catch {
+    // A malformed branch marker is an invalid control, not an operational failure.
+    return null
+  }
+  if (baseRef.length === 0)
+    return null
   const headSha = automatedReviewHead(before)
   const repository = object(input.repository).full_name
   const issue = object(input.issue)
@@ -49,14 +63,14 @@ export function reviewApproval(event: string, payload: unknown): ReviewApproval 
     || typeof requestedBy !== 'string' || typeof commentAuthor !== 'string') {
     return null
   }
-  return { repository, pullRequestNumber: issue.number, headSha, commentId: comment.id, beforeBody: before, requestedBy, commentAuthor }
+  return { repository, pullRequestNumber: issue.number, headSha, baseRef, commentId: comment.id, beforeBody: before, requestedBy, commentAuthor }
 }
 
 /** Uses the same label path as manual Approval after checking the current prompt and GitHub head. */
 export async function applyReviewApproval(
   options: {
     github: ReviewApprovalSource
-    store: Pick<JournalStore, 'getApprovalPrompt' | 'hasPullRequestApproval'>
+    store: Pick<JournalStore, 'getApprovalPrompt' | 'hasPullRequestApproval' | 'recordReviewApprovalLabelIntent'>
   },
   repository: RepositoryMapping,
   request: ReviewApproval,
@@ -74,6 +88,8 @@ export async function applyReviewApproval(
     return ok(undefined)
   // The journal may advance while GitHub answers. Recheck before the write.
   if (options.store.getApprovalPrompt(request)?.revisionId !== prompt.revisionId)
+    return ok(undefined)
+  if (!options.store.recordReviewApprovalLabelIntent(request))
     return ok(undefined)
   return options.github.addApprovalLabel(repository, request.pullRequestNumber, APPROVAL_LABELS.review, signal)
 }

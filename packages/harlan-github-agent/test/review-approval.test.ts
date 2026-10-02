@@ -1,5 +1,8 @@
 import type { Octokit } from 'octokit'
 import { createHmac } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createApprovalController } from '../src/approval-controller.ts'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
@@ -12,14 +15,14 @@ import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const at = '2026-10-02T00:00:00.000Z'
 const headSha = 'a'.repeat(40)
-const before = `${AUTOMATED_REVIEW_MARKER}\n<!-- reviewed-sha: ${headSha} -->\n### 🤖 REVIEW PAUSED\n\n${REVIEW_APPROVAL_CONTROL}`
+const before = `${AUTOMATED_REVIEW_MARKER}\n<!-- reviewed-sha: ${headSha} -->\n<!-- target-branch: main -->\n### 🤖 REVIEW PAUSED\n\n${REVIEW_APPROVAL_CONTROL}`
 const checked = before.replace('- [ ]', '- [x]')
 function payload() {
   return { action: 'edited', repository: { full_name: 'harlan-zw/example' }, issue: { number: 24, pull_request: {} }, comment: { id: 42, body: checked, user: { login: 'harlan-github-agent[bot]' } }, changes: { body: { from: before } }, sender: { login: 'harlan-zw' } }
 }
 
-function fixture() {
-  const store = openJournalStore(':memory:')
+function fixture(path = ':memory:') {
+  const store = openJournalStore(path)
   const mapping = repositoryMapping()
   const subject = pullRequestItem({ author: 'contributor', headSha, mergeState: 'clean', baseRef: 'main' })
   store.syncRepositories([mapping], at)
@@ -121,10 +124,17 @@ it('starts one Review through a signed click and the existing label Approval pat
     tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
     createClient: () => ({ rest: {
       pulls: { get: async () => ({ data: { state: 'open', head: { sha: headSha }, base: { ref: 'main' } } }) },
-      issues: { addLabels: async (input: { labels: string[] }) => {
-        labels.push(...input.labels)
-        return { data: labels.map(name => ({ name })) }
-      } },
+      issues: {
+        removeLabel: async () => {
+          labels.splice(0)
+          return { data: [] }
+        },
+        get: async () => ({ data: { labels: labels.map(name => ({ name })) } }),
+        addLabels: async (input: { labels: string[] }) => {
+          labels.push(...input.labels)
+          return { data: labels.map(name => ({ name })) }
+        },
+      },
     } } as unknown as Octokit),
   })
   const secret = 'integration-secret'
@@ -137,11 +147,92 @@ it('starts one Review through a signed click and the existing label Approval pat
   const observed = store.recordObservation({ externalId: 'labelled', observedAt: at, source: 'poll', subject: { ...labelled, approvalLabels: ['review'] } })
   if (observed._tag === 'Conflict')
     throw new Error('Unexpected observation conflict.')
-  const controller = createApprovalController({ store, github: source, now: () => new Date(at) })
+  const controller = createApprovalController({ checkboxApprovals: store, store, github: source, now: () => new Date(at) })
   expect(await controller.reconcile(mapping, { ...labelled, approvalLabels: ['review'] }, observed.revisionId, new AbortController().signal)).toEqual(ok(undefined))
   await app.fetch(request())
-  expect(labels).toEqual(['harlan-agent-review'])
+  expect(labels).toEqual([])
   expect(store.claimNextAdversarialReviewTask('reviewer', at, 60000)?.kind).toBe('adversarial_review')
   expect(store.claimNextAdversarialReviewTask('second-reviewer', at, 60000)).toBeNull()
+  store.close()
+})
+
+it.each(['head', 'target branch'])('rejects a racing change to %s after the checkbox label write', async (changed) => {
+  const { store, mapping, subject } = fixture()
+  const next = { ...subject, ...(changed === 'head' ? { headSha: 'b'.repeat(40) } : { baseRef: 'next' }), approvalLabels: ['review'] as Array<'review'> }
+  const applied = await applyReviewApproval({ store, github: {
+    getPullRequestStatusIdentity: async () => ok(subject),
+    addApprovalLabel: async () => {
+      store.recordObservation({ externalId: 'racing-push', observedAt: at, source: 'poll', subject: next })
+      return ok(undefined)
+    },
+  } }, mapping, reviewApproval('issue_comment', payload())!, signalForTest())
+  expect(applied).toEqual(ok(undefined))
+  const revisionId = store.getDashboardSnapshot(at).items.find(item => item.number === 24)!.revisionId
+  const controller = createApprovalController({ checkboxApprovals: store, store, now: () => new Date(at), github: {
+    clearAgentLabels: async () => ok(undefined),
+    ensureApprovalLabel: async () => ok(undefined),
+    consumeApprovalLabel: async () => ok(undefined),
+    upsertReviewStatus: async () => ok({ commentId: 42, url: 'url' }),
+  } })
+  expect(await controller.reconcile(mapping, next, revisionId, signalForTest())).toEqual(ok(undefined))
+  expect(store.hasPullRequestApproval(mapping.github, 24, revisionId, 'review')).toBe(false)
+  store.close()
+})
+
+function signalForTest() {
+  return new AbortController().signal
+}
+
+it('keeps the checkbox head binding across a restart', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-approval-'))
+  const path = join(directory, 'journal.sqlite')
+  const { store } = fixture(path)
+  expect(store.recordReviewApprovalLabelIntent(reviewApproval('issue_comment', payload())!)).toBe(true)
+  store.close()
+  const reopened = openJournalStore(path)
+  expect(reopened.getReviewApprovalLabelIntent('harlan-zw/example', 24)).toEqual({ headSha, baseRef: 'main' })
+  reopened.close()
+  rmSync(directory, { recursive: true, force: true })
+})
+
+it('finishes earlier checkbox label writes before consuming the label', async () => {
+  const labels: string[] = []
+  const writes: string[] = []
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const source = createGitHubAgentSource({
+    ownAppId: 98114,
+    actorLogin: () => 'harlan-github-agent[bot]',
+    tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    createClient: () => ({ rest: { issues: {
+      addLabels: async () => {
+        writes.push('add')
+        started.resolve()
+        await release.promise
+        labels.push('harlan-agent-review')
+        return { data: labels.map(name => ({ name })) }
+      },
+      removeLabel: async () => {
+        writes.push('remove')
+        labels.splice(0)
+        return { data: [] }
+      },
+      get: async () => ({ data: { labels: labels.map(name => ({ name })) } }),
+    } } } as unknown as Octokit),
+  })
+  const added = source.addApprovalLabel(repositoryMapping(), 24, 'harlan-agent-review', signalForTest())
+  await started.promise
+  const consumed = source.consumeApprovalLabel(repositoryMapping(), 'pull_request', 24, 'harlan-agent-review', signalForTest())
+  release.resolve()
+  expect(await added).toEqual(ok(undefined))
+  expect(await consumed).toEqual(ok(undefined))
+  expect(writes).toEqual(['add', 'remove'])
+  expect(labels).toEqual([])
+})
+
+it('rejects the old branch marker when the journal carries its prompt to a retargeted head', () => {
+  const { store, subject } = fixture()
+  store.recordObservation({ externalId: 'retarget', observedAt: at, source: 'poll', subject: { ...subject, baseRef: 'next' } })
+  expect(store.getApprovalPrompt(reviewApproval('issue_comment', payload())!)).toBeNull()
   store.close()
 })

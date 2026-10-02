@@ -599,6 +599,20 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         }).catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
   }
 
+  const approvalLabelWrites = new Map<string, Promise<void>>()
+  const serializeApprovalLabel = (repository: string, number: number, write: () => Promise<Result<void, string>>): Promise<Result<void, string>> => {
+    const key = `${repository.toLowerCase()}:${number}`
+    const active = (approvalLabelWrites.get(key) ?? Promise.resolve()).then(write)
+    // Each caller receives its failure. A failed write must release the queue.
+    const settled = active.then(() => undefined, () => undefined)
+    approvalLabelWrites.set(key, settled)
+    void settled.then(() => {
+      if (approvalLabelWrites.get(key) === settled)
+        approvalLabelWrites.delete(key)
+    })
+    return active
+  }
+
   return {
     async findOpenPullRequestForBranch(repository, headRef, signal) {
       const octokit = await client(repository.github, 'read', signal)
@@ -661,22 +675,24 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async consumeApprovalLabel(repository, _subjectKind, itemNumber, label, signal) {
-      const octokit = await client(repository.github, 'item_write', signal)
-      if (octokit._tag === 'Err')
-        return octokit
-      const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, issue_number: itemNumber, request: { signal } }
-      const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
-        .then((): Result<void, string> => ok(undefined))
-        .catch((error: unknown): Result<void, string> => err(message(error)))
-      const current = await octokit.value.rest.issues.get(request)
-        .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
-        .catch((error: unknown): Result<string[], string> => err(message(error)))
-      if (current._tag === 'Err')
-        return current
-      if (current.value.some(value => value.toLowerCase() === label.toLowerCase()))
-        return removed._tag === 'Err' ? removed : err(`GitHub did not remove the ${label} label.`)
-      return ok(undefined)
+      return serializeApprovalLabel(repository.github, itemNumber, async () => {
+        const octokit = await client(repository.github, 'item_write', signal)
+        if (octokit._tag === 'Err')
+          return octokit
+        const { owner, repo } = repositoryParts(repository.github)
+        const request = { owner, repo, issue_number: itemNumber, request: { signal } }
+        const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
+          .then((): Result<void, string> => ok(undefined))
+          .catch((error: unknown): Result<void, string> => err(message(error)))
+        const current = await octokit.value.rest.issues.get(request)
+          .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
+          .catch((error: unknown): Result<string[], string> => err(message(error)))
+        if (current._tag === 'Err')
+          return current
+        if (current.value.some(value => value.toLowerCase() === label.toLowerCase()))
+          return removed._tag === 'Err' ? removed : err(`GitHub did not remove the ${label} label.`)
+        return ok(undefined)
+      })
     },
 
     async clearAgentLabels(repository, pullRequestNumber, signal) {
@@ -847,15 +863,17 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async addApprovalLabel(repository, pullRequestNumber, label, signal) {
-      const octokit = await client(repository.github, 'item_write', signal)
-      if (octokit._tag === 'Err')
-        return octokit
-      const { owner, repo } = repositoryParts(repository.github)
-      return octokit.value.rest.issues.addLabels({ owner, repo, issue_number: pullRequestNumber, labels: [label], request: { signal } })
-        .then(({ data }) => data.some(value => value.name.toLowerCase() === label.toLowerCase())
-          ? ok(undefined)
-          : err(`GitHub did not confirm the ${label} label.`))
-        .catch((error: unknown) => err(message(error)))
+      return serializeApprovalLabel(repository.github, pullRequestNumber, async () => {
+        const octokit = await client(repository.github, 'item_write', signal)
+        if (octokit._tag === 'Err')
+          return octokit
+        const { owner, repo } = repositoryParts(repository.github)
+        return octokit.value.rest.issues.addLabels({ owner, repo, issue_number: pullRequestNumber, labels: [label], request: { signal } })
+          .then(({ data }) => data.some(value => value.name.toLowerCase() === label.toLowerCase())
+            ? ok(undefined)
+            : err(`GitHub did not confirm the ${label} label.`))
+          .catch((error: unknown) => err(message(error)))
+      })
     },
 
     async ensureApprovalLabel(repository, label, signal) {

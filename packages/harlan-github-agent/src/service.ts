@@ -333,6 +333,17 @@ export function createExternalWatchReload(options: ExternalWatchReloadOptions): 
   }
 }
 
+/** Signed human controls need Harlan's login even when every repository uses the App. */
+export function serviceNeedsUserLogin(
+  config: Pick<ValidatedAgentConfig, 'webhook' | 'mutationsEnabled' | 'releaseDefaults' | 'repositories'>,
+  userRepositoryCount: number,
+  webhookSecret?: string,
+): boolean {
+  return userRepositoryCount > 0 || config.releaseDefaults !== undefined
+    || config.repositories.some(repository => repository.release !== undefined)
+    || (config.mutationsEnabled && config.webhook._tag !== 'Disabled' && webhookSecret !== undefined)
+}
+
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
   const now = options.now ?? (() => new Date())
   const agentContext = await loadAgentContext(defaultAgentContextPaths())
@@ -364,8 +375,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // ones that do not need it keep working.
   // Package releases need the login as well. Only Harlan grants release
   // authority, and a release with the user credential writes as him.
-  const needsUserLogin = userRepositories.length > 0 || options.config.releaseDefaults !== undefined
-    || options.config.repositories.some(repository => repository.release !== undefined)
+  const needsUserLogin = serviceNeedsUserLogin(options.config, userRepositories.length, options.webhookSecret)
   const resolvedLogin = needsUserLogin
     ? await resolveUserLogin(userAccess, options.logger)
     : { _tag: 'Ok' as const, value: AGENT_ACTOR_LOGIN }
@@ -373,7 +383,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const userLogin = resolvedLogin._tag === 'Ok' ? resolvedLogin.value : AGENT_ACTOR_LOGIN
   const userLoginKnown = needsUserLogin && resolvedLogin._tag === 'Ok'
   if (resolvedLogin._tag === 'Err') {
-    options.logger.error(`The GitHub CLI could not name its account, so ${userRepositories.length} repositories that need it stay untracked this run, and package releases stay off: ${resolvedLogin.error}`)
+    options.logger.error(`The GitHub CLI could not name its account: ${resolvedLogin.error}. Repositories that need its identity stay untracked. Human checkbox controls and package releases stay off.`)
   }
   if (activeUserRepositories.length > 0)
     options.logger.info(`${activeUserRepositories.length} repositories answer to @${userLogin} because the GitHub App is not installed: ${activeUserRepositories.map(repository => repository.github).join(', ')}.`)
@@ -809,7 +819,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     }
     return {
       approvals: createApprovalController({
-        reviewApprovalControls: () => releaseWebhookReady,
+        reviewApprovalControls: () => releaseWebhookReady && userLoginKnown,
+        checkboxApprovals: store,
         github: workerGithub,
         now,
         store,
@@ -1610,7 +1621,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             allowedAuthor: userLogin,
             actorLogin: (name) => {
               const repository = config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase())
-              return repository === undefined || !repository.enabled || !config.mutationsEnabled || !repository.pullRequestReview || !store.mayWriteRepository(repository.github)
+              return repository === undefined || !userLoginKnown || !repository.enabled || !config.mutationsEnabled || !repository.pullRequestReview || !store.mayWriteRepository(repository.github)
                 ? null
                 : actorLogin(repository)
             },

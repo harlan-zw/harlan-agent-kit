@@ -32,6 +32,8 @@ Replace that route label with exactly one Review outcome label when Review finis
 Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review.
 If signed webhooks are ready, offer `Review and repair` in the paused comment.
 Only Harlan's isolated checkbox click adds that label.
+Store its exact head and target branch before adding it.
+Consume a checkbox-added label once. Reject it if the head or target branch changed.
 Match the recorded comment, current head commit, and target branch before adding it.
 Reject clicks from other accounts and stale or modified comments.
 Bind Approval to the exact head commit; never let the label approve a head commit twice.

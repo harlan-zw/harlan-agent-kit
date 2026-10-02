@@ -1067,6 +1067,9 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   hasApprovalPromptComment: (repository: string, pullRequestNumber: number, revisionId: string) => boolean
   /** Matches a checkbox click to the canonical prompt for the current open Revision. */
   getApprovalPrompt: (request: ReviewApproval) => { revisionId: string, baseRef: string } | null
+  recordReviewApprovalLabelIntent: (request: ReviewApproval) => boolean
+  getReviewApprovalLabelIntent: (repository: string, pullRequestNumber: number) => { headSha: string, baseRef: string } | null
+  clearReviewApprovalLabelIntent: (repository: string, pullRequestNumber: number, headSha: string, baseRef: string) => void
   /** Records the Queue position this service published on the canonical comment. */
   recordQueuedReviewStatus: (input: {
     taskId: string
@@ -6876,7 +6879,18 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${loggedFindingSchema} PRAGMA user_version = 82;`)
     version = 82
   }
-  if (version === 82)
+  if (version === 82) {
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS review_approval_label_intents (
+        subject_id INTEGER PRIMARY KEY REFERENCES subjects(id),
+        head_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL
+      );
+      PRAGMA user_version = 83;
+    `)
+    version = 83
+  }
+  if (version === 83)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -13695,9 +13709,42 @@ export function openJournalStore(
     WHERE repositories.github = ? COLLATE NOCASE AND subjects.github_number = ? AND subjects.kind = 'pull_request'
       AND prompt.revision_id = revisions.id AND prompt.github_comment_id = ? AND prompt.body = ?
       AND json_extract(revisions.payload, '$.headSha') = ?
+      AND json_extract(revisions.payload, '$.baseRef') = ?
       AND json_extract(revisions.payload, '$.state') = 'open'
       AND repositories.enabled = 1 AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-  `).get(request.repository, request.pullRequestNumber, request.commentId, request.beforeBody, request.headSha) as { revisionId: string, baseRef: string } | undefined) ?? null
+  `).get(request.repository, request.pullRequestNumber, request.commentId, request.beforeBody, request.headSha, request.baseRef) as { revisionId: string, baseRef: string } | undefined) ?? null
+
+  const recordReviewApprovalLabelIntent: JournalStore['recordReviewApprovalLabelIntent'] = (request) => {
+    const prompt = getApprovalPrompt(request)
+    if (prompt === null)
+      return false
+    const result = database.prepare(`
+      INSERT INTO review_approval_label_intents (subject_id, head_sha, base_ref)
+      SELECT subjects.id, ?, ? FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? COLLATE NOCASE AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND subjects.current_revision_id = ?
+      ON CONFLICT (subject_id) DO UPDATE SET head_sha = excluded.head_sha, base_ref = excluded.base_ref
+    `).run(request.headSha, prompt.baseRef, request.repository, request.pullRequestNumber, prompt.revisionId)
+    return result.changes > 0
+  }
+
+  const getReviewApprovalLabelIntent: JournalStore['getReviewApprovalLabelIntent'] = (repository, number) => (database.prepare(`
+    SELECT intents.head_sha AS headSha, intents.base_ref AS baseRef
+    FROM review_approval_label_intents AS intents
+    JOIN subjects ON subjects.id = intents.subject_id
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+  `).get(repository, number) as { headSha: string, baseRef: string } | undefined) ?? null
+
+  const clearReviewApprovalLabelIntent: JournalStore['clearReviewApprovalLabelIntent'] = (repository, number, headSha, baseRef) => {
+    database.prepare(`
+      DELETE FROM review_approval_label_intents WHERE head_sha = ? AND base_ref = ? AND subject_id IN (
+        SELECT subjects.id FROM subjects JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+      )
+    `).run(headSha, baseRef, repository, number)
+  }
 
   const recordApprovalPromptComment: JournalStore['recordApprovalPromptComment'] = (input) => {
     const subject = database.prepare(`
@@ -15798,6 +15845,9 @@ export function openJournalStore(
     listActiveTaskLeases,
     listRunningTaskItems,
     listQueuedReviewStatuses,
+    recordReviewApprovalLabelIntent,
+    getReviewApprovalLabelIntent,
+    clearReviewApprovalLabelIntent,
     getApprovalPrompt,
     hasApprovalPromptComment,
     recordApprovalPromptComment,

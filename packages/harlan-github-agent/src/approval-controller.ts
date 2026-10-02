@@ -15,12 +15,13 @@ export interface ApprovalControllerOptions {
   github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
   now: () => Date
   reviewApprovalControls?: () => boolean
+  checkboxApprovals?: Pick<JournalStore, 'getReviewApprovalLabelIntent' | 'clearReviewApprovalLabelIntent'>
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'getSelectionMode' | 'hasApprovalPromptComment' | 'hasPullRequestApproval' | 'isIssueApprovalPending' | 'recordApprovalPromptComment'>
 }
 
-function approvalPrompt(label: string, headSha: string, controls: boolean): string {
+function approvalPrompt(label: string, headSha: string, baseRef: string | undefined, controls: boolean): string {
   return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
+<!-- reviewed-sha: ${headSha} -->${baseRef === undefined ? '' : `\n<!-- target-branch: ${encodeURIComponent(baseRef)} -->`}
 ### 🤖 REVIEW PAUSED
 
 ${automatedDisclosure({ kind: 'status' })}
@@ -28,7 +29,7 @@ ${automatedDisclosure({ kind: 'status' })}
 This pull request is from an outside contributor.
 
 Add the \`${label}\` label to approve automated review and verified repairs.
-Approval covers head commit \`${headSha.slice(0, 12)}\`.${controls ? `\n\n${REVIEW_APPROVAL_CONTROL}\n\nOnly Harlan's click starts work. It adds the \`${label}\` label.` : ''}`
+Approval covers head commit \`${headSha.slice(0, 12)}\`.${controls && baseRef !== undefined ? `\n\n${REVIEW_APPROVAL_CONTROL}\n\nOnly Harlan's click starts work. It adds the \`${label}\` label.` : ''}`
 }
 
 export function createApprovalController(options: ApprovalControllerOptions): ApprovalController {
@@ -59,6 +60,17 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
       const manualSelection = options.store.getSelectionMode() === 'manual'
       if (!repository.enabled || !repository.pullRequestReview || (trustedAuthor && !manualSelection))
         return ok(undefined)
+      const checkbox = options.checkboxApprovals?.getReviewApprovalLabelIntent(repository.github, pullRequest.number)
+      if (checkbox !== undefined && checkbox !== null && pullRequest.approvalLabels.includes('review')) {
+        // Consume the checkbox label before any Approval. It can never carry
+        // a click to a contributor's next head or a different target branch.
+        const consumed = await options.github.consumeApprovalLabel(repository, 'pull_request', pullRequest.number, APPROVAL_LABELS.review, signal)
+        if (consumed._tag === 'Err')
+          return consumed
+        options.checkboxApprovals?.clearReviewApprovalLabelIntent(repository.github, pullRequest.number, checkbox.headSha, checkbox.baseRef)
+        if (checkbox.headSha !== pullRequest.headSha || checkbox.baseRef !== pullRequest.baseRef)
+          return ok(undefined)
+      }
       if (options.store.hasPullRequestApproval(repository.github, pullRequest.number, revisionId, 'review'))
         return ok(undefined)
 
@@ -88,7 +100,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
           if (cleared._tag === 'Err')
             return cleared
         }
-        const body = approvalPrompt(label, pullRequest.headSha, options.reviewApprovalControls?.() === true)
+        const body = approvalPrompt(label, pullRequest.headSha, pullRequest.baseRef, options.reviewApprovalControls?.() === true)
         const posted = await options.github.upsertReviewStatus(repository, pullRequest.number, null, body, false, signal)
         if (posted._tag === 'Err')
           return posted
