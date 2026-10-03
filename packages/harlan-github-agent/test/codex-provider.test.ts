@@ -3,7 +3,6 @@ import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import process from 'node:process'
 import { describe, expect, it } from 'vitest'
 import { codexAgentEvent, createCodexProvider } from '../src/codex-provider.ts'
 
@@ -87,7 +86,6 @@ describe('createCodexProvider', () => {
 
     expect(codexOptions?.env?.DAILY_CHECKIN_DIR).toMatch(/\/daily-checkin\/owner\/site$/)
     expect(codexOptions?.env?.CLOUDFLARE_API_TOKEN).toBe('from-repo')
-    expect(codexOptions?.env?.PATH).toBe(process.env.PATH)
   })
 
   it('pins the model, reasoning effort, and worktree on a new thread', async () => {

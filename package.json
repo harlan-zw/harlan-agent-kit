@@ -28,7 +28,7 @@
     "test:context": "bash scripts/sync-agent-context.test.sh",
     "test:commit-hook": "bash scripts/commit-msg-hook.test.sh",
     "test:himalaya": "bash scripts/himalaya-read-only.test.sh",
-    "test:service": "bash scripts/service.test.sh && bash scripts/repository-env.test.sh && bash scripts/worktrunk-config.test.sh && bash scripts/worktrunk-pre-switch.test.sh && bash scripts/worktree-sweep.test.sh && bash scripts/worktree-sweep-service.test.sh && bash scripts/hogwild-service.test.sh",
+    "test:service": "bash scripts/service.test.sh && bash scripts/repository-env.test.sh && bash scripts/worktrunk-config.test.sh && bash scripts/worktrunk-pre-switch.test.sh && pnpm exec vitest run scripts/worktrunk-state.test.ts && bash scripts/worktree-sweep.test.sh && bash scripts/worktree-sweep-service.test.sh && bash scripts/hogwild-service.test.sh",
     "test:worktree-claim": "bash harlan-agent-kit/scripts/worktree-claim.test.sh",
     "test:pr-skill-only": "bash harlan-agent-kit/hooks/pr-skill-only.test.sh",
     "test:wt-only": "bash harlan-agent-kit/hooks/wt-only.test.sh",
