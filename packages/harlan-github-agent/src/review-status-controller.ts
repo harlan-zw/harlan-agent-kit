@@ -26,9 +26,9 @@ export interface ReviewStatusControllerOptions {
   /** Mirrors each Review publication onto the Review check run. Absent leaves the check run unwritten. */
   nativeReviews?: NativeReviewMirror
   checkRuns?: ReviewCheckRunMirror
-  commentControls?: boolean
+  commentControls?: (repository: string) => boolean
   loggedFindings?: Pick<JournalStore, 'decorateLoggedFindings'>
-  loggedFindingControls?: () => boolean
+  loggedFindingControls?: (repository: string) => boolean
   /** Puts each finding beside its code. Absent writes the canonical comment alone. */
   findingThreads?: ReviewFindingThreadMirror
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewStatusIdentitySource & ReviewPublicationSource & ExistingReviewLabelSource
@@ -385,7 +385,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
     replacePriorReview: boolean,
     signal: AbortSignal,
   ): Promise<Result<PublishedReviewStatus, string>> {
-    if (options.commentControls && taskPhase.phase !== 'terminal')
+    if (options.commentControls?.(task.repository) && taskPhase.phase !== 'terminal')
       body += `\n\n${REVIEW_CANCEL_CONTROL}\n\nLeave unchecked to finish Review after merge.`
     const at = options.now().toISOString()
     const staged = options.store.stageReviewStatus({
@@ -417,7 +417,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
       )
     },
     stageTerminal(task, body, desiredOutcome, reviewRunId, gates) {
-      if (options.loggedFindingControls?.() && reviewRunId !== undefined && options.loggedFindings !== undefined)
+      if (options.loggedFindingControls?.(task.repository) && reviewRunId !== undefined && options.loggedFindings !== undefined)
         body = options.loggedFindings.decorateLoggedFindings(body, reviewRunId)
       const staged = options.store.stageReviewStatus({
         taskKind: 'adversarial_review',

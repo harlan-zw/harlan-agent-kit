@@ -68,10 +68,10 @@ describe('approval controller', () => {
     expect(body).toContain('head commit `abc123`')
   })
 
-  it.each([false, true])('offers Approval only when signed webhook controls are ready: %s', async (enabled) => {
+  it.each([false, true])('offers Approval only when this repository has signed webhook coverage: %s', async (enabled) => {
     let body = ''
     const controller = createApprovalController({
-      reviewApprovalControls: () => enabled,
+      reviewApprovalControls: repository => enabled && repository.github === repositoryMapping().github,
       github: {
         clearAgentLabels: () => Promise.resolve(ok(undefined)),
         consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label consumption.')),

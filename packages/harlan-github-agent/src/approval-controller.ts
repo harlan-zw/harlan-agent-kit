@@ -14,7 +14,7 @@ export interface ApprovalController {
 export interface ApprovalControllerOptions {
   github: Pick<GitHubAgentSource, 'clearAgentLabels' | 'consumeApprovalLabel' | 'ensureApprovalLabel' | 'upsertReviewStatus'>
   now: () => Date
-  reviewApprovalControls?: () => boolean
+  reviewApprovalControls?: (repository: RepositoryMapping) => boolean
   checkboxApprovals?: Pick<JournalStore, 'getReviewApprovalLabelIntent' | 'clearReviewApprovalLabelIntent'>
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'getSelectionMode' | 'hasApprovalPromptComment' | 'hasPullRequestApproval' | 'isIssueApprovalPending' | 'recordApprovalPromptComment'>
 }
@@ -100,7 +100,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
           if (cleared._tag === 'Err')
             return cleared
         }
-        const body = approvalPrompt(label, pullRequest.headSha, pullRequest.baseRef, options.reviewApprovalControls?.() === true)
+        const body = approvalPrompt(label, pullRequest.headSha, pullRequest.baseRef, options.reviewApprovalControls?.(repository) === true)
         const posted = await options.github.upsertReviewStatus(repository, pullRequest.number, null, body, false, signal)
         if (posted._tag === 'Err')
           return posted

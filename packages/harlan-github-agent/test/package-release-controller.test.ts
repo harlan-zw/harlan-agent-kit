@@ -22,17 +22,24 @@ function setup() {
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
   }
-  const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  const run = (webhookReady = true, commentControls = true) => reconcilePackageReleases({ webhookReady, commentControls, repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
   return { database, store, source, run, click }
 }
 
 describe('release controller', () => {
+  it('does not offer a release checkbox without repository comment delivery', async () => {
+    const task = setup()
+    await task.run(true, false)
+    expect(task.source.comment).not.toHaveBeenCalled()
+    expect(task.store.listPackageReleases(repository.github)).toEqual([])
+    task.database.close()
+  })
   it('finishes an authorized release across restarts without preparing twice', async () => {
     const task = setup()
     await task.run()
     expect(task.click()).toBe(true)
-    await task.run()
+    await task.run(true, false)
     expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Prepared')
     task.source.merge = vi.fn<PackageReleaseSource['merge']>(async () => ({ _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) }))
     await task.run()
@@ -108,7 +115,7 @@ it.each([
 ] as const)('offers a maintained repository release only with the %s credential opt in', async (credential, offers) => {
   const task = setup()
   const maintained = { ...repository, github: 'nuxt-modules/example', ownership: 'maintained' as const, release: { ...repository.release, credential: { _tag: credential } } }
-  await reconcilePackageReleases({ webhookReady: true, repository: maintained, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  await reconcilePackageReleases({ webhookReady: true, commentControls: true, repository: maintained, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   expect(task.source.comment).toHaveBeenCalledTimes(offers)
   task.database.close()
 })
