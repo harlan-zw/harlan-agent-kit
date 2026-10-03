@@ -10313,6 +10313,18 @@ export function openJournalStore(
         WHERE worker_tasks.state_tag = 'Failed'
           AND worker_tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM worker_tasks AS other
+            WHERE other.subject_id = worker_tasks.subject_id AND other.kind = worker_tasks.kind
+              AND other.id != worker_tasks.id
+              AND (
+                other.state_tag IN ('Queued', 'ActionRequired', 'Running')
+                OR (other.revision_id = worker_tasks.revision_id AND (
+                  other.updated_at > worker_tasks.updated_at
+                  OR (other.updated_at = worker_tasks.updated_at AND other.id > worker_tasks.id)
+                ))
+              )
+          )
           AND (
             (worker_tasks.kind = 'adversarial_review' AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1)
             OR (worker_tasks.kind = 'issue_triage' AND json_extract(repositories.policy_json, '$.issueWork') = 1)
@@ -10327,6 +10339,20 @@ export function openJournalStore(
         WHERE tasks.state_tag = 'Failed'
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          -- Recovery belongs to the newest attempt. Older failures remain history.
+          -- An active owner on any revision also holds this subject's work slot.
+          AND NOT EXISTS (
+            SELECT 1 FROM tasks AS other
+            WHERE other.subject_id = tasks.subject_id AND other.kind = tasks.kind
+              AND other.id != tasks.id
+              AND (
+                other.state_tag IN ('Queued', 'NeedsAttention', 'Running', 'Publishing')
+                OR (other.revision_id = tasks.revision_id AND (
+                  other.updated_at > tasks.updated_at
+                  OR (other.updated_at = tasks.updated_at AND other.id > tasks.id)
+                ))
+              )
+          )
           -- Approved issue work whose scope moved needs fresh triage before it
           -- runs again, which the issue scope pass below arranges. A plain
           -- requeue here would skip that and work against the old approval.
