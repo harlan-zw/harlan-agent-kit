@@ -90,6 +90,7 @@ import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
+import { createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
 import { agentWorktreeLeaseKey, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createReviewFixWorktreeManager, sweepAgentWorktrees } from './worktree.ts'
@@ -416,6 +417,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort)
   let releaseWebhookReady = false
+  const webhookControls = createWebhookControls({
+    ready: () => releaseWebhookReady && userLoginKnown && config.triggers.includes('github'),
+  })
   const processId = randomUUID()
   const restartController = createRestartController({
     store,
@@ -761,9 +765,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       },
       checkRuns: { publisher: workerGithub, report: reportCheckRun },
       findingThreads,
-      commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
+      commentControls: webhookControls.available,
       loggedFindings: store,
-      loggedFindingControls: () => releaseWebhookReady,
+      loggedFindingControls: webhookControls.available,
       github: workerGithub,
       leaseMilliseconds: 2 * 60_000,
       now,
@@ -819,7 +823,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     }
     return {
       approvals: createApprovalController({
-        reviewApprovalControls: () => releaseWebhookReady && userLoginKnown,
+        reviewApprovalControls: repository => webhookControls.available(repository.github),
         checkboxApprovals: store,
         github: workerGithub,
         now,
@@ -1296,6 +1300,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               await reconcilePackageReleases({
                 repository,
                 webhookReady: releaseWebhookReady,
+                commentControls: webhookControls.available(repository.github),
                 store,
                 now: () => now().getTime(),
                 signal,
@@ -1591,7 +1596,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         app: createWebhookApp({
           allowedOwners: config.github.allowedOwners,
           logger: { info: message => options.logger.info(message) },
-          onHint: (repository) => {
+          onHint: (repository, event) => {
+            webhookControls.observe(repository, event)
             const name = repository.toLowerCase()
             if (repositoryPollers.has(name))
               reconcileHint.hint(name)

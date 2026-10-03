@@ -147,7 +147,7 @@ export function createReconcileHint(options: ReconcileHintOptions): ReconcileHin
 export interface WebhookAppOptions {
   allowedOwners: readonly string[]
   logger: { info: (message: string) => void }
-  onHint: (repository: string) => void
+  onHint: (repository: string, event: string) => void
   reviewApproval?: {
     allowedAuthor: string
     actorLogin: (repository: string) => string | null
@@ -254,7 +254,7 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         options.reviewCancellation.apply({ ...cancellation, requestId: delivery })
       }
       options.logger.info(`Webhook: ${name} on ${hint.repository}.`)
-      options.onHint(hint.repository)
+      options.onHint(hint.repository, name)
     }
     // Record only accepted deliveries. Polling recovers work after a restart.
     if (deliveries.size >= maximumDeliveries) {
