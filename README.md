@@ -120,9 +120,11 @@ Service updates run the same restore before starting workers on either host.
 | `write-human` | Edit prose while preserving facts and voice. Replaces `humanize-writing`. |
 | `technical-guide` | Research and verify individual technical articles. |
 | `agentify-text` | Compress agent text while preserving its meaning. |
+| `pull-request-summary` | Check PR description text before personal `pr` publishes it. |
 
 [`brundlefly.json`](./harlan-agent-kit/brundlefly.json) selects the exact source commit and Skills.
-Brundlefly's general `pr` Skill is excluded. Personal `pr` owns Hooks, Review, and Service policy here.
+Personal `pr` calls Brundlefly `pull-request-summary` for its description gate.
+Personal `pr` owns Hooks, publication, Review, and Service policy.
 `content-refresh` coordinates collections and uses `technical-guide` for each technical article.
 
 | Skill | Description |

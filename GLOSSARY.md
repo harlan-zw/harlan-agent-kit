@@ -89,7 +89,7 @@ more Skills share it.
 
 ### Brundlefly
 **Is:** the separate collection that owns portable Skills used by Harlan Agent Kit.
-**Use for:** `write-human`, `technical-guide`, `agentify-text`, and their pinned source in `harlan-agent-kit/brundlefly.json`.
+**Use for:** `write-human`, `technical-guide`, `agentify-text`, `pull-request-summary`, and their pinned source in `harlan-agent-kit/brundlefly.json`.
 **Never:** a second personal Plugin or a copy of personal host policy.
 **Casing:** `Brundlefly` in prose, `brundlefly` in paths.
 

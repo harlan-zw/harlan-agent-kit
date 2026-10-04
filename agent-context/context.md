@@ -187,6 +187,6 @@ Every commit subject follows Conventional Commits: `type(scope): description`.
 ## Reference material
 
 Personal rubrics and procedures live in `~/pkg/harlan-agent-kit/harlan-agent-kit/skills/*/SKILL.md`.
-Brundlefly owns `write-human`, `technical-guide`, and `agentify-text`, installed through `pnpm sync:skills` in Harlan Agent Kit.
+Brundlefly owns `write-human`, `technical-guide`, `agentify-text`, and `pull-request-summary`, installed through `pnpm sync:skills` in Harlan Agent Kit.
 Use personal `pr` for delivery. Its Hooks and Service policy take precedence over general pull request guidance.
 Load the installed Skill that matches the task. Trust its file, not memory.

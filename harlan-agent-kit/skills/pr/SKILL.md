@@ -132,31 +132,31 @@ Reproduce that block character for character, including every emoji. Do not rest
 
 Add `### ⚠️ Breaking Changes` and `### 📝 Migration` only when the change actually breaks or needs an operator step. Migration text is for the person running it: the command, the ordering constraint, and what it cannot recover.
 
-### Body rules
+### Description gate
 
-These exist because the generated bodies drift the same way every time.
+Load the installed Brundlefly `pull-request-summary` Skill before writing or revising the body.
+Use `~/.agents/skills/pull-request-summary/SKILL.md` in Codex.
+Use the configured Claude Skills directory or OpenCode's configured Skill paths in those providers.
+If it is missing, run `pnpm sync:skills` from Harlan Agent Kit, then load it.
+Stop publication if the Skill cannot load. Do not substitute a second description rubric.
 
-- **Answer why, not how.** The description exists to say why the change is needed. The fix itself gets 1 to 2 sentences. Never walk through the implementation, name the functions you touched, or explain the mechanism; the diff is right there and the code documents itself. A reviewer who reads the method twice is a reviewer you wasted.
-- **No verification, testing, or QA section. Ever.** Not `✅ Verification`, not `🧪 Testing`, not a checklist of what you ran. Not a passing mention either: "covered by unit tests only" and "added five e2e cases" are testing details and belong nowhere in the body. CI reports test results and reviewers trust it. Evidence that CI cannot produce belongs in a follow-up comment (Step 5), never the description.
-- **Benchmarks when they are relevant and measured.** A performance or caching change earns a real before and after. Never invent, estimate, or infer a figure. If you did not measure it, say nothing, or offer to run it.
-- **No self-ticked checkboxes** beyond the ones the repo's own template asks for. A list of `- [x]` items you wrote and ticked yourself is not evidence, it reads as homework.
-- **Delete empty sections.** Never write "None.", "No linked issue.", or "N/A" under a heading. No linked issue means no Linked issue section.
-- **Length follows risk.** A fix gets 1 to 3 sentences. Spend more only where a reviewer must understand a behaviour change, a data migration, or a non-obvious tradeoff.
-- **Earn every number.** Include a figure only if a reviewer would act differently for knowing it. `7,438 rows backfilled` earns its place in a migration note. `533 tests passed, 2 skipped` does not.
-- **Vary the shape.** Do not open every paragraph with `This `. Do not follow a past-tense problem sentence with a present-tense `This adds…` in every PR. For a small fix, one sentence is the whole description.
-- **Disclose AI writing visibly.** If Harlan Agent Kit drafts or edits the description, append the exact AI disclosure after the description. Never hide it in an HTML comment or template metadata.
-- **Preserve disclosure.** Keep an existing AI disclosure during every body rewrite. Refuse publication when required disclosure is missing or changed.
+Supply the intended base, complete net diff, user intent, effective template, and current body when updating.
+Add these local description requirements:
 
-### Voice
+- Use the effective template and preserve its required comments and sections.
+- Omit verification, testing, and QA sections or mentions. CI owns that evidence.
+  Evidence CI cannot produce belongs in the self-identified Agent comment from Step 5.
+- Add Breaking Changes and Migration sections only when the operator needs them.
+- Include relevant measured benchmarks. Never invent or estimate a figure.
+- Append the exact AI disclosure from Step 3. Preserve it on every rewrite.
+  Refuse publication if the disclosure is missing or changed.
+- Preserve author notes, attachments, and reviewer decisions outside the requested edit.
+- Include the PR Lens diagram when the Diagram rules below require it.
 
-Modelled on Harlan's hand-written PRs to `nuxt/nuxt`. These are the moves that read human and that generated bodies never make on their own.
-
-- **Write as the person who hit the problem.** First person is correct when there is a story or a judgement: "I had a valid use case for runtime plugin meta, and got a cryptic warning three times", "I honestly had no idea what it meant and could only debug it by reading the Nuxt source". Do not fabricate an experience you did not have; if the work started from an issue, say that instead.
-- **Paste the evidence, do not describe it.** Real terminal output before and after, the actual generated code that broke, the config snippet a user would write. A pasted `WARN` line beats a sentence about a warning.
-- **Say what you are unsure about.** Real PRs carry loose ends: "I tried making it throw once but hit too many test failures, not sure what went wrong", "Question: should the root element always have a unique id?", "Consider deprecating `teleportId` with these changes". Include the dead end you abandoned, the follow-up you did not take, the design question you want the reviewer to answer. Certainty on every point is the loudest AI tell in a PR.
-- **Bullets and fragments are fine.** "Types aren't documented, copied docs from the site" is a complete thought. Prose paragraphs are not mandatory.
-- **Motivation before mechanism** for a feature: who needs this, what they do today, what is bad about that, then the change.
-- **Do not perform completeness.** Leave the repo template's HTML comments untouched. Tick a checklist box only if it is true. Shipping with boxes unticked is normal and correct.
+Use the returned body only after its description checks pass.
+Resolve required-input gaps before publishing dependent text.
+This Skill retains title rules, branches, commits, publication, CI, and Review.
+Re-read the remote body before an update. Reconcile concurrent edits before replacing it.
 
 ### Diagram
 
@@ -165,27 +165,8 @@ Before writing the description, decide whether the change earns a diagram. Read 
 A diagram goes in the description, after the why and before the AI disclosure. Never in a trailing comment.
 
 Before pushing, load the installed Brundlefly `write-human` Skill for the title and description.
-Preserve this Skill's body rules, template, and disclosure.
-
-**Reads-human check.** Before pushing, reread the body and cut anything that exists to show effort rather than to help the reviewer. This is the target shape:
-
-```markdown
-### 🔗 Linked issue
-
-Resolves #658
-
-### ❓ Type of change
-
-- [x] 🐞 Bug fix
-
-### 📚 Description
-
-DevTools refresh broadcasts used request and response RPC calls, so disconnected
-clients logged a `birpc` timeout for `refreshRouteData` every time the pages
-changed. They are notifications now, so a dead client costs nothing.
-
-> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
-```
+Preserve the Description gate, template, and disclosure.
+After prose edits, repeat the `pull-request-summary` description checks.
 
 ## Step 4: Verify
 

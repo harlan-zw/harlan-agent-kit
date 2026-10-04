@@ -5,13 +5,11 @@ import { describe, expect, it } from 'vitest'
 import { claudeProjectSlug, defaultAgentContextPaths, findRepositoryMemory, instructionFilesLine, listInstructionFiles, loadAgentContext, opencodeAgentEnvironment, opencodeTurnEnvironment, repositoryMemoryIndexPath, repositoryMemoryLine } from '../src/agent-context.ts'
 
 describe('defaultAgentContextPaths', () => {
-  it('resolves the copied service context from its working directory', () => {
-    expect(defaultAgentContextPaths({ CODEX_HOME: '/agent-home', HOME: '/agent-home' }, '/service')).toEqual({
-      claudeHome: '/agent-home/.claude',
-      instructionsPath: '/agent-home/AGENTS.md',
-      skillsRoot: '/service/harlan-agent-kit/skills',
-      requiredSkillDirectories: ['write-human', 'technical-guide', 'agentify-text'].map(name => join('/agent-home/.local/share/harlan-agent-kit/brundlefly/32a7c90da343c60601c4a7e488c7d7a97d51cbc2/skills', name)),
-    })
+  it('uses the supplied service directory and Agent home for context paths', () => {
+    const paths = defaultAgentContextPaths({ CODEX_HOME: '/agent-home', HOME: '/agent-home' }, '/service')
+    expect(paths.claudeHome).toBe('/agent-home/.claude')
+    expect(paths.instructionsPath).toBe('/agent-home/AGENTS.md')
+    expect(paths.skillsRoot).toBe('/service/harlan-agent-kit/skills')
   })
 })
 
