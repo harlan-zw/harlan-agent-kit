@@ -164,7 +164,8 @@ Before writing the description, decide whether the change earns a diagram. Read 
 
 A diagram goes in the description, after the why and before the AI disclosure. Never in a trailing comment.
 
-**Strip AI tells from the title and description** before pushing, run them through `/humanize-writing`. For PRs specifically: no em-dashes, drop the over-explained "this means that..." takeaway, and use specifics (issue numbers, real before/after behaviour, measured figures) instead of vague claims like "improves performance". A PR body that reads as AI-generated erodes reviewer trust.
+Before pushing, load the installed Brundlefly `write-human` Skill for the title and description.
+Preserve this Skill's body rules, template, and disclosure.
 
 **Reads-human check.** Before pushing, reread the body and cut anything that exists to show effort rather than to help the reviewer. This is the target shape:
 

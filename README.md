@@ -108,7 +108,22 @@ Start a new Codex thread after a reinstall, otherwise the new Skills stay unload
 
 ## Skills
 
-Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
+Personal Skills live in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
+Portable Skills come from [Brundlefly](https://github.com/harlan-zw/brundlefly).
+Run `pnpm sync:skills` after installation to restore the pinned source and provider links.
+The source requires Git access to Brundlefly while that repository is private.
+The command preserves unrelated installed Skills and refuses name conflicts.
+Service updates run the same restore before starting workers on either host.
+
+| Brundlefly Skill | Use |
+| --- | --- |
+| `write-human` | Edit prose while preserving facts and voice. Replaces `humanize-writing`. |
+| `technical-guide` | Research and verify individual technical articles. |
+| `agentify-text` | Compress agent text while preserving its meaning. |
+
+[`brundlefly.json`](./harlan-agent-kit/brundlefly.json) selects the exact source commit and Skills.
+Brundlefly's general `pr` Skill is excluded. Personal `pr` owns Hooks, Review, and Service policy here.
+`content-refresh` coordinates collections and uses `technical-guide` for each technical article.
 
 | Skill | Description |
 |-------|-------------|
@@ -120,7 +135,6 @@ Every Skill lives in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 | [`email-usage`](./harlan-agent-kit/skills/email-usage/SKILL.md) | Choose email addresses, Himalaya accounts, and mail permissions |
 | [`glossary`](./harlan-agent-kit/skills/glossary/SKILL.md) | Create or audit `GLOSSARY.md` and catch vocabulary drift |
 | [`harlan-github-agent`](./harlan-agent-kit/skills/harlan-github-agent/SKILL.md) | Drive or diagnose the local GitHub service |
-| [`humanize-writing`](./harlan-agent-kit/skills/humanize-writing/SKILL.md) | Strip AI tells from prose before it goes out |
 | [`i-dont-know-just-keep-working`](./harlan-agent-kit/skills/i-dont-know-just-keep-working/SKILL.md) | Find related gaps, bugs, and improvements, then rank next steps by impact, effort, and confidence |
 | [`improve-ts-pkg-architecture`](./harlan-agent-kit/skills/improve-ts-pkg-architecture/SKILL.md) | Find architecture improvements in a TypeScript package |
 | [`issue-triage`](./harlan-agent-kit/skills/issue-triage/SKILL.md) | Rank open issues by impact and difficulty |

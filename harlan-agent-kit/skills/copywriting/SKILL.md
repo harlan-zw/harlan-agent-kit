@@ -123,20 +123,20 @@ dashes, never the "it's not X, it's Y" pattern, Simplified Technical English in 
 and CLI output. Do not restate them in every repo's `COPY.md`. Record only what is specific to
 this product.
 
-## Relationship to humanize-writing
+## Relationship to write-human
 
 They run in sequence and neither replaces the other.
 
 - **This skill decides what the sentence has to say**: which register, which canonical asset,
   which banned word, which claim `VISION.md` permits.
-- **[`humanize-writing`](../humanize-writing/SKILL.md) decides whether it reads as though a
+- **The installed Brundlefly `write-human` Skill decides whether it reads as though a
   person wrote it**: the surface tells, then the structural ones.
 
-So: draft against `COPY.md`, then run `humanize-writing` over the draft, then check the result
+So: draft against `COPY.md`, then run `write-human` over the draft, then check the result
 still matches `COPY.md`. That last check matters, because the humanize pass rewrites structure
 and can walk a sentence off its register or paraphrase a canonical asset while improving it.
 
-Never duplicate `humanize-writing`'s tell list into a `COPY.md`. A repo's copy file records what
+Never duplicate `write-human`'s tell list into a `COPY.md`. A repo's copy file records what
 is true of *this product*; the tells are true of all prose and are maintained in one place.
 
 For a whole collection of articles rather than a string, use
@@ -242,7 +242,7 @@ Register mismatch (needs a human read):
    with the string you are about to write as its example.
 3. Reach for a canonical asset before writing a new sentence. Most requests for a meta
    description are a request for the one that already exists.
-4. Draft, then run [`humanize-writing`](../humanize-writing/SKILL.md) over the draft.
+4. Draft, then run the installed Brundlefly `write-human` Skill over the draft.
 5. Re-check the humanized result against `COPY.md`. The humanize pass improves prose and does not
    know about your canonical assets, so it will sometimes paraphrase one.
 6. Show the user the string and the register row you wrote it against. Never publish under

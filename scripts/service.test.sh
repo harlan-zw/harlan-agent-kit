@@ -84,6 +84,11 @@ fi
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/service.sh" update >/dev/null
 
+if ! grep -Fx -- 'sync:skills' "$SERVICE_TEST_PNPM_CALLS" >/dev/null; then
+  printf '%s\n' 'service did not restore Brundlefly Skills before startup' >&2
+  exit 1
+fi
+
 if ! grep -F -- 'install --frozen-lockfile' "$SERVICE_TEST_PNPM_CALLS" >/dev/null; then
   printf '%s\n' 'service did not use the installed pnpm fallback' >&2
   exit 1

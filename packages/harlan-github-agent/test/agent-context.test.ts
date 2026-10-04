@@ -10,11 +10,39 @@ describe('defaultAgentContextPaths', () => {
       claudeHome: '/agent-home/.claude',
       instructionsPath: '/agent-home/AGENTS.md',
       skillsRoot: '/service/harlan-agent-kit/skills',
+      requiredSkillDirectories: ['write-human', 'technical-guide', 'agentify-text'].map(name => join('/agent-home/.local/share/harlan-agent-kit/brundlefly/32a7c90da343c60601c4a7e488c7d7a97d51cbc2/skills', name)),
     })
   })
 })
 
 describe('loadAgentContext', () => {
+  it('requires portable Skills and passes their directories to OpenCode', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'portable-context-'))
+    const paths = { claudeHome: root, instructionsPath: join(root, 'AGENTS.md'), skillsRoot: join(root, 'personal'), requiredSkillDirectories: [join(root, 'portable/write-human')] }
+    try {
+      await writeFile(paths.instructionsPath, '# Instructions\n')
+      await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal PR policy.\n')
+      await expect(loadAgentContext(paths)).resolves.toMatchObject({ _tag: 'Err', error: expect.stringContaining('write-human') })
+      await mkdir(paths.requiredSkillDirectories[0]!, { recursive: true })
+      await writeFile(join(paths.requiredSkillDirectories[0]!, 'SKILL.md'), 'Portable writing.\n')
+      const result = await loadAgentContext(paths)
+      expect(result._tag).toBe('Ok')
+      if (result._tag === 'Err')
+        return
+      const environment = opencodeAgentEnvironment({ context: result.value, environment: {} })
+      expect(environment._tag).toBe('Ok')
+      if (environment._tag === 'Err')
+        return
+      expect(JSON.parse(environment.value.OPENCODE_CONFIG_CONTENT!).skills.paths).toEqual([join(paths.skillsRoot, 'pr'), ...paths.requiredSkillDirectories])
+      await mkdir(join(paths.skillsRoot, 'write-human'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'write-human/SKILL.md'), 'Duplicate.\n')
+      await expect(loadAgentContext(paths)).resolves.toMatchObject({ _tag: 'Err', error: expect.stringContaining('Duplicate Skill') })
+    }
+    finally {
+      await rm(root, { recursive: true })
+    }
+  })
   it('loads the global instructions and every installed Harlan skill', async () => {
     const root = await mkdtemp(join(tmpdir(), 'harlan-agent-context-'))
     const instructionsPath = join(root, 'AGENTS.md')
@@ -27,7 +55,7 @@ describe('loadAgentContext', () => {
     }))
 
     try {
-      await expect(loadAgentContext({ claudeHome: join(root, '.claude'), instructionsPath, skillsRoot })).resolves.toEqual({
+      await expect(loadAgentContext({ claudeHome: join(root, '.claude'), instructionsPath, skillsRoot, requiredSkillDirectories: [] })).resolves.toEqual({
         _tag: 'Ok',
         value: {
           claudeHome: join(root, '.claude'),
@@ -49,6 +77,7 @@ describe('loadAgentContext', () => {
         claudeHome: join(root, '.claude'),
         instructionsPath: join(root, 'missing.md'),
         skillsRoot: join(root, 'skills'),
+        requiredSkillDirectories: [],
       })).resolves.toEqual({
         _tag: 'Err',
         error: `The global Agent instructions do not exist: ${join(root, 'missing.md')}`,

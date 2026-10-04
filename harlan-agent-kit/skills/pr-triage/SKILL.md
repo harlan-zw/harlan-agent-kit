@@ -21,7 +21,7 @@ Read these completely before discovery:
 
 1. `../adversarial-review/SKILL.md`, the complete workflow for one PR.
 
-The `adversarial-review` skill loads `pr`, `humanize-writing`, and `unit-tests` when required. Do not duplicate those rules here.
+The `adversarial-review` Skill loads personal `pr`, Brundlefly `write-human`, and `unit-tests` when required. Do not duplicate those rules here.
 
 ## Discover
 

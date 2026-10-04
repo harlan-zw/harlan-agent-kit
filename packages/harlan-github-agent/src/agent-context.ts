@@ -1,8 +1,9 @@
 import type { Result } from './result.ts'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
+import brundlefly from '../../../harlan-agent-kit/brundlefly.json' with { type: 'json' }
 import { err, ok } from './result.ts'
 
 export interface AgentContextPaths {
@@ -10,6 +11,7 @@ export interface AgentContextPaths {
   claudeHome: string
   instructionsPath: string
   skillsRoot: string
+  requiredSkillDirectories: readonly string[]
 }
 
 export interface AgentContext {
@@ -63,6 +65,7 @@ export function defaultAgentContextPaths(
     claudeHome,
     instructionsPath: join(codexHome, 'AGENTS.md'),
     skillsRoot: join(workingDirectory, 'harlan-agent-kit', 'skills'),
+    requiredSkillDirectories: brundlefly.skills.map(name => join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/brundlefly', brundlefly.revision, 'skills', name)),
   }
 }
 
@@ -99,6 +102,21 @@ export async function loadAgentContext(paths: AgentContextPaths): Promise<Result
   const skillDirectories = candidates.filter((_, index) => checked[index]?._tag === 'Ok' && checked[index].value)
   if (skillDirectories.length === 0)
     return err(`No Harlan skills exist under ${paths.skillsRoot}.`)
+
+  for (const directory of paths.requiredSkillDirectories) {
+    if (skillDirectories.some(existing => basename(existing) === basename(directory)))
+      return err(`Duplicate Skill: ${directory}. Remove the personal copy before starting the Agent.`)
+    const installed = await stat(join(directory, 'SKILL.md'))
+      .then(metadata => ok(metadata.isFile()))
+      .catch((error: unknown) => isMissingPath(error)
+        ? ok(false)
+        : err(`The required Skill could not be read: ${directory}: ${errorMessage(error)}`))
+    if (installed._tag === 'Err')
+      return installed
+    if (!installed.value)
+      return err(`The required Skill is missing: ${directory}. Run pnpm sync:skills before starting the Agent.`)
+    skillDirectories.push(directory)
+  }
 
   return ok({ claudeHome: paths.claudeHome, instructionPaths: [paths.instructionsPath], skillDirectories })
 }

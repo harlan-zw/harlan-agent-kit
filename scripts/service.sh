@@ -149,6 +149,8 @@ prepare_update() {
   fi
   echo "Installing dependencies"
   (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
+  echo "Restoring Brundlefly Skills"
+  (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" sync:skills)
   echo "Syncing Agent instructions"
   bash "$SERVICE_CHECKOUT/scripts/sync-agent-context.sh" local >/dev/null
   echo "Installing Worktrunk settings"
