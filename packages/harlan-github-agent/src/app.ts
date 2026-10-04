@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
+import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { Result } from './result.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
@@ -17,9 +18,14 @@ import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseAgentSlots } from './host-capacity.ts'
+import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
+  pullRequestWatch?: {
+    state: (repository: string, number: number) => PullRequestWatchState | null
+    observe: (target: PullRequestWatchTarget, signal: AbortSignal) => Promise<Result<void, string>>
+  }
   reloadExternalWatches?: () => Promise<Result<{ repositories: number, issues: number }, string>>
   desktop?: DesktopBroker
   hostCapacity?: () => HostCapacity
@@ -749,6 +755,66 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (result.reason._tag === 'ReviewStopped')
       throw createError({ status: 409, statusText: 'Conflict', message: 'Another Agent took this head commit Review.' })
     throw createError({ status: 409, statusText: 'Conflict', message: 'The pull request is not ready for review.' })
+  })
+
+  app.get('/api/items/pull-request-events', async (event) => {
+    const watch = options.pullRequestWatch
+    if (watch === undefined)
+      throw createError({ status: 503, message: 'Pull request watching is unavailable.' })
+    const query = new URL(event.req.url).searchParams
+    const target = parsePullRequestWatchTarget({ repository: query.get('repository'), number: Number(query.get('number')) })
+    if (target._tag === 'Err')
+      throw createError({ status: 400, message: target.error })
+    const { repository, number } = target.value
+    let initial = watch.state(repository, number)
+    if (initial === null)
+      throw createError({ status: 404, message: 'The repository is not enabled in this service.' })
+    if (initial._tag === 'NotObserved' || initial._tag === 'PendingClosure') {
+      const observed = await watch.observe(target.value, AbortSignal.any([event.req.signal, AbortSignal.timeout(60_000)]))
+      if (observed._tag === 'Err')
+        throw createError({ status: 502, message: observed.error })
+      initial = watch.state(repository, number)
+      if (initial === null || initial._tag === 'NotObserved')
+        throw createError({ status: 404, message: 'The service cannot observe this pull request.' })
+    }
+    const stream = createEventStream(event)
+    let previous = JSON.stringify(initial)
+    let stopped = false
+    const interval = setInterval(() => {
+      const next = watch.state(repository, number)
+      if (next === null) {
+        stop()
+        void stream.close()
+        return
+      }
+      const serialized = JSON.stringify(next)
+      if (serialized !== previous) {
+        previous = serialized
+        void stream.push({ event: 'pull-request', data: serialized }).catch(stop)
+      }
+    }, options.eventIntervalMilliseconds ?? 2_000)
+    const heartbeat = setInterval(() => void stream.pushComment('keepalive').catch(stop), 15_000)
+    interval.unref()
+    heartbeat.unref()
+    function stop(): void {
+      if (stopped)
+        return
+      stopped = true
+      clearInterval(interval)
+      clearInterval(heartbeat)
+      options.shutdownSignal?.removeEventListener('abort', shutdown)
+    }
+    function shutdown(): void {
+      stop()
+      void stream.close()
+    }
+    stream.onClosed(stop)
+    options.shutdownSignal?.addEventListener('abort', shutdown, { once: true })
+    if (options.shutdownSignal?.aborted)
+      shutdown()
+    else
+      void stream.push({ event: 'pull-request', data: previous }).catch(stop)
+    return stream
   })
 
   app.get('/api/events', (event) => {

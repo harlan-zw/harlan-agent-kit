@@ -1,7 +1,9 @@
+import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
 import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
+import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
 import { err, ok } from './result.ts'
 
 export interface ControlHealth {
@@ -48,6 +50,7 @@ type Parsed<Value> = Result<Value, string>
 type ResponseParser<Value> = (value: unknown) => Parsed<Value>
 
 export interface ControlClient {
+  watchPullRequest: (target: PullRequestWatchTarget, options?: PullRequestWatchOptions) => Promise<Result<PullRequestWatchState, ControlApiError>>
   health: () => Promise<Result<ControlHealth, ControlApiError>>
   state: () => Promise<Result<DashboardSnapshot, ControlApiError>>
   status: () => Promise<Result<ControlStatus, ControlApiError>>
@@ -253,6 +256,14 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
   const state = () => request({ method: 'GET', path: 'api/state', parse: parseState })
 
   return ok({
+    watchPullRequest(target, watchOptions = {}) {
+      const parsed = parsePullRequestWatchTarget(target)
+      if (parsed._tag === 'Err')
+        return Promise.resolve(err({ _tag: 'InvalidResponse', message: parsed.error }))
+      const url = new URL('api/items/pull-request-events', baseUrl)
+      url.search = new URLSearchParams({ repository: target.repository, number: String(target.number) }).toString()
+      return watchPullRequestStream({ url, target, authorization, fetch: options.fetch, options: watchOptions })
+    },
     health,
     state,
     async status() {

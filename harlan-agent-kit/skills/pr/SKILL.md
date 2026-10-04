@@ -264,6 +264,9 @@ Keep verification evidence in a self-identified Agent comment. Do not attach scr
 
 ## Step 6: Wait for CI and Review
 
+For a tracked pull request, use [pull request watching](references/pull-request-watch.md) for repeated waiting.
+The Control CLI subscribes to Service events. Do not create a GitHub polling loop.
+
 Keep ownership after submitting or updating the pull request. Complete this step for the **current head SHA**.
 Green CI alone does not finish an Agent-submitted pull request tracked by `harlan-github-agent`.
 If the Service controller publishes the pull request from an implementation Agent's result, that Agent returns first.
@@ -326,6 +329,20 @@ If the service cannot publish Review, report the exact blocker and keep the pull
 For a repository the service does not track, use CI and the available reviewers; state that automated Review was unavailable.
 
 Do not post replies to other reviewers without approval. Draft a reply for a question or non-actionable comment and show it to the user.
+
+### Wait for Harlan's merge
+
+After current-head CI and Review pass, keep the submitting Agent responsible for the human merge decision.
+Run `control watch-pr` using [pull request watching](references/pull-request-watch.md).
+Run it in the foreground and keep the Agent turn active while it waits.
+Do not background the command and end the turn. A finished chat cannot receive its tool result.
+An active Service implementation Task returns to its controller instead of waiting here.
+
+On `Merged`, apply `../take-ownership/SKILL.md` in Completion mode for this exact pull request.
+Verify required delivery, reconcile records, clean task-owned Git state, and report remaining work.
+On `ActionRequired`, use the existing repair and publication rules, then resume the watch.
+On `Closed` or `Dismissed`, report that outcome and preserve unintegrated work.
+If Harlan explicitly ends the wait, stop the watch and retain the pull request target for the next turn.
 
 ## Step 7: Cleanup (after merge or user says "finish")
 

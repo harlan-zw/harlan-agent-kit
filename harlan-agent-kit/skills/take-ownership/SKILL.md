@@ -55,6 +55,9 @@ Delegate detailed permissions, review gates, worktree isolation, and publication
 Use [completion](references/completion.md) for the closure ledger and cleanup proof.
 
 If `harlan-github-agent` already controls the repository, resume its existing worker. Do not start another watcher.
+Interactive submitting Agents may subscribe with [pull request watching](../pr/references/pull-request-watch.md).
+That CLI reads the existing observer. It does not create another scheduler or GitHub polling loop.
+When the CLI returns `Merged`, continue Completion for that exact target without waiting for Harlan to repeat the merge.
 
 ## Start ownership
 

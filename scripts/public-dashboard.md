@@ -125,7 +125,7 @@ Under Permissions and events, subscribe to:
 - Check run and Check suite
 - Commit status
 - Issue comment and Issues
-- Pull request and Pull request review
+- Pull request, Pull request review, and Pull request review comment
 - Push
 
 Use Recent deliveries to redeliver an event. Require a 204 response and a matching `Webhook:` Service log.
