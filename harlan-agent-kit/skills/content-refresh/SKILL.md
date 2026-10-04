@@ -1,6 +1,6 @@
 ---
 name: content-refresh
-description: "Refresh a collection of articles with verified sources, reviewed briefs, human writing, and crisp screenshots. Use for an editorial audit, article rewrite, or coordinated content refresh."
+description: "Coordinate a collection refresh with shared evidence, reviewed briefs, and independent article reviews. Use for an editorial audit or a refresh across several articles."
 user_invocable: true
 argument-hint: "[content directory] [scope or exclusions]"
 ---
@@ -86,9 +86,11 @@ A new revision invalidates affected approvals. Recheck changed claims and consum
 ## Write and verify
 
 Read [screenshots](references/screenshots.md) before planning visual evidence.
-Use the target's article voice and the [humanize-writing Skill](../humanize-writing/SKILL.md).
+Load the installed Brundlefly `technical-guide` Skill for each technical article's research, examples, and reader verification.
+This Skill owns shared records, the worker pool, and collection publication checks.
+Use the target's article voice and the installed Brundlefly `write-human` Skill.
 Run a distinct factual review before the humanize pass.
-Then apply both humanize-writing passes under COPY.md, including progressive complexity.
+Then apply `write-human` under COPY.md.
 Record the main writing changes in the brief. Recheck meaning, uncertainty, dates, and examples afterward.
 The final article reviewer reads the humanized revision, not an earlier draft.
 Record useful findings in the brief instead of flooding the user with every worker's writing report.

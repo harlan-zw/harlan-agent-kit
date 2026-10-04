@@ -23,6 +23,7 @@ Where the two files disagree about a service word, the package glossary wins.
 | Plugin | `harlan-agent-kit/`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` | Claude Code, Codex | 1 to N Skills, 1 to N Hooks | "plugin" |
 | Marketplace | `.claude-plugin/marketplace.json` | Claude Code | 1 Marketplace, 1 Plugin | "marketplace" |
 | Skill | `harlan-agent-kit/skills/<name>/SKILL.md` | Claude Code, Codex | 1 to N References, 1 to N templates | "Skill" |
+| Brundlefly | `harlan-agent-kit/brundlefly.json` | `sync:skills`, Agent providers | 1 pinned source, selected portable Skills | "Brundlefly" |
 | Reference | `skills/<name>/references/`, `harlan-agent-kit/references/` | one Skill, mid-task | N to 1 Skill, or shared across Skills | "reference" |
 | Hook | `harlan-agent-kit/hooks/*.sh` | Claude Code, Codex, per event | N per event, disabled by `.claude/hooks.json` | "hook" |
 | Git hook | `agent-context/git-hooks/commit-msg` | git, for every Agent provider | 1 per commit, under `~/pkg` and `~/sites` | "commit hook" |
@@ -72,7 +73,7 @@ below cover the plugin surface only.
 **Casing:** `Plugin` in prose, `plugin` in identifiers and paths.
 
 ### Skill
-**Is:** one `SKILL.md` under `harlan-agent-kit/skills/`, plus its References and templates.
+**Is:** one `SKILL.md`, plus its References and templates. Personal Skills live under `harlan-agent-kit/skills/`. Selected portable Skills come from Brundlefly.
 **Use for:** the README Skill table, every skill directory name, prose about invoking one.
 **Never:** command, slash command, playbook, recipe, prompt, workflow, agent.
 **Casing:** `Skill` in prose, kebab-case in directory names, `SKILL.md` for the file.
@@ -85,6 +86,12 @@ Claude Code and Codex both load Skills by directory.
 more Skills share it.
 **Never:** doc, guide, appendix, addendum, sub-skill.
 **Casing:** `Reference` in prose, `references/` as the directory.
+
+### Brundlefly
+**Is:** the separate collection that owns portable Skills used by Harlan Agent Kit.
+**Use for:** `write-human`, `technical-guide`, `agentify-text`, `pull-request-summary`, and their pinned source in `harlan-agent-kit/brundlefly.json`.
+**Never:** a second personal Plugin or a copy of personal host policy.
+**Casing:** `Brundlefly` in prose, `brundlefly` in paths.
 
 ### Root docs
 **Is:** the fixed set of Markdown files a repository root carries, and the `docs/`
