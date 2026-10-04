@@ -9,6 +9,7 @@ import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
+import type { PullRequestWatchState } from './pull-request-watch.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { ReviewApproval } from './review-approval.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
@@ -758,6 +759,7 @@ export type StoredIssueTriageRun
     }
 
 export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore {
+  getPullRequestWatchState: (repository: string, number: number) => PullRequestWatchState | null
   /**
    * Approves one exact issue state from an outside author. The Approval unlocks
    * Issue triage, and Issue work follows on its own when triage says ready.
@@ -6919,7 +6921,7 @@ function openDatabase(path: string): DatabaseSync {
   return database
 }
 
-function taskRows(database: DatabaseSync): TaskRow[] {
+function taskRows(database: DatabaseSync, subjectId?: number): TaskRow[] {
   const rows = (table: 'tasks' | 'worker_tasks', current: boolean): TaskRow[] => database.prepare(`
     SELECT
       ${table}.id,
@@ -6945,14 +6947,15 @@ function taskRows(database: DatabaseSync): TaskRow[] {
       ? `JOIN revisions ON revisions.id = subjects.current_revision_id
          WHERE ${table}.revision_id = subjects.current_revision_id
            AND repositories.enabled = 1
-           AND json_extract(revisions.payload, '$.state') = 'open'`
-      : ''}
+           AND json_extract(revisions.payload, '$.state') = 'open'
+           ${subjectId === undefined ? '' : `AND ${table}.subject_id = ?`}`
+      : subjectId === undefined ? '' : `WHERE ${table}.subject_id = ?`}
     ORDER BY ${table}.updated_at DESC
-    ${current ? '' : 'LIMIT 100'}
-  `).all() as unknown as TaskRow[]
+    ${current || subjectId !== undefined ? '' : 'LIMIT 100'}
+  `).all(...(subjectId === undefined ? [] : [subjectId])) as unknown as TaskRow[]
   const current = [...rows('tasks', true), ...rows('worker_tasks', true)]
   const currentIds = new Set(current.map(row => row.id))
-  const historyLimit = Math.max(0, 100 - current.length)
+  const historyLimit = subjectId === undefined ? Math.max(0, 100 - current.length) : Number.POSITIVE_INFINITY
   const history = [...rows('tasks', false), ...rows('worker_tasks', false)]
     .filter(row => !currentIds.has(row.id))
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at) || left.id.localeCompare(right.id))
@@ -8158,6 +8161,56 @@ export function openJournalStore(
         AND json_extract(revisions.payload, '$.state') = 'open'
     `).get(github, pullRequestNumber) as { head_sha: string, dismissed: number } | undefined
     return row === undefined ? null : { headSha: row.head_sha, dismissed: row.dismissed === 1 }
+  }
+
+  const getPullRequestWatchState: JournalStore['getPullRequestWatchState'] = (github, number) => {
+    const repository = database.prepare('SELECT github FROM repositories WHERE github = ? COLLATE NOCASE AND enabled = 1')
+      .get(github) as { github: string } | undefined
+    if (repository === undefined)
+      return null
+    const row = database.prepare(`
+      SELECT subjects.id, revisions.id AS revision_id, revisions.payload,
+        EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id) AS dismissed,
+        EXISTS (SELECT 1 FROM pull_request_closure_verifications AS verified
+          WHERE verified.subject_id = subjects.id AND verified.revision_id = revisions.id
+            AND verified.head_sha = json_extract(revisions.payload, '$.headSha')
+            AND verified.base_sha = json_extract(revisions.payload, '$.baseSha')
+            AND verified.disposition_tag = CASE WHEN json_extract(revisions.payload, '$.mergedAt') IS NULL THEN 'Closed' ELSE 'Merged' END)
+          AS verified
+      FROM subjects JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND subjects.kind = 'pull_request' AND subjects.github_number = ?
+    `).get(repository.github, number) as { id: number, revision_id: string, payload: string, dismissed: number, verified: number } | undefined
+    if (row === undefined)
+      return { _tag: 'NotObserved', repository: repository.github, number }
+    const pullRequest = JSON.parse(row.payload) as GitHubPullRequestItem
+    const sameHeadRevisions = new Set((database.prepare(`SELECT id FROM revisions WHERE subject_id = ?
+      AND json_extract(payload, '$.headSha') = ?`).all(row.id, pullRequest.headSha) as unknown as Array<{ id: string }>).map(row => row.id))
+    const tasks = taskRows(database, row.id).filter(task => task.repository === repository.github && task.github_number === number
+      && task.kind !== 'issue_work' && task.kind !== 'issue_triage' && sameHeadRevisions.has(task.revision_id)).filter((task, index, rows) => rows.findIndex(candidate => candidate.kind === task.kind) === index).map(taskFromRow)
+    const observed = { pullRequest, tasks }
+    if (pullRequest.state === 'closed')
+      return { ...observed, _tag: row.verified === 0 ? 'PendingClosure' : pullRequest.mergedAt === null ? 'Closed' : 'Merged' }
+    if (row.dismissed === 1)
+      return { ...observed, _tag: 'Dismissed' }
+    const active = tasks.some(task => ['Queued', 'Running', 'Publishing'].includes(task.state._tag))
+    if (!active) {
+      const blocked = tasks.find(task => task.state._tag === 'ActionRequired' || task.state._tag === 'Failed')
+      if (blocked?.state._tag === 'ActionRequired' || blocked?.state._tag === 'Failed')
+        return { ...observed, _tag: 'ActionRequired', reason: blocked.state.reason }
+    }
+    const review = storedReviewForHead(repository.github, number, pullRequest.headSha)
+    if (review._tag === 'Current' && review.run.revisionId === row.revision_id && !active) {
+      if (review.run.outcome._tag === 'Ready' && review.run.gatePublication._tag === 'Published')
+        return { ...observed, _tag: 'Ready' }
+      if (review.run.outcome._tag === 'Blocked') {
+        const findings = review.run.findings.filter(finding => finding._tag === 'Open')
+        const gates = Object.values(review.run.gates).filter(gate => gate._tag === 'Failed')
+        const reasons = [...findings.map(finding => `${finding.summary} ${finding.nextAction}`), ...gates.map(gate => gate.reason)]
+        return { ...observed, _tag: 'ActionRequired', reason: reasons.join('\n') || 'Service Review is BLOCKED.' }
+      }
+    }
+    return { ...observed, _tag: 'Open' }
   }
 
   const isRoutineTrackingIssue: JournalStore['isRoutineTrackingIssue'] = (github, issueNumber) => routineTrackingIssueInDatabase(database, github, issueNumber)
@@ -15971,6 +16024,7 @@ export function openJournalStore(
     isSafeToRestart,
     dismissItem,
     getOpenPullRequestStatus,
+    getPullRequestWatchState,
     restoreItem,
     getSelectionMode,
     setSelectionMode,

@@ -169,6 +169,22 @@ const client = createControlClient({
 
 ## Webhooks
 
+Interactive Agents can watch one pull request through the Control CLI:
+
+```bash
+harlan-github-agent control watch-pr --repository OWNER/REPOSITORY --number NUMBER --config /absolute/path/to/config.yml
+```
+
+The authenticated stream reads the Journal. Waiting clients make no repeated GitHub reads.
+The command returns on a confirmed merge, closure, Dismissal, or actionable work without an active Service Task.
+`--until review` returns published current-Revision Review readiness. `--until merged` waits through actionable findings.
+`--timeout-seconds` bounds the wait. Repeating the command resumes from stored state after disconnection.
+The initial subscription can bootstrap one missing pull request. It follows later head commits and repairs.
+
+Keep the submitting Agent turn active while the command runs.
+After merge, that Agent applies Take Ownership Completion and reports remaining work.
+A finished chat needs a new turn before it can continue.
+
 Set `webhook.enabled` to start the separate listener on port 3211.
 The public route exposes only `POST /webhook` through Caddy.
 Dashboard routes retain their password and Origin checks.

@@ -232,6 +232,7 @@ function pullRequestItem(
     number: pull.number,
     state: pull.state === 'closed' ? 'closed' : 'open',
     mergedAt: pull.merged_at,
+    mergeCommitSha: pull.merge_commit_sha,
     title: pull.title,
     author: pull.user?.login ?? 'ghost',
     url: pull.html_url,

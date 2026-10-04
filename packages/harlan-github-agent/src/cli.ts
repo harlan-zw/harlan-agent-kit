@@ -12,6 +12,7 @@ import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadClassificationToken, loadConfig } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
+import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { err } from './result.ts'
 import { describePreflightIssues, loadServiceInputs } from './service-preflight.ts'
@@ -64,6 +65,7 @@ type ControlCommandError
     | { _tag: 'InvalidEventLimit', message: string }
     | { _tag: 'InvalidStream', message: string }
     | { _tag: 'InvalidReviewTarget', message: string }
+    | { _tag: 'InvalidWatchTarget', message: string }
     | { _tag: 'InvalidBaseUrl', message: string }
 
 const workflowEventStreams = [
@@ -174,6 +176,48 @@ const controlCommand = defineCommand({
     description: 'Read and control one running Harlan GitHub Agent service.',
   },
   subCommands: {
+    'watch-pr': defineCommand({
+      meta: { name: 'watch-pr', description: 'Watch one pull request through Service events, without polling GitHub.' },
+      args: {
+        ...controlConnectionArguments,
+        'repository': { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        'number': { type: 'string', description: 'Pull request number.', required: true },
+        'until': { type: 'string', description: 'Stop at attention, review readiness, or merge: attention, review, merged.', default: 'attention' },
+        'timeout-seconds': { type: 'string', description: 'Optional watch duration from 1 to 86400 seconds.' },
+      },
+      async run({ args }) {
+        const target = parsePullRequestWatchTarget({ repository: args.repository, number: Number(args.number) })
+        const until = args.until
+        const timeoutSeconds = args['timeout-seconds'] === undefined ? undefined : Number(args['timeout-seconds'])
+        if (target._tag === 'Err' || (until !== 'attention' && until !== 'review' && until !== 'merged')) {
+          writeJson({ _tag: 'InvalidWatchTarget', message: target._tag === 'Err' ? target.error : 'Set until to attention, review, or merged.' } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        if (timeoutSeconds !== undefined && (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400)) {
+          writeJson({ _tag: 'InvalidWatchTarget', message: 'Set timeout-seconds from 1 to 86400.' } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        const controller = new AbortController()
+        const stop = () => controller.abort()
+        process.once('SIGINT', stop)
+        process.once('SIGTERM', stop)
+        try {
+          await runControl(args, client => client.watchPullRequest(target.value, {
+            signal: timeoutSeconds === undefined ? controller.signal : AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutSeconds * 1_000)]),
+            until,
+            onUpdate: state => writeJson({ event: 'pull-request', status: state._tag, ...(state._tag === 'NotObserved'
+              ? {}
+              : { headSha: state.pullRequest.headSha, tasks: state.tasks.map(task => ({ id: task.id, kind: task.kind, state: task.state._tag })) }) }, process.stderr),
+          }))
+        }
+        finally {
+          process.removeListener('SIGINT', stop)
+          process.removeListener('SIGTERM', stop)
+        }
+      },
+    }),
     'status': defineCommand({
       meta: { name: 'status', description: 'Read service health and the shared dashboard state.' },
       args: controlConnectionArguments,

@@ -93,6 +93,7 @@ harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent
 harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control watch-pr --repository OWNER/REPOSITORY --number NUMBER --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control reload-external-watches --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control routine-run --routine OWNER/REPOSITORY:NAME --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control stop-review --repository OWNER/REPOSITORY --number NUMBER --head HEAD_SHA --config /absolute/path/to/harlan-github-agent.yml
@@ -116,6 +117,12 @@ Close the daily issue when its actions are resolved or tracked in linked issues.
 
 Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
 Every command prints one JSON value. A tagged JSON error exits with status 1.
+`watch-pr` streams changed pull request states to stderr and prints its terminal state to stdout.
+It uses the authenticated Service stream, without polling GitHub.
+Use `--until review` for published current-Revision Review readiness, or `--until merged` to wait through actionable findings.
+The default returns actionable work only after Service Tasks stop owning that head.
+Use `--timeout-seconds` for a bounded wait. Reconnect with the same command after a Service restart.
+Follow [pull request watching](../pr/references/pull-request-watch.md) for the submitting Agent's completion contract.
 
 Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and authenticated `gh` client.
 

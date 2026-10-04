@@ -236,6 +236,8 @@ export interface GitHubPullRequestItem extends GitHubItemBase {
   /** True when the Auto merge label lets the controller merge this pull request. */
   autoMerge: boolean
   mergedAt: string | null
+  /** Available after merge. Older journal entries may omit it. */
+  mergeCommitSha?: string | null
   draft: boolean
   baseSha: string
   /**

@@ -1504,6 +1504,41 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     return settled.includes(true)
   }
   const app = createAgentApp({
+    ...(config.triggers.includes('github')
+      ? { pullRequestWatch: {
+          state: store.getPullRequestWatchState,
+          observe: async (target, signal) => {
+            const repository = config.repositories.find(repository => repository.enabled && repository.github.toLowerCase() === target.repository.toLowerCase())
+            if (repository === undefined)
+              return err('The repository is not enabled in this service.')
+            // Use the normal triage and observation path for an open pull request.
+            await repositoryPollers.get(repository.github.toLowerCase())?.runNow()
+            const state = store.getPullRequestWatchState(repository.github, target.number)
+            if (state !== null && state._tag !== 'NotObserved' && state._tag !== 'PendingClosure')
+              return ok(undefined)
+            // A pull request merged before the first observation is absent from the open list.
+            const read = await github.getPullRequest(repository, target.number, signal)
+            if (read._tag === 'Err')
+              return err(read.error.message)
+            if (read.value.state !== 'closed')
+              return err('The service did not select this open pull request for observation.')
+            const observedAt = now().toISOString()
+            const recorded = store.recordPollObservation({ subject: read.value, observedAt })
+            if (recorded._tag === 'Conflict' || recorded._tag === 'Stale')
+              return err('The pull request changed during observation. Run watch-pr again.')
+            const verified = store.recordVerifiedPullRequestClosure({
+              repository: repository.github,
+              pullRequestNumber: target.number,
+              revisionId: recorded.revisionId,
+              headSha: read.value.headSha,
+              baseSha: read.value.baseSha,
+              disposition: read.value.mergedAt === null ? { _tag: 'Closed' } : { _tag: 'Merged' },
+              at: observedAt,
+            })
+            return verified ? ok(undefined) : err('The pull request closure could not be confirmed.')
+          },
+        } }
+      : {}),
     ...(reloadExternalWatches === undefined ? {} : { reloadExternalWatches }),
     desktop,
     hostCapacity: hosts.read,
