@@ -121,6 +121,8 @@ Service updates run the same restore before starting workers on either host.
 | `technical-guide` | Research and verify individual technical articles. |
 | `agentify-text` | Compress agent text while preserving its meaning. |
 | `pull-request-summary` | Check PR description text before personal `pr` publishes it. |
+| `glossary` | Create or audit GLOSSARY.md for names and vocabulary drift. |
+| `copywriting` | Create or audit COPY.md for voice and canonical wording. |
 
 [`brundlefly.json`](./harlan-agent-kit/brundlefly.json) selects the exact source commit and Skills.
 Personal `pr` calls Brundlefly `pull-request-summary` for its description gate.
@@ -135,7 +137,6 @@ Personal `pr` owns Hooks, publication, Review, and Service policy.
 | [`content-refresh`](./harlan-agent-kit/skills/content-refresh/SKILL.md) | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks |
 | [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Review inbox email with [Himalaya](https://github.com/pimalaya/himalaya) and propose actions |
 | [`email-usage`](./harlan-agent-kit/skills/email-usage/SKILL.md) | Choose email addresses, Himalaya accounts, and mail permissions |
-| [`glossary`](./harlan-agent-kit/skills/glossary/SKILL.md) | Create or audit `GLOSSARY.md` and catch vocabulary drift |
 | [`harlan-github-agent`](./harlan-agent-kit/skills/harlan-github-agent/SKILL.md) | Drive or diagnose the local GitHub service |
 | [`i-dont-know-just-keep-working`](./harlan-agent-kit/skills/i-dont-know-just-keep-working/SKILL.md) | Find related gaps, bugs, and improvements, then rank next steps by impact, effort, and confidence |
 | [`improve-ts-pkg-architecture`](./harlan-agent-kit/skills/improve-ts-pkg-architecture/SKILL.md) | Find architecture improvements in a TypeScript package |

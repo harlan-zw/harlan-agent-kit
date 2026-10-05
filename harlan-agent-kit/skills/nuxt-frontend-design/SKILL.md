@@ -165,7 +165,7 @@ its words ships whatever sentence each agent liked that day.
 
 After emitting `DESIGN.md`, check for `COPY.md` at the project root. If the project has
 user-visible strings and no `COPY.md`, say so and offer to run the
-[`copywriting` skill](../copywriting/SKILL.md) `init` workflow. Do not write one from inside
+installed Brundlefly `copywriting` Skill `init` workflow. Do not write one from inside
 this skill: it bootstraps from the strings that already ship, and that is a different harvest
 from the one done here.
 

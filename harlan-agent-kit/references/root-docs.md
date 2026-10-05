@@ -25,8 +25,8 @@ Nothing else may sit at the root. A new root Markdown file is an error.
 | `CONTRIBUTING.md` | how a human contributes | humans |
 | `LICENSE.md`, `SECURITY.md`, `CHANGELOG.md` | the usual | humans, tooling |
 
-The [`copywriting` skill](../skills/copywriting/SKILL.md) creates and audits `COPY.md`, the way
-the [`glossary` skill](../skills/glossary/SKILL.md) does for `GLOSSARY.md`. A site with
+The installed Brundlefly `copywriting` Skill creates and audits `COPY.md`, the way
+the installed Brundlefly `glossary` Skill does for `GLOSSARY.md`. A site with
 user-visible strings and no `COPY.md` is a gap; run its `init` workflow.
 
 `COPY.md` owns the words on screen. `DESIGN.md` owns the pixels and defers voice

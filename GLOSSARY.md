@@ -212,7 +212,7 @@ the replacement when it refuses a commit.
 
 Scopes that look like drift and are not: `dashboard` names
 `packages/harlan-github-agent/dashboard/`, a real directory with its own design system.
-`hooks`, `skills`, `pr`, and `glossary` each name a directory too. All of them stay.
+`hooks`, `skills`, and `pr` each name a local directory. `glossary` names an imported Brundlefly Skill. These scopes remain allowed.
 
 ## Open questions
 
