@@ -75,7 +75,10 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     .filter(number => !seenPullRequests.has(number))
   const unverifiedClosedPullRequestNumbers = dependencies.store.listUnverifiedClosedPullRequestNumbers(repository.github)
     .filter(number => !seenPullRequests.has(number))
-  const finalPullRequestNumbers = [...new Set([...missingPullRequestNumbers, ...unverifiedClosedPullRequestNumbers])]
+  const completionPullRequestNumbers = writesEnabled
+    ? dependencies.store.listUnverifiedCompletionPullRequestNumbers(repository).filter(number => !seenPullRequests.has(number))
+    : []
+  const finalPullRequestNumbers = [...new Set([...missingPullRequestNumbers, ...unverifiedClosedPullRequestNumbers, ...completionPullRequestNumbers])]
   const [finalIssueReads, finalPullRequestReads] = await Promise.all([
     Promise.all(missingIssueNumbers.map(number => dependencies.github.getIssue(repository, number, dependencies.signal))),
     Promise.all(finalPullRequestNumbers.map(number => dependencies.github.getPullRequest(repository, number, dependencies.signal))),

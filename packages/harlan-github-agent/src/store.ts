@@ -13,6 +13,7 @@ import type { PullRequestWatchState } from './pull-request-watch.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { ReviewApproval } from './review-approval.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
+import type { TakeOwnershipStore } from './take-ownership-store.ts'
 import type {
   AdversarialReviewTask,
   AgentFeedback,
@@ -133,6 +134,7 @@ import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
 import { buildStats } from './stats.ts'
+import { createTakeOwnershipStore } from './take-ownership-store.ts'
 import { cleanLine } from './text.ts'
 import { parseConflictCleanMergeEvidence } from './worktree.ts'
 
@@ -758,7 +760,7 @@ export type StoredIssueTriageRun
       decidedAt: string
     }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore {
   getPullRequestWatchState: (repository: string, number: number) => PullRequestWatchState | null
   /**
    * Approves one exact issue state from an outside author. The Approval unlocks
@@ -7175,6 +7177,7 @@ export function openJournalStore(
 ): JournalStore {
   const database = openDatabase(path)
   const packageReleaseStore = createPackageReleaseStore(database)
+  const takeOwnershipStore = createTakeOwnershipStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
   const loggedFindingStore = createLoggedFindingStore(database, {
@@ -13742,6 +13745,7 @@ export function openJournalStore(
       repositories,
       items,
       tasks,
+      completionTasks: takeOwnershipStore.listCompletionTasks(),
       routines,
       routineRuns,
       batches: batchStore.listBatches(10),
@@ -15884,6 +15888,7 @@ export function openJournalStore(
   }
 
   return {
+    ...takeOwnershipStore,
     ...loggedFindingStore,
     approveIssue,
     syncRoutines,
