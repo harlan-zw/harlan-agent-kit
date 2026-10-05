@@ -7,6 +7,7 @@ import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
 import type { PackageReleaseConfig, PackageReleaseDefaults } from './package-release.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { RoutineName } from './routines/index.ts'
+import type { CompletionTask } from './take-ownership-store.ts'
 
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
 
@@ -1581,6 +1582,8 @@ export interface TriageSkip {
 }
 
 export interface DashboardSnapshot {
+  /** Controller delivery checks, exposed by the Control API. */
+  completionTasks?: CompletionTask[]
   hostTasks?: Array<{ taskId: string | null, host: 'hogwild' | 'desktop' }>
   hostCapacity?: HostCapacity
   agentSlots?: AgentSlotLimits

@@ -89,6 +89,8 @@ import { resolveRecoveredRunnerIncidents } from './runner-lost-recovery.ts'
 import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
 import { openJournalStore } from './store.ts'
+import { runCompletionTask } from './take-ownership-completion.ts'
+import { createCompletionSource } from './take-ownership-github.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
 import { createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
@@ -1438,6 +1440,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           if (result._tag === 'Err')
             throw new Error(`${result.error.repository}: ${result.error.message}`)
           options.logger.info(`${result.value.repository}: observed ${result.value.subjects} open pull requests and issues.`)
+        }
+        if (config.mutationsEnabled && store.getAgentControl()._tag === 'Running'
+          && restartAllowsTaskClaims(store.getRestartRequest())) {
+          await runCompletionTask({ repository, store, now, workerId: 'take-ownership', source: createCompletionSource({ tokens, fetch: globalThis.fetch }) }, signal)
         }
       },
       onError: error => options.logger.error(error),

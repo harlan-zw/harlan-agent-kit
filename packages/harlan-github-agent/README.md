@@ -185,6 +185,38 @@ Keep the submitting Agent turn active while the command runs.
 After merge, that Agent applies Take Ownership Completion and reports remaining work.
 A finished chat needs a new turn before it can continue.
 
+### Take Ownership
+
+For Service-created pull requests, enable `repositories[].take_ownership` to retain delivery checks after merge.
+The repository must be owned and mapped inside a trusted sites root.
+
+```yaml
+take_ownership:
+  enabled: true
+  production_url: https://example.com
+  required_workflows: [deploy.yml]
+  smoke_paths: [/health]
+```
+
+The controller confirms the exact merge, then checks workflows at its merge commit.
+Use workflow filenames or unique workflow names in `required_workflows`.
+Only default branch push runs count. The newest matching run must finish successfully.
+After those runs pass, each smoke URL must return HTTP 2xx without a redirect.
+Smoke requests carry no GitHub credentials and stay on the configured production origin.
+Empty workflow or smoke lists omit that stage.
+
+Completion Tasks retain their target, result, and evidence across restarts.
+The existing repository observer resumes them. They consume no Agent slots and add no polling timer.
+`control tasks` and `control status` include `completionTasks`.
+Missing or unreadable evidence retries after one minute, at the next repository observation.
+After 24 hours, the Task reports Action required with its last reason.
+Failed workflows and smoke responses also report Action required.
+If the policy changes, the Task reports Action required for the original delivery target.
+Pause and disabled writes prevent claims and completion writes.
+
+These checks verify workflow results and HTTP availability. They do not prove which commit a URL serves.
+The controller creates no repair, deploy, release, or cleanup action from these checks.
+
 Set `webhook.enabled` to start the separate listener on port 3211.
 The public route exposes only `POST /webhook` through Caddy.
 Dashboard routes retain their password and Origin checks.
@@ -481,7 +513,7 @@ Tokens on this account share its quota across hosts.
 
 The CLI permits read commands and REST `GET` requests.
 API fields keep `GET`, rather than changing the request to `POST`.
-Use `pr view`, `issue view`, or `search` instead of raw GraphQL.
+Use `pr view`, `issue view`, or `search` instead of raw [GraphQL](https://graphql.org).
 Missing credentials, denied access, and rate limits never select another account.
 
 The wrapper prevents accidental writes and credential selection.
