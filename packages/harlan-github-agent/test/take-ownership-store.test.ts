@@ -105,7 +105,7 @@ it('resumes Pending delivery, then stores workflow and smoke evidence', async ()
     merged(store)()
     const options = { repository, store, workerId: 'completion', now: () => new Date(at(seconds)), source: {
       workflows: async () => ok(delivered
-        ? [{ id: 1, path: '.github/workflows/deploy.yml', sha: 'm'.repeat(40), branch: 'main', event: 'push', status: 'completed', conclusion: 'success', url: 'https://github.com/run/1' }]
+        ? [{ id: 1, path: '.github/workflows/deploy.yml', source: { _tag: 'Push' as const, sha: 'm'.repeat(40), branch: 'main' }, status: 'completed', conclusion: 'success', url: 'https://github.com/run/1' }]
         : []),
       smoke: async () => {
         smokeRequests++

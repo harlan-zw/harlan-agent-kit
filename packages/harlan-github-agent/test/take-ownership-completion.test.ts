@@ -5,18 +5,18 @@ import { repositoryMapping } from './fixtures.ts'
 
 const repository = repositoryMapping({ takeOwnership: { _tag: 'Enabled', productionUrl: 'https://example.com', requiredWorkflows: ['deploy.yml'], smokePaths: ['/health'] } })
 const target = { pullRequestNumber: 24, headSha: 'head', mergeSha: 'merge', mergedAt: '2026-10-05T00:00:00.000Z' }
-const run = { id: 1, path: '.github/workflows/deploy.yml', sha: 'merge', branch: 'main', event: 'push', status: 'completed', conclusion: 'success', url: 'https://github.com/run/1' }
+const run = { id: 1, path: '.github/workflows/deploy.yml', source: { _tag: 'Push' as const, sha: 'merge', branch: 'main' }, status: 'completed', conclusion: 'success', url: 'https://github.com/run/1' }
 
 it('waits for the merge workflow before making any smoke request', async () => {
   let requests = 0
   const result = await verifyCompletion(repository, target, {
-    workflows: async () => ok([{ ...run, sha: 'head', event: 'pull_request' }]),
+    workflows: async () => ok([{ ...run, source: { _tag: 'Push', sha: 'head', branch: 'main' } }]),
     smoke: async () => {
       requests++
       return ok(200)
     },
   }, new AbortController().signal)
-  expect(result).toEqual({ _tag: 'Pending', reason: 'Workflow deploy.yml has no default branch push run for merge.' })
+  expect(result).toEqual({ _tag: 'Pending', reason: 'Workflow deploy.yml has no delivery run for merge.' })
   expect(requests).toBe(0)
 })
 
@@ -60,4 +60,25 @@ it('accepts a configured workflow name and rejects an ambiguous name', async () 
   expect((await verifyCompletion(named, target, source, new AbortController().signal))._tag).toBe('Completed')
   source.workflows = async () => ok([{ ...run, name: 'deploy' }, { ...run, id: 2, path: '.github/workflows/other.yml', name: 'deploy' }])
   expect((await verifyCompletion(named, target, source, new AbortController().signal))._tag).toBe('ActionRequired')
+})
+
+it('matches a downstream triggering push instead of the workflow definition commit', async () => {
+  const result = await verifyCompletion(repository, target, {
+    workflows: async () => ok([{ ...run, source: { _tag: 'WorkflowRun', repository: repository.github, branch: 'main', sha: target.mergeSha } }]),
+    smoke: async () => ok(200),
+  }, new AbortController().signal)
+  expect(result._tag).toBe('Completed')
+})
+
+it.each([['foreign repository', 'harlan-zw/other', 'main', 'merge'], ['foreign branch', repository.github, 'feature', 'merge'], ['different commit', repository.github, 'main', 'other']])('rejects downstream evidence for %s', async (_reason, sourceRepository, branch, sha) => {
+  let requests = 0
+  const result = await verifyCompletion(repository, target, {
+    workflows: async () => ok([{ ...run, source: { _tag: 'WorkflowRun', repository: sourceRepository, branch, sha } }]),
+    smoke: async () => {
+      requests++
+      return ok(200)
+    },
+  }, new AbortController().signal)
+  expect(result._tag).toBe('Pending')
+  expect(requests).toBe(0)
 })

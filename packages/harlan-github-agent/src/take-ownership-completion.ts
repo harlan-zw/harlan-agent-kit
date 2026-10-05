@@ -13,9 +13,9 @@ export interface CompletionWorkflow {
   id: number
   name?: string | null
   path: string
-  sha: string
-  branch: string | null
-  event: string
+  source:
+    | { _tag: 'Push', sha: string, branch: string | null }
+    | { _tag: 'WorkflowRun', sha: string, branch: string, repository: string }
   status: string | null
   conclusion: string | null
   url: string
@@ -33,7 +33,7 @@ export type CompletionResult
     | { _tag: 'Completed', evidence: CompletionEvidence }
 
 export interface CompletionSource {
-  workflows: (repository: RepositoryMapping, sha: string, signal: AbortSignal) => Promise<Result<CompletionWorkflow[], string>>
+  workflows: (repository: RepositoryMapping, target: CompletionTarget, signal: AbortSignal) => Promise<Result<CompletionWorkflow[], string>>
   smoke: (url: string, signal: AbortSignal) => Promise<Result<number, string>>
 }
 
@@ -44,18 +44,19 @@ export async function verifyCompletion(repository: RepositoryMapping, target: Co
     return { _tag: 'ActionRequired', reason: 'Take Ownership is disabled for this repository.' }
   const evidence: CompletionEvidence = { mergeSha: target.mergeSha, workflows: [], smoke: [] }
   if (policy.requiredWorkflows.length > 0) {
-    const read = await source.workflows(repository, target.mergeSha, signal)
+    const read = await source.workflows(repository, target, signal)
     if (read._tag === 'Err')
       return { _tag: 'Pending', reason: read.error }
     for (const name of policy.requiredWorkflows) {
-      const matches = read.value.filter(run => run.sha === target.mergeSha
-        && run.branch === repository.defaultBranch && run.event === 'push'
+      const matches = read.value.filter(run => run.source.sha === target.mergeSha
+        && run.source.branch === repository.defaultBranch
+        && (run.source._tag === 'Push' || run.source.repository.toLowerCase() === repository.github.toLowerCase())
         && (run.name === name || run.path.split('@')[0] === `.github/workflows/${name}` || run.path.split('@')[0] === name))
       if (new Set(matches.map(run => run.path.split('@')[0])).size > 1)
         return { _tag: 'ActionRequired', reason: `Workflow ${name} matches multiple workflow files. Use one workflow filename.` }
       const run = matches.sort((a, b) => b.id - a.id)[0]
       if (run === undefined)
-        return { _tag: 'Pending', reason: `Workflow ${name} has no default branch push run for ${target.mergeSha}.` }
+        return { _tag: 'Pending', reason: `Workflow ${name} has no delivery run for ${target.mergeSha}.` }
       if (run.status !== 'completed')
         return { _tag: 'Pending', reason: `Workflow ${name} is ${run.status ?? 'pending'}.` }
       if (run.conclusion !== 'success')
