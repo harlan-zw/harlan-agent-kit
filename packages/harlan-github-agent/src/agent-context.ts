@@ -1,8 +1,10 @@
 import type { Result } from './result.ts'
+import { execFile } from 'node:child_process'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
+import { promisify } from 'node:util'
 import skillManifest from '../../../.skills/skilld.json' with { type: 'json' }
 import { err, ok } from './result.ts'
 
@@ -12,6 +14,12 @@ export interface AgentContextPaths {
   instructionsPath: string
   skillsRoot: string
   requiredSkillDirectories: readonly string[]
+  declaredSkills?: {
+    binary: string
+    manifest: string
+    dataRoot: string
+    environment: NodeJS.ProcessEnv
+  }
 }
 
 export interface AgentContext {
@@ -66,11 +74,36 @@ export function defaultAgentContextPaths(
     instructionsPath: join(codexHome, 'AGENTS.md'),
     skillsRoot: join(workingDirectory, 'harlan-agent-kit', 'skills'),
     requiredSkillDirectories: Object.keys(skillManifest.skills).map(name => join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/skilld/skills', name)),
+    declaredSkills: {
+      binary: 'skilld',
+      manifest: join(workingDirectory, '.skills/skilld.json'),
+      dataRoot: join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/skilld'),
+      environment,
+    },
   }
 }
 
 /** Loads every canonical Harlan skill, or refuses to start with partial context. */
 export async function loadAgentContext(paths: AgentContextPaths): Promise<Result<AgentContext, string>> {
+  if (paths.declaredSkills) {
+    const declaration = paths.declaredSkills
+    const checked = await promisify(execFile)(declaration.binary, [
+      'sync',
+      '--manifest',
+      declaration.manifest,
+      '--global',
+      '--check',
+      '--plain',
+    ], {
+      env: { ...declaration.environment, SKILLD_DATA_DIR: declaration.dataRoot, SKILLD_NO_UPGRADE: '1', SKILLD_NO_WEEKLY: '1' },
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+    }).then(() => ok(true)).catch((error: unknown) => err(
+      `The declared Skill check failed. Run pnpm sync:skills before starting the Agent. ${errorMessage(error)}`,
+    ))
+    if (checked._tag === 'Err')
+      return checked
+  }
   const instructions = await stat(paths.instructionsPath)
     .then(metadata => ok(metadata.isFile()))
     .catch((error: unknown) => isMissingPath(error)
