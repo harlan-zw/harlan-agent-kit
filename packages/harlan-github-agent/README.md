@@ -200,10 +200,28 @@ take_ownership:
 
 The controller confirms the exact merge, then checks workflows at its merge commit.
 Use workflow filenames or unique workflow names in `required_workflows`.
-Only default branch push runs count. The newest matching run must finish successfully.
+Default branch push runs count. Downstream `workflow_run` runs need explicit triggering push evidence.
+The newest matching run must finish successfully.
 After those runs pass, each smoke URL must return HTTP 2xx without a redirect.
 Smoke requests carry no GitHub credentials and stay on the configured production origin.
 Empty workflow or smoke lists omit that stage.
+
+For a downstream deployment, record its triggering push in `run-name`:
+
+```yaml
+name: Deploy to Prod
+run-name: >-
+  ${{ github.event_name == 'workflow_run' && format('Deploy to Prod [take_ownership:{0}:{1}:{2}:{3}]',
+      github.event.workflow_run.head_repository.full_name, github.event.workflow_run.event,
+      github.event.workflow_run.head_branch, github.event.workflow_run.head_sha) || 'Deploy to Prod' }}
+```
+
+Deploy from that same `github.event.workflow_run.head_sha`.
+The verifier matches the marker's repository, default branch, and full merge SHA.
+Only triggering `push` events qualify. Unmarked runs, pull request triggers, and manual dispatches cannot satisfy Completion.
+The workflow definition commit can differ from the triggering commit.
+Downstream searches start at the merge time and use GitHub's paginated run history.
+GitHub limits each filtered search to 1,000 runs. Older evidence can therefore remain unavailable.
 
 Completion Tasks retain their target, result, and evidence across restarts.
 The existing repository observer resumes them. They consume no Agent slots and add no polling timer.
