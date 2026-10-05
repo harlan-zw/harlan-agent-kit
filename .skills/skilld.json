@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "name": "harlan-agent-kit",
+  "agents": ["codex", "claude-code", "opencode"],
+  "mode": "symlink",
+  "skills": {
+    "write-human": {
+      "source": "github:harlan-zw/brundlefly/skills/write-human#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    },
+    "technical-guide": {
+      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    },
+    "agentify-text": {
+      "source": "github:harlan-zw/brundlefly/skills/agentify-text#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    },
+    "pull-request-summary": {
+      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    },
+    "glossary": {
+      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    },
+    "copywriting": {
+      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    }
+  },
+  "requires": {
+    "pr": ["pull-request-summary", "write-human"],
+    "adversarial-review": ["write-human"],
+    "content-refresh": ["technical-guide", "write-human", "glossary"],
+    "tweet": ["write-human"],
+    "release-notes": ["write-human"],
+    "improve-ts-pkg-architecture": ["glossary"],
+    "nuxt-improve-codebase-architecture": ["glossary"],
+    "nuxt-frontend-design": ["copywriting"]
+  }
+}

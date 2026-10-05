@@ -10,6 +10,7 @@ describe('defaultAgentContextPaths', () => {
     expect(paths.claudeHome).toBe('/agent-home/.claude')
     expect(paths.instructionsPath).toBe('/agent-home/AGENTS.md')
     expect(paths.skillsRoot).toBe('/service/harlan-agent-kit/skills')
+    expect(paths.requiredSkillDirectories).toContain('/agent-home/.local/share/harlan-agent-kit/skilld/skills/write-human')
   })
 })
 

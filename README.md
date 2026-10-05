@@ -110,9 +110,15 @@ Start a new Codex thread after a reinstall, otherwise the new Skills stay unload
 
 Personal Skills live in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
 Portable Skills come from [Brundlefly](https://github.com/harlan-zw/brundlefly).
-Run `pnpm sync:skills` after installation to restore the pinned source and provider links.
-The source requires Git access to Brundlefly while that repository is private.
+Run `pnpm sync:skills` to install the declared Skills through skilld.
+Use a skilld CLI that supports `skilld sync`.
+Private Brundlefly delivery requires skilld authentication and GitHub App access.
 The command preserves unrelated installed Skills and refuses name conflicts.
+It adopts existing links only when their files match the pinned source.
+Run `pnpm check:skills` to check installed content, targets, and required Skills.
+Skills reach Codex, Claude Code, and OpenCode through the same declaration.
+The dedicated store lives at `~/.local/share/harlan-agent-kit/skilld`.
+The existing skilld store keeps its files.
 Service updates run the same restore before starting workers on either host.
 
 | Brundlefly Skill | Use |
@@ -124,7 +130,7 @@ Service updates run the same restore before starting workers on either host.
 | `glossary` | Create or audit GLOSSARY.md for names and vocabulary drift. |
 | `copywriting` | Create or audit COPY.md for voice and canonical wording. |
 
-[`brundlefly.json`](./harlan-agent-kit/brundlefly.json) selects the exact source commit and Skills.
+[`skilld.json`](./.skills/skilld.json) declares exact sources, Agent targets, and required Skills.
 Personal `pr` calls Brundlefly `pull-request-summary` for its description gate.
 Personal `pr` owns Hooks, publication, Review, and Service policy.
 `content-refresh` coordinates collections and uses `technical-guide` for each technical article.
