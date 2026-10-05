@@ -3,7 +3,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
-import brundlefly from '../../../harlan-agent-kit/brundlefly.json' with { type: 'json' }
+import skillManifest from '../../../.skills/skilld.json' with { type: 'json' }
 import { err, ok } from './result.ts'
 
 export interface AgentContextPaths {
@@ -65,7 +65,7 @@ export function defaultAgentContextPaths(
     claudeHome,
     instructionsPath: join(codexHome, 'AGENTS.md'),
     skillsRoot: join(workingDirectory, 'harlan-agent-kit', 'skills'),
-    requiredSkillDirectories: brundlefly.skills.map(name => join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/brundlefly', brundlefly.revision, 'skills', name)),
+    requiredSkillDirectories: Object.keys(skillManifest.skills).map(name => join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/skilld/skills', name)),
   }
 }
 
