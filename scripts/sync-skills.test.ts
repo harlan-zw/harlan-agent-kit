@@ -8,6 +8,10 @@ const input = {
   check: false,
 }
 
+it.each([0, 1, 2])('returns the CLI exit code %i', (code) => {
+  expect(syncSkills({ ...input, check: true }, () => code)).toBe(code)
+})
+
 it('uses the declared global Skills without moving the existing skilld store', () => {
   const calls: unknown[] = []
   syncSkills(input, invocation => calls.push(invocation))
