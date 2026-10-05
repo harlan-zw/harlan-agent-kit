@@ -139,6 +139,7 @@ Personal `pr` owns Hooks, publication, Review, and Service policy.
 |-------|-------------|
 | [`adversarial-review`](./harlan-agent-kit/skills/adversarial-review/SKILL.md) | Review one PR adversarially, hand defects to Repair, publish the bot status |
 | [`agent-feedback`](./harlan-agent-kit/skills/agent-feedback/SKILL.md) | Improve one Agent Skill from explicit Review feedback |
+| [`brand-lab`](./harlan-agent-kit/skills/brand-lab/SKILL.md) | Compare brand directions for a logo and UI motifs on one private page |
 | [`browser`](./harlan-agent-kit/skills/browser/SKILL.md) | Select Chrome identities, use prompt-free debugging, and clean up task tabs |
 | [`content-refresh`](./harlan-agent-kit/skills/content-refresh/SKILL.md) | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks |
 | [`email-triage`](./harlan-agent-kit/skills/email-triage/SKILL.md) | Review inbox email with [Himalaya](https://github.com/pimalaya/himalaya) and propose actions |
