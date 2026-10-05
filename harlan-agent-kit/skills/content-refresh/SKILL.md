@@ -16,7 +16,7 @@ Precise examples should also remain useful to agents.
 Inspect the target repository, its Agent instructions, content configuration, routes, navigation, and existing editorial records.
 Include relevant hidden project records, such as prior SEO research under .claude/, using a bounded search.
 Treat old research as leads to recheck, not current source proof.
-Read its glossary through the [glossary Skill](../glossary/SKILL.md).
+Read its glossary through the installed Brundlefly `glossary` Skill.
 If no glossary exists, use that Skill to propose terms and resolve naming decisions before dependent copy.
 Do not silently adopt another project's vocabulary.
 Do not transfer another product's facts, terminology, source scores, or rollout claims.
