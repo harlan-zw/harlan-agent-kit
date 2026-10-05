@@ -75,7 +75,7 @@ export function defaultAgentContextPaths(
     skillsRoot: join(workingDirectory, 'harlan-agent-kit', 'skills'),
     requiredSkillDirectories: Object.keys(skillManifest.skills).map(name => join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/skilld/skills', name)),
     declaredSkills: {
-      binary: 'skilld',
+      binary: environment.HARLAN_AGENT_SKILLD_BINARY ?? 'skilld',
       manifest: join(workingDirectory, '.skills/skilld.json'),
       dataRoot: join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/skilld'),
       environment,

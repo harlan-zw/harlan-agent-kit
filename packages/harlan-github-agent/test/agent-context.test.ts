@@ -15,6 +15,35 @@ describe('defaultAgentContextPaths', () => {
 })
 
 describe('loadAgentContext', () => {
+  it.each([0, 1, 2])('uses the configured skilld binary during startup, received %s', async (status) => {
+    const root = await mkdtemp(join(tmpdir(), 'configured-skilld-'))
+    try {
+      const binary = join(root, 'custom-skilld')
+      await writeFile(binary, `#!/bin/sh\n[ "$1" = sync ] && [ "$5" = --check ] || exit 99\nexit ${status}\n`)
+      await chmod(binary, 0o755)
+      const paths = defaultAgentContextPaths({
+        HOME: root,
+        CODEX_HOME: root,
+        PATH: join(root, 'empty-path'),
+        HARLAN_AGENT_SKILLD_BINARY: binary,
+      }, root)
+      await writeFile(paths.instructionsPath, '# Instructions\n')
+      await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal policy.\n')
+      for (const directory of paths.requiredSkillDirectories) {
+        await mkdir(directory, { recursive: true })
+        await writeFile(join(directory, 'SKILL.md'), 'Declared policy.\n')
+      }
+      const result = await loadAgentContext(paths)
+      if (status === 0)
+        expect(result).toMatchObject({ _tag: 'Ok', value: { skillDirectories: [join(paths.skillsRoot, 'pr'), ...paths.requiredSkillDirectories] } })
+      else
+        expect(result).toMatchObject({ _tag: 'Err', error: expect.stringContaining(`Command failed: ${binary}`) })
+    }
+    finally {
+      await rm(root, { recursive: true })
+    }
+  })
   it.each([0, 1, 2])('permits installed context only when the declared Skill check exits zero, received %s', async (status) => {
     const root = await mkdtemp(join(tmpdir(), 'declared-context-'))
     try {
