@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -15,6 +15,32 @@ describe('defaultAgentContextPaths', () => {
 })
 
 describe('loadAgentContext', () => {
+  it.each([0, 1, 2])('permits installed context only when the declared Skill check exits zero, received %s', async (status) => {
+    const root = await mkdtemp(join(tmpdir(), 'declared-context-'))
+    try {
+      const binary = join(root, 'skilld')
+      await writeFile(binary, `#!/bin/sh\n[ "$1" = sync ] && [ "$5" = --check ] || exit 99\necho 'Declared Skills need attention.' >&2\nexit ${status}\n`)
+      await chmod(binary, 0o755)
+      const paths = {
+        claudeHome: root,
+        instructionsPath: join(root, 'AGENTS.md'),
+        skillsRoot: join(root, 'personal'),
+        requiredSkillDirectories: [],
+        declaredSkills: { binary, manifest: join(root, 'skilld.json'), dataRoot: join(root, 'store'), environment: {} },
+      }
+      await writeFile(paths.instructionsPath, '# Instructions\n')
+      await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal policy.\n')
+      const result = await loadAgentContext(paths)
+      if (status === 0)
+        expect(result).toMatchObject({ _tag: 'Ok', value: { skillDirectories: [join(paths.skillsRoot, 'pr')] } })
+      else
+        expect(result).toMatchObject({ _tag: 'Err', error: expect.stringContaining('pnpm sync:skills') })
+    }
+    finally {
+      await rm(root, { recursive: true })
+    }
+  })
   it('requires portable Skills and passes their directories to OpenCode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'portable-context-'))
     const paths = { claudeHome: root, instructionsPath: join(root, 'AGENTS.md'), skillsRoot: join(root, 'personal'), requiredSkillDirectories: [join(root, 'portable/write-human')] }

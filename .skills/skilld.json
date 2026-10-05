@@ -4,6 +4,9 @@
   "agents": ["codex", "claude-code", "opencode"],
   "mode": "symlink",
   "skills": {
+    "skilld": {
+      "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
+    },
     "write-human": {
       "source": "github:harlan-zw/brundlefly/skills/write-human#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
     },
