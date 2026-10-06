@@ -10,7 +10,7 @@ describe('defaultAgentContextPaths', () => {
     expect(paths.claudeHome).toBe('/agent-home/.claude')
     expect(paths.instructionsPath).toBe('/agent-home/AGENTS.md')
     expect(paths.skillsRoot).toBe('/service/harlan-agent-kit/skills')
-    expect(paths.requiredSkillDirectories).toContain('/agent-home/.local/share/harlan-agent-kit/skilld/skills/write-human')
+    expect(paths.requiredSkillDirectories).toContain('/agent-home/.local/share/harlan-agent-kit/skilld/skills/im-not-a-fly')
   })
 })
 
@@ -72,12 +72,12 @@ describe('loadAgentContext', () => {
   })
   it('requires portable Skills and passes their directories to OpenCode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'portable-context-'))
-    const paths = { claudeHome: root, instructionsPath: join(root, 'AGENTS.md'), skillsRoot: join(root, 'personal'), requiredSkillDirectories: [join(root, 'portable/write-human')] }
+    const paths = { claudeHome: root, instructionsPath: join(root, 'AGENTS.md'), skillsRoot: join(root, 'personal'), requiredSkillDirectories: [join(root, 'portable/im-not-a-fly')] }
     try {
       await writeFile(paths.instructionsPath, '# Instructions\n')
       await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
       await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal PR policy.\n')
-      await expect(loadAgentContext(paths)).resolves.toMatchObject({ _tag: 'Err', error: expect.stringContaining('write-human') })
+      await expect(loadAgentContext(paths)).resolves.toMatchObject({ _tag: 'Err', error: expect.stringContaining('im-not-a-fly') })
       await mkdir(paths.requiredSkillDirectories[0]!, { recursive: true })
       await writeFile(join(paths.requiredSkillDirectories[0]!, 'SKILL.md'), 'Portable writing.\n')
       const result = await loadAgentContext(paths)
@@ -89,8 +89,8 @@ describe('loadAgentContext', () => {
       if (environment._tag === 'Err')
         return
       expect(JSON.parse(environment.value.OPENCODE_CONFIG_CONTENT!).skills.paths).toEqual([join(paths.skillsRoot, 'pr'), ...paths.requiredSkillDirectories])
-      await mkdir(join(paths.skillsRoot, 'write-human'), { recursive: true })
-      await writeFile(join(paths.skillsRoot, 'write-human/SKILL.md'), 'Duplicate.\n')
+      await mkdir(join(paths.skillsRoot, 'im-not-a-fly'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'im-not-a-fly/SKILL.md'), 'Duplicate.\n')
       await expect(loadAgentContext(paths)).resolves.toMatchObject({ _tag: 'Err', error: expect.stringContaining('Duplicate Skill') })
     }
     finally {

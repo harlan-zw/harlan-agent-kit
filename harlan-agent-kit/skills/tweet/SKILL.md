@@ -25,7 +25,7 @@ Never invent metrics, engagement, personal experience, or product claims.
 - **Screenshot dependencies** -- `sharp` and `@resvg/resvg-js` need to be installed. If they're not global, install to a temp dir, don't pollute the project.
 - **Hot takes can backfire** -- always flag the hot take variation as risky. The user should consciously opt in, not accidentally post something inflammatory.
 - **Always suggest a visual** -- text-only dev tweets get buried by the algorithm. Every finalized tweet should have a visual recommendation, even if the user didn't ask for one.
-- Before finalizing, load the installed Brundlefly `write-human` Skill. Preserve supplied facts and voice.
+- Before finalizing, load the installed Brundlefly `im-not-a-fly` Skill. Preserve supplied facts and voice.
 
 ## Data Storage
 

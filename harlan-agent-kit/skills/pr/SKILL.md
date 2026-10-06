@@ -164,7 +164,7 @@ Before writing the description, decide whether the change earns a diagram. Read 
 
 A diagram goes in the description, after the why and before the AI disclosure. Never in a trailing comment.
 
-Before pushing, load the installed Brundlefly `write-human` Skill for the title and description.
+Before pushing, load the installed Brundlefly `im-not-a-fly` Skill for the title and description.
 Preserve the Description gate, template, and disclosure.
 After prose edits, repeat the `pull-request-summary` description checks.
 

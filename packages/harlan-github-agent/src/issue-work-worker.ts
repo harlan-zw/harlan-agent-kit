@@ -340,7 +340,7 @@ Plan, implement, and verify the complete fix.
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 ${instructionFilesLine(input.instructionFiles)}
-${memoryBlock}Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or write-human. Their rules are inlined below.
+${memoryBlock}Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or im-not-a-fly. Their rules are inlined below.
 ${UNIT_TEST_LINES}
 ${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}

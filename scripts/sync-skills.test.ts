@@ -29,7 +29,7 @@ it('checks installed Skills without adopting targets', () => {
 })
 
 it('reports the original skilld failure for missing support or a target conflict', () => {
-  const failure = new Error('TARGET_CONFLICT: Skill write-human differs from its source.')
+  const failure = new Error('TARGET_CONFLICT: Skill im-not-a-fly differs from its source.')
   expect(() => syncSkills(input, () => {
     throw failure
   })).toThrow(failure)
