@@ -77,6 +77,25 @@ Keep the package manager pin. Check provenance, source revision, and tarball int
 Include nested dependencies when verifying a coordinated upstream release. Avoid repeated exceptions based only on each new error.
 Source: [cssnano 9.2.2 provenance](https://registry.npmjs.org/-/npm/v1/attestations/cssnano@9.2.2).
 
+## Consumer verification
+
+Update existing Nuxt and Unhead overrides alongside catalogs. Old overrides can hide required exports or incompatible declaration graphs.
+Check resolved peer versions, including optional integrations. A compatible catalog range can retain an older incompatible lock entry.
+Preserve stricter consumer engine ranges. A producer's lower Node floor does not prove the consumer supports that runtime.
+Deduplicate Vue across peer dependencies when rendering fails with a null component instance. Verify SSR after resolving the graph.
+Port version-bound patches only when the defect persists. Remove patches whose behavior is already fixed upstream.
+Move patches for owned modules into their producer before removing the consumer patch.
+Verify persisted queue choices through recovery, storage, and the actual publisher boundary.
+Refresh framework test doubles for native addon factories and module-owned runtime aliases. Preserve existing request and cache assertions.
+Import template-only constants explicitly when Nuxt no longer discovers them.
+Use native Nuxt fetch types at app boundaries. Mixed app and server globals can select Nitro's legacy route matcher.
+If that matcher recurses, bind client `$fetch` through `#imports` before adding response casts or experimental compiler settings.
+Response hooks can receive streamed bodies without a header map. Read head metadata before streaming and set headers on the event.
+Verify normal HTML, error responses, and linked stylesheet requests in the built Worker.
+If Rolldown emits missing SSR stylesheet chunks, test `features.inlineStyles: false` against that exact consumer graph.
+Keep stylesheet loading and HTTP asset checks in the workaround evidence.
+Apply exact age exceptions to local archives after publication too. Their registry timestamps can trigger fixture lock verification.
+
 Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
 Check ESM package roots through Node 22 `require(ESM)` and Nuxt's Jiti configuration loader.
 An import-only exports map can fail those loaders. Add a compatible `default` ESM entry when needed.
