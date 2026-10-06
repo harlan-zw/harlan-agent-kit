@@ -63,6 +63,7 @@ Do not stage, commit, push, publish, or alter GitHub metadata. The controller ow
 10. Return one pull request containing all passing updates. List excluded versions, blockers, and next actions in its description.
 
 Use explicit package targets when a blanket update would upgrade TypeScript or bypass another repository constraint.
+Use the [lockfile recipe](../../references/focused-checks.md#pnpm-lockfile). Regenerate the graph; never patch its YAML manually.
 Do not weaken tests, type checks, install trust policy, or build approvals to obtain passing checks.
 Do not widen supported peer ranges without testing that support.
 If every update is blocked, return a blocked outcome. Never fabricate a change to obtain a pull request.

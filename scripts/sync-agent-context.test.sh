@@ -101,6 +101,7 @@ printf '%s %s\n' plugin.json \
   "$(/usr/bin/sha256sum "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
 export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$opencode_hashes"
 export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_BAD=''
 
@@ -209,7 +210,7 @@ grep -E "chmod 644 '$manifest_target.next\.[0-9.]+'" "$calls" >/dev/null
 fixture="$test_root/fixture"
 mkdir -p "$fixture/scripts" "$fixture/harlan-agent-kit/hooks" \
   "$fixture/harlan-agent-kit/.claude-plugin" "$fixture/harlan-agent-kit/plugins/opencode"
-cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$fixture/scripts/"
+cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$fixture/scripts/"
 cp -r "$repo_root/agent-context" "$fixture/agent-context"
 cp "$repo_root/harlan-agent-kit/hooks/"*.sh "$fixture/harlan-agent-kit/hooks/"
 cp "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" "$fixture/harlan-agent-kit/plugins/opencode/"
@@ -250,6 +251,7 @@ printf '%s %s\n' harlan-hooks.ts \
 : > "$calls"
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
 PATH="$test_root/bin:/usr/bin:/bin" \
   HARLAN_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$fixture_hashes" \
   HARLAN_AGENT_CONTEXT_HOGWILD_HOST=hogwild \

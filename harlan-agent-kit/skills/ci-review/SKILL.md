@@ -101,6 +101,8 @@ If existing work owns the fix, return its link and a blocked outcome instead of 
 6. Run only the scoped checks permitted by the controller. CI owns the full suite, typecheck, and build.
 7. Report the original evidence, changed behavior, verification, and anything only GitHub Actions can prove.
 
+Use the [focused check recipes](../../references/focused-checks.md) to retain original exits and resolve declared preparation.
+
 If reproduction needs a command outside the check budget, report that limitation and leave verification to CI.
 Do not load workflow Skills. Use the controller's inlined rules.
 
