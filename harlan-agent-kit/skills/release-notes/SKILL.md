@@ -211,7 +211,7 @@ Structure:
 - Changelog items are **one-line bullets** with PR links.
 - Skip empty categories (if no perf changes, omit 🔥 Performance).
 - Contributors: deduplicate, use GitHub usernames with profile links.
-- Before publishing, load the installed Brundlefly `write-human` Skill for the Highlights prose. Preserve versions, links, and measured figures.
+- Before publishing, load the installed Brundlefly `im-not-a-fly` Skill for the Highlights prose. Preserve versions, links, and measured figures.
 
 ## Step 4: LLM Upgrade Prompt (Breaking Changes Only)
 

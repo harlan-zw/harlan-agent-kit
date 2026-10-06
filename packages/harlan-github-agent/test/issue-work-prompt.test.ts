@@ -97,7 +97,7 @@ describe('issueWorkPrompt', () => {
     expect(prompt).toContain('pullRequestTitle is a Conventional Commit subject under 70 characters')
     expect(prompt).toContain('> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description.')
     expect(prompt).toContain('Read these repository instruction files before you change code: AGENTS.md.')
-    expect(prompt).not.toMatch(/Apply the (?:PR|unit-tests|write-human) skill/)
+    expect(prompt).not.toMatch(/Apply the (?:PR|unit-tests|im-not-a-fly) skill/)
   })
 })
 

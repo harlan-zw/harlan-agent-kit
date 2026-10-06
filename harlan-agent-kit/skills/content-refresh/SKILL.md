@@ -88,9 +88,9 @@ A new revision invalidates affected approvals. Recheck changed claims and consum
 Read [screenshots](references/screenshots.md) before planning visual evidence.
 Load the installed Brundlefly `technical-guide` Skill for each technical article's research, examples, and reader verification.
 This Skill owns shared records, the worker pool, and collection publication checks.
-Use the target's article voice and the installed Brundlefly `write-human` Skill.
+Use the target's article voice and the installed Brundlefly `im-not-a-fly` Skill.
 Run a distinct factual review before the humanize pass.
-Then apply `write-human` under COPY.md.
+Then apply `im-not-a-fly` under COPY.md.
 Record the main writing changes in the brief. Recheck meaning, uncertainty, dates, and examples afterward.
 The final article reviewer reads the humanized revision, not an earlier draft.
 Record useful findings in the brief instead of flooding the user with every worker's writing report.

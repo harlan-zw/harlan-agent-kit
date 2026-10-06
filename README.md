@@ -123,9 +123,9 @@ Service updates run the same restore before starting workers on either host.
 
 | Brundlefly Skill | Use |
 | --- | --- |
-| `write-human` | Edit prose while preserving facts and voice. Replaces `humanize-writing`. |
+| `im-not-a-fly` | Edit prose while preserving facts and voice. Replaces `write-human`, formerly `humanize-writing`. |
 | `technical-guide` | Research and verify individual technical articles. |
-| `agentify-text` | Compress agent text while preserving its meaning. |
+| `im-a-fly` | Compress agent text while preserving its meaning. Replaces `agentify-text`. |
 | `pull-request-summary` | Check PR description text before personal `pr` publishes it. |
 | `glossary` | Create or audit GLOSSARY.md for names and vocabulary drift. |
 | `copywriting` | Create or audit COPY.md for voice and canonical wording. |

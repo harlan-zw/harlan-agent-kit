@@ -7,31 +7,31 @@
     "skilld": {
       "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
     },
-    "write-human": {
-      "source": "github:harlan-zw/brundlefly/skills/write-human#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    "im-not-a-fly": {
+      "source": "github:harlan-zw/brundlefly/skills/im-not-a-fly#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
     },
     "technical-guide": {
-      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
     },
-    "agentify-text": {
-      "source": "github:harlan-zw/brundlefly/skills/agentify-text#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+    "im-a-fly": {
+      "source": "github:harlan-zw/brundlefly/skills/im-a-fly#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
     },
     "pull-request-summary": {
-      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
     },
     "glossary": {
-      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
     },
     "copywriting": {
-      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:f554322273b83e25b904bd2b2b9b4428b07e2a5d"
+      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
     }
   },
   "requires": {
-    "pr": ["pull-request-summary", "write-human"],
-    "adversarial-review": ["write-human"],
-    "content-refresh": ["technical-guide", "write-human", "glossary"],
-    "tweet": ["write-human"],
-    "release-notes": ["write-human"],
+    "pr": ["pull-request-summary", "im-not-a-fly"],
+    "adversarial-review": ["im-not-a-fly"],
+    "content-refresh": ["technical-guide", "im-not-a-fly", "glossary"],
+    "tweet": ["im-not-a-fly"],
+    "release-notes": ["im-not-a-fly"],
     "improve-ts-pkg-architecture": ["glossary"],
     "nuxt-improve-codebase-architecture": ["glossary"],
     "nuxt-frontend-design": ["copywriting"]
