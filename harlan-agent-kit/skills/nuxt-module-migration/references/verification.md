@@ -104,7 +104,8 @@ Isolate synthetic Git fixtures from host signing settings. Keep normal commit ho
 
 Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
 Nuxt fetch route schemas can traverse server handlers from the shared project. Register virtual module declarations for that context.
-Use `addTypeTemplate(..., { nuxt: true, nitro: true, shared: true })` when the shared project imports the template.
+For small virtual declarations, use `addTypeTemplate(..., { nuxt: true, nitro: true, shared: true })` when all projects import them.
+For large runtime declarations, check Vue `globalTypeFiles` before choosing template flags or project references.
 Compile generated projects after template generation. Keep the Nuxt instance's type hooks active when refreshing declarations.
 If plugin types recurse through client barrels, test a typed Vue injection key with `vueApp.runWithContext`.
 Keep one service access path. Verify missing-provider errors and transport failures without changing auth behavior.
