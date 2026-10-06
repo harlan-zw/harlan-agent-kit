@@ -8,22 +8,22 @@
       "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
     },
     "im-not-a-fly": {
-      "source": "github:harlan-zw/brundlefly/skills/im-not-a-fly#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
+      "source": "github:harlan-zw/brundlefly/skills/im-not-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
     },
     "technical-guide": {
-      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
+      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
     },
     "im-a-fly": {
-      "source": "github:harlan-zw/brundlefly/skills/im-a-fly#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
+      "source": "github:harlan-zw/brundlefly/skills/im-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
     },
     "pull-request-summary": {
-      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
+      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
     },
     "glossary": {
-      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
+      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
     },
     "copywriting": {
-      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:95b4a5a324ac4172ea3baef3c663c6f32ffb45ba"
+      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
     }
   },
   "requires": {
