@@ -19,6 +19,7 @@ Use the `pr` Skill for repository edits and delivery. Acquire a task-owned Workt
 Record the minimum Nuxt release, Node range, supported server builders, deployment targets, and next major for each package.
 Record producer and consumer relationships. Include shared runtime packages and optional UI packages.
 Separate a research request from authorization to migrate or publish packages.
+Preserve published package versions during migration. Bump versions only when the user explicitly authorizes release preparation.
 
 For the Nuxt 4.6.0 baseline:
 
