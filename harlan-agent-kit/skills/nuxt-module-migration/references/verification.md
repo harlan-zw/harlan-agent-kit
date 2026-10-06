@@ -44,6 +44,7 @@ Check Vite transpilation for app runtime code that imports Nuxt virtual aliases.
 Check Nitro 2 inline coverage for the full reachable runtime graph, including shared files outside server directories.
 Exercise development-only hooks and disabled-module mocks through their public aliases.
 Use immutable tarball paths. Record checksums and verify the delivered artifact contains the final source changes.
+For pnpm 11 and 12 packing, use `--config.ignore-scripts=true`. Require a successful pack before hashing or copying artifacts.
 A reused tarball path can preserve stale package-manager cache entries.
 Put temporary tarball overrides in `pnpm-workspace.yaml` with pnpm 12.
 Do not assume `package.json#pnpm.overrides` changes the resolved graph.

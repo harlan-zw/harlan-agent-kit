@@ -114,6 +114,8 @@ Expose a server entry only when the module has a public server function.
 Do not invent an empty API to make every manifest look alike.
 
 Register both directory aliases in Nuxt. Also register the server alias in Nitro.
+Register app runtime directories in `build.transpile` and preserve existing entries.
+Centralize this in the alias helper so packed plugins receive Vite transformation consistently.
 Nuxt 4.6 can include server files in its generated app typecheck context.
 Add exact and wildcard TypeScript paths during `prepare:types`, using the corresponding app or server configuration.
 Resolve paths relative to the generated configuration's base URL and normalize separators.

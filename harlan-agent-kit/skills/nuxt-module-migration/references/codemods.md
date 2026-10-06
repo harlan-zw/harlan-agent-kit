@@ -31,6 +31,9 @@ Read its current CLI help. New commands can precede the installed Skill's comman
 Scan first, inspect the dry run, then apply and verify.
 If replacing an imported symbol with a project export, include the target during resolution.
 Inspect its implementation separately. A replacement that rewrites its own native import can create a recursive self-import.
+If Ripast supports `--target-import`, pair the canonical alias with a physical `--target-scope` for export validation.
+For named barrels, verify value and type re-exports. Exclude their resolved implementation files from replacement.
+If the installed CLI lacks this capability, stop that transform rather than guessing an import target.
 
 Repeated opportunities from the rollout:
 
