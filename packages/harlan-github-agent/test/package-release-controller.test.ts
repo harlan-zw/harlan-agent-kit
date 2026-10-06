@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
-import { renderPackageRelease } from '../src/package-release.ts'
+import { planPackageReleaseBeforeMerge, renderPackageRelease } from '../src/package-release.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -28,6 +28,30 @@ function setup() {
 }
 
 describe('release controller', () => {
+  it.each([false, true])('explains a manual major release without authorizing publication, text request: %s', async (requested) => {
+    const task = setup()
+    task.source.inspect = async () => planPackageReleaseBeforeMerge({
+      ...plan,
+      title: 'fix: handle input',
+      body: '',
+      currentVersion: plan.previousVersion,
+      commits: ['feat!: require Nuxt 4.6', 'fix: handle input'],
+      files: [],
+      complete: true,
+    })
+    if (requested)
+      task.store.queuePackageReleaseCommand({ repository: repository.github, pullRequestNumber: 24, commentId: 101, requestedBy: 'harlan-zw', bump: 'auto' })
+    await task.run()
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('Run a manual major release.'))
+    const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
+    expect(body).toContain('Automatic releases support patch and minor only.')
+    expect(body).toContain('v1.0.0')
+    expect(body).not.toContain('- [ ]')
+    expect(task.store.listPackageReleases(repository.github)).toEqual([])
+    expect(task.store.listPackageReleaseCommands(repository.github)).toEqual([])
+    expect(task.source.prepare).not.toHaveBeenCalled()
+    task.database.close()
+  })
   it('offers a checkbox before comment delivery and keeps one comment across restarts', async () => {
     const task = setup()
     await task.run()
@@ -64,6 +88,26 @@ describe('release controller', () => {
     await task.run()
     expect(task.source.prepare).not.toHaveBeenCalled()
     expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Blocked')
+    task.database.close()
+  })
+  it.each([false, true])('explains a major release when an existing patch offer changes, selected: %s', async (selected) => {
+    const task = setup()
+    await task.run()
+    if (selected)
+      task.click()
+    task.source.inspect = async () => planPackageReleaseBeforeMerge({
+      ...plan,
+      title: 'fix: handle input',
+      body: '',
+      currentVersion: plan.previousVersion,
+      commits: ['feat!: require Nuxt 4.6'],
+      files: [],
+      complete: true,
+    })
+    await task.run()
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('Run a manual major release.'), 99)
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Blocked')
+    expect(task.source.prepare).not.toHaveBeenCalled()
     task.database.close()
   })
   it('resumes publication after a lost response with the same version', async () => {

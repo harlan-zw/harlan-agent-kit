@@ -10,6 +10,8 @@ import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMer
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
 
+const releaseTitle = /^(?:feat|fix|perf)(?:\([^\n]*\))?:|^[a-z]+(?:\([^\n]*\))?!:/i
+
 function hasReleasePatch(file: { filename: string, patch?: string }): boolean {
   // GitHub omits large generated lockfile patches. Classification uses commit
   // messages, and the public API removal check needs source patches only.
@@ -142,7 +144,7 @@ export function createPackageReleaseSource(options: {
     const pull = (await api.rest.pulls.get({ ...scope, pull_number: number })).data
     if (pull.base.ref !== repository.defaultBranch || pull.draft || (!pull.merged && pull.state !== 'open'))
       return unavailable('The pull request must be open or merged into the default branch.')
-    if (!/^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title))
+    if (!releaseTitle.test(pull.title))
       return unavailable('This pull request does not need a package release.')
     const sha = await sourceSha()
     const pkg = await manifest(config.manifest, sha)
@@ -240,12 +242,12 @@ export function createPackageReleaseSource(options: {
       const numbers: number[] = []
       const cutoff = options.now().getTime() - 7 * 86_400_000
       const open = await api.paginate(api.rest.pulls.list, { ...scope, state: 'open', base: repository.defaultBranch, per_page: 100 })
-      numbers.push(...open.filter(pull => !pull.draft && /^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title)).map(pull => pull.number))
+      numbers.push(...open.filter(pull => !pull.draft && releaseTitle.test(pull.title)).map(pull => pull.number))
       for await (const response of api.paginate.iterator(api.rest.pulls.list, { ...scope, state: 'closed', base: repository.defaultBranch, sort: 'updated', direction: 'desc', per_page: 100 })) {
         for (const pull of response.data) {
           if (Date.parse(pull.updated_at) < cutoff)
             return numbers
-          if (pull.merged_at !== null && /^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title))
+          if (pull.merged_at !== null && releaseTitle.test(pull.title))
             numbers.push(pull.number)
         }
       }

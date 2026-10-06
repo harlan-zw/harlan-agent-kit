@@ -106,7 +106,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
       data = {}
     }
     else if (path === '/pulls' && req.method === 'GET') {
-      data = []
+      data = sourceOpen && url.searchParams.get('state') === 'open' ? [{ number: 24, title: sourceTitle, draft: false }] : []
     }
     else if (path === '/pulls' && req.method === 'POST') {
       data = { number: 25 }
@@ -130,7 +130,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
       data = { id: 100 }
     }
     else if (path === '/issues/24/comments') {
-      data = []
+      data = commentBody === '' ? [] : [{ id: 100, body: commentBody, user: { login: 'harlan-github-agent[bot]' }, issue_url: `https://api.github.com/repos/${mapping.github}/issues/24` }]
     }
     else {
       throw new Error(`Unexpected ${req.method} ${path}`)
@@ -174,6 +174,29 @@ it('reads the release range and prepares a version pull request without pushing 
   const tree = task.writes.find(write => write.path === '/git/trees')!.body.tree as Array<{ content: string }>
   expect(JSON.parse(tree[0]!.content)).toMatchObject({ name: 'example', version: '1.0.1' })
   expect(task.refs.get('heads/release/24-1.0.1')).toBe('c'.repeat(40))
+})
+
+it.each(['feat(nuxt)!: require Nuxt 4.6', 'refactor!: remove the old API'])('discovers breaking-change titles and explains their manual major release: %s', async (title) => {
+  const task = fixture()
+  task.openSource(title)
+  expect(await task.source.candidates()).toEqual([24])
+  expect(await task.source.inspect(24)).toMatchObject({ _tag: 'ManualMajor' })
+  expect(task.writes).toEqual([])
+})
+
+it('keeps one manual release comment across restarts and replaces it when a patch becomes eligible', async () => {
+  const task = fixture()
+  const database = new DatabaseSync(':memory:')
+  const run = () => reconcilePackageReleases({ repository: mapping, webhookReady: true, store: createPackageReleaseStore(database), source: () => task.source, now: () => Date.now(), signal: new AbortController().signal })
+  task.openSource('feat!: remove the old API')
+  await run()
+  await run()
+  expect(task.writes).toEqual([{ path: '/issues/24/comments', body: expect.objectContaining({ body: expect.stringContaining('Run a manual major release.') }) }])
+  task.openSource('fix: handle input')
+  await run()
+  expect(task.writes.at(-1)).toMatchObject({ path: '/issues/comments/100', body: { body: expect.stringContaining('- [ ] Release patch after merge') } })
+  expect(task.writes.filter(write => write.path === '/issues/24/comments')).toHaveLength(1)
+  database.close()
 })
 
 it('does not offer a release for a merge already outside the unreleased range', async () => {

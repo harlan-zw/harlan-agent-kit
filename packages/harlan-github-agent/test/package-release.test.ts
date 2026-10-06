@@ -65,9 +65,6 @@ describe('package releases', () => {
   it.each([
     { title: 'docs: explain setup' },
     { title: 'chore: refresh tooling' },
-    { title: 'feat!: remove option' },
-    { body: 'BREAKING CHANGE: remove option' },
-    { commits: ['fix: handle input', 'feat!: remove option'] },
     { commits: ['fix: handle input', 'feat: add streaming'] },
     { commits: ['unclassified change'] },
     { files: [{ filename: 'src/index.ts', patch: '-export function oldApi() {}' }] },
@@ -76,9 +73,21 @@ describe('package releases', () => {
     { complete: false },
     { previousVersion: '1.2.3-beta.1' },
     { currentVersion: '2.0.0' },
-    { previousVersion: '0.2.0', commits: ['feat!: remove option'] },
   ])('hides an unsafe or irrelevant action: %j', (change) => {
     expect(planPackageRelease({ ...input, ...change })._tag).toBe('Unavailable')
+  })
+  it.each([
+    { title: 'feat!: remove option' },
+    { body: 'BREAKING CHANGE: remove option' },
+    { commits: ['feat!: require Nuxt 4.6', 'fix: handle input'] },
+    { previousVersion: '0.2.0', commits: ['feat!: remove option'] },
+  ])('explains that annotated breaking changes need a manual major release: %j', (change) => {
+    expect(planPackageRelease({ ...input, ...change })).toMatchObject({
+      _tag: 'ManualMajor',
+      reason: 'This release includes breaking changes. Run a manual major release. Automatic releases support patch and minor only.',
+      previousTag: input.previousTag,
+      headSha: input.headSha,
+    })
   })
   it('uses an already merged version bump', () => {
     expect(planPackageRelease({ ...input, currentVersion: '1.2.4' })).toMatchObject({ _tag: 'Available', version: '1.2.4' })
