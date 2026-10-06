@@ -63,6 +63,13 @@ Dropping Nuxt 3 does not remove Nitro 2. Nuxt 4.6 still uses it.
 Storage, cached handlers, tasks, database access, lazy handlers, and Nitro plugins need a separate audit.
 Audit third-party plugin internals too. A supported SDK version can still wrap Nitro 2-only `localFetch`.
 Nitro 3 exposes `fetch(Request)` instead. Preserve request isolation and error capture when adapting it.
+Fetch instrumentation must cover native app fetch and external fetch, rather than only `$fetch`.
+If instrumentation uses `useRequest()`, enable Nitro's `experimental.asyncContext` for that feature.
+Without it, native requests can succeed while request-scoped telemetry stays empty.
+Preserve request bodies, abort signals, and transport options when wrapping native fetch.
+Read native request context from `event.req.context`.
+Derive the method and URL from `event.req`; the old event properties can be absent.
+Native matched routes use `matchedRoute.route`, rather than Nitro 2's `matchedRoute.path`.
 Cloudflare request bindings now live under `req.runtime.cloudflare`, with the execution context beside the environment.
 Do not rely only on Nitro 2 context layouts or the isolate-wide environment.
 A legacy h3 event also has `req` and `res`. Check header capabilities before treating them as portable objects.
@@ -121,6 +128,9 @@ Kit infers compatibility from registered imports. Use `meta.compatibility.server
 Use `resolveServerVariant` for aliases and `addServerImports` variants where appropriate.
 Nitro-specific variants take priority over `nuxt` variants on their matching hosts.
 Tests must prove which implementation ran.
+Kit falls back to the Nitro 2 variant when a matching Nitro 3 variant is absent.
+Use `{ nitro2: true, nitro3: false }` when selecting a removed Nitro 2 option.
+Likewise, use `{ nitro2: false, nitro3: file }` for a Nitro 3-only initializer.
 Do not mistake a passing Nitro 3 compatibility layer test for a completed portable migration.
 
 Source: [versioned server compatibility guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/4.modules/9.server-compatibility.md).
