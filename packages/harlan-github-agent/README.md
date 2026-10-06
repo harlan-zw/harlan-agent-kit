@@ -323,6 +323,8 @@ After merge, the controller waits for passing default branch push checks before 
 Pull request checks do not count as default branch checks.
 Merged pull requests also retain a release checkbox when no selection exists.
 Docs, chores, known breaking changes, and released changes get no checkbox.
+Known breaking changes get a comment that requests a manual major release.
+The comment explains that automatic releases support patch and minor only.
 If the unreleased range contains features, a fix cannot offer patch.
 Use a feature pull request for that minor release.
 

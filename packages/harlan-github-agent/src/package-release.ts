@@ -60,7 +60,9 @@ export type PackageReleasePlan = PackageReleaseVersion & (
   | { _tag: 'BeforeMerge' }
 )
 
-export type PackageReleaseOffer = PackageReleasePlan | { _tag: 'Unavailable', reason: string }
+export type PackageReleaseOffer = PackageReleasePlan
+  | { _tag: 'Unavailable', reason: string }
+  | { _tag: 'ManualMajor', reason: string, previousTag: string, headSha: string }
 
 export function stableVersion(value: string): [number, number, number] | null {
   if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(value))
@@ -143,8 +145,14 @@ function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sou
   if (previous === null || stableVersion(input.currentVersion) === null)
     return unavailable('Only existing stable releases are supported.')
   const breaking = /^[a-z]+(?:\([^\n]*\))?!:|BREAKING[ -]CHANGE:/im
-  if ([input.title, input.body, ...input.commits].some(text => breaking.test(text)))
-    return unavailable('Breaking changes require a manual release.')
+  if ([input.title, input.body, ...input.commits].some(text => breaking.test(text))) {
+    return {
+      _tag: 'ManualMajor',
+      reason: 'This release includes breaking changes. Run a manual major release. Automatic releases support patch and minor only.',
+      previousTag: input.previousTag,
+      headSha: input.headSha,
+    }
+  }
   // Missing annotations must not hide an obvious public API removal.
   if (input.files.some(file => /\.(?:[cm]?[jt]sx?|vue)$/.test(file.filename)
     && hasIncompatibleDeclaration(file))) {
@@ -166,6 +174,10 @@ function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sou
 }
 
 export const PACKAGE_RELEASE_MARKER = '<!-- harlan-agent-kit:package-release -->'
+
+export function renderManualMajorRelease(plan: Extract<PackageReleaseOffer, { _tag: 'ManualMajor' }>): string {
+  return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\n${plan.reason}\nIncludes all unreleased changes since \`${plan.previousTag}\`.\nChecked head \`${plan.headSha}\`.\n`
+}
 
 export function renderPackageRelease(plan: PackageReleasePlan, selected = false): string {
   if (plan._tag === 'BeforeMerge') {

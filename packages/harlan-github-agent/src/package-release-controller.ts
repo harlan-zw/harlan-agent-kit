@@ -1,7 +1,7 @@
 import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore } from './package-release-store.ts'
 import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.ts'
 import type { RepositoryMapping } from './types.ts'
-import { PACKAGE_RELEASE_MARKER, renderPackageRelease } from './package-release.ts'
+import { PACKAGE_RELEASE_MARKER, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
 import { canReleasePackages } from './repository-policy.ts'
 import { automatedDisclosure } from './review-comment.ts'
 import { cleanLine } from './text.ts'
@@ -78,7 +78,7 @@ export async function reconcilePackageReleases(options: {
         record = transition(record, { _tag: 'Blocked', reason: 'The repository release policy changed.' })
       if (record.state._tag === 'AwaitingMerge') {
         const offer = await source.inspect(record.pullRequestNumber)
-        if (offer._tag === 'Unavailable') {
+        if (offer._tag === 'Unavailable' || offer._tag === 'ManualMajor') {
           record = transition(record, { _tag: 'Blocked', reason: offer.reason })
         }
         else if (!sameSelection(offer, record.plan)) {
@@ -93,7 +93,7 @@ export async function reconcilePackageReleases(options: {
       if (record.state._tag === 'Queued' && record.plan._tag === 'Available') {
         const offer = await source.inspect(record.pullRequestNumber)
         if (offer._tag !== 'Available' || !samePlan(offer, record.plan)) {
-          record = transition(record, { _tag: 'Blocked', reason: 'The release range changed. Request a new release after reviewing it.' })
+          record = transition(record, { _tag: 'Blocked', reason: offer._tag === 'ManualMajor' ? offer.reason : 'The release range changed. Request a new release after reviewing it.' })
         }
         else {
           const prepared = await source.prepare({ ...record, plan: record.plan })
@@ -117,6 +117,7 @@ export async function reconcilePackageReleases(options: {
       return
     const currentRecords = store.listPackageReleases(repository.github)
     const commands = store.listPackageReleaseCommands(repository.github)
+    const manualReleases = new Set<number>()
     const candidates = new Set([...commands.map(command => command.pullRequestNumber), ...await source.candidates(), ...currentRecords.filter(record => record.state._tag === 'Available').map(record => record.pullRequestNumber)])
     for (const number of candidates) {
       assertLease()
@@ -124,6 +125,17 @@ export async function reconcilePackageReleases(options: {
       if (existing !== undefined && existing.state._tag !== 'Available')
         continue
       const plan = await source.inspect(number)
+      if (plan._tag === 'ManualMajor') {
+        manualReleases.add(number)
+        if (existing !== undefined) {
+          const blocked = transition(existing, { _tag: 'Blocked', reason: plan.reason })
+          await report(blocked)
+        }
+        else {
+          await source.comment(number, renderManualMajorRelease(plan))
+        }
+        continue
+      }
       if (plan._tag === 'Unavailable') {
         if (existing !== undefined) {
           const blocked = transition(existing, { _tag: 'Blocked', reason: plan.reason })
@@ -142,7 +154,7 @@ export async function reconcilePackageReleases(options: {
       if (offer?.state._tag === 'Available' && (command.bump === 'auto' || command.bump === offer.plan.bump)) {
         store.requestPackageRelease({ ...command, commentId: offer.commentId, before: offer.body, commentAuthor: '', requestId: `comment:${command.commentId}`, selected: true })
       }
-      else if (offer === undefined) {
+      else if (offer === undefined && !manualReleases.has(command.pullRequestNumber)) {
         await source.comment(command.pullRequestNumber, `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nNo matching patch or minor release is available.\n`)
       }
       store.consumePackageReleaseCommand(command)
