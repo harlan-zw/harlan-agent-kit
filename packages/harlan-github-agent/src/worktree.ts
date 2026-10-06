@@ -13,6 +13,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -1030,7 +1031,10 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
 
 /** Runs current selected evidence without copying credentials into repository scripts. */
 export async function confirmRepairRecoveryRegression(path: string, regressionPaths: string[], signal: AbortSignal): Promise<Result<void, string>> {
-  const reporter = join(import.meta.dirname, existsSync(join(import.meta.dirname, 'repair-regression-reporter.ts')) ? 'repair-regression-reporter.ts' : 'repair-regression-reporter.mjs')
+  const sourceReporter = fileURLToPath(new URL('./repair-regression-reporter.ts', import.meta.url))
+  const reporter = existsSync(sourceReporter)
+    ? sourceReporter
+    : fileURLToPath(import.meta.resolve('harlan-github-agent/repair-regression-reporter'))
   const evidenceDirectory = await mkdtemp(join(tmpdir(), 'repair-regression-evidence-'))
   const evidenceFile = join(evidenceDirectory, 'result.json')
   let output: string | undefined

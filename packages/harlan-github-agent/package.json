@@ -6,6 +6,10 @@
   "description": "Local service for Harlan's GitHub agents.",
   "license": "MIT",
   "exports": {
+    "./repair-regression-reporter": {
+      "types": "./dist/repair-regression-reporter.d.mts",
+      "import": "./dist/repair-regression-reporter.mjs"
+    },
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
