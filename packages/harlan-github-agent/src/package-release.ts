@@ -167,12 +167,7 @@ function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sou
 
 export const PACKAGE_RELEASE_MARKER = '<!-- harlan-agent-kit:package-release -->'
 
-export function renderPackageRelease(plan: PackageReleasePlan, selected = false, commentControls = true): string {
-  if (!commentControls) {
-    const timing = plan._tag === 'BeforeMerge' ? ' after this pull request merges and default branch checks pass' : ` from \`${plan.sourceSha}\``
-    const selection = selected ? '\nRelease selected. Waiting for this pull request to merge.\n' : `\nComment \`do release ${plan.bump}\` to request this release.\n`
-    return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease **${plan.packageName}@${plan.version}**${timing}.\nIncludes all unreleased changes since \`${plan.previousTag}\`.\n${selection}`
-  }
+export function renderPackageRelease(plan: PackageReleasePlan, selected = false): string {
   if (plan._tag === 'BeforeMerge') {
     return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease **${plan.packageName}@${plan.version}** after this pull request merges and default branch checks pass.\nIncludes all unreleased changes since \`${plan.previousTag}\`.\nSelection applies to head \`${plan.headSha}\`. A changed head or release version clears it.\nClear the checkbox to cancel before merge.\n\n- [${selected ? 'x' : ' '}] Release ${plan.bump} after merge\n`
   }

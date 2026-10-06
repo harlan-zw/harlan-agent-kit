@@ -15,11 +15,11 @@ export interface PackageReleaseSource {
   publish: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Publishing' }> }) => Promise<string | Extract<PackageReleaseState, { _tag: 'Blocked' }> | null>
 }
 
-export function packageReleaseStatus(record: PackageReleaseRecord, commentControls = true): string {
+export function packageReleaseStatus(record: PackageReleaseRecord): string {
   if (record.state._tag === 'Available')
-    return renderPackageRelease(record.plan, false, commentControls)
+    return renderPackageRelease(record.plan)
   if (record.state._tag === 'AwaitingMerge')
-    return renderPackageRelease(record.plan, true, commentControls)
+    return renderPackageRelease(record.plan, true)
   const details: Record<Exclude<PackageReleaseState['_tag'], 'Available' | 'AwaitingMerge'>, string> = {
     Queued: 'Release requested. Waiting for passing default branch checks on the pinned release range.',
     Prepared: record.state._tag === 'Prepared' ? `Waiting for Review and required checks on #${record.state.pullRequestNumber}.` : '',
@@ -34,7 +34,6 @@ export function packageReleaseStatus(record: PackageReleaseRecord, commentContro
 export async function reconcilePackageReleases(options: {
   repository: RepositoryMapping
   webhookReady: boolean
-  commentControls: boolean
   store: PackageReleaseStore
   source: (assertLease: () => void) => PackageReleaseSource
   now: () => number
@@ -60,7 +59,7 @@ export async function reconcilePackageReleases(options: {
     return { ...record, state, plan }
   }
   const report = async (record: PackageReleaseRecord): Promise<void> => {
-    const body = packageReleaseStatus(record, options.commentControls)
+    const body = packageReleaseStatus(record)
     if (record.body === body)
       return
     const commentId = await source.comment(record.pullRequestNumber, body, record.commentId)
@@ -132,7 +131,7 @@ export async function reconcilePackageReleases(options: {
         }
         continue
       }
-      const body = renderPackageRelease(plan, false, options.commentControls)
+      const body = renderPackageRelease(plan)
       const commentId = existing?.body === body ? existing.commentId : await source.comment(number, body, existing?.commentId)
       assertLease()
       store.saveReleaseOffer({ repository: repository.github, pullRequestNumber: number, plan, commentId, body, policy })
