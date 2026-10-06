@@ -145,8 +145,14 @@ describe('review fix worktree', () => {
     })
   })
 
-  it.each([{ merged: false, pickup: false }, { merged: true, pickup: false }, { merged: true, pickup: true }])('publishes a verified Repair: %j', async ({ merged, pickup }) => {
+  it.each([
+    { merged: false, pickup: false, taskId: 'fix-task-1' },
+    { merged: true, pickup: false, taskId: 'fix-task-1' },
+    { merged: true, pickup: true, taskId: `logged-finding:${'f'.repeat(64)}` },
+    { merged: false, pickup: false, taskId: 'task with..invalid/ref\ncharacters.lock' },
+  ])('publishes a verified Repair: %j', async ({ merged, pickup, taskId }) => {
     const { remote, root, task } = fixture()
+    task.id = taskId
     if (merged) {
       const checkout = task.repositoryMapping.checkout
       git(checkout, 'checkout', 'main')
@@ -200,6 +206,7 @@ describe('review fix worktree', () => {
     expect(committed).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 2 }) }))
     if (committed._tag === 'Err')
       throw new Error(committed.error)
+    expect(git(join(root, 'repositories', 'harlan-zw__example.git'), 'rev-parse', committed.value.artifactRef)).toBe(committed.value.commitSha)
     expect(git(prepared.value.path, 'show', '--no-patch', '--format=%an <%ae>')).toBe('Harlan Wilton <harlan@harlanzw.com>')
     expect(git(prepared.value.path, 'show', '--no-patch', '--format=%s')).toBe('fix(parser): preserve buffered bytes')
     expect(git(

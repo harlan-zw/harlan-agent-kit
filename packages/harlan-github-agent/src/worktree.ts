@@ -313,7 +313,7 @@ function repositoryGitDirectory(root: string, repository: string): string {
 }
 
 function publicationArtifactRef(taskId: string): string {
-  return `refs/harlan-github-agent/publications/${taskId}`
+  return `refs/harlan-github-agent/publications/${createHash('sha256').update(taskId).digest('hex')}`
 }
 
 /**
