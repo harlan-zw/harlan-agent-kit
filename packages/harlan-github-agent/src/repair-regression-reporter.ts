@@ -1,4 +1,4 @@
-import process from 'node:process'
+import { writeFileSync } from 'node:fs'
 
 interface HookTask {
   result?: { hooks?: Partial<Record<string, string>> }
@@ -7,6 +7,7 @@ interface HookTask {
 
 interface ReporterContext {
   state: { getFiles: () => HookTask[] }
+  config: { outputFile?: string | Record<string, string> }
 }
 
 interface ReportedModule {
@@ -44,7 +45,10 @@ export default function repairRegressionReporter() {
         }
       }
       const setupFailed = context === undefined || context.state.getFiles().some(failedHook)
-      process.stdout.write(`${JSON.stringify({ _tag: 'RegressionEvidence', assertions, otherFailures, setupFailed, interrupted: reason === 'interrupted' })}\n`)
+      const outputFile = context?.config.outputFile
+      if (typeof outputFile !== 'string')
+        throw new Error('The regression reporter requires an evidence file.')
+      writeFileSync(outputFile, JSON.stringify({ _tag: 'RegressionEvidence', assertions, otherFailures, setupFailed, interrupted: reason === 'interrupted' }))
     },
   }
 }

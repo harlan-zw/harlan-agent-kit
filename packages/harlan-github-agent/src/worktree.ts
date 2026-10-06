@@ -9,7 +9,8 @@ import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
@@ -1030,14 +1031,29 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
 /** Runs current selected evidence without copying credentials into repository scripts. */
 export async function confirmRepairRecoveryRegression(path: string, regressionPaths: string[], signal: AbortSignal): Promise<Result<void, string>> {
   const reporter = join(import.meta.dirname, existsSync(join(import.meta.dirname, 'repair-regression-reporter.ts')) ? 'repair-regression-reporter.ts' : 'repair-regression-reporter.mjs')
-  const output = await new Promise<string>((resolve) => {
-    execFile('pnpm', ['exec', 'vitest', 'run', `--reporter=${reporter}`, ...regressionPaths], {
-      cwd: path,
-      env: { ...gitEnvironment(), CI: 'true' },
-      signal,
-      maxBuffer: 10 * 1024 * 1024,
-    }, (_error, stdout) => resolve(stdout))
-  })
+  const evidenceDirectory = await mkdtemp(join(tmpdir(), 'repair-regression-evidence-'))
+  const evidenceFile = join(evidenceDirectory, 'result.json')
+  let output: string | undefined
+  try {
+    await new Promise<void>((resolve) => {
+      execFile('pnpm', ['exec', 'vitest', 'run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...regressionPaths], {
+        cwd: path,
+        env: { ...gitEnvironment(), CI: 'true' },
+        signal,
+        maxBuffer: 10 * 1024 * 1024,
+      }, () => resolve()) // An assertion failure exits nonzero. The reporter supplies the failure category.
+    })
+    output = await readFile(evidenceFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT')
+        return undefined
+      throw error
+    })
+  }
+  finally {
+    await rm(evidenceDirectory, { recursive: true, force: true })
+  }
+  if (output === undefined)
+    return err('The selected regression tests produced no current failure evidence.')
   let report: unknown
   try {
     report = JSON.parse(output)
