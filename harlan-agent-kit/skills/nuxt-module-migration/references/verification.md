@@ -24,6 +24,9 @@ Run the Node 22.22.3 floor and a supported newer LTS for the stable Nuxt lanes.
 Use a supported Node version for the exact Nuxt 5 nightly.
 If claiming Windows tooling support, run filesystem and resolution cases there.
 Exercise Cloudflare or other supported edge targets where server code changes.
+Build packed consumers and serve them through local workerd. Assert real HTTP output and forwarded request context.
+Check the local Wrangler version supports the fixture's compatibility date before diagnosing module failures.
+Keep local Worker evidence separate from remote production and database adapter evidence.
 Use the repository's workflow for production deployment.
 Require an explicit opt-in for tests that deploy remotely.
 An authenticated CLI alone must not enable a deployment test.
@@ -38,6 +41,9 @@ Remove inherited fixture lockfiles before creating isolated consumers with diffe
 A stale `link:` resolution can survive a changed `file:` specification and bypass the packed artifact.
 Audit every runtime import against published dependencies, including optional feature paths.
 Workspace development dependencies can conceal missing runtime declarations.
+For bundled modules, test the meta module alone without direct submodule dependencies or explicit registration.
+Resolve pinned nightly metadata through the meta package's dependency context when necessary.
+Distinguish disabled features from absent packages. Required dependencies remain installed when their features are disabled.
 Run packed development SSR and server requests in all three Nuxt lanes.
 Production bundling can conceal development externalization and unresolved runtime aliases.
 Check Vite transpilation for app runtime code that imports Nuxt virtual aliases.
@@ -89,6 +95,11 @@ Use a failing test first for defects discovered during migration.
 Determine dependency order from manifests and imports.
 Prepare shared runtime packages and Site Config before their consumers.
 Handle cycles explicitly, including type-only relationships and optional peers.
+Audit development installs separately from the published runtime graph. Workspace catalogs can create development-only cycles.
+Filtered pnpm installs can still resolve every project through a shared workspace lockfile.
+If consumer majors are unpublished, bootstrap an explicit source workspace with relative overrides and its own verified frozen lock.
+Preserve supply-chain policy and full consumer CI. Publish only the foundation package allowlist through its release workflow.
+Never let a recursive workspace release bump or publish a meta package whose version must stay unchanged.
 Prepare DevTools artifacts and their versioned protocol alongside core packages.
 Release the meta module after compatible module versions exist in the registry.
 

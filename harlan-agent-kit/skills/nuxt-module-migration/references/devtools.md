@@ -164,4 +164,7 @@ Report package counts and byte sizes for core-only, one panel, and the complete 
 Never equate an extracted subpath with a separate installed package.
 Run DevTools checks outside fixtures whose test flags automatically disable the host.
 Prove optional v4 host installation in exact Nuxt 4.6 and actual Nuxt 5 consumers.
+Before publication, a local registry fixture can serve the genuine packed host to the unchanged native installer.
+Preserve trust policy and use official registry metadata for other packages. Never substitute an installer stub.
+Report local registry installation separately from public npm installation after publication.
 DevTools supports the Vite builder in the inspected versions. Preserve core behavior for other builders.
