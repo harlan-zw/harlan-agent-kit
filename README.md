@@ -151,6 +151,7 @@ Personal `pr` owns Hooks, publication, Review, and Service policy.
 | [`nuxt-frontend-design`](./harlan-agent-kit/skills/nuxt-frontend-design/SKILL.md) | Build and polish Nuxt UI v4+ pages and design systems |
 | [`nuxt-frontend-review`](./harlan-agent-kit/skills/nuxt-frontend-review/SKILL.md) | Run a Nuxt frontend and check it against its contract |
 | [`nuxt-improve-codebase-architecture`](./harlan-agent-kit/skills/nuxt-improve-codebase-architecture/SKILL.md) | Find Nuxt-native architecture improvements |
+| [`nuxt-4-minors-migration`](./harlan-agent-kit/skills/nuxt-4-minors-migration/SKILL.md) | Move a Nuxt 4 site to the latest 4.x release with compatibility version 5, and migrate what the minors changed |
 | [`pkg-conform`](./harlan-agent-kit/skills/pkg-conform/SKILL.md) | Conform or scaffold a TypeScript package or Nuxt module |
 | [`plan-ceo`](./harlan-agent-kit/skills/plan-ceo/SKILL.md) | Challenge scope and strategy before anyone writes code |
 | [`pr`](./harlan-agent-kit/skills/pr/SKILL.md) | Create or update a pull request from current work |
