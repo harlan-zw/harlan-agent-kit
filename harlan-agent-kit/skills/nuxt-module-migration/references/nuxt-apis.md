@@ -61,6 +61,22 @@ Sources: [server imports](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/
 
 Dropping Nuxt 3 does not remove Nitro 2. Nuxt 4.6 still uses it.
 Storage, cached handlers, tasks, database access, lazy handlers, and Nitro plugins need a separate audit.
+Audit third-party plugin internals too. A supported SDK version can still wrap Nitro 2-only `localFetch`.
+Nitro 3 exposes `fetch(Request)` instead. Preserve request isolation and error capture when adapting it.
+Sentry's request wrapper needs its AsyncLocalStorage strategy initialized when `withSentry` is absent.
+Prove concurrent requests retain different scope tags after an `await`.
+Local subrequests must preserve the incoming Sentry request metadata.
+Avoid wrapping an already instrumented request scope as another incoming request.
+Fetch instrumentation must cover native app fetch and external fetch, rather than only `$fetch`.
+If instrumentation uses `useRequest()`, enable Nitro's `experimental.asyncContext` for that feature.
+Without it, native requests can succeed while request-scoped telemetry stays empty.
+Preserve request bodies, abort signals, and transport options when wrapping native fetch.
+Read native request context from `event.req.context`.
+Derive the method and URL from `event.req`; the old event properties can be absent.
+Native matched routes use `matchedRoute.route`, rather than Nitro 2's `matchedRoute.path`.
+Cloudflare request bindings now live under `req.runtime.cloudflare`, with the execution context beside the environment.
+Do not rely only on Nitro 2 context layouts or the isolate-wide environment.
+A legacy h3 event also has `req` and `res`. Check header capabilities before treating them as portable objects.
 If storage never uses watchers, audit whether `unstorage`'s `fs-lite` driver preserves its persistence contract.
 The full `fs` driver can introduce an optional `chokidar` dependency during server bundling.
 Use `addNitroPlugin` for Nitro plugin registration.
@@ -74,7 +90,24 @@ Do not retain a legacy handler just to support Nuxt releases below the new minim
 | Caching | `nitropack/runtime` | `nitro/cache` |
 | Plugins | `defineNitroPlugin` from `nitropack/runtime` | `definePlugin` from `nitro` |
 | Nitro hooks | `useNitroApp().hooks` | `useNitroHooks()` from `nitro/app` |
+| Response hook | `afterResponse(event, response)` | `response(response, event)` |
 | Lazy handlers | `h3` | `nitro/h3` |
+
+Nitro 3 has no `beforeResponse` or `afterResponse` lifecycle hook.
+Its response hook receives the final `Response` before the request event.
+Mutate that response's headers when changing the output sent to the client.
+Nitro 2 can pass a native `Response` as `beforeResponse`'s body.
+h3 copies its headers after that hook runs, overriding Node response headers.
+Read the body headers and pending Node headers when applying cache policy.
+Write changes into the body response too.
+Do not assume `event.res.headers` still owns those final headers.
+
+Nitro 3 uses `HookableCore`, which has no `callHookParallel` or `callHookWith`.
+Serial `callHook` stops after a rejected handler.
+Preserve independent drains when one sink fails. Exercise both sinks in a real server.
+Include synchronous throws as well as rejected promises in that exercise.
+Do not cast a missing dispatch method into existence.
+Initialize any dispatcher adapter before application plugins register their drains.
 
 Keep renderer hooks separate from request and response lifecycle hooks.
 Preserve Node streaming behavior and edge response behavior when moving compression or body transforms.
@@ -99,6 +132,9 @@ Kit infers compatibility from registered imports. Use `meta.compatibility.server
 Use `resolveServerVariant` for aliases and `addServerImports` variants where appropriate.
 Nitro-specific variants take priority over `nuxt` variants on their matching hosts.
 Tests must prove which implementation ran.
+Kit falls back to the Nitro 2 variant when a matching Nitro 3 variant is absent.
+Use `{ nitro2: true, nitro3: false }` when selecting a removed Nitro 2 option.
+Likewise, use `{ nitro2: false, nitro3: file }` for a Nitro 3-only initializer.
 Do not mistake a passing Nitro 3 compatibility layer test for a completed portable migration.
 
 Source: [versioned server compatibility guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/4.modules/9.server-compatibility.md).
@@ -133,6 +169,8 @@ Use `RequestEventContext` for fields on `event.context`.
 Audit `NuxtRequestContext`, `AppRouteRules`, `RuntimeConfig`, `ServerRoutes`, and `NuxtServerHooks`.
 Prefer one augmentation of `@nuxt/schema`; `nuxt/schema` mirrors its public types.
 Retain builder-specific augmentation only for builder-specific contracts.
+Generate custom Nitro hook augmentations for the selected builder.
+Exercise registrations without `as never` so type mismatches remain visible.
 Use `addServerTemplate` for server virtual files and the appropriate `addTypeTemplate` context for declarations.
 Register server declarations with `{ nuxt: true, nitro: true }` when generated API route types include their server files.
 The app compiler then needs the same request context and hook augmentations as the server compiler.
@@ -162,6 +200,29 @@ Sources: [Kit exports](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/kit/src
 [template schema](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/schema/src/types/nuxt.ts),
 [dependency installation](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/kit/src/dependency.ts),
 [layer directories](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/kit/src/layers.ts).
+
+## Fetch and AsyncData addons
+
+Use `createUseFetch` and `createUseAsyncData` when a wrapper adds state to Nuxt's data object.
+Import these factories and addon makers from `#imports` in runtime composables.
+Nuxt 4.6 does not export these runtime factories from `nuxt/app`.
+Its compiler recognizes exported top-level factory declarations.
+An untransformed factory throws instead of creating a composable.
+
+Return wrapper properties from `defineUseFetchAddon` or `defineUseAsyncDataAddon` setup.
+Nuxt attaches them to both the returned promise and the awaited data object.
+Directly assigning properties to the promise can lose them after `await`.
+Type the augmented promise as resolving to the extended data object too.
+Intersecting extensions with an existing `AsyncData` promise can leave `Awaited` unchanged.
+Build declarations and check packed subpath exports after adding factory macros.
+Use named public types when inference would expose private Nuxt paths.
+Add a real Nuxt regression for both URL and handler wrappers.
+Preserve middleware, deadlines, hydration, stale data, and request context while adopting addons.
+Use Nuxt-owned `TypedFetchRequest` and `TypedServerResponse` types for route inference.
+Keep `experimental.routeTypedFetch` scoped to a fixture when exercising that feature.
+
+Sources: [addon implementation](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/nuxt/src/app/composables/addons.ts),
+[factory transform](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/nuxt/src/compiler/plugins/keyed-function-factories.ts).
 
 ## Earlier 4.x opportunities
 
