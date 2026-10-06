@@ -37,7 +37,7 @@ A published Nuxt module belongs to the [Nuxt module migration](../nuxt-module-mi
 | Step | Do | Reference |
 | --- | --- | --- |
 | 1 | Record the baseline on the base branch: install, lint, typecheck, test, build. | [verification](references/verification.md) |
-| 2 | Raise the Node floor, upgrade Nuxt to the latest 4.x release, dedupe the lockfile. | [minors](references/minors.md#upgrade) |
+| 2 | Raise the Node floor, upgrade Nuxt to the latest 4.x release, update every other dependency, dedupe the lockfile. | [minors](references/minors.md#upgrade) |
 | 3 | Make server imports explicit with the codemod. | [server imports](references/server-imports.md) |
 | 4 | Turn on compatibility version 5. Remove opt-outs and redundant flags. Fix each changed default. | [compatibility version 5](references/compat-v5.md) |
 | 5 | Replace deprecated APIs (Tier 1). | [minors](references/minors.md) |

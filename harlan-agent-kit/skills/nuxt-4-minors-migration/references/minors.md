@@ -13,14 +13,19 @@ Tier 0.
    - Change `engines`, `.nvmrc`, `.node-version`, and CI `node-version`. Prefer `24`.
    - A self-hosted runner uses the host's Node unless CI installs one. Check each runner that builds the site.
 2. **Nuxt version.** Raise `nuxt` to the latest 4.x release where it is declared: the catalog in `pnpm-workspace.yaml`, or `package.json`. Then run `pnpm dedupe`. With another package manager, run `nuxt upgrade --dedupe`.
-3. **Overrides.** Remove a `vite` override that pins Vite below 8, and any `rolldown-vite` override. Nuxt 4.5 ships Vite 8 on Rolldown.
-4. **Supply-chain policy.** With `trustPolicy: no-downgrade`, pnpm rejects the cssnano 9 family that `@nuxt/vite-builder` 4.6.0 installs. Expect about 30 packages. Repeat these steps until the install passes:
+3. **Every other dependency.** Take the upgrade as the moment to move every dependency to its latest release, majors included. Follow the [dependency updates](../../dependency-updates/SKILL.md) Skill's rules for finding versions and repairing majors.
+   - List them with `pnpm outdated -r --include-workspace-root --format json`. Update catalog entries at their source, and keep each entry's caret or exact pin.
+   - Hold TypeScript on 6, as that Skill requires.
+   - Hold `h3` on 1. Nuxt 4 runs nitropack v2, which needs h3 1; h3 2 belongs to Nitro v3 and Nuxt 5.
+   - Expect majors to break code. On harlanzw.com, VueUse 15 replaced the `useNow` `interval` option with `scheduler: cb => useIntervalFn(cb, ms)`, and `@antfu/eslint-config` 9.5 began sorting `pnpm-workspace.yaml` and requiring `minimumReleaseAgeExcludePrune: true`. Run `eslint --fix pnpm-workspace.yaml` for the second.
+4. **Overrides.** Remove a `vite` override that pins Vite below 8, and any `rolldown-vite` override. Nuxt 4.5 ships Vite 8 on Rolldown.
+5. **Supply-chain policy.** With `trustPolicy: no-downgrade`, pnpm rejects the cssnano 9 family that `@nuxt/vite-builder` 4.6.0 installs. Expect about 30 packages. Repeat these steps until the install passes:
    1. Run `pnpm install > install.log 2>&1 || rg -o 'trust downgrade for "([^"]+)"' -r '$1' install.log`
    2. Check the named package: `npm view <name>@<version> dist.attestations.provenance.predicateType repository.url`
    3. If the provenance is SLSA and the repository is the package's own, add the exact `<name>@<version>` to `trustPolicyExclude`. Group the entries under one comment that names the reason.
    4. If the provenance is missing, stop and report the package.
    With a release age policy, pnpm adds the new Nuxt packages to `minimumReleaseAgeExclude` itself. Keep those entries; they follow the site's existing pattern.
-5. **Modules.** Build once. Upgrade each module that fails on Vite 8, unhead v3, or vue-router 5.
+6. **Modules.** Build once. Upgrade each module that fails on Vite 8, unhead v3, or vue-router 5.
 
 ## 4.1
 
