@@ -78,6 +78,17 @@ Do not retain a legacy handler just to support Nuxt releases below the new minim
 
 Keep renderer hooks separate from request and response lifecycle hooks.
 Preserve Node streaming behavior and edge response behavior when moving compression or body transforms.
+Nitro 3 exposes `response(response, event)`. Native `beforeResponse` and `afterResponse` hooks are absent.
+Select lifecycle adapters through `getNitroVersion`, then prove their side effects on both real builders.
+The Nitro 3 hook receives a Web `Response`. Its return value does not replace that response.
+Apply body transforms at the handler's return boundary. Set final headers on the actual response.
+Test success and error responses when hooks choose status-dependent headers.
+Check lifecycle timing when cleanup shares resources with deferred work or streamed responses.
+
+Forwarded request context can share resources across nested local requests.
+Track the request that owns a database or other cleanup resource.
+Do not let a child response close a borrowed parent resource.
+Prove that the parent response still closes the live resource on Nitro 2 and Nitro 3.
 Do not declare generic server-builder support while required Nitro features remain.
 The experimental Vite server lacks storage, caching, tasks, and Nitro plugins.
 
@@ -118,7 +129,13 @@ Audit `NuxtRequestContext`, `AppRouteRules`, `RuntimeConfig`, `ServerRoutes`, an
 Prefer one augmentation of `@nuxt/schema`; `nuxt/schema` mirrors its public types.
 Retain builder-specific augmentation only for builder-specific contracts.
 Use `addServerTemplate` for server virtual files and the appropriate `addTypeTemplate` context for declarations.
+Register server declarations with `{ nuxt: true, nitro: true }` when generated API route types include their server files.
+The app compiler then needs the same request context and hook augmentations as the server compiler.
 Prepare fixtures before checking generated app, server, shared, and Node TypeScript contexts.
+
+When using Site Config 5 URL helpers, preserve the application's base path explicitly.
+The path resolver removes that prefix unless the caller requests `withBase: true`.
+Prove signed URLs with a non-root application base path, including query parameters and rendered output.
 
 Read exports and signatures rather than guessing from release-note names:
 

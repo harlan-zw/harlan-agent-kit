@@ -43,6 +43,10 @@ Its base represents a containing file. Convert a directory into a file URL befor
 Bare package specifiers can find a root manifest hidden by the package's export map.
 Absolute file specifiers select the nearest parent manifest.
 It uses the default resolver and does not honor custom loader hooks.
+It also does not search arbitrary Nuxt `modulesDir` folders.
+If the existing function accepts module directories, read each physical `directory/package/package.json` in configured order.
+Continue only when that candidate is absent. Propagate malformed JSON and filesystem failures.
+Check all explicit directories before any default-resolver fallback can select a conflicting parent copy.
 Keep missing-package handling distinct from malformed JSON and unexpected filesystem failures.
 Use it to confirm an optional package belongs to the consumer before `createRequire` loads it.
 CommonJS resolution can find packages through `NODE_PATH` outside that consumer.
