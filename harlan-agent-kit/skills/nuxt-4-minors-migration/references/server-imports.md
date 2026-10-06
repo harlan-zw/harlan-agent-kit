@@ -12,7 +12,7 @@ Two facts make this dangerous. Both were verified on Nuxt 4.6.0.
 1. **The build still passes.** A handler that calls an auto-imported `defineEventHandler` builds with exit 0. At runtime it returns 500, because the name is undefined.
 2. **Modules hide the gap.** `addServerImports` in `@nuxt/kit` runs `config.imports ||= {}`. That replaces `imports: false`, so any module that calls it turns every server auto-import back on, and the generated types too. `nuxt-site-config`, `@nuxtjs/sitemap`, `@nuxtjs/robots`, and `@nuxt/image` all call it. A site works today by accident. It breaks the day Nuxt fixes this, or the day the site drops its last such module.
 
-[nuxt/nuxt#36468](https://github.com/nuxt/nuxt/pull/36468) proposes the 4.x fix: keep `imports` on and drop only the h3 and Nitro presets. Until a release ships it, assume the behaviour above.
+[nuxt/nuxt#36468](https://github.com/nuxt/nuxt/pull/36468) makes kit leave `imports: false` alone. Once a release ships it, nothing in `server/` is auto-imported on 4.x under compatibility version 5, module helpers included.
 
 So neither the build nor typecheck is the gate. Make every server import explicit, then prove it with the codemod dry run.
 
@@ -58,9 +58,11 @@ The script uses the project's own TypeScript. It never imports a name the file a
 
 The report has two lists.
 
-**"Left as auto-imports"** holds module helpers with no alias and no package export. Leave them. They are safe:
+**"Left as auto-imports"** holds module helpers with no alias and no package export. Whether they keep working depends on the installed `@nuxt/kit`:
 
-- On 4.6, the module that provides the helper calls `addServerImports`, which keeps server auto-imports on.
+- Check for the kit fix: `rg -c "config.imports === false" node_modules/@nuxt/kit/dist`.
+- Without it, the module that provides the helper calls `addServerImports`, which turns server auto-imports back on. Leave the helper.
+- With it, nothing in `server/` is auto-imported on 4.x under compatibility version 5, so the helper fails at runtime. Ask the module to export it, or keep `experimental.nitroAutoImports: true` with a comment that names the helpers until it does.
 - On Nuxt 5, server auto-imports drop only the h3 and Nitro helpers. Helpers that modules register, and `server/utils` and `shared/utils` exports, stay auto-imported. This was checked against `packages/nitro-server/src/index.ts` on `nuxt/nuxt` `main` on 2026-10-06.
 
 Seen on 2026-10-06: `nuxt-auth-utils` (`getUserSession`, `requireUserSession`, `setUserSession`), `@nuxtjs/turnstile` (`verifyTurnstileToken`), `evlog` (`useLogger`), and `@harlan-zw/nuxt-wide-events` (`createWideEvent`).

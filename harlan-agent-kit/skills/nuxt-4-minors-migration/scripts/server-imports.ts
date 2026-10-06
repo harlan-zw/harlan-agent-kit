@@ -27,8 +27,8 @@ export interface Alias {
 
 /**
  * `module`: a helper a module registered, with no public import path. It stays
- * an auto-import. The module's `addServerImports` call keeps it working on 4.6,
- * and Nuxt 5 still auto-imports helpers that modules register.
+ * an auto-import. Nuxt 5 auto-imports helpers that modules register; on 4.x it
+ * depends on the installed kit, as the server imports reference explains.
  * `unreachable`: anything else. A person must import it by hand.
  */
 export type Resolution
