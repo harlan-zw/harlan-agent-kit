@@ -65,6 +65,8 @@ Audit third-party plugin internals too. A supported SDK version can still wrap N
 Nitro 3 exposes `fetch(Request)` instead. Preserve request isolation and error capture when adapting it.
 Sentry's request wrapper needs its AsyncLocalStorage strategy initialized when `withSentry` is absent.
 Prove concurrent requests retain different scope tags after an `await`.
+Local subrequests must preserve the incoming Sentry request metadata.
+Avoid wrapping an already instrumented request scope as another incoming request.
 Fetch instrumentation must cover native app fetch and external fetch, rather than only `$fetch`.
 If instrumentation uses `useRequest()`, enable Nitro's `experimental.asyncContext` for that feature.
 Without it, native requests can succeed while request-scoped telemetry stays empty.
