@@ -8,7 +8,7 @@ Agent plugin for Nuxt/Vue/TypeScript workflows. No build step: bash hooks plus m
 check              # Parallel lint + typecheck + test (installed to ~/.local/bin)
 pnpm lint:fix      # ESLint autofix
 pnpm check:context # Verify installed Agent instructions match agent-context/
-pnpm sync:skills   # Sync declared Brundlefly Skills through skilld
+pnpm sync:skills   # Sync declared portable Skills through skilld
 pnpm check:skills  # Check installed Skills against .skills/skilld.json
 pnpm sync:context # Install tracked Claude and Codex instructions, the commit-msg hook, and the opencode plugin
 pnpm sync:context:hogwild # Install tracked instructions on Hogwild
