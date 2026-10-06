@@ -1,6 +1,35 @@
 # Verification and release order
 
-## Three Nuxt lanes
+## Keep existing tests
+
+Keep the original unit suite and reusable workflows close to their current form.
+Run required checks on Node 22.22.3. Do not add a Node matrix without an explicit requirement.
+Run pull request checks once. Restrict push checks to main and ignore Markdown by default.
+Retain lint, typecheck, build, and test jobs. Preserve services required by existing tests.
+
+Use the existing Nuxt 4.6 suite and one linked Nuxt 5 fixture.
+Install Nuxt 5 through an exact npm alias: `nuxt: npm:nuxt-nightly@<5x-version>`.
+Commit ordinary frozen lockfiles for the root and fixture.
+Invoke the fixture from the existing non-watch test command.
+Keep app and server type checks and meaningful runtime assertions.
+
+If linked imports resolve the root framework, add Vite dedupe for Nuxt, Vue, and Vue Router.
+If generated types scan unrelated packages, set the fixture's `workspaceDir` to `import.meta.dirname`.
+For nightly module compatibility, allow the exact nightly only within the fixture.
+
+Use immutable full-SHA `pkg.pr.new` overrides for unpublished producer majors.
+Preserve intended package version declarations. Remove preview overrides when registry versions become available.
+Do not add cross-repository source checkouts, coordinated bootstrap workspaces, or custom lane runners.
+If pnpm rejects preview URL subdependencies, use temporary `blockExoticSubdeps: false` in affected workspaces.
+Keep trust policy and exact approved exceptions. Restore the URL restriction after removing previews.
+
+Update all direct dependencies, catalogs, optional dependencies, and examples when the user requests the dependency sweep.
+Keep TypeScript unchanged for this rollout. Use `>=` minimums for `moduleDependencies`, preserving supported integration floors.
+
+## Targeted Nuxt checks
+
+The compatibility flag and packed consumers are targeted evidence, rather than additional required workflow lanes.
+Use them when a changed contract requires that proof. Avoid multiplying every test across all configurations.
 
 | Lane | Dependency | What it proves |
 | --- | --- | --- |
@@ -20,7 +49,7 @@ An `experimental.future` object does not enable that lane.
 The future flag does not upgrade Nitro on Nuxt 4.
 Source: [versioned Nuxt upgrade guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/1.getting-started/18.upgrade.md#testing-nuxt-5).
 
-Run the Node 22.22.3 floor and a supported newer LTS for the stable Nuxt lanes.
+Run the Node 22.22.3 floor for the stable Nuxt checks.
 Run server-only unit tests in Node, rather than a browser emulator.
 Node 22's prefix-only `node:sqlite` can fail Vite resolution in browser environments.
 Use a supported Node version for the exact Nuxt 5 nightly.
@@ -35,7 +64,7 @@ An authenticated CLI alone must not enable a deployment test.
 
 ## Packed consumers
 
-Build and pack the producer before testing consumers.
+When published package boundaries change, build and pack the producer for a targeted consumer check.
 Run packing after checks that rebuild the same package finish.
 Concurrent prepack hooks can delete artifacts that another check is loading.
 Use isolated fixtures outside the workspace dependency graph.
@@ -48,7 +77,7 @@ Workspace development dependencies can conceal missing runtime declarations.
 For bundled modules, test the meta module alone without direct submodule dependencies or explicit registration.
 Resolve pinned nightly metadata through the meta package's dependency context when necessary.
 Distinguish disabled features from absent packages. Required dependencies remain installed when their features are disabled.
-Run packed development SSR and server requests in all three Nuxt lanes.
+For targeted packed checks, exercise development SSR and server requests on the affected Nuxt versions.
 Production bundling can conceal development externalization and unresolved runtime aliases.
 Check Vite transpilation for app runtime code that imports Nuxt virtual aliases.
 Check Nitro 2 inline coverage for the full reachable runtime graph, including shared files outside server directories.
@@ -58,7 +87,7 @@ For pnpm 11 and 12 packing, use `--config.ignore-scripts=true`. Require a succes
 A reused tarball path can preserve stale package-manager cache entries.
 Put temporary tarball overrides in `pnpm-workspace.yaml` with pnpm 12.
 Do not assume `package.json#pnpm.overrides` changes the resolved graph.
-Pass cross-repository artifacts through `NUXT_TEST_TARBALLS`, a package-to-absolute-path JSON map.
+Use package previews for cross-repository dependencies. Keep local tarballs scoped to targeted artifact checks.
 Copy the repository's pinned `packageManager` into isolated fixtures too.
 A different pnpm major can enforce a different dependency trust decision.
 If resolution hangs, reproduce it with a minimal pinned consumer before changing dependencies.
@@ -154,7 +183,7 @@ Prepare shared runtime packages and Site Config before their consumers.
 Handle cycles explicitly, including type-only relationships and optional peers.
 Audit development installs separately from the published runtime graph. Workspace catalogs can create development-only cycles.
 Filtered pnpm installs can still resolve every project through a shared workspace lockfile.
-If consumer majors are unpublished, bootstrap an explicit source workspace with relative overrides and its own verified frozen lock.
+If consumer majors are unpublished, use immutable package previews with ordinary frozen lockfiles.
 Preserve supply-chain policy and full consumer CI. Publish only the foundation package allowlist through its release workflow.
 Never let a recursive workspace release bump or publish a meta package whose version must stay unchanged.
 Prepare DevTools artifacts and their versioned protocol alongside core packages.

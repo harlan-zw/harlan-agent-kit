@@ -77,8 +77,9 @@ Delete compatibility scaffolding only when the remaining imports and behavior pr
 
 ## Verify and hand off
 
-Run the three Nuxt lanes in the verification reference.
-Exercise packed artifacts and meaningful module output, including the supported deployment targets.
+Keep existing tests and workflow structure. Follow the verification reference for version aliases and targeted checks.
+Use Node 22 for required checks unless the user requests a broader matrix.
+Exercise meaningful module output, including supported deployment targets affected by the change.
 Measure dependency changes in equivalent clean consumers.
 Show each removal, retained dependency reason, artifact delta, and remaining untested path.
 Open the required pull requests. Keep shared changes ordered before their consumers.
