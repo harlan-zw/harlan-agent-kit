@@ -16,10 +16,13 @@ Keep app and server type checks and meaningful runtime assertions.
 
 If linked imports resolve the root framework, add Vite dedupe for Nuxt, Vue, and Vue Router.
 If generated types scan unrelated packages, set the fixture's `workspaceDir` to `import.meta.dirname`.
+If development fixtures reject linked runtime files, allow the module directory through `vite.server.fs.allow`.
 For nightly module compatibility, allow the exact nightly only within the fixture.
 
 Use immutable full-SHA `pkg.pr.new` overrides for unpublished producer majors.
 Preserve intended package version declarations. Remove preview overrides when registry versions become available.
+If original tests use stable sibling modules, scope their transitive overrides to their supported dependency versions.
+Keep the migrated module on its intended producer previews. Avoid introducing test-only publication cycles.
 Do not add cross-repository source checkouts, coordinated bootstrap workspaces, or custom lane runners.
 If pnpm rejects preview URL subdependencies, use temporary `blockExoticSubdeps: false` in affected workspaces.
 Keep trust policy and exact approved exceptions. Restore the URL restriction after removing previews.
