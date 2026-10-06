@@ -2,14 +2,18 @@ import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
+import type { RepairRecoveryArtifact, RepairRecoveryWorktrees } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -1021,6 +1025,181 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
       if (artifactRef._tag === 'Err')
         return err(`Could not pin the repair artifact: ${artifactRef.error}`)
       return ok({ ...patch, commitSha: commitSha.stdout, baseSha: worktree.baseSha, artifactRef: artifactRef.value })
+    },
+  }
+}
+
+/** Runs current selected evidence without copying credentials into repository scripts. */
+export async function confirmRepairRecoveryRegression(path: string, regressionPaths: string[], signal: AbortSignal): Promise<Result<void, string>> {
+  const sourceReporter = fileURLToPath(new URL('./repair-regression-reporter.ts', import.meta.url))
+  const reporter = existsSync(sourceReporter)
+    ? sourceReporter
+    : fileURLToPath(import.meta.resolve('harlan-github-agent/repair-regression-reporter'))
+  const evidenceDirectory = await mkdtemp(join(tmpdir(), 'repair-regression-evidence-'))
+  const evidenceFile = join(evidenceDirectory, 'result.json')
+  let output: string | undefined
+  try {
+    await new Promise<void>((resolve) => {
+      execFile('pnpm', ['exec', 'vitest', 'run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...regressionPaths], {
+        cwd: path,
+        env: { ...gitEnvironment(), CI: 'true' },
+        signal,
+        maxBuffer: 10 * 1024 * 1024,
+      }, () => resolve()) // An assertion failure exits nonzero. The reporter supplies the failure category.
+    })
+    output = await readFile(evidenceFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT')
+        return undefined
+      throw error
+    })
+  }
+  finally {
+    await rm(evidenceDirectory, { recursive: true, force: true })
+  }
+  if (output === undefined)
+    return err('The selected regression tests produced no current failure evidence.')
+  let report: unknown
+  try {
+    report = JSON.parse(output)
+  }
+  catch {
+    return err('The selected regression tests produced no current failure evidence.')
+  }
+  if (typeof report !== 'object' || report === null)
+    return err('The selected regression report is invalid.')
+  const result = report as { _tag?: unknown, assertions?: unknown, otherFailures?: unknown, setupFailed?: unknown, interrupted?: unknown }
+  return result._tag === 'RegressionEvidence' && typeof result.assertions === 'number' && result.assertions > 0
+    && result.otherFailures === 0 && result.setupFailed === false && result.interrupted === false
+    ? ok(undefined)
+    : err('The selected regression tests must fail on the current base without setup errors.')
+}
+
+export async function runRepairRecoveryChecks(path: string, regressionPaths: string[], signal: AbortSignal): Promise<Result<string[], string>> {
+  const commands: Array<{ command: string, args: string[] }> = [
+    { command: 'pnpm', args: ['install', '--frozen-lockfile'] },
+    { command: 'pnpm', args: ['exec', 'vitest', 'run', ...regressionPaths] },
+    { command: 'check', args: [] },
+  ]
+  const manifest: unknown = JSON.parse(await readFile(join(path, 'package.json'), 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null)
+    return err('The recovery repository has no package manifest.')
+  const scripts = (manifest as { scripts?: unknown }).scripts
+  if (typeof scripts === 'object' && scripts !== null && typeof (scripts as { build?: unknown }).build === 'string')
+    commands.push({ command: 'pnpm', args: ['build'] })
+  const checks: string[] = []
+  for (const command of commands) {
+    const passed = await new Promise<boolean>((resolve) => {
+      const child = spawn(command.command, command.args, { cwd: path, env: { ...gitEnvironment(), CI: 'true' }, signal, stdio: 'ignore' })
+      child.on('error', () => resolve(false))
+      child.on('close', code => resolve(code === 0))
+    })
+    if (!passed)
+      return err(`Fresh Repair checks failed: ${command.command} ${command.args.join(' ')}.`)
+    checks.push(`${command.command} ${command.args.join(' ')} passed`.trim())
+  }
+  return ok(checks)
+}
+
+/** Ports only the artifact the failed Task retained, then uses normal verification and pinning. */
+export function createRepairRecoveryWorktreeManager(options: ConflictWorktreeManagerOptions & {
+  runChecks: typeof runRepairRecoveryChecks
+  confirmRegression: typeof confirmRepairRecoveryRegression
+  recordChecks: (task: ClaimedReviewFixTask, checks: string[]) => boolean
+}): RepairRecoveryWorktrees {
+  const fixes = createReviewFixWorktreeManager(options)
+  const inspectRecovery: RepairRecoveryWorktrees['inspectRecovery'] = async (target, signal) => {
+    const finding = target.task.pickup?.finding
+    if (finding === undefined)
+      return err('Recovery needs the original selected finding.')
+    const retainedRef = `refs/heads/${agentWorktreeBranch(`fix-${target.task.pullRequestNumber}-${finding.details.fingerprint.slice(0, 12)}`, { taskId: target.task.id, fence: target.proof.originalFence })}`
+    const checkout = target.task.repositoryMapping.checkout
+    const retained = await runGitScalar(checkout, ['rev-parse', '--verify', retainedRef], signal)
+    if (retained.exitCode !== 0 || retained.stdout !== target.proof.commitSha)
+      return err('The original retained Repair ref does not match the persisted failed pin.')
+    const parents = await runGitScalar(checkout, ['show', '--no-patch', '--format=%P', target.proof.commitSha], signal)
+    if (parents.exitCode !== 0 || !/^[a-f\d]{40}$/.test(parents.stdout))
+      return err('The retained Repair must have exactly one parent commit.')
+    const changed = await runGit(checkout, ['diff-tree', '-r', '--no-commit-id', '--name-only', '-z', target.proof.commitSha], signal)
+    if (changed.exitCode !== 0)
+      return err('The retained Repair paths could not be read.')
+    const changedPaths = changed.stdout.split('\0').filter(Boolean)
+    if (changedPaths.length === 0)
+      return err('The retained Repair patch is empty.')
+    const artifact: RepairRecoveryArtifact = { parentSha: parents.stdout, retainedRef, changedPaths, regressionPaths: changedPaths.filter(path => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path)) }
+    return ok(artifact)
+  }
+  return {
+    inspectRecovery,
+    async recover(task, target, plan, signal) {
+      const retained = await inspectRecovery(target, signal)
+      if (retained._tag === 'Err')
+        return retained
+      if (JSON.stringify(retained.value) !== JSON.stringify({ parentSha: plan.parentSha, retainedRef: plan.retainedRef, changedPaths: plan.changedPaths, regressionPaths: plan.regressionPaths }))
+        return err('The retained Repair changed after its Plan.')
+      const prepared = await fixes.prepare(task, signal)
+      if (prepared._tag === 'Err')
+        return prepared
+      const workspace = prepared.value
+      if (workspace.headSha !== plan.expectedBase)
+        return err('The fetched default branch base changed before recovery.')
+      const applied = await runGit(workspace.path, ['cherry-pick', '--no-commit', target.proof.commitSha], signal)
+      if (applied.exitCode !== 0)
+        return err('The retained Repair conflicts with the current base. Recovery needs a current patch.')
+      const nonempty = await runGit(workspace.path, ['diff', '--cached', '--quiet'], signal)
+      if (nonempty.exitCode === 0)
+        return err('The retained Repair is already present or has an empty patch.')
+      if (nonempty.exitCode !== 1)
+        return err('The retained Repair patch could not be inspected.')
+      const appliedDigest = await runGitDigest(workspace.path, contentDiffArgs('--cached', 'HEAD'), signal)
+      if (appliedDigest.exitCode !== 0)
+        return err('The retained Repair patch could not be verified.')
+      const patchTree = await runGitScalar(workspace.path, ['write-tree'], signal)
+      if (patchTree.exitCode !== 0)
+        return err('The retained Repair tree could not be preserved.')
+      const baseline = await runGit(workspace.path, ['restore', '--source=HEAD', '--staged', '--worktree', '--', '.'], signal)
+      const tests = await runGit(workspace.path, ['restore', `--source=${patchTree.stdout}`, '--staged', '--worktree', '--', ...plan.regressionPaths], signal)
+      if (baseline.exitCode !== 0 || tests.exitCode !== 0)
+        return err('The selected regression tests could not be isolated on the current base.')
+      // Prepare dependencies before the red run. The same current base owns both test runs.
+      const installed = await new Promise<boolean>((resolve) => {
+        const child = spawn('pnpm', ['install', '--frozen-lockfile'], { cwd: workspace.path, env: { ...gitEnvironment(), CI: 'true' }, signal, stdio: 'ignore' })
+        child.on('error', () => resolve(false))
+        child.on('close', code => resolve(code === 0))
+      })
+      if (!installed)
+        return err('Current base dependencies could not be installed for regression evidence.')
+      const regression = await options.confirmRegression(workspace.path, plan.regressionPaths, signal)
+      if (regression._tag === 'Err')
+        return err({ _tag: 'EvidenceRequired', reason: regression.error })
+      const restored = await runGit(workspace.path, ['restore', `--source=${patchTree.stdout}`, '--staged', '--worktree', '--', '.'], signal)
+      if (restored.exitCode !== 0)
+        return err('The retained Repair could not be restored after current regression evidence.')
+      const reset = await runGit(workspace.path, ['reset'], signal)
+      if (reset.exitCode !== 0)
+        return err('The retained Repair could not prepare fresh checks.')
+      const paths = await runGit(workspace.path, ['diff', '--name-only', '-z', 'HEAD'], signal)
+      if (paths.exitCode !== 0 || paths.stdout.length === 0)
+        return err('The retained Repair is already present or has an empty patch.')
+      const checks = await options.runChecks(workspace.path, plan.regressionPaths, signal)
+      if (checks._tag === 'Err')
+        return checks
+      const verified = await fixes.verify(task, workspace, signal)
+      if (verified._tag === 'Err')
+        return verified
+      if (verified.value.changedFiles === 0)
+        return err('Fresh Repair checks left an empty patch.')
+      if (verified.value.digest !== appliedDigest.digest)
+        return err('Fresh checks changed the retained patch. Request a current Repair.')
+      if (!options.recordChecks(task, ['Selected regression tests failed on the current base without setup errors.', ...checks.value]))
+        return err('The Repair lost authority before recording fresh checks.')
+      if (plan.operation === 'Reuse') {
+        const retainedDigest = await runGitDigest(task.repositoryMapping.checkout, contentDiffArgs(plan.parentSha, target.proof.commitSha), signal)
+        if (retainedDigest.exitCode !== 0 || retainedDigest.digest !== verified.value.digest)
+          return err('Fresh checks changed the retained patch. Request a current Repair.')
+        const pinned = await pinPublicationArtifact(options.root, task.repository, task.id, task.repositoryMapping.checkout, target.proof.commitSha, signal)
+        return pinned._tag === 'Err' ? pinned : ok({ ...verified.value, commitSha: target.proof.commitSha, baseSha: plan.expectedBase, artifactRef: pinned.value })
+      }
+      return fixes.commit(task, workspace, verified.value, `fix: recover selected finding from #${task.pullRequestNumber}`, signal)
     },
   }
 }

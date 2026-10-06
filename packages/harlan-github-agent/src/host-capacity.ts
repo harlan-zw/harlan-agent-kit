@@ -57,6 +57,8 @@ export function agentHost(capacity: HostCapacity, refused: ReadonlySet<AgentHost
 }
 
 export interface HostAgentPool {
+  /** Controller checks own a local slot without starting an implementation Agent. */
+  tryAcquireLocal: (taskId: string) => { release: () => void } | null
   read: () => HostCapacity
   tasks: () => Array<{ taskId: string | null, host: AgentHost }>
   provider: (local: AgentProvider, desktop: AgentProvider) => AgentProvider
@@ -94,6 +96,18 @@ export function createHostAgentPool(options: {
     desktopConnected: options.desktopConnected(),
   })
   return {
+    tryAcquireLocal(taskId) {
+      if (localActive >= hostLimit(options.localMaximum))
+        return null
+      const key = Symbol(taskId)
+      localActive += 1
+      tasks.set(key, { taskId, host: 'hogwild' })
+      return { release: () => {
+        if (!tasks.delete(key))
+          return
+        localActive -= 1
+      } }
+    },
     read,
     tasks: () => [...tasks.values()],
     provider: (local, desktop) => ({

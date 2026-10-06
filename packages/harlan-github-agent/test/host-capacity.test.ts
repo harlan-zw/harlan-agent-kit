@@ -20,6 +20,20 @@ function provider(name: 'codex' | 'opencode', started: () => void): AgentProvide
 }
 
 describe('host admission', () => {
+  it('accounts for controller checks in the existing local host capacity', async () => {
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const lease = pool.tryAcquireLocal('recovery')
+    expect(lease).not.toBeNull()
+    expect(pool.tryAcquireLocal('duplicate')).toBeNull()
+    expect(pool.tasks()).toEqual([{ taskId: 'recovery', host: 'hogwild' }])
+    const events = pool.provider(provider('codex', () => {}), provider('codex', () => {})).runTurn(request)
+    for await (const _event of events) {
+      expect(pool.read().desktopActive).toBe(1)
+    }
+    lease?.release()
+    lease?.release()
+    expect(pool.read().localActive).toBe(0)
+  })
   it('removes a host assignment when its provider fails', async () => {
     const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
     const failing: AgentProvider = { name: 'codex', async* runTurn() {

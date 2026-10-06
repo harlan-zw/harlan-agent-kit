@@ -140,9 +140,9 @@ async function runControl<ErrorValue>(
 }
 
 function taskId(value: string): { _tag: 'Ok', value: string } | { _tag: 'Err', error: ControlCommandError } {
-  return /^[a-f\d]{64}$/.test(value)
+  return /^(?:logged-finding:)?[a-f\d]{64}$/.test(value)
     ? { _tag: 'Ok', value }
-    : { _tag: 'Err', error: { _tag: 'InvalidTaskId', message: 'The Task ID must contain 64 lowercase hexadecimal characters.' } }
+    : { _tag: 'Err', error: { _tag: 'InvalidTaskId', message: 'Set a 64-character Task ID or logged-finding Task ID.' } }
 }
 
 function controlTaskCommand(input: { name: 'activity' | 'cancel', description: string }) {
@@ -293,6 +293,19 @@ const controlCommand = defineCommand({
       run: ({ args }) => runControl(args, client => client.update()),
     }),
     'cancel': controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
+    'recover-repair': defineCommand({
+      meta: { name: 'recover-repair', description: 'Plan retained Repair recovery. Apply runs fresh checks before normal Publication.' },
+      args: {
+        ...controlConnectionArguments,
+        'task': { type: 'string', description: 'Selected finding Task ID.', required: true },
+        'commit': { type: 'string', description: 'Exact retained commit SHA.', required: true },
+        'apply': { type: 'boolean', description: 'Claim recovery and run fresh checks.', default: false },
+        'expected-base': { type: 'string', description: 'Exact base SHA from the current Plan.' },
+      },
+      run: ({ args }) => runControl(args, client => client.recoverRepair(args.apply
+        ? { _tag: 'Apply', taskId: args.task, commitSha: args.commit, expectedBase: args['expected-base'] ?? '' }
+        : { _tag: 'Plan', taskId: args.task, commitSha: args.commit })),
+    }),
     'stop-review': defineCommand({
       meta: { name: 'stop-review', description: 'Stop Service Review for one pull request head.' },
       args: {

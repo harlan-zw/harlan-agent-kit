@@ -10,6 +10,7 @@ export default defineBuildConfig({
         './src/desktop-client.ts',
         './src/desktop-execute.ts',
         './src/github-media-render.ts',
+        './src/repair-regression-reporter.ts',
       ],
     },
   ],

@@ -2,6 +2,7 @@ import type { AgentActivityLog } from './agent-activity.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
 import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
+import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
@@ -19,9 +20,11 @@ import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseAgentSlots } from './host-capacity.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
+import { parseRepairRecoveryRequest } from './repair-recovery.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
+  repairRecovery?: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, string>>
   pullRequestWatch?: {
     state: (repository: string, number: number) => PullRequestWatchState | null
     observe: (target: PullRequestWatchTarget, signal: AbortSignal) => Promise<Result<void, string>>
@@ -239,7 +242,7 @@ function cancelTaskRequest(value: unknown): CancelTaskRequest | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     return undefined
   const taskId = (value as Record<string, unknown>).taskId
-  return typeof taskId === 'string' && /^[a-f\d]{64}$/.test(taskId) ? { taskId } : undefined
+  return typeof taskId === 'string' && /^(?:logged-finding:)?[a-f\d]{64}$/.test(taskId) ? { taskId } : undefined
 }
 
 function reviewRerunRequest(value: unknown): ReviewRerunRequest | undefined {
@@ -714,6 +717,20 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (result.reason._tag === 'TaskNotFound')
       throw createError({ status: 404, statusText: 'Not Found', message: 'The task was not found.' })
     throw createError({ status: 409, statusText: 'Conflict', message: 'The task already finished.' })
+  })
+
+  app.post('/api/tasks/recover-repair', async (event) => {
+    const parsed = parseRepairRecoveryRequest(await event.req.json().catch(() => undefined))
+    if (parsed._tag === 'Err')
+      throw createError({ status: 400, message: parsed.error })
+    if (options.repairRecovery === undefined)
+      throw createError({ status: 409, message: 'Repair recovery is unavailable on this Service.' })
+    const result = await options.repairRecovery(parsed.value)
+    if (result._tag === 'Err')
+      throw createError({ status: 409, message: result.error })
+    if (result.value._tag === 'Accepted')
+      setResponseStatus(event, 202)
+    return result.value
   })
 
   app.post('/api/reviews/stop', async (event) => {

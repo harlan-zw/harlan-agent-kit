@@ -155,6 +155,20 @@ harlan-github-agent control update --url https://harlan-github-agent.localhost -
 harlan-github-agent control cancel --task TASK_ID --url https://harlan-github-agent.localhost --password-file /absolute/path/to/dashboard-password
 ```
 
+Recover one retained commit from a failed Logged finding Repair:
+
+```bash
+harlan-github-agent control recover-repair --task logged-finding:TASK_DIGEST --commit COMMIT_SHA --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control recover-repair --task logged-finding:TASK_DIGEST --commit COMMIT_SHA --apply --expected-base BASE_SHA --config /absolute/path/to/harlan-github-agent.yml
+```
+
+The default command returns a read-only Plan. Apply requires the exact current base from that Plan.
+Apply returns a durable Task ID and fence before fresh checks finish. Read its outcome with `control tasks`.
+Recovery preserves the original commit, Approval, Task identity, and retry budgets.
+Selected regression tests must fail on the current base without import or setup errors.
+The recovered patch must pass those tests, `check`, and the declared build before normal Publication.
+If current regression evidence cannot run, the Task needs attention. Review checks the new pull request head.
+
 The package exports the typed Control API client:
 
 ```ts
