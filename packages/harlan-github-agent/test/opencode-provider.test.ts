@@ -26,7 +26,7 @@ function request(overrides: Partial<AgentTurnRequest> = {}): AgentTurnRequest {
 function replay(lines: unknown[], options: { exitCode?: number, standardError?: string, failWithSession?: boolean } = {}) {
   const script = `
     const args = process.argv.slice(1)
-    if (${options.failWithSession === true} && args.includes('--session')) {
+    if (${options.failWithSession === true} && args.includes('ses_missing00')) {
       process.stderr.write('\\u001B[91mError: \\u001B[0mSession not found')
       process.exit(1)
     }
@@ -45,14 +45,21 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 }
 
 /** A turn server that records every message the provider sends into a session. */
-function fakeServer(answer: Result<void, string> = { _tag: 'Ok', value: undefined }) {
+function fakeServer(answer: Result<void, string> = { _tag: 'Ok', value: undefined }, messages: Result<unknown, string> = { _tag: 'Err', error: 'Missing persisted response.' }) {
   const steered: Array<{ sessionId: string, text: string }> = []
+  const reads: string[] = []
   let closed = false
   const start = (): Promise<Result<OpencodeServer, string>> => Promise.resolve({
     _tag: 'Ok',
     value: {
       url: 'http://127.0.0.1:4097',
       password: 'turn-password',
+      createSession: () => Promise.resolve({ _tag: 'Ok', value: 'ses_abc12345' }),
+      readMessages: (sessionId: string) => {
+        reads.push(sessionId)
+        expect(closed).toBe(false)
+        return Promise.resolve(messages)
+      },
       steer: (sessionId: string, text: string) => {
         steered.push({ sessionId, text })
         return Promise.resolve(answer)
@@ -62,7 +69,7 @@ function fakeServer(answer: Result<void, string> = { _tag: 'Ok', value: undefine
       },
     },
   })
-  return { start, steered, closed: () => closed }
+  return { start, steered, reads, closed: () => closed }
 }
 
 const bashLine = {
@@ -80,6 +87,7 @@ const textLine = {
   sessionID: 'ses_abc12345',
   part: { type: 'text', text: '```json\n{"outcome":"resolved"}\n```' },
 }
+const completedLine = { type: 'step_finish', sessionID: 'ses_abc12345', part: { reason: 'stop' } }
 
 describe('opencodeArguments', () => {
   it('runs the pinned model in the prepared worktree with permissions answered', () => {
@@ -107,6 +115,133 @@ describe('opencodeArguments', () => {
     expect(opencodeArguments(request({ sessionId: 'ses_abc12345' }), 'the prompt', 'http://127.0.0.1:4097'))
       .not
       .toContain('--session')
+  })
+})
+
+describe('attached result recovery', () => {
+  const identity = { sessionID: 'ses_abc12345', messageID: 'msg_current' }
+  const start = { type: 'step_start', sessionID: identity.sessionID, part: { id: 'part_start', ...identity, type: 'step-start' } }
+  const persisted = [{ info: { id: identity.messageID, sessionID: identity.sessionID, role: 'assistant', parentID: 'msg_user', finish: 'stop', time: { created: 50, completed: 100 } }, parts: [
+    { id: 'part_answer', ...identity, type: 'text', text: '{"outcome":"resolved"}', time: { end: 100 } },
+    { id: 'part_finish', ...identity, type: 'step-finish', reason: 'stop', tokens: { input: 5, output: 3, reasoning: 1, cache: { read: 2, write: 0 } } },
+  ] }, { info: { id: 'msg_user', sessionID: identity.sessionID, role: 'user', parentID: '', finish: '', time: { created: 40, completed: 40 } }, parts: [] }]
+
+  it('delivers the persisted answer when the attached CLI exits before completion events', async () => {
+    const server = fakeServer(undefined, { _tag: 'Ok', value: persisted })
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: replay([start]) })
+    const events = await collect(provider.runTurn(request()))
+    expect(events).toEqual([
+      { _tag: 'SessionStarted', sessionId: identity.sessionID },
+      { _tag: 'Reasoning', text: 'Recovered the completed OpenCode result after its attached stream ended.' },
+      { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'Usage', usage: { _tag: 'Available', input: 5, cachedInput: 2, cacheWrite: 0, output: 3, reasoning: 1 } },
+      { _tag: 'TurnCompleted' },
+    ])
+    expect(server.closed()).toBe(true)
+  })
+
+  it('never replays text or token usage already delivered by the stream', async () => {
+    const server = fakeServer(undefined, { _tag: 'Ok', value: persisted })
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: replay([start, { type: 'text', sessionID: identity.sessionID, part: persisted[0]!.parts[0] }]) })
+    const events = await collect(provider.runTurn(request()))
+    expect(events.filter(event => event._tag === 'Message')).toEqual([{ _tag: 'Message', text: '{"outcome":"resolved"}' }])
+    expect(events.at(-1)).toEqual({ _tag: 'TurnCompleted' })
+  })
+
+  it('recovers zero stdout events using only its newly created empty session', async () => {
+    const server = fakeServer(undefined, { _tag: 'Ok', value: persisted })
+    let launched: string[] = []
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: (args) => {
+      launched = args
+      return replay([])(args)
+    } })
+    const events = await collect(provider.runTurn(request({ sessionId: 'ses_old' })))
+    expect(launched[launched.indexOf('--session') + 1]).toBe(identity.sessionID)
+    expect(events.filter(event => event._tag === 'SessionStarted')).toEqual([{ _tag: 'SessionStarted', sessionId: identity.sessionID }])
+    expect(events.at(-1)).toEqual({ _tag: 'TurnCompleted' })
+  })
+
+  it('does not reconcile an already completed stream', async () => {
+    const server = fakeServer()
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: replay([textLine, completedLine]) })
+    expect((await collect(provider.runTurn(request()))).at(-1)).toEqual({ _tag: 'TurnCompleted' })
+    expect(server.reads).toEqual([])
+  })
+
+  it.each([false, true])('never converts a nonzero exit into success with terminal=%s', async (terminal) => {
+    const server = fakeServer(undefined, { _tag: 'Ok', value: persisted })
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: replay([start, textLine, ...(terminal ? [completedLine] : [])], { exitCode: 1 }) })
+    const events = await collect(provider.runTurn(request()))
+    expect(events.at(-1)).toMatchObject({ _tag: 'Failed' })
+    expect(events.some(event => event._tag === 'TurnCompleted')).toBe(false)
+    expect(server.reads).toEqual([])
+  })
+
+  it('rejects a streamed identity from a different session', async () => {
+    const server = fakeServer()
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: replay([{ ...start, sessionID: 'ses_other' }]) })
+    expect((await collect(provider.runTurn(request()))).at(-1)).toEqual({ _tag: 'Failed', reason: 'The OpenCode stream returned another session identity.' })
+    expect(server.reads).toEqual([])
+  })
+
+  it.each(['signal', 'cancel'])('buffers terminal completion until a clean exit when stopped by %s', async (mode) => {
+    const controller = new AbortController()
+    const server = fakeServer()
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: () => {
+      const child = spawn(process.execPath, ['-e', `
+        process.stdout.write(${JSON.stringify(`${JSON.stringify(textLine)}\n${JSON.stringify(completedLine)}\n`)})
+        ${mode === 'signal' ? 'process.kill(process.pid, \'SIGTERM\')' : 'setInterval(() => {}, 1000)'}
+      `], { stdio: ['ignore', 'pipe', 'pipe'] })
+      if (mode === 'cancel')
+        child.stdout.once('data', () => controller.abort())
+      return child
+    } })
+    const events = await collect(provider.runTurn(request({ signal: controller.signal })))
+    expect(events.at(-1)).toMatchObject({ _tag: 'Failed' })
+    expect(events.some(event => event._tag === 'TurnCompleted')).toBe(false)
+    expect(server.reads).toEqual([])
+  })
+
+  it('does not publish a recovered answer when cancellation arrives during the read', async () => {
+    const controller = new AbortController()
+    const server = fakeServer()
+    const provider = createOpencodeProvider({ startOpencodeServer: async () => {
+      const started = await server.start()
+      if (started._tag === 'Err')
+        return started
+      return { _tag: 'Ok', value: { ...started.value, readMessages: async () => {
+        controller.abort()
+        return { _tag: 'Ok', value: persisted }
+      } } }
+    }, spawnOpencode: replay([]) })
+    const events = await collect(provider.runTurn(request({ signal: controller.signal })))
+    expect(events.at(-1)).toEqual({ _tag: 'Failed', reason: 'The OpenCode result read was cancelled.' })
+    expect(events.some(event => event._tag === 'TurnCompleted' || event._tag === 'Message')).toBe(false)
+    expect(server.closed()).toBe(true)
+  })
+
+  it.each([false, true])('recovers completed command activity once with streamed=%s', async (streamed) => {
+    const tool = { ...bashLine.part, id: 'part_check', ...identity, state: { ...bashLine.part.state, time: { start: 50, end: 75 } } }
+    const messages = [{ ...persisted[0], parts: [tool, ...persisted[0]!.parts] }, persisted[1]]
+    const server = fakeServer(undefined, { _tag: 'Ok', value: messages })
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: replay(streamed ? [start, { type: 'tool_use', sessionID: identity.sessionID, part: tool }] : []) })
+    const events = await collect(provider.runTurn(request()))
+    expect(events.filter(event => event._tag === 'CommandCompleted')).toEqual([{ _tag: 'CommandCompleted', command: 'pnpm test', output: 'ok\n', exitCode: 0 }])
+    expect(events.at(-1)).toEqual({ _tag: 'TurnCompleted' })
+  })
+
+  it.each([
+    { name: 'read failure', response: { _tag: 'Err', error: 'Read failed.' } },
+    { name: 'unfinished assistant', response: { _tag: 'Ok', value: [{ ...persisted[0], info: { ...persisted[0]!.info, finish: undefined } }] } },
+    { name: 'another turn', response: { _tag: 'Ok', value: [{ ...persisted[0], info: { ...persisted[0]!.info, id: 'msg_old' } }] } },
+    { name: 'missing user', response: { _tag: 'Ok', value: [persisted[0]] } },
+    { name: 'ambiguous user', response: { _tag: 'Ok', value: [...persisted, { ...persisted[1], info: { ...persisted[1]!.info, id: 'msg_other' } }] } },
+  ])('fails explicitly on $name instead of accepting exit zero', async ({ response }) => {
+    const server = fakeServer(undefined, response as Result<unknown, string>)
+    const provider = createOpencodeProvider({ startOpencodeServer: server.start, spawnOpencode: replay([start]) })
+    const events = await collect(provider.runTurn(request()))
+    expect(events.at(-1)).toMatchObject({ _tag: 'Failed' })
+    expect(events.some(event => event._tag === 'TurnCompleted')).toBe(false)
   })
 })
 
@@ -207,16 +342,18 @@ if [ "$1" = serve ]; then
   exec /bin/sleep 60
 fi
 printf '%s\\n' '${JSON.stringify(textLine)}'
+printf '%s\\n' '${JSON.stringify(completedLine)}'
 `)
     await chmod(binary, 0o755)
     process.env.PATH = workspace
 
     try {
-      const provider = createOpencodeProvider()
+      const provider = createOpencodeProvider({ startOpencodeServer: fakeServer().start })
 
       expect(await collect(provider.runTurn(request({ workspace })))).toEqual([
         { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
         { _tag: 'Message', text: '{"outcome":"resolved"}' },
+        { _tag: 'TurnCompleted' },
       ])
     }
     finally {
@@ -271,13 +408,14 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
   it('reports the session before the events it produced', async () => {
     const provider = createOpencodeProvider({
       startOpencodeServer: fakeServer().start,
-      spawnOpencode: replay([bashLine, textLine]),
+      spawnOpencode: replay([bashLine, textLine, completedLine]),
     })
 
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'CommandCompleted', command: 'pnpm test', output: 'ok\n', exitCode: 0 },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'TurnCompleted' },
     ])
   })
 
@@ -294,12 +432,13 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
   it('starts a fresh session even when one was saved', async () => {
     const provider = createOpencodeProvider({
       startOpencodeServer: fakeServer().start,
-      spawnOpencode: replay([textLine], { failWithSession: true }),
+      spawnOpencode: replay([textLine, completedLine], { failWithSession: true }),
     })
 
     expect(await collect(provider.runTurn(request({ sessionId: 'ses_missing00' })))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
+      { _tag: 'TurnCompleted' },
     ])
   })
 
@@ -320,7 +459,7 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
     ])
   })
 
-  it('ends a completed turn even when the opencode process stays alive', async () => {
+  it('fails a terminal stream when its process never exits successfully', async () => {
     const provider = createOpencodeProvider({
       startOpencodeServer: fakeServer().start,
       idleTimeoutMilliseconds: 1_000,
@@ -336,7 +475,7 @@ printf '%s\\n' '${JSON.stringify(textLine)}'
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
-      { _tag: 'TurnCompleted' },
+      { _tag: 'Failed', reason: 'The opencode session stopped sending output.' },
     ])
   })
 })
