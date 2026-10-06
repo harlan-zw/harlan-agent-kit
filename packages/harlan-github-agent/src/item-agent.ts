@@ -6,6 +6,7 @@ import type { AgentPhase, AgentPhaseTag } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
+import type { GitHubMediaSource } from './github-media.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
 import type { MergeRisk, PullRequestFile } from './merge-risk.ts'
@@ -38,6 +39,7 @@ import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
+import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { combineMergeRisk, describeMergeRisk, mergeRiskFloor } from './merge-risk.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
@@ -79,6 +81,7 @@ export interface IssueTriageWorker {
 }
 
 export interface ItemAgentOptions {
+  mediaSource?: GitHubMediaSource
   activityLog?: Pick<AgentActivityLog, 'record'>
   /**
    * Harlan's Claude Code home, which holds the per-repository memory.
@@ -366,7 +369,7 @@ const issueTriageSchema = {
  */
 export function reviewSnapshotDigest(snapshot: PullRequestReviewSnapshot): string {
   const { updatedAt: _githubActivityAt, ...pullRequest } = snapshot.pullRequest
-  const { baseChecks: _baseChecks, checks: _checks, requiredChecks: _requiredChecks, ...reviewed } = snapshot
+  const { baseChecks: _baseChecks, checks: _checks, requiredChecks: _requiredChecks, imageReferences: _signedImageReferences, ...reviewed } = snapshot
   return createHash('sha256').update(JSON.stringify({ ...reviewed, pullRequest })).digest('hex')
 }
 
@@ -1263,7 +1266,8 @@ ${repeatedFindings}${discussedFindings}
 Untrusted pull request data follows as JSON:
 ${JSON.stringify(reviewConversationContext(snapshot))}
 
-Fetch the full GitHub conversation only if omitted history matters to a material finding.`
+The worker GitHub CLI supports public reads only. Use this snapshot for private conversation evidence.
+If omitted private history matters to a finding, state the missing evidence. Do not retry credentials.`
 }
 
 /** The Issue triage prompt. Exported so tests can assert its contract without an Agent. */
@@ -1536,11 +1540,13 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const memory = options.claudeHome === undefined
         ? null
         : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: task.repositoryMapping.checkout })
+      const media = await snapshotMedia(options.mediaSource, task.repository, snapshot.value, signal)
       const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
+        media: media.images,
         freshSession: task.state.fence > 1 || freshReviewSession,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
-        prompt: reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings, memory),
+        prompt: `${reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings, memory)}\n${mediaEvidenceLines(media)}`,
         progress: {
           current: agentPhase('WorktreeReady', 'Git worktree ready'),
           report: phase => reportReviewProgress(options, task, 'review', phase, signal),

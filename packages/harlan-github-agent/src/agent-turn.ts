@@ -2,6 +2,7 @@ import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase, AgentProgressWork } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
+import type { AgentMedia } from './github-media.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { AgentRole } from './types.ts'
@@ -48,6 +49,7 @@ export interface AgentTurnOptions {
 }
 
 export interface AgentTurnInput {
+  media?: AgentMedia[]
   /** Start without prior session context, while still saving the new session for Eject. */
   freshSession?: boolean
   /** Absolute instruction files this turn adds, such as the memory index. */
@@ -169,6 +171,7 @@ export async function runAgentTurn(
   const runtime = options.runtime(input.repository)
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({
+    ...(input.media === undefined ? {} : { media: input.media }),
     ...(input.instructionPaths === undefined ? {} : { instructionPaths: input.instructionPaths }),
     taskId: input.taskId,
     model: profile.model,

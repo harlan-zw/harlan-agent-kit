@@ -10,6 +10,7 @@ import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } 
 import { createCodexProvider } from './codex-provider.ts'
 import { desktopErrorCause, parseDesktopWorktree } from './desktop-protocol.ts'
 import { desktopRepositoryPath, exportDesktopWorktree, prepareDesktopWorktree } from './desktop-worktree.ts'
+import { parseAgentMedia } from './github-media.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 
 export interface DesktopTurnOptions {
@@ -26,6 +27,7 @@ export interface DesktopTurnOptions {
 /** Run a provider in an isolated desktop Worktree and return its exact changes. */
 export async function executeDesktopTurn(options: DesktopTurnOptions): Promise<DesktopWorktree> {
   const { turn, directory, signal } = options
+  parseAgentMedia(turn.request.media)
   const snapshot = parseDesktopWorktree(turn.worktree)
   // Everything before the provider starts leaves the turn untouched, so a
   // failure here lets Hogwild run it instead of spending a Task attempt.

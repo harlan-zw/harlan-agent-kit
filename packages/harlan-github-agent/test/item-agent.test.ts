@@ -29,6 +29,7 @@ describe('subject Workers', () => {
       ...snapshot,
       checks: { _tag: 'Available' as const, checks: [{ id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }] },
     })).toBe(reviewSnapshotDigest(snapshot))
+    expect(reviewSnapshotDigest({ ...snapshot, imageReferences: [{ url: 'https://private-user-images.githubusercontent.com/a?jwt=new-signature', label: 'Image' }] })).toBe(reviewSnapshotDigest(snapshot))
     expect(reviewSnapshotDigest({
       ...snapshot,
       requiredChecks: { _tag: 'Declared' as const, contexts: ['ci / test'] },
@@ -42,7 +43,12 @@ describe('subject Workers', () => {
     const comments: string[] = []
     const stamped: string[] = []
     let attempt: RecordReviewRunInput | undefined
+    const image = { mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Before: diagram', source: 'https://github.com/user-attachments/assets/a' }
     const worker = createReviewWorker({
+      mediaSource: async (_repository, references) => {
+        expect(references).toEqual([{ url: image.source, label: image.label }])
+        return { images: [image], unavailable: [] }
+      },
       runtime: createAgentRuntimeSource({
         configuredProvider: 'codex',
         maximumActiveAgents: 6,
@@ -76,7 +82,7 @@ describe('subject Workers', () => {
         listPullRequestFiles: () => Promise.resolve(ok([])),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
-          body: 'Fixes the bug.',
+          body: '![Before: diagram](https://github.com/user-attachments/assets/a)',
           checks: { _tag: 'Available', checks: [] },
           comments: [],
           priorAutomatedReview: {
@@ -157,10 +163,8 @@ describe('subject Workers', () => {
     expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
     expect(capture.requests[0]?.prompt).toContain('Read only the changed hunks plus the symbols they call.')
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
-    expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
-    expect(capture.requests[0]?.prompt).toContain('private-user-images.githubusercontent.com')
-    expect(capture.requests[0]?.prompt).toContain('Authorization')
     expect(capture.requests[0]?.prompt).toContain('stays inaccessible after authenticated retrieval')
+    expect(capture.requests[0]?.media).toEqual([image])
     expect(capture.requests[0]?.prompt).toContain('Use pnpm for every package command. Never use npx.')
   })
 

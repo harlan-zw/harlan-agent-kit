@@ -1,12 +1,13 @@
-import type { CodexOptions, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
+import type { CodexOptions, Input, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import process from 'node:process'
 import { Codex } from '@openai/codex-sdk'
 import { agentProviderFailureReason, agentTextEvent } from './agent-provider.ts'
+import { materializeAgentMedia } from './github-media.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 interface CodexThread {
-  runStreamed: (prompt: string, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }>
+  runStreamed: (prompt: Input, options: { outputSchema: unknown, signal: AbortSignal }) => Promise<{ events: AsyncIterable<ThreadEvent> }>
 }
 
 export interface CodexThreadClient {
@@ -107,41 +108,48 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
   return {
     name: 'codex',
     runTurn: (request: AgentTurnRequest) => (async function* () {
+      const media = await materializeAgentMedia(request.media)
+      try {
       // The SDK replaces the inherited environment when `env` is set, so the
       // whole service environment goes with the worktree's seeded .env on top.
       // Codex takes no per-turn instruction file, so it ignores
       // `request.instructionPaths`. The prompt names the memory index path, and
       // the turn opens it as a file instead.
-      const client = factory({ env: definedEntries(workspaceEnvironment(process.env, request.workspace, request.taskId)) })
-      const baseOptions = {
-        model: request.model,
-        workingDirectory: request.workspace,
-        webSearchMode: 'live',
-        approvalPolicy: 'never',
-      } satisfies ThreadOptions
-      const threadOptions: ThreadOptions = request.reasoningEffort === undefined
-        ? baseOptions
-        : { ...baseOptions, modelReasoningEffort: request.reasoningEffort as NonNullable<ThreadOptions['modelReasoningEffort']> }
-      const run = (thread: CodexThread) => thread.runStreamed(request.prompt, {
-        outputSchema: request.outputSchema,
-        signal: request.signal,
-      })
+        const client = factory({ env: definedEntries(workspaceEnvironment(process.env, request.workspace, request.taskId)) })
+        const baseOptions = {
+          model: request.model,
+          workingDirectory: request.workspace,
+          webSearchMode: 'live',
+          approvalPolicy: 'never',
+        } satisfies ThreadOptions
+        const threadOptions: ThreadOptions = request.reasoningEffort === undefined
+          ? baseOptions
+          : { ...baseOptions, modelReasoningEffort: request.reasoningEffort as NonNullable<ThreadOptions['modelReasoningEffort']> }
+        const input: Input = media.paths.length === 0 ? request.prompt : [{ type: 'text', text: request.prompt }, ...media.paths.map(path => ({ type: 'local_image' as const, path }))]
+        const run = (thread: CodexThread) => thread.runStreamed(input, {
+          outputSchema: request.outputSchema,
+          signal: request.signal,
+        })
 
-      if (request.sessionId !== null) {
-        try {
-          const resumed = await run(client.resumeThread(request.sessionId, threadOptions))
-          yield* providerEvents(resumed.events)
-          return
-        }
-        catch (error) {
+        if (request.sessionId !== null) {
+          try {
+            const resumed = await run(client.resumeThread(request.sessionId, threadOptions))
+            yield* providerEvents(resumed.events)
+            return
+          }
+          catch (error) {
           // A dropped rollout is expected after a restart: start a fresh thread.
-          if (!isMissingSession(error))
-            throw error
+            if (!isMissingSession(error))
+              throw error
+          }
         }
-      }
 
-      const started = await run(client.startThread(threadOptions))
-      yield* providerEvents(started.events)
+        const started = await run(client.startThread(threadOptions))
+        yield* providerEvents(started.events)
+      }
+      finally {
+        await media.release()
+      }
     })(),
   }
 }

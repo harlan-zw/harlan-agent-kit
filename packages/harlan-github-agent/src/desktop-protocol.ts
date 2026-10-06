@@ -20,8 +20,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 2: tagged `DesktopHistory`, which carries only what the receiver lacks.
  * 3: tagged `DesktopFailure`, which says whether the Agent provider started.
  * 4: the `ContextBudgetWarned` Agent event.
+ * 5: bounded controller image evidence carried in the turn request.
  */
-export const DESKTOP_PROTOCOL = 4
+export const DESKTOP_PROTOCOL = 5
 
 /**
  * Why one desktop turn failed.

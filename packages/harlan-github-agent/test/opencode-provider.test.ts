@@ -2,7 +2,7 @@ import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
 import type { OpencodeServer } from '../src/opencode-provider.ts'
 import type { Result } from '../src/result.ts'
 import { spawn } from 'node:child_process'
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -185,6 +185,18 @@ describe('opencodeAgentEvent', () => {
 })
 
 describe('createOpencodeProvider', () => {
+  it('passes local pixel files to OpenCode and deletes them after completion', async () => {
+    let path = ''
+    const image = { mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Before: diagram', source: 'https://github.com/user-attachments/assets/a' }
+    const provider = createOpencodeProvider({ startOpencodeServer: fakeServer().start, spawnOpencode: (args) => {
+      path = args[args.indexOf('--file') + 1]!
+      const script = 'const fs = require("node:fs"); if (fs.readFileSync(process.argv[1]).toString("base64") !== process.argv[2]) process.exit(1); process.stdout.write(process.argv[3]);'
+      return spawn(process.execPath, ['-e', script, path, image.data, `${JSON.stringify(textLine)}\n`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    } })
+    expect(await collect(provider.runTurn(request({ media: [image] })))).toContainEqual({ _tag: 'Message', text: '{"outcome":"resolved"}' })
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('finds the installed opencode command through PATH', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'opencode-provider-'))
     const binary = join(workspace, 'opencode')

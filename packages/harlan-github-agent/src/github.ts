@@ -234,6 +234,7 @@ function pullRequestItem(
     mergedAt: pull.merged_at,
     mergeCommitSha: pull.merge_commit_sha,
     title: pull.title,
+    body: pull.body ?? '',
     author: pull.user?.login ?? 'ghost',
     url: pull.html_url,
     createdAt: pull.created_at,

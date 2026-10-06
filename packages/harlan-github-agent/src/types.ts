@@ -232,6 +232,8 @@ export interface GitHubIssueItem extends GitHubItemBase {
 }
 
 export interface GitHubPullRequestItem extends GitHubItemBase {
+  /** Controller-read intent. Older stored observations can omit the description. */
+  body?: string
   kind: 'pull_request'
   approvalLabels: PullRequestApprovalKind[]
   /** True when the Auto merge label lets the controller merge this pull request. */

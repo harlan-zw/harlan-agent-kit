@@ -48,6 +48,15 @@ describe('authenticated conditional reads', () => {
     expect(seen.every(call => call.headers.authorization === 'token first')).toBe(true)
   })
 
+  it('requests fresh rendered HTML so signed image URLs cannot outlive their read grant', async () => {
+    const { responses, client, seen } = setup()
+    responses.push(json({ body_html: 'first signed URL' }, '"unchanged-body"'), json({ body_html: 'fresh signed URL' }, '"unchanged-body"'))
+    const headers = { accept: 'application/vnd.github.full+json' }
+    await client().request(route, { headers })
+    expect((await client().request(route, { headers })).data).toEqual({ body_html: 'fresh signed URL' })
+    expect(seen.map(call => call.headers['if-none-match'])).toEqual([undefined, undefined])
+  })
+
   it('refreshes changed data and stops reusing a response without an ETag', async () => {
     const { responses, client, seen } = setup()
     responses.push(json([1], '"v1"'), json([2], '"v2"'), json([3]), json([4]))

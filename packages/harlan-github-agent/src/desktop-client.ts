@@ -146,6 +146,7 @@ async function main(): Promise<void> {
       await api('/api/desktop/complete', { id: turn.id, result, failure })
     }
     finally {
+      await rm(input, { force: true })
       stop()
       await completion
       heartbeat.abort()

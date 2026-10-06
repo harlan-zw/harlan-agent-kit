@@ -213,7 +213,6 @@ describe('review fix Worker', () => {
     expect(capture.requests[0]?.prompt).toContain('If evidence contradicts the proposed fix, reject that proposal.')
     expect(capture.requests[0]?.prompt).toContain('Return blocked if no safe fix can satisfy the verified security boundary.')
     expect(capture.requests[0]?.prompt).toContain('Capture and inspect the repaired view before returning repaired')
-    expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
   })
 
   it('hands a later round the earlier rounds and stores its own report', async () => {

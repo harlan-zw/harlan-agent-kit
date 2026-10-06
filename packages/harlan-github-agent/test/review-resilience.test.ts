@@ -422,7 +422,6 @@ describe('review resilience', () => {
     await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
     expect(test.provider.requests[0]?.prompt).toContain('The controller already applied the review workflow')
-    expect(test.provider.requests[0]?.prompt).toContain('Fetch the full GitHub conversation only if omitted history matters')
     expect(test.provider.requests[0]?.prompt).not.toContain('Apply the adversarial-review skill completely')
   })
 
