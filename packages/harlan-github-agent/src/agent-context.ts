@@ -435,4 +435,8 @@ Do not retry another repository slug or credential after a private read fails.`
 export const TOOLCHAIN_LINES = `Use pnpm for every package command. Never use npx.
 The worker GitHub CLI supports public reads only. When a controller snapshot is supplied, use it for private repository evidence.
 If required private evidence is missing, report that limitation. Do not request credentials or bypass the worker CLI.
-Never add debug output to tracked files.`
+Never add debug output to tracked files.
+For secret diagnostics, report only whether a value exists or whether two values match.
+Never print secret values, prefixes, cookies, tokens, signing keys, or configuration objects that contain them.
+Do not print environment files or unfiltered environment variables. Inspect only the named setting and return a boolean.
+Keep failing test evidence. Redact secret values before displaying logs or adding evidence to reports.`

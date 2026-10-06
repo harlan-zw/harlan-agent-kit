@@ -1,7 +1,7 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createGitHubMediaSource, extractMediaReferences, MEDIA_LIMITS, parseAgentMedia, renderedMediaReferences, renderSvgPixels, snapshotMedia } from '../src/github-media.ts'
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>'
@@ -181,10 +181,12 @@ describe('controller image evidence', () => {
     const directory = await mkdtemp(join(tmpdir(), 'media-render-timeout-'))
     try {
       const executablePath = join(directory, 'hang.ts')
-      await writeFile(executablePath, 'while (true) {}')
+      const marker = join(directory, 'ready')
+      await writeFile(executablePath, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'ready'); while (true) {}`)
       const started = Date.now()
-      const result = await renderSvgPixels(Buffer.from(svg), new AbortController().signal, { executablePath, timeoutMs: 100 })
+      const result = await renderSvgPixels(Buffer.from(svg), new AbortController().signal, { executablePath, timeoutMs: 500 })
       expect(result._tag).toBe('Err')
+      expect(await readFile(marker, 'utf8')).toBe('ready')
       expect(Date.now() - started).toBeLessThan(2000)
     }
     finally {
@@ -196,9 +198,11 @@ describe('controller image evidence', () => {
     const directory = await mkdtemp(join(tmpdir(), 'media-render-abort-'))
     try {
       const executablePath = join(directory, 'hang.ts')
-      await writeFile(executablePath, 'while (true) {}')
+      const marker = join(directory, 'ready')
+      await writeFile(executablePath, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'ready'); while (true) {}`)
       const controller = new AbortController()
       const pending = renderSvgPixels(Buffer.from(svg), controller.signal, { executablePath, timeoutMs: 5000 })
+      await vi.waitFor(async () => expect(await readFile(marker, 'utf8')).toBe('ready'))
       controller.abort()
       await expect(pending).rejects.toThrow()
     }
