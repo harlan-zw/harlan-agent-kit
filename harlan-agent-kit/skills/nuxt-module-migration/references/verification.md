@@ -92,6 +92,8 @@ Use native Nuxt fetch types at app boundaries. Mixed app and server globals can 
 If that matcher recurses, bind client `$fetch` through `#imports` before adding response casts or experimental compiler settings.
 Verify runtime interceptors after binding native `$fetch`. A generated import can capture the client before a plugin replaces it.
 Exercise `.raw` and `.create` through the same runtime boundary. Type correctness alone does not prove plugin auth behavior.
+Exercise native `useFetch` too. Its generated fetch import can retain the earlier client.
+Check concurrent SSR requests for cookie isolation. Keep per-request clients outside global replacement.
 Response hooks can receive streamed bodies without a header map. Read head metadata before streaming and set headers on the event.
 Verify normal HTML, error responses, and linked stylesheet requests in the built Worker.
 If Rolldown emits missing SSR stylesheet chunks, test `features.inlineStyles: false` against that exact consumer graph.
