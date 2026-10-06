@@ -38,6 +38,13 @@ Remove inherited fixture lockfiles before creating isolated consumers with diffe
 A stale `link:` resolution can survive a changed `file:` specification and bypass the packed artifact.
 Audit every runtime import against published dependencies, including optional feature paths.
 Workspace development dependencies can conceal missing runtime declarations.
+Run packed development SSR and server requests in all three Nuxt lanes.
+Production bundling can conceal development externalization and unresolved runtime aliases.
+Check Vite transpilation for app runtime code that imports Nuxt virtual aliases.
+Check Nitro 2 inline coverage for the full reachable runtime graph, including shared files outside server directories.
+Exercise development-only hooks and disabled-module mocks through their public aliases.
+Use immutable tarball paths. Record checksums and verify the delivered artifact contains the final source changes.
+A reused tarball path can preserve stale package-manager cache entries.
 Put temporary tarball overrides in `pnpm-workspace.yaml` with pnpm 12.
 Do not assume `package.json#pnpm.overrides` changes the resolved graph.
 Pass cross-repository artifacts through `NUXT_TEST_TARBALLS`, a package-to-absolute-path JSON map.

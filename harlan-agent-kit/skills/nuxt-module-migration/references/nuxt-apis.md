@@ -89,6 +89,9 @@ Forwarded request context can share resources across nested local requests.
 Track the request that owns a database or other cleanup resource.
 Do not let a child response close a borrowed parent resource.
 Prove that the parent response still closes the live resource on Nitro 2 and Nitro 3.
+If deferred work delays cleanup, preserve the owner's cleanup identity in the shared resource state.
+The last task can finish in a borrowed child after the owner responds.
+Prove that this task closes the owner's resource exactly once.
 Do not declare generic server-builder support while required Nitro features remain.
 The experimental Vite server lacks storage, caching, tasks, and Nitro plugins.
 
