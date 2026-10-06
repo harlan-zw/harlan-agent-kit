@@ -116,11 +116,14 @@ def redact(s):
 
 
 def redact_data(value):
-    """Redact string leaves before JSON serialization adds escaping."""
+    """Redact parsed fields before serialization or presentation changes."""
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, dict):
-        return {key: redact_data(item) for key, item in value.items()}
+        return {
+            redact(key): '***' if SENSITIVE_KEY.search(key) and isinstance(item, str) else redact_data(item)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [redact_data(item) for item in value]
     return value
@@ -246,7 +249,9 @@ def render(goal, sess):
     last_kind = 'none'
     body = []
     for p in parts:
-        d = json.loads(p['data'])
+        # Redact complete input and output before summaries, line selection,
+        # or whitespace changes can split a known secret into fragments.
+        d = redact_data(json.loads(p['data']))
         m = json.loads(p['mdata'])
         role = m.get('role')
         t = (p['time_created'] - t0) / 1000
