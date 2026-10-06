@@ -888,6 +888,37 @@ describe('issue work pull request metadata', () => {
     })))
   })
 
+  it('restores trusted template comments without another Agent turn', async () => {
+    const commentTemplate = {
+      _tag: 'Found' as const,
+      body: '<!-- Keep this template. -->\n\n### Description\n\n<!-- Explain why. -->\n\n### Linked Issues\n\n<!-- Close the issue. -->',
+    }
+    const { result, capture } = await runIssueWork({ texts: [answer({})], template: commentTemplate })
+
+    expect(capture.requests).toHaveLength(1)
+    expect(result).toEqual(ok(expect.objectContaining({
+      publication: expect.objectContaining({
+        pullRequestBody: expect.stringMatching(/<!-- Keep this template\. -->[\s\S]*### Description[\s\S]*<!-- Explain why\. -->[\s\S]*The parser dropped the last byte\.[\s\S]*### Linked Issues[\s\S]*<!-- Close the issue\. -->[\s\S]*Closes #12\./),
+      }),
+    })))
+  })
+
+  it('keeps checked change types and existing comments when restoring a missing comment', async () => {
+    const commentTemplate = {
+      _tag: 'Found' as const,
+      body: '### Description\n\n<!-- Explain why. -->\n\n- [ ] Bug fix\n\n<!-- Link the issue. -->\n\n### Linked Issues',
+    }
+    const body = '### Description\n\n<!-- Explain why. -->\n\nThe parser dropped the last byte.\n\n- [x] Bug fix\n\n### Linked Issues\n\nCloses #12.'
+    const { result, capture } = await runIssueWork({ texts: [answer({ pullRequestBody: body })], template: commentTemplate })
+
+    expect(capture.requests).toHaveLength(1)
+    expect(result).toEqual(ok(expect.objectContaining({
+      publication: expect.objectContaining({
+        pullRequestBody: expect.stringMatching(/### Description[\s\S]*<!-- Explain why\. -->[\s\S]*The parser dropped the last byte\.[\s\S]*- \[x\] Bug fix[\s\S]*<!-- Link the issue\. -->[\s\S]*### Linked Issues[\s\S]*Closes #12\./),
+      }),
+    })))
+  })
+
   it('keeps the original title when the repair answer loses it', async () => {
     const { result } = await runIssueWork({
       texts: [answer({ pullRequestBody: 'Closes #12.' }), 'The work is done.'],

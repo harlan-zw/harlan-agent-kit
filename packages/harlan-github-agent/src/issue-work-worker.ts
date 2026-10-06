@@ -176,6 +176,28 @@ function preservesTemplate(body: string, template: string): boolean {
   })
 }
 
+/** Restores trusted comments while retaining the Agent's text and checklist choices. */
+function restoreTemplateComments(body: string, template: string): string {
+  const unticked = untick(body)
+  let position = 0
+  let restored = ''
+  for (const part of templateStructure(template)) {
+    const next = unticked.indexOf(part, position)
+    if (next !== -1) {
+      restored += body.slice(position, next + part.length)
+      position = next + part.length
+    }
+    else if (part.startsWith('<!--')) {
+      restored += `\n\n${part}\n\n`
+    }
+    else {
+      // Visible structure needs an Agent correction. Do not publish a guessed body.
+      return body
+    }
+  }
+  return restored + body.slice(position)
+}
+
 function closesLines(issueNumbers: readonly number[]): string {
   return issueNumbers.map(number => `Closes #${number}.`).join('\n')
 }
@@ -229,7 +251,7 @@ function parseAgentResponse(text: string, issueNumbers: readonly number[], templ
         return err('The agent returned an invalid issue work result.')
       if (value.outcome !== 'implemented' || typeof value.commitMessage !== 'string' || value.commitMessage.trim().length === 0 || typeof value.pullRequestTitle !== 'string' || typeof value.pullRequestBody !== 'string')
         return err('The agent returned an invalid issue work result.')
-      const pullRequestBody = withAiDisclosure(value.pullRequestBody)
+      const pullRequestBody = withAiDisclosure(restoreTemplateComments(value.pullRequestBody, template))
       // Each rule names itself. One shared refusal told nobody which of five
       // rules the metadata broke, so the Incident a person read said only that
       // something was wrong, and a retry had nothing to correct.
