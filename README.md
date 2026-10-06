@@ -109,9 +109,9 @@ Start a new Codex thread after a reinstall, otherwise the new Skills stay unload
 ## Skills
 
 Personal Skills live in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
-Portable Skills come from [Brundlefly](https://github.com/harlan-zw/brundlefly).
-The [Ripast skill](./.skills/sources/ripast/SKILL.md) comes from a reviewed source copy in this repository.
-Its [provenance](./.skills/sources/ripast/PROVENANCE.md) pins the upstream commit.
+Portable Skills come from [Brundlefly](https://github.com/harlan-zw/brundlefly) and [Ripast](https://github.com/harlan-zw/ripast).
+The [Ripast skill](https://github.com/harlan-zw/ripast/blob/main/packages/cli/skills/ripast/SKILL.md) lives in Ripast's repository.
+The declaration pins its source commit.
 Run `pnpm sync:skills` to install the declared Skills through skilld.
 Use a skilld CLI that supports `skilld sync`.
 Private Brundlefly delivery requires skilld authentication and GitHub App access.
