@@ -314,6 +314,8 @@ Enable `mutations_enabled` only after the selected repository policy and GitHub 
 ## Package releases
 
 Eligible open pull requests get one release checkbox in a bot comment.
+Before a verified comment delivery, the comment offers a `do release` command instead.
+This keeps offers visible after restarts. A verified delivery enables the checkbox in the same comment.
 Feature titles offer **Release minor after merge**. Fix and performance titles offer **Release patch after merge**.
 Select it before merging. Clear it to cancel while the pull request remains open.
 The selection survives service restarts. A changed head or release version clears the selection.

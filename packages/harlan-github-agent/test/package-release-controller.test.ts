@@ -28,11 +28,16 @@ function setup() {
 }
 
 describe('release controller', () => {
-  it('does not offer a release checkbox without repository comment delivery', async () => {
+  it('offers a text command before comment delivery and upgrades the same comment afterward', async () => {
     const task = setup()
     await task.run(true, false)
-    expect(task.source.comment).not.toHaveBeenCalled()
-    expect(task.store.listPackageReleases(repository.github)).toEqual([])
+    expect(task.source.comment).toHaveBeenCalledWith(24, expect.stringContaining('`do release patch`'), undefined)
+    expect(task.store.listPackageReleases(repository.github)[0]?.body).not.toContain('- [ ]')
+    expect(task.source.prepare).not.toHaveBeenCalled()
+    await task.run(true, false)
+    expect(task.source.comment).toHaveBeenCalledTimes(1)
+    await task.run()
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, renderPackageRelease(plan), 99)
     task.database.close()
   })
   it('finishes an authorized release across restarts without preparing twice', async () => {
@@ -106,6 +111,47 @@ it('keeps a text command that arrives before the offer exists', async () => {
   expect(task.source.prepare).toHaveBeenCalledTimes(1)
   task.store.queuePackageReleaseCommand({ repository: repository.github, pullRequestNumber: 24, commentId: 101, requestedBy: 'harlan-zw', bump: 'auto' })
   expect(task.store.listPackageReleaseCommands(repository.github)).toEqual([])
+  task.database.close()
+})
+
+it.each(['harlan-zw', 'contributor'])('accepts a signed text request before checkbox coverage only from Harlan: %s', async (author) => {
+  const task = setup()
+  task.source.inspect = async () => ({ ...plan, _tag: 'BeforeMerge' })
+  await task.run(true, false)
+  const app = createWebhookApp({
+    secret: 'secret',
+    allowedOwners: ['harlan-zw'],
+    onHint: () => {},
+    logger: { info: () => {} },
+    packageRelease: {
+      allowedAuthor: 'harlan-zw',
+      actorLogin: () => 'harlan-github-agent[bot]',
+      apply: () => {},
+      command: command => task.store.queuePackageReleaseCommand(command),
+    },
+  })
+  const body = JSON.stringify({ action: 'created', repository: { full_name: repository.github }, issue: { number: 24, pull_request: {} }, sender: { login: author }, comment: { id: 101, user: { login: author }, body: 'do release patch' } })
+  await app.fetch(new Request('http://localhost/webhook', {
+    method: 'POST',
+    body,
+    headers: {
+      'x-github-event': 'issue_comment',
+      'x-github-delivery': `text-${author}`,
+      'x-hub-signature-256': `sha256=${createHmac('sha256', 'secret').update(body).digest('hex')}`,
+    },
+  }))
+  await task.run(true, false)
+  await task.run(true, false)
+  expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe(author === 'harlan-zw' ? 'AwaitingMerge' : 'Available')
+  expect(task.source.prepare).not.toHaveBeenCalled()
+  if (author === 'harlan-zw') {
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('Release selected.'), 99)
+    await task.run()
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('- [x] Release patch after merge'), 99)
+    task.source.inspect = async () => plan
+    await task.run()
+    expect(task.source.prepare).toHaveBeenCalledTimes(1)
+  }
   task.database.close()
 })
 
