@@ -30,7 +30,24 @@ Build and pack the producer before testing consumers.
 Use isolated fixtures outside the workspace dependency graph.
 Install only the tarballs and documented consumer dependencies.
 Avoid `link:` fixtures as the only proof of published exports and dependencies.
+Remove inherited fixture lockfiles before creating isolated consumers with different dependency specifications.
+A stale `link:` resolution can survive a changed `file:` specification and bypass the packed artifact.
+Audit every runtime import against published dependencies, including optional feature paths.
+Workspace development dependencies can conceal missing runtime declarations.
+Put temporary tarball overrides in `pnpm-workspace.yaml` with pnpm 12.
+Do not assume `package.json#pnpm.overrides` changes the resolved graph.
+Pass cross-repository artifacts through `NUXT_TEST_TARBALLS`, a package-to-absolute-path JSON map.
+Copy the repository's existing trust age policy and approved build scripts into isolated fixtures.
+Keep exact approved trust exceptions. Never disable the policy to make tests pass.
 Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
+Check ESM package roots through Node 22 `require(ESM)` and Nuxt's Jiti configuration loader.
+An import-only exports map can fail those loaders. Add a compatible `default` ESM entry when needed.
+
+Stable `^5.0.0` module metadata excludes Nuxt 5 nightly prereleases.
+For the actual-nightly fixture, read each imported module's public `getMeta()` before installation.
+Include the exact pinned nightly in that fixture's metadata compatibility.
+Keep the published peer and metadata contracts unchanged.
+Assert actual module behavior. A correct Nitro version can still accompany a disabled module.
 
 All declared support lanes must invoke non-watch test commands through required workflow jobs.
 Trace reusable workflows to their actual test command and runtime.

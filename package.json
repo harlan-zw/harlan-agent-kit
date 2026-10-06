@@ -15,7 +15,7 @@
     "sync:context": "bash scripts/sync-agent-context.sh local",
     "sync:skills": "node --experimental-strip-types scripts/sync-skills.ts",
     "check:skills": "node --experimental-strip-types scripts/sync-skills.ts --check",
-    "test:skills": "vitest run scripts/sync-skills.test.ts",
+    "test:skills": "vitest run scripts/sync-skills.test.ts scripts/nuxt-module-migration.test.ts",
     "sync:context:hogwild": "bash scripts/sync-agent-context.sh hogwild",
     "sync:context:all": "bash scripts/sync-agent-context.sh all",
     "service:update": "bash scripts/service.sh update",

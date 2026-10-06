@@ -8,8 +8,15 @@ Import `defineEventHandler` and its helpers explicitly from `nuxt/server`.
 On Nuxt 4, the corresponding auto-imports still use h3 events.
 Mixing those handlers with portable helpers can produce `NUXT_E8012`.
 Keep `nuxt/server` external in the published module build.
+Ensure the Nuxt server builder bundles shared portable runtime entries during prerender.
+Externalized entries can import the generic `serverFetch` stub outside Nuxt's alias transformation.
+Use Nitro 2 `externals.inline` or Nitro 3 `noExternals`, preserving existing inline choices.
+Prove runtime requests and static generation from packed artifacts.
 Use it only in server code. App plugins and components cannot import its runtime.
 Type-only imports can reference its types.
+Verify default SSR and explicit SPA rules separately on each compiled builder.
+An absent `ssr` field does not imply one universal default across Nitro 2 and Nitro 3.
+Check native rule normalization and rendering behavior before deleting a builder workaround.
 App-side `useRequestEvent` follows the configured builder's event type.
 Do not assume that its event already satisfies the portable handler contract.
 
@@ -32,6 +39,9 @@ Native `fetch` and `serverFetch` do not preserve ofetch's parsing, retries, or e
 Inspect forwarded headers, base URL handling, hooks, and response status before replacement.
 Keep local and external source fetching distinct.
 Preserve cookie multiplicity and request isolation.
+Do not rely on `globalThis.$fetch` during Nitro 3 prerender hooks or scheduled tasks.
+Choose an explicit local transport for the builder and preserve configured external base URLs.
+Test additional crawling and restoration paths, rather than only the initial prerender request.
 
 Use Nuxt's runtime hooks through `useServerHooks` where the hook belongs to `NuxtServerHooks`.
 For Nitro lifecycle hooks, use the appropriate Nitro API.
@@ -44,6 +54,8 @@ Sources: [server imports](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/
 
 Dropping Nuxt 3 does not remove Nitro 2. Nuxt 4.6 still uses it.
 Storage, cached handlers, tasks, database access, lazy handlers, and Nitro plugins need a separate audit.
+If storage never uses watchers, audit whether `unstorage`'s `fs-lite` driver preserves its persistence contract.
+The full `fs` driver can introduce an optional `chokidar` dependency during server bundling.
 Use `addNitroPlugin` for Nitro plugin registration.
 Use `{ nitro2: file, nitro3: file }` variants where runtime implementations differ.
 Use one portable handler when it imports only `nuxt/server`.
@@ -73,6 +85,8 @@ Source: [versioned server compatibility guide](https://github.com/nuxt/nuxt/blob
 ## Types and Kit
 
 Move server context and route-rule extensions to Nuxt's owned types where possible.
+Use `RequestEventContext` for fields on `event.context`.
+`NuxtRequestContext` owns the nested `event.context.nuxt` state, rather than the whole context.
 Audit `NuxtRequestContext`, `AppRouteRules`, `RuntimeConfig`, `ServerRoutes`, and `NuxtServerHooks`.
 Prefer one augmentation of `@nuxt/schema`; `nuxt/schema` mirrors its public types.
 Retain builder-specific augmentation only for builder-specific contracts.
@@ -91,6 +105,7 @@ Read exports and signatures rather than guessing from release-note names:
 | `updateAppConfig` | Consider for module-owned app configuration |
 
 The release notes describe template dependencies, but the schema property is `dependsOn`.
+This property belongs to app templates. Nuxt 4.6 `addServerTemplate` does not accept it.
 The Kit index exports `getNitroVersion` but does not export the release notes' `hasNitroVersion` name.
 Check exact exports before adding version checks.
 
