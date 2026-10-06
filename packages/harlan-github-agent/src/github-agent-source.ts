@@ -453,8 +453,28 @@ async function resolveFailedJobs(
 }
 
 /** The label names in one GitHub answer, which mixes plain strings and objects. */
-function labelNames(labels: Array<string | { name?: string }>): string[] {
-  return labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])
+function labelNames(labels: unknown, context: string): Result<string[], string> {
+  if (!Array.isArray(labels))
+    return err(`GitHub ${context} returned invalid labels (${labels === null ? 'null' : typeof labels}).`)
+  const names: string[] = []
+  for (const label of labels) {
+    const name = typeof label === 'string' ? label : typeof label === 'object' && label !== null ? label.name : undefined
+    if (typeof name !== 'string')
+      return err(`GitHub ${context} returned an invalid label name.`)
+    names.push(name)
+  }
+  return ok(names)
+}
+
+/** Valid write arrays prove the write before a fast Task can remove its stamp. */
+async function confirmedLabelNames(value: unknown, context: string, read: () => Promise<unknown>): Promise<Result<string[], string>> {
+  const parsed = labelNames(value, context)
+  if (parsed._tag === 'Ok')
+    return parsed
+  return read().then((labels) => {
+    const confirmation = labelNames(labels, `issues.get after ${context}`)
+    return confirmation._tag === 'Err' ? err(`${parsed.error} ${confirmation.error}`) : confirmation
+  }).catch((error: unknown) => err(`${parsed.error} Confirmation read failed: ${message(error)}`))
 }
 
 /** One login as GraphQL spells it: an App's slug without the REST `[bot]` suffix. */
@@ -693,7 +713,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           .then((): Result<void, string> => ok(undefined))
           .catch((error: unknown): Result<void, string> => err(message(error)))
         const current = await octokit.value.rest.issues.get(request)
-          .then(response => ok(response.data.labels.flatMap(value => typeof value === 'string' ? [value] : value.name === undefined ? [] : [value.name])))
+          .then(response => labelNames(response.data.labels, 'issues.get'))
           .catch((error: unknown): Result<string[], string> => err(message(error)))
         if (current._tag === 'Err')
           return current
@@ -710,7 +730,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const { owner, repo } = repositoryParts(repository.github)
       const request = { owner, repo, issue_number: pullRequestNumber, request: { signal } }
       const current = await octokit.value.rest.issues.get(request)
-        .then(response => ok(labelNames(response.data.labels)))
+        .then(response => labelNames(response.data.labels, 'issues.get'))
         .catch((error: unknown): Result<string[], string> => err(message(error)))
       if (current._tag === 'Err')
         return current
@@ -811,7 +831,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const { owner, repo } = repositoryParts(repository.github)
       const request = { owner, repo, issue_number: itemNumber, request: { signal } }
       const current = await octokit.value.rest.issues.get(request)
-        .then(response => ok(labelNames(response.data.labels)))
+        .then(response => labelNames(response.data.labels, 'issues.get'))
         .catch((error: unknown): Result<string[], string> => err(message(error)))
       if (current._tag === 'Err')
         return current
@@ -843,7 +863,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         if (additionAuthority?._tag === 'Err')
           return additionAuthority
         const added = await octokit.value.rest.issues.addLabels({ ...request, labels: [plan.add.name] })
-          .then((response): Result<string[], string> => ok(labelNames(response.data)))
+          .then(response => confirmedLabelNames(response.data, 'addLabels', () => octokit.value.rest.issues.get(request).then(current => current.data.labels)))
           .catch((error: unknown): Result<string[], string> => err(message(error)))
         if (added._tag === 'Err')
           return added
@@ -856,7 +876,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           return removalAuthority
         // A label another writer already removed answers this call.
         const removed = await octokit.value.rest.issues.removeLabel({ ...request, name: label })
-          .then((response): Result<string[], string> => ok(labelNames(response.data)))
+          .then(response => confirmedLabelNames(response.data, 'removeLabel', () => octokit.value.rest.issues.get(request).then(current => current.data.labels)))
           .catch((error: unknown): Result<string[], string> => errorStatus(error) === 404
             ? ok(held.filter(value => value.toLowerCase() !== label.toLowerCase()))
             : err(message(error)))
@@ -876,10 +896,14 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         if (octokit._tag === 'Err')
           return octokit
         const { owner, repo } = repositoryParts(repository.github)
-        return octokit.value.rest.issues.addLabels({ owner, repo, issue_number: pullRequestNumber, labels: [label], request: { signal } })
-          .then(({ data }) => data.some(value => value.name.toLowerCase() === label.toLowerCase())
-            ? ok(undefined)
-            : err(`GitHub did not confirm the ${label} label.`))
+        const request = { owner, repo, issue_number: pullRequestNumber, request: { signal } }
+        return octokit.value.rest.issues.addLabels({ ...request, labels: [label] })
+          .then(({ data }) => confirmedLabelNames(data, 'addLabels', () => octokit.value.rest.issues.get(request).then(current => current.data.labels)))
+          .then(confirmed => confirmed._tag === 'Err'
+            ? confirmed
+            : confirmed.value.some(value => value.toLowerCase() === label.toLowerCase())
+              ? ok(undefined)
+              : err(`GitHub did not confirm the ${label} label.`))
           .catch((error: unknown) => err(message(error)))
       })
     },
