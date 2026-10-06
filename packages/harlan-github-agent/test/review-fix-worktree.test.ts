@@ -1,11 +1,12 @@
+import type { RepairRecoveryTarget } from '../src/repair-recovery.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedReviewFixTask } from '../src/types.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ok } from '../src/result.ts'
-import { createAgentWorkspaceManager, createGitPublicationRemote, createReviewFixWorktreeManager } from '../src/worktree.ts'
+import { err, ok } from '../src/result.ts'
+import { agentWorktreeBranch, createAgentWorkspaceManager, createGitPublicationRemote, createRepairRecoveryWorktreeManager, createReviewFixWorktreeManager } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
@@ -76,6 +77,80 @@ function fixture(): { remote: string, root: string, task: ClaimedReviewFixTask }
 }
 
 describe('review fix worktree', () => {
+  it.each(['Reuse', 'Port', 'wrong-ref', 'merge', 'empty', 'conflict', 'checks-fail', 'patch-change', 'evidence-missing'])('checks a retained Repair on the current base: %s', async (mode) => {
+    const { remote, root, task } = fixture()
+    const checkout = task.repositoryMapping.checkout
+    git(checkout, 'checkout', 'main')
+    writeFileSync(join(checkout, 'package.json'), '{"name":"recovery-fixture","private":true}')
+    writeFileSync(join(checkout, '.gitignore'), 'node_modules/\n')
+    writeFileSync(join(checkout, 'pnpm-lock.yaml'), 'lockfileVersion: \'9.0\'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n')
+    git(checkout, 'add', '.')
+    git(checkout, 'commit', '-m', 'prepare checks')
+    const parentSha = git(checkout, 'rev-parse', 'HEAD')
+    task.id = `logged-finding:${'a'.repeat(64)}`
+    task.pickup = { _tag: 'LoggedFinding', finding: { _tag: 'Logged', impact: 40, summary: 'Keep input', details: { fingerprint: 'f'.repeat(64), identity: 'parser', proof: 'Loses input', location: { path: 'file.ts', line: 1 } } } }
+    task.pullRequest = { ...task.pullRequest, state: 'closed', mergedAt: '2026-10-06' }
+    const branch = agentWorktreeBranch('fix-1-ffffffffffff', { taskId: task.id, fence: 1 })
+    git(checkout, 'checkout', '-b', branch)
+    writeFileSync(join(checkout, 'file.ts'), 'export const value = 3\n')
+    writeFileSync(join(checkout, 'file.test.ts'), 'export const selectedRegression = true\n')
+    git(checkout, 'add', '.')
+    git(checkout, 'commit', '-m', 'retain repair')
+    if (mode === 'merge')
+      git(checkout, 'merge', '--no-ff', '-s', 'ours', 'fix/review', '-m', 'merge artifact')
+    const commitSha = git(checkout, 'rev-parse', 'HEAD')
+    git(checkout, 'checkout', 'main')
+    if (mode === 'empty')
+      git(checkout, 'cherry-pick', commitSha)
+    if (mode === 'Port') {
+      writeFileSync(join(checkout, 'other.ts'), 'export const unrelated = 1\n')
+      git(checkout, 'add', '.')
+      git(checkout, 'commit', '-m', 'move base')
+    }
+    if (mode === 'conflict') {
+      writeFileSync(join(checkout, 'file.ts'), 'export const value = 4\n')
+      git(checkout, 'commit', '-am', 'conflicting base')
+    }
+    const expectedBase = git(checkout, 'rev-parse', 'HEAD')
+    git(checkout, 'push', 'origin', 'main')
+    const target: RepairRecoveryTarget = { task, fence: 1, proof: { _tag: 'RepairRecovery', commitSha, originalFence: 1, originalFailure: 'saved pin' }, report: { summary: 'Keep input', checks: ['prior checks'] } }
+    if (mode === 'wrong-ref')
+      git(checkout, 'branch', '-f', branch, parentSha)
+    task.state = { ...task.state, fence: 2 }
+    let red = 0
+    let green = 0
+    const manager = createRepairRecoveryWorktreeManager({ root, remoteUrl: () => remote, gitIdentity: { name: 'Test Author', email: 'author@example.com' }, tokens: { getToken: async () => ok({ token: 'unused', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined }, confirmRegression: async (path) => {
+      red += 1
+      expect(readFileSync(join(path, 'file.ts'), 'utf8')).toContain('value = 1')
+      return mode === 'evidence-missing' ? err('No current assertion failure.') : ok(undefined)
+    }, runChecks: async (path) => {
+      green += 1
+      expect(readFileSync(join(path, 'file.ts'), 'utf8')).toContain('value = 3')
+      if (mode === 'patch-change')
+        writeFileSync(join(path, 'other.ts'), 'unexpected check output\n')
+      return mode === 'checks-fail' ? err('Fresh checks failed.') : ok(['check passed'])
+    }, recordChecks: () => true })
+    const signal = new AbortController().signal
+    const artifact = await manager.inspectRecovery(target, signal)
+    if (mode === 'wrong-ref' || mode === 'merge') {
+      expect(artifact._tag).toBe('Err')
+      return
+    }
+    if (artifact._tag === 'Err')
+      throw new Error(artifact.error)
+    const result = await manager.recover(task, target, { ...artifact.value, _tag: 'Plan', taskId: task.id, repository: task.repository, pullRequestNumber: 1, commitSha, expectedBase, operation: expectedBase === parentSha ? 'Reuse' : 'Port', checks: [] }, signal)
+    if (!['Reuse', 'Port'].includes(mode)) {
+      expect(result._tag).toBe('Err')
+      expect(git(checkout, 'rev-parse', `refs/heads/${branch}`)).toBe(commitSha)
+      return
+    }
+    if (result._tag === 'Err')
+      throw new Error(typeof result.error === 'string' ? result.error : result.error.reason)
+    expect(result.value.baseSha).toBe(expectedBase)
+    expect(red).toBe(1)
+    expect(green).toBe(1)
+    expect(result.value.commitSha === commitSha).toBe(mode === 'Reuse')
+  }, 30_000)
   it('reports an unchanged worktree without losing the Agent result', async () => {
     const { root, task, remote } = fixture()
     const manager = createReviewFixWorktreeManager({

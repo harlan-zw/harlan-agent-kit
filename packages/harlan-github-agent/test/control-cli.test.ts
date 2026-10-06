@@ -32,6 +32,34 @@ afterEach(async () => {
 })
 
 describe('harlan GitHub Agent control CLI', () => {
+  it.each(['normal', 'logged-finding', 'invalid'])('cancels only supported Task identities: %s', async (mode) => {
+    const directory = await mkdtemp(join(tmpdir(), 'harlan-recovery-cli-'))
+    temporaryDirectories.push(directory)
+    const passwordFile = join(directory, 'password')
+    await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+    const taskId = mode === 'normal' ? 'a'.repeat(64) : mode === 'logged-finding' ? `logged-finding:${'a'.repeat(64)}` : 'logged-finding:arbitrary'
+    const requests: unknown[] = []
+    const server = createServer(async (request, response) => {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      requests.push({ path: request.url, body: JSON.parse(body) })
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ _tag: 'Cancelled' }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as AddressInfo
+    const result = await runControlCli(['control', 'cancel', '--task', taskId, '--url', `http://127.0.0.1:${address.port}`, '--password-file', passwordFile])
+      .finally(() => new Promise<void>((resolve, reject) => server.close(error => error === undefined ? resolve() : reject(error))))
+    if (mode === 'invalid') {
+      expect(result.code).toBe(1)
+      expect(JSON.parse(result.stderr)._tag).toBe('InvalidTaskId')
+      expect(requests).toEqual([])
+      return
+    }
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ _tag: 'Cancelled' })
+    expect(requests).toEqual([{ path: '/api/tasks/cancel', body: { taskId } }])
+  })
   it('prints one tagged JSON error and exits 1 when a Task ID is missing', async () => {
     const run = await runControlCli(['control', 'cancel'])
 

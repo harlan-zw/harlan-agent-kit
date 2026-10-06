@@ -45,6 +45,65 @@ function setup(findings = [finding], path = ':memory:') {
 }
 
 describe('durable Logged finding pickup', () => {
+  it.each(['claim', 'writes', 'dismissed', 'cancelled', 'wrong-commit', 'crash', 'restart', 'paused', 'drain', 'policy', 'head', 'write-loss', 'transient'])('recovers only the authorized retained repair: %s', (mode) => {
+    const { store, mapping, pullRequest, request } = setup()
+    store.requestLoggedFindingPickup(request)
+    store.recordObservation({ externalId: 'recovery-merge', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+    let task = store.claimNextReviewFixTask('repair', at, 60_000)!
+    const commitSha = 'c'.repeat(40)
+    store.recordRepairReport({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, summary: 'Keep parser input', checks: ['check passed'] })
+    const reason = `Could not pin the repair artifact: Could not pin the publication artifact: fatal: invalid refspec '+${commitSha}:refs/harlan-github-agent/publications/${task.id}'`
+    while (store.failTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, reason }) === 'Retrying') {
+      task = store.claimNextReviewFixTask('repair', at, 60_000)!
+    }
+    if (mode === 'writes')
+      store.setRepositoryWritesEnabled(mapping.github, false)
+    if (mode === 'dismissed')
+      store.dismissItem({ repository: mapping.github, itemNumber: pullRequest.number, at })
+    if (mode === 'cancelled')
+      store.cancelTask({ taskId: task.id, at })
+    if (mode === 'paused')
+      store.pauseAgents(at)
+    if (mode === 'drain')
+      store.requestRestart({ id: 'restart', source: 'helper', operation: { _tag: 'Restart' }, at })
+    if (mode === 'policy')
+      store.syncRepositories([{ ...mapping, ownership: 'external' }], at)
+    if (mode === 'head')
+      store.recordObservation({ externalId: 'head-moved', observedAt: at, source: 'poll', subject: { ...task.pullRequest, headSha: 'e'.repeat(40) } })
+    const target = store.inspectRepairRecovery(task.id, mode === 'wrong-commit' ? 'd'.repeat(40) : commitSha)
+    if (!['claim', 'crash', 'restart', 'write-loss', 'transient'].includes(mode)) {
+      expect(target._tag).toBe('Err')
+      return
+    }
+    if (target._tag === 'Err')
+      throw new Error(target.error)
+    const recovered = store.claimRepairRecovery(target.value, 'recovery', at, 60_000)
+    expect(recovered._tag).toBe('Ok')
+    expect(store.claimRepairRecovery(target.value, 'duplicate', at, 60_000)._tag).toBe('Err')
+    expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.recoveryAttempts).toBe(0)
+    if (mode === 'restart')
+      store.recoverInterruptedAgentTasks(at)
+    if (mode === 'write-loss' || mode === 'transient') {
+      if (mode === 'write-loss')
+        store.setRepositoryWritesEnabled(mapping.github, false)
+      if (recovered._tag === 'Err')
+        throw new Error(recovered.error)
+      expect(store.failTask({ taskId: task.id, workerId: 'recovery', fence: recovered.value.state.fence, at, reason: 'HTTP 503. Service unavailable.' })).toBe('Failed')
+      store.setRepositoryWritesEnabled(mapping.github, true)
+      store.retryRecoverableWorkerFailures('2026-09-30T01:00:00.000Z')
+    }
+    if (mode === 'crash') {
+      store.claimNextReviewFixTask('after-crash', '2026-09-30T00:02:00.000Z', 60_000)
+      expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.state._tag).toBe('Failed')
+      const retry = store.inspectRepairRecovery(task.id, commitSha)
+      expect(retry).toMatchObject({ _tag: 'Ok', value: { proof: { commitSha, originalFence: task.state.fence } } })
+    }
+    if (['restart', 'write-loss', 'transient'].includes(mode)) {
+      expect(store.claimNextReviewFixTask('implementation', at, 60_000)).toBeNull()
+      expect(store.inspectRepairRecovery(task.id, commitSha)).toMatchObject({ _tag: 'Ok', value: { proof: { commitSha, originalFence: task.state.fence } } })
+      expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.recoveryAttempts).toBe(0)
+    }
+  })
   it('queues only the selected finding after merge and shows its progress beside the finding', () => {
     const { store, pullRequest, request } = setup()
     expect(store.requestLoggedFindingPickup(request)).toBe(true)

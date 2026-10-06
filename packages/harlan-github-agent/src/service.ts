@@ -70,6 +70,7 @@ import { createPullRequestStatusController } from './pull-request-status-control
 import { createPullRequestTriageController } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
+import { createRepairRecoveryController } from './repair-recovery.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
 import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
@@ -96,7 +97,7 @@ import { createTaskScheduler } from './task-scheduler.ts'
 import { createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
-import { agentWorktreeLeaseKey, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createReviewFixWorktreeManager, sweepAgentWorktrees } from './worktree.ts'
+import { agentWorktreeLeaseKey, confirmRepairRecoveryRegression, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createRepairRecoveryWorktreeManager, createReviewFixWorktreeManager, runRepairRecoveryChecks, sweepAgentWorktrees } from './worktree.ts'
 
 export interface RunningAgentService {
   server: Server
@@ -827,6 +828,25 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       workspaces,
     }
     return {
+      repairRecovery: createRepairRecoveryController({
+        store,
+        github: workerGithub,
+        validateMapping,
+        permits,
+        canClaim,
+        acquireHost: hosts.tryAcquireLocal,
+        now,
+        workerId: randomUUID(),
+        onError: error => options.logger.error(error),
+        worktrees: createRepairRecoveryWorktreeManager({
+          gitIdentity: options.gitIdentity,
+          root: controllerRoot,
+          tokens,
+          runChecks: runRepairRecoveryChecks,
+          confirmRegression: confirmRepairRecoveryRegression,
+          recordChecks: (task, checks) => store.recordRepairReport({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), summary: `Recovered selected finding: ${task.pickup!.finding.summary}`, checks }),
+        }),
+      }),
       approvals: createApprovalController({
         reviewApprovalControls: repository => webhookControls.available(repository.github),
         checkboxApprovals: store,
@@ -1510,10 +1530,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       ...mutationSchedulers.repairs,
       ...mutationSchedulers.reviews,
     ]
-    const settled = await Promise.all(schedulers.map(scheduler => scheduler.settle(taskId)))
+    const settled = await Promise.all([...schedulers.map(scheduler => scheduler.settle(taskId)), mutationSchedulers.repairRecovery.settle(taskId)])
     return settled.includes(true)
   }
   const app = createAgentApp({
+    ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),
     ...(config.triggers.includes('github')
       ? { pullRequestWatch: {
           state: store.getPullRequestWatchState,
@@ -1771,6 +1792,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         ...(mutationSchedulers?.issueWork.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.batches.map(scheduler => scheduler.stop()) ?? []),
         mutationSchedulers?.publications.stop() ?? Promise.resolve(),
+        mutationSchedulers?.repairRecovery.stop() ?? Promise.resolve(),
         mutationSchedulers?.reviewStatuses.stop() ?? Promise.resolve(),
         ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.reviews.map(scheduler => scheduler.stop()) ?? []),

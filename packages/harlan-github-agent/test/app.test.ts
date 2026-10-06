@@ -1,4 +1,5 @@
 import type { AgentSelection } from '../src/agent-profile.ts'
+import type { AgentAppOptions } from '../src/app.ts'
 import type { StatsRange, StatsSnapshot } from '../src/stats.ts'
 import type { RestartOperation, SelectionMode } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
@@ -62,9 +63,10 @@ const agentControls = {
 
 afterEach(() => vi.useRealTimers())
 
-function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>) {
+function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>, repairRecovery?: AgentAppOptions['repairRecovery']) {
   return createAgentApp({
     ...(desktop === undefined ? {} : { desktop }),
+    ...(repairRecovery === undefined ? {} : { repairRecovery }),
     allowedOrigin,
     dashboardPassword,
     dashboardRoot,
@@ -74,6 +76,22 @@ function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof c
 }
 
 describe('dashboard HTTP app', () => {
+  it('accepts explicit Repair recovery only through authenticated control', async () => {
+    const taskId = `logged-finding:${'a'.repeat(64)}`
+    const recover = vi.fn(async () => ({ _tag: 'Ok' as const, value: { _tag: 'Accepted' as const, taskId, fence: 4 } }))
+    const app = createApp(undefined, undefined, recover)
+    const path = `http://${allowedHost}/api/tasks/recover-repair`
+    const body = JSON.stringify({ _tag: 'Apply', taskId, commitSha: 'c'.repeat(40), expectedBase: 'b'.repeat(40) })
+    const headers = { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' }
+    const accepted = await app.request(path, { method: 'POST', headers, body })
+    expect(accepted.status).toBe(202)
+    expect(await accepted.json()).toEqual({ _tag: 'Accepted', taskId, fence: 4 })
+    const denied = await app.request(path, { method: 'POST', headers: { ...headers, authorization: '' }, body })
+    expect(denied.status).toBe(401)
+    const invalid = await app.request(path, { method: 'POST', headers, body: JSON.stringify({ _tag: 'Apply', taskId, commitSha: 'c'.repeat(40) }) })
+    expect(invalid.status).toBe(400)
+    expect(recover).toHaveBeenCalledTimes(1)
+  })
   it('stops Service Review only for the requested head', async () => {
     const requests: unknown[] = []
     const app = createAgentApp({

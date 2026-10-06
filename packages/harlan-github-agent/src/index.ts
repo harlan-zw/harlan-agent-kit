@@ -34,6 +34,8 @@ export { createPullRequestStatusController } from './pull-request-status-control
 export { parsePullRequestWatchTarget, pullRequestWatchFinished } from './pull-request-watch.ts'
 export type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 export { reconcileAllRepositories, reconcileRepository } from './reconcile.ts'
+export { createRepairRecoveryController, parseRepairRecoveryRequest, parseRepairRecoveryResponse, repairRecoveryProof } from './repair-recovery.ts'
+export type { RepairRecoveryPlan, RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 export { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts } from './repository-discovery.ts'
 export type { Result } from './result.ts'
 export { createReviewStatusController } from './review-status-controller.ts'

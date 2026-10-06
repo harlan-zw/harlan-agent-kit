@@ -10,7 +10,9 @@ import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { PullRequestWatchState } from './pull-request-watch.ts'
+import type { RepairRecoveryTarget } from './repair-recovery.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
+import type { Result } from './result.ts'
 import type { ReviewApproval } from './review-approval.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
@@ -130,8 +132,10 @@ import { isIssueTriageState } from './issue-triage.ts'
 import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
+import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
+import { err, ok } from './result.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
 import { buildStats } from './stats.ts'
 import { createTakeOwnershipStore } from './take-ownership-store.ts'
@@ -761,6 +765,8 @@ export type StoredIssueTriageRun
     }
 
 export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore {
+  inspectRepairRecovery: (taskId: string, commitSha: string) => Result<RepairRecoveryTarget, string>
+  claimRepairRecovery: (target: RepairRecoveryTarget, workerId: string, at: string, leaseMilliseconds: number) => Result<ClaimedReviewFixTask, string>
   getPullRequestWatchState: (repository: string, number: number) => PullRequestWatchState | null
   /**
    * Approves one exact issue state from an outside author. The Approval unlocks
@@ -9304,21 +9310,129 @@ export function openJournalStore(
     return planRepairRound(subject === undefined ? [] : reviewFixRounds(database, subject.id, headSha))
   }
 
+  const inspectRepairRecovery: JournalStore['inspectRepairRecovery'] = (taskId, commitSha) => {
+    if (!mutationsEnabled)
+      return err('Service mutations are disabled.')
+    const row = database.prepare(`
+      SELECT tasks.id, tasks.fence, tasks.reason, tasks.evidence, tasks.updated_at,
+        subjects.current_revision_id AS revision_id, subjects.github_number,
+        repositories.github AS repository, repositories.policy_json,
+        revisions.payload AS subject_payload, repair_reports.summary, repair_reports.checks,
+        requests.head_sha, requests.base_ref
+      FROM tasks
+      JOIN subjects ON subjects.id = tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      JOIN logged_finding_requests AS requests ON requests.task_id = tasks.id
+      JOIN repair_reports ON repair_reports.task_id = tasks.id
+      WHERE tasks.id = ? AND tasks.kind = 'review_fix' AND tasks.state_tag = 'Failed'
+        AND repositories.enabled = 1 AND repositories.writes_enabled = 1 AND repositories.paused = 0
+        AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
+        AND NOT EXISTS (SELECT 1 FROM restart_requests WHERE state_tag IN ('Requested', 'Restarting'))
+        AND EXISTS (SELECT 1 FROM pull_request_approvals
+          WHERE subject_id = subjects.id AND revision_id = subjects.current_revision_id AND kind = 'fixes')
+        AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+        AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id)
+        AND NOT EXISTS (SELECT 1 FROM review_stops WHERE subject_id = subjects.id AND head_sha = requests.head_sha)
+        AND NOT EXISTS (SELECT 1 FROM tasks AS sibling
+          WHERE sibling.subject_id = subjects.id AND sibling.id != tasks.id AND sibling.state_tag IN ('Queued', 'Running', 'Publishing'))
+        AND NOT EXISTS (SELECT 1 FROM worker_tasks
+          WHERE subject_id = subjects.id AND state_tag IN ('Queued', 'Running', 'Publishing'))
+        AND NOT EXISTS (SELECT 1 FROM publication_commands
+          JOIN tasks AS owner ON owner.id = publication_commands.task_id
+          WHERE owner.subject_id = subjects.id AND publication_commands.state_tag IN ('Pending', 'Running'))
+        AND NOT EXISTS (SELECT 1 FROM publication_commands WHERE task_id = tasks.id)
+    `).get(taskId) as {
+      id: string
+      fence: number
+      reason: string | null
+      evidence: string | null
+      updated_at: string
+      revision_id: string
+      github_number: number
+      repository: string
+      policy_json: string
+      subject_payload: string
+      summary: string
+      checks: string
+      head_sha: string
+      base_ref: string
+    } | undefined
+    if (row === undefined)
+      return err('The failed Repair has no current recovery authority or has an active owner.')
+    const proof = repairRecoveryProof({ taskId, reason: row.reason, evidence: row.evidence, fence: row.fence })
+    if (proof === null || proof.commitSha !== commitSha)
+      return err('The retained commit does not match the persisted failed pin.')
+    const mapping = JSON.parse(row.policy_json) as RepositoryMapping
+    const pullRequest = JSON.parse(row.subject_payload) as GitHubItem
+    const finding = loggedFindingStore.getLoggedFindingForTask(taskId)
+    if (!canRepairBaseline(mapping) || pullRequest.kind !== 'pull_request' || pullRequest.state !== 'closed'
+      || pullRequest.mergedAt === null || pullRequest.draft || pullRequest.headSha !== row.head_sha
+      || pullRequest.baseRef !== row.base_ref || finding === null) {
+      return err('The selected finding no longer matches an authorized merged pull request.')
+    }
+    return ok({ fence: row.fence, proof, report: { summary: row.summary, checks: JSON.parse(row.checks) as string[] }, task: {
+      id: taskId,
+      kind: 'review_fix',
+      repository: row.repository,
+      revisionId: row.revision_id,
+      updatedAt: row.updated_at,
+      repositoryMapping: mapping,
+      pullRequestNumber: row.github_number,
+      pullRequest,
+      pickup: { _tag: 'LoggedFinding', finding },
+      rounds: { number: 1, limit: 1, prior: [] },
+    } })
+  }
+
+  const claimRepairRecovery: JournalStore['claimRepairRecovery'] = (target, workerId, at, leaseMilliseconds) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const current = inspectRepairRecovery(target.task.id, target.proof.commitSha)
+      if (current._tag === 'Err' || current.value.fence !== target.fence
+        || current.value.task.revisionId !== target.task.revisionId
+        || JSON.stringify(current.value.task.repositoryMapping) !== JSON.stringify(target.task.repositoryMapping)
+        || JSON.stringify(current.value.proof) !== JSON.stringify(target.proof)) {
+        database.exec('COMMIT')
+        return err('The Repair recovery authority changed before its claim.')
+      }
+      const fence = current.value.fence + 1
+      const leaseExpiresAt = new Date(Date.parse(at) + leaseMilliseconds).toISOString()
+      const update = database.prepare(`
+        UPDATE tasks SET state_tag = 'Running', reason = NULL, worker_id = ?, fence = ?,
+          revision_id = ?, evidence = ?, lease_expires_at = ?, updated_at = ?
+        WHERE id = ? AND state_tag = 'Failed' AND fence = ?
+      `).run(workerId, fence, current.value.task.revisionId, JSON.stringify(current.value.proof), leaseExpiresAt, at, target.task.id, target.fence)
+      if (update.changes !== 1)
+        throw new Error('Repair recovery lost its fenced claim.')
+      recordTransition(database, { taskId: target.task.id, from: 'Failed', to: 'Running', reason: 'Explicit retained Repair recovery.', fence, at })
+      database.exec('COMMIT')
+      return ok({ ...current.value.task, updatedAt: at, state: { _tag: 'Running', workerId, fence, leaseExpiresAt } })
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recoverExpiredTasks = (now: string): void => {
     const expired = database.prepare(`
-      SELECT id, state_tag, fence FROM tasks
+      SELECT id, state_tag, fence, reason, evidence FROM tasks
       WHERE state_tag = 'Running' AND lease_expires_at <= ?
-    `).all(now) as unknown as Array<{ id: string, state_tag: 'Running', fence: number }>
+    `).all(now) as unknown as Array<{ id: string, state_tag: 'Running', fence: number, reason: string | null, evidence: string | null }>
     expired.forEach((row) => {
+      const recovery = repairRecoveryProof({ taskId: row.id, ...row })
+      const state = recovery === null ? 'Queued' : 'Failed'
+      const reason = recovery === null ? null : 'Repair recovery was interrupted. Apply the retained commit again.'
       database.prepare(`
-        UPDATE tasks SET state_tag = 'Queued', reason = NULL, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        UPDATE tasks SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND fence = ?
-      `).run(now, row.id, row.fence)
+      `).run(state, reason, now, row.id, row.fence)
       recordTransition(database, {
         taskId: row.id,
         from: 'Running',
-        to: 'Queued',
-        reason: 'Worker lease expired.',
+        to: state,
+        reason: reason ?? 'Worker lease expired.',
         fence: row.fence,
         at: now,
       })
@@ -9348,6 +9462,9 @@ export function openJournalStore(
         JOIN repositories ON repositories.id = subjects.repository_id
         JOIN revisions ON revisions.id = tasks.revision_id
         WHERE (? IS NULL OR tasks.kind = ?) AND tasks.state_tag = 'Queued'
+          -- Retained recovery belongs only to explicit Control. A future
+          -- planner must never send its proof-tagged Task to an implementation Agent.
+          AND COALESCE(CASE WHEN json_valid(tasks.evidence) THEN json_extract(tasks.evidence, '$._tag') END, '') != 'RepairRecovery'
           AND (? IS NULL OR tasks.id = ?)
           -- A Task a Batch reserved runs under that Batch's lease. Only the
           -- exact-Task claim the Batch makes may take it. Priority checks also
@@ -10393,6 +10510,7 @@ export function openJournalStore(
         JOIN subjects ON subjects.id = tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE tasks.state_tag = 'Failed'
+          AND COALESCE(CASE WHEN json_valid(tasks.evidence) THEN json_extract(tasks.evidence, '$._tag') END, '') != 'RepairRecovery'
           AND tasks.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
           -- Recovery belongs to the newest attempt. Older failures remain history.
@@ -10569,10 +10687,10 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       const conflictRows = database.prepare(`
-        SELECT id, fence, state_tag FROM tasks
+        SELECT id, fence, state_tag, reason, evidence FROM tasks
         WHERE state_tag = 'Running'
           OR (state_tag = 'Failed' AND reason LIKE '%operation was aborted%')
-      `).all() as unknown as Array<{ id: string, fence: number, state_tag: 'Running' | 'Failed' }>
+      `).all() as unknown as Array<{ id: string, fence: number, state_tag: 'Running' | 'Failed', reason: string | null, evidence: string | null }>
       const workerRows = database.prepare(`
         SELECT id, fence, state_tag FROM worker_tasks
         WHERE state_tag = 'Running'
@@ -10613,6 +10731,15 @@ export function openJournalStore(
       `)
       let recovered = 0
       conflictRows.forEach((row) => {
+        if (repairRecoveryProof({ taskId: row.id, ...row }) !== null) {
+          const reason = 'Repair recovery was interrupted. Apply the retained commit again.'
+          database.prepare(`UPDATE tasks SET state_tag = 'Failed', reason = ?, worker_id = NULL,
+            lease_expires_at = NULL, updated_at = ? WHERE id = ? AND state_tag = ? AND fence = ?`)
+            .run(reason, at, row.id, row.state_tag, row.fence)
+          recordTransition(database, { taskId: row.id, from: row.state_tag, to: 'Failed', reason, fence: row.fence, at })
+          recovered += 1
+          return
+        }
         if (recoverConflict.run(at, row.id, row.state_tag).changes !== 1)
           return
         recovered += 1
@@ -12035,14 +12162,14 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       const row = database.prepare(`
-        SELECT tasks.attempts, tasks.max_attempts, repositories.writes_enabled
+        SELECT tasks.attempts, tasks.max_attempts, tasks.fence, tasks.reason, tasks.evidence, repositories.writes_enabled
         FROM tasks
         JOIN subjects ON subjects.id = tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE tasks.id = ? AND tasks.state_tag = 'Running'
           AND tasks.worker_id = ? AND tasks.fence = ?
           AND tasks.lease_expires_at > ?
-      `).get(input.taskId, input.workerId, input.fence, input.at) as { attempts: number, max_attempts: number, writes_enabled: number } | undefined
+      `).get(input.taskId, input.workerId, input.fence, input.at) as { attempts: number, max_attempts: number, fence: number, reason: string | null, evidence: string | null, writes_enabled: number } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return 'Rejected'
@@ -12051,7 +12178,8 @@ export function openJournalStore(
       // retry can satisfy ends the Task now and names an Incident instead.
       const providerPaused = isProviderCircuitPause(input.reason)
       const writesDisabled = mutationsEnabled && row.writes_enabled === 0
-      const retry = writesDisabled || providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason }))
+      const recovery = repairRecoveryProof({ taskId: input.taskId, ...row }) !== null
+      const retry = !recovery && (writesDisabled || providerPaused || (row.attempts < row.max_attempts && mayRetryFailure({ message: input.reason })))
       const nextTag = retry ? 'Queued' : 'Failed'
       database.prepare(`
         UPDATE tasks SET state_tag = ?, reason = ?,
@@ -12059,7 +12187,7 @@ export function openJournalStore(
           worker_id = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-      `).run(nextTag, retry ? null : input.reason, writesDisabled || providerPaused ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
+      `).run(nextTag, retry ? null : input.reason, !recovery && (writesDisabled || providerPaused) ? 1 : 0, input.at, input.taskId, input.workerId, input.fence, input.at)
       recordTransition(database, {
         taskId: input.taskId,
         from: 'Running',
@@ -15961,6 +16089,8 @@ export function openJournalStore(
     claimNextIssueTriageTask,
     claimNextIssueWorkTask,
     claimNextReviewFixTask,
+    inspectRepairRecovery,
+    claimRepairRecovery,
     queueReviewFixTaskForReview,
     queueReviewFixForGate,
     repairRoundPlan,

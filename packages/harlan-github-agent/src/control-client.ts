@@ -1,9 +1,11 @@
 import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
+import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
 import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
+import { parseRepairRecoveryResponse } from './repair-recovery.ts'
 import { err, ok } from './result.ts'
 
 export interface ControlHealth {
@@ -50,6 +52,7 @@ type Parsed<Value> = Result<Value, string>
 type ResponseParser<Value> = (value: unknown) => Parsed<Value>
 
 export interface ControlClient {
+  recoverRepair: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, ControlApiError>>
   watchPullRequest: (target: PullRequestWatchTarget, options?: PullRequestWatchOptions) => Promise<Result<PullRequestWatchState, ControlApiError>>
   health: () => Promise<Result<ControlHealth, ControlApiError>>
   state: () => Promise<Result<DashboardSnapshot, ControlApiError>>
@@ -256,6 +259,7 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
   const state = () => request({ method: 'GET', path: 'api/state', parse: parseState })
 
   return ok({
+    recoverRepair: body => request({ method: 'POST', path: 'api/tasks/recover-repair', body, acceptedStatuses: [200, 202], parse: parseRepairRecoveryResponse }),
     watchPullRequest(target, watchOptions = {}) {
       const parsed = parsePullRequestWatchTarget(target)
       if (parsed._tag === 'Err')

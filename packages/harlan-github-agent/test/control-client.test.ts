@@ -21,6 +21,19 @@ function clientWith(responses: Response[], requests: Request[]) {
 }
 
 describe('harlan GitHub Agent control client', () => {
+  it('returns durable Repair acceptance without waiting for repository checks', async () => {
+    const requests: Request[] = []
+    const taskId = `logged-finding:${'a'.repeat(64)}`
+    const receipt = { _tag: 'Accepted', taskId, fence: 4 }
+    const created = clientWith([Response.json(receipt, { status: 202 })], requests)
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    const request = { _tag: 'Apply' as const, taskId, commitSha: 'c'.repeat(40), expectedBase: 'b'.repeat(40) }
+    expect(await created.value.recoverRepair(request)).toEqual({ _tag: 'Ok', value: receipt })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/tasks/recover-repair`)
+    expect(requests[0]?.headers.get('origin')).toBe(baseUrl)
+    expect(await requests[0]?.json()).toEqual(request)
+  })
   it('reads health before the shared dashboard state', async () => {
     const requests: Request[] = []
     const snapshot = dashboardSnapshot()
