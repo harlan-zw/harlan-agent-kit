@@ -15,6 +15,8 @@ Record the actual Nuxt, Nitro, h3, Vue, and router versions in test evidence.
 Refresh pins before a release rather than silently floating a required check.
 Check the nightly's own Node engine before assigning it to a Node lane.
 
+Set `future.compatibilityVersion` at the top level of the Nuxt configuration.
+An `experimental.future` object does not enable that lane.
 The future flag does not upgrade Nitro on Nuxt 4.
 Source: [versioned Nuxt upgrade guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/1.getting-started/18.upgrade.md#testing-nuxt-5).
 
@@ -23,6 +25,8 @@ Use a supported Node version for the exact Nuxt 5 nightly.
 If claiming Windows tooling support, run filesystem and resolution cases there.
 Exercise Cloudflare or other supported edge targets where server code changes.
 Use the repository's workflow for production deployment.
+Require an explicit opt-in for tests that deploy remotely.
+An authenticated CLI alone must not enable a deployment test.
 
 ## Packed consumers
 
@@ -45,6 +49,7 @@ An import-only exports map can fail those loaders. Add a compatible `default` ES
 
 Stable `^5.0.0` module metadata excludes Nuxt 5 nightly prereleases.
 For the actual-nightly fixture, read each imported module's public `getMeta()` before installation.
+Include transitive Nuxt modules, such as shared lifecycle modules, in that allowance.
 Include the exact pinned nightly in that fixture's metadata compatibility.
 Keep the published peer and metadata contracts unchanged.
 Assert actual module behavior. A correct Nitro version can still accompany a disabled module.

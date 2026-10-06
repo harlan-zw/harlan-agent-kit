@@ -66,7 +66,8 @@ Read these references before their corresponding changes:
 2. Remove Nuxt 3 branches, fixtures, adapters, old API paths, and documentation claims.
 3. Replace portable server work with explicit `nuxt/server` imports and `RequestEvent` types.
 4. Retain explicit Nitro 2 and Nitro 3 implementations where caching, plugins, storage, or tasks require them.
-5. Remove redundant dependencies and separate optional DevTools code from core installation.
+5. Register curated app and server runtime aliases with their generated TypeScript contexts.
+6. Remove redundant dependencies and separate optional DevTools code from core installation.
 
 Load `ts-design-patterns` for non-trivial API changes.
 Load `unit-tests` before new regression tests. Reproduce bugs with a failing behavior test first.

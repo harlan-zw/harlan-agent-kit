@@ -42,6 +42,13 @@ Preserve cookie multiplicity and request isolation.
 Do not rely on `globalThis.$fetch` during Nitro 3 prerender hooks or scheduled tasks.
 Choose an explicit local transport for the builder and preserve configured external base URLs.
 Test additional crawling and restoration paths, rather than only the initial prerender request.
+Nitro 3 closes its prerender worker before later crawling hooks can reuse it.
+If several modules reopen the generated app, share its lifetime by renderer identity.
+Register clients during prerender initialization. Close the app only after every client releases it.
+Prove that one module finishing cannot close another module's active transport.
+Use the generated builder's public exports. Do not assume global fetch remains available.
+For packages with native optional binaries, prefer Nitro's trace dependencies over forced external package specifiers.
+A forced external can bypass the generated prerender app's absolute resolver.
 
 Use Nuxt's runtime hooks through `useServerHooks` where the hook belongs to `NuxtServerHooks`.
 For Nitro lifecycle hooks, use the appropriate Nitro API.
@@ -81,6 +88,26 @@ Tests must prove which implementation ran.
 Do not mistake a passing Nitro 3 compatibility layer test for a completed portable migration.
 
 Source: [versioned server compatibility guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/4.modules/9.server-compatibility.md).
+
+## Module runtime aliases
+
+Use each module's existing namespace with explicit `/app` and `/server` entry points.
+For example, expose browser composables through `#site-config/app` and server helpers through `#site-config/server`.
+Register directory aliases and create curated `index.ts` barrels inside those directories.
+A file alias can shadow existing deep imports or fail to resolve them.
+Keep Node filesystem imports and server configuration out of app barrels.
+Expose a server entry only when the module has a public server function.
+Do not invent an empty API to make every manifest look alike.
+
+Register both directory aliases in Nuxt. Also register the server alias in Nitro.
+Nuxt 4.6 can include server files in its generated app typecheck context.
+Add exact and wildcard TypeScript paths during `prepare:types`, using the corresponding app or server configuration.
+Resolve paths relative to the generated configuration's base URL and normalize separators.
+Avoid rooted export declarations inside ambient modules.
+Parent aliases can still resolve deep imports across contexts. Scoped path registration does not enforce an import ban.
+Prove consumer imports with the real parent aliases present, rather than an artificially isolated namespace.
+Test packed app SSR output, server requests, and generated app and server types on all three Nuxt lanes.
+Keep disabled and mocked module behavior consistent with existing public functions.
 
 ## Types and Kit
 

@@ -39,6 +39,11 @@ Use Kit's resolver when it covers the Nuxt-specific need.
 `findPackageJSON` exists from Node 22.14.0, with active-development stability.
 It can replace some package discovery, but not configuration parsing or package-manager detection.
 Review its resolver limitations before relying on it in public tooling.
+Its base represents a containing file. Convert a directory into a file URL before resolving.
+Bare package specifiers can find a root manifest hidden by the package's export map.
+Absolute file specifiers select the nearest parent manifest.
+It uses the default resolver and does not honor custom loader hooks.
+Keep missing-package handling distinct from malformed JSON and unexpected filesystem failures.
 Use it to confirm an optional package belongs to the consumer before `createRequire` loads it.
 CommonJS resolution can find packages through `NODE_PATH` outside that consumer.
 Prove missing-package behavior with those environment paths present.
