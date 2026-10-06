@@ -19,6 +19,7 @@ Use the `pr` Skill for repository edits and delivery. Acquire a task-owned Workt
 Record the minimum Nuxt release, Node range, supported server builders, deployment targets, and next major for each package.
 Record producer and consumer relationships. Include shared runtime packages and optional UI packages.
 Separate a research request from authorization to migrate or publish packages.
+Preserve published package versions during migration. Bump versions only when the user explicitly authorizes release preparation.
 
 For the Nuxt 4.6.0 baseline:
 
@@ -78,7 +79,7 @@ Delete compatibility scaffolding only when the remaining imports and behavior pr
 ## Verify and hand off
 
 Keep existing tests and workflow structure. Follow the verification reference for version aliases and targeted checks.
-Use Node 22 for required checks unless the user requests a broader matrix.
+Preserve existing CI configuration, including its LTS selector. Change workflows only to fix verified migration blockers.
 Exercise meaningful module output, including supported deployment targets affected by the change.
 Measure dependency changes in equivalent clean consumers.
 Show each removal, retained dependency reason, artifact delta, and remaining untested path.

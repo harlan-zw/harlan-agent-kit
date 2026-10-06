@@ -2,10 +2,11 @@
 
 ## Keep existing tests
 
-Keep the original unit suite and reusable workflows close to their current form.
-Run required checks on Node 22.22.3. Do not add a Node matrix without an explicit requirement.
-Run pull request checks once. Restrict push checks to main and ignore Markdown by default.
-Retain lint, typecheck, build, and test jobs. Preserve services required by existing tests.
+Keep original test files and assertions. Make only changes required by migrated APIs or dependency upgrades.
+Preserve pre-migration CI configuration, including its LTS selector, actions, jobs, events, matrices, and required services.
+Change workflows only to fix verified migration blockers. Remove jobs for explicitly dropped support contracts.
+Do not add workflow matrices, replace LTS with a pinned Node version, or redesign reusable workflows.
+For new workflows only, ignore Markdown unless a job consumes it.
 
 Use the existing Nuxt 4.6 suite and one linked Nuxt 5 fixture.
 Install Nuxt 5 through an exact npm alias: `nuxt: npm:nuxt-nightly@<5x-version>`.
@@ -15,10 +16,13 @@ Keep app and server type checks and meaningful runtime assertions.
 
 If linked imports resolve the root framework, add Vite dedupe for Nuxt, Vue, and Vue Router.
 If generated types scan unrelated packages, set the fixture's `workspaceDir` to `import.meta.dirname`.
+If development fixtures reject linked runtime files, allow the module directory through `vite.server.fs.allow`.
 For nightly module compatibility, allow the exact nightly only within the fixture.
 
 Use immutable full-SHA `pkg.pr.new` overrides for unpublished producer majors.
 Preserve intended package version declarations. Remove preview overrides when registry versions become available.
+If original tests use stable sibling modules, scope their transitive overrides to their supported dependency versions.
+Keep the migrated module on its intended producer previews. Avoid introducing test-only publication cycles.
 Do not add cross-repository source checkouts, coordinated bootstrap workspaces, or custom lane runners.
 If pnpm rejects preview URL subdependencies, use temporary `blockExoticSubdeps: false` in affected workspaces.
 Keep trust policy and exact approved exceptions. Restore the URL restriction after removing previews.
@@ -49,7 +53,7 @@ An `experimental.future` object does not enable that lane.
 The future flag does not upgrade Nitro on Nuxt 4.
 Source: [versioned Nuxt upgrade guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/1.getting-started/18.upgrade.md#testing-nuxt-5).
 
-Run the Node 22.22.3 floor for the stable Nuxt checks.
+Check the Node 22.22.3 support floor locally when migration behavior depends on it. Keep the existing CI Node selector.
 Run server-only unit tests in Node, rather than a browser emulator.
 Node 22's prefix-only `node:sqlite` can fail Vite resolution in browser environments.
 Use a supported Node version for the exact Nuxt 5 nightly.
