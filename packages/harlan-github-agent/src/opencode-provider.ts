@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline'
 import { opencodeTurnEnvironment } from './agent-context.ts'
 import { advanceContextBudget, agentProviderFailureReason, agentTextEvent, contextBudgetWrapUpPrompt, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
 import { materializeAgentMedia } from './github-media.ts'
+import { createOpencodeSession, readOpencodeMessages, recoverOpencodeResult } from './opencode-result.ts'
 import { err, ok } from './result.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
@@ -37,8 +38,10 @@ export interface OpencodeServer {
   url: string
   /** Basic auth password for this server. It lives only as long as the turn. */
   password: string
+  createSession: (signal: AbortSignal) => Promise<Result<string, string>>
   /** Adds one user message to a busy session. The session reads it before its next model step. */
   steer: (sessionId: string, text: string) => Promise<Result<void, string>>
+  readMessages: (sessionId: string, signal: AbortSignal) => Promise<Result<unknown, string>>
   /** Stops the server, and with it every model call the session still makes. */
   close: (signal: NodeJS.Signals) => void
 }
@@ -103,6 +106,8 @@ function opencodeServer(url: string, password: string, workspace: string, child:
   return {
     url,
     password,
+    createSession: signal => createOpencodeSession({ url, password, workspace, signal }),
+    readMessages: (sessionId, signal) => readOpencodeMessages({ url, password, workspace, sessionId, signal }),
     steer: (sessionId, text) => fetch(`${url}/session/${encodeURIComponent(sessionId)}/prompt_async?directory=${encodeURIComponent(workspace)}`, {
       method: 'POST',
       headers: { 'authorization': authorization, 'content-type': 'application/json' },
@@ -251,15 +256,16 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
 /**
  * Every turn starts its own session.
  *
- * `opencode run --session` reopens the session in the directory that created
- * it, which is never the worktree this turn prepared, and the process then
- * stays alive after its loop ends. Each turn therefore carries its own context.
+ * Ignore request.sessionId, because a saved session belongs to its earlier directory.
+ * Create an empty session in this turn's prepared worktree before the CLI starts.
+ * Its identity remains available even when the attached CLI emits no events.
  */
-export function opencodeArguments(request: AgentTurnRequest, prompt: string, serverUrl: string, mediaPaths: readonly string[] = []): string[] {
+export function opencodeArguments(request: AgentTurnRequest, prompt: string, serverUrl: string, mediaPaths: readonly string[] = [], freshSessionId?: string): string[] {
   return [
     'run',
     '--attach',
     serverUrl,
+    ...(freshSessionId === undefined ? [] : ['--session', freshSessionId]),
     ...(mediaPaths.length === 0 ? [] : ['--file', ...mediaPaths]),
     '--format',
     'json',
@@ -286,6 +292,10 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
   }))
 
   async function* runOnce(request: AgentTurnRequest, prompt: string, mediaPaths: readonly string[] = []): AsyncGenerator<AgentEvent> {
+    if (request.signal.aborted) {
+      yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.' }
+      return
+    }
     // The worktree's seeded .env carries the tokens its own scripts read.
     // This turn's own instruction files, such as the repository memory index,
     // merge on top of the shared OpenCode configuration.
@@ -303,8 +313,14 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       return
     }
     const server = started.value
+    const created = await server.createSession(request.signal).catch(() => err('The OpenCode session creation failed.'))
+    if (created._tag === 'Err' || request.signal.aborted) {
+      server.close('SIGTERM')
+      yield { _tag: 'Failed', reason: created._tag === 'Err' ? created.error : 'The OpenCode turn was cancelled.' }
+      return
+    }
     const child = spawnOpencode(
-      opencodeArguments(request, prompt, server.url, mediaPaths),
+      opencodeArguments(request, prompt, server.url, mediaPaths, created.value),
       request.workspace,
       { ...turnEnvironment.value, ...serverCredentials(server.password) },
     )
@@ -314,6 +330,8 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     }
     const abort = () => stop('SIGTERM')
     request.signal.addEventListener('abort', abort, { once: true })
+    if (request.signal.aborted)
+      abort()
     let standardError = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
@@ -336,7 +354,10 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     }, Math.max(1_000, Math.floor(idleTimeoutMilliseconds / 4)))
     watchdog.unref()
 
-    let sessionId: string | null = null
+    const sessionId = created.value
+    let sessionReported = false
+    let assistantId: string | undefined
+    const deliveredParts = new Set<string>()
     let failed = false
     let cachedTokensRead = 0
     let usage: Extract<AgentTokenUsage, { _tag: 'Available' }> = { _tag: 'Available', input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }
@@ -357,11 +378,21 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
           // A non-JSON line is plugin or upgrade noise, never a turn result.
           continue
         }
-        if (sessionId === null && typeof parsed.sessionID === 'string') {
-          sessionId = parsed.sessionID
+        if (typeof parsed.sessionID === 'string' && parsed.sessionID !== sessionId) {
+          failed = true
+          stop('SIGKILL')
+          yield { _tag: 'Failed', reason: 'The OpenCode stream returned another session identity.' }
+          break
+        }
+        if (!sessionReported && parsed.sessionID === sessionId) {
+          sessionReported = true
           yield { _tag: 'SessionStarted', sessionId }
         }
         const stepUsage = opencodeAgentUsage(parsed)
+        if (parsed.sessionID === sessionId && parsed.type === 'step_start' && typeof parsed.part?.messageID === 'string')
+          assistantId ??= parsed.part.messageID
+        if (typeof parsed.part?.id === 'string' && (stepUsage !== undefined || opencodeAgentEvent(parsed) !== undefined))
+          deliveredParts.add(parsed.part.id)
         if (stepUsage !== undefined) {
           usageAvailable = true
           usage = {
@@ -380,11 +411,10 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
             failed = true
           if (event._tag === 'TurnCompleted') {
             completed = true
-            if (usageAvailable)
-              yield { _tag: 'Usage', usage }
-            child.kill('SIGTERM')
           }
-          yield event
+          else {
+            yield event
+          }
         }
         if (completed)
           break
@@ -402,9 +432,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
           break
         }
         if (advanced.action._tag === 'Warn') {
-          const delivered = sessionId === null
-            ? err('The session reported no identity to send the message to.')
-            : await server.steer(sessionId, contextBudgetWrapUpPrompt(cachedTokensRead, cachedContextBudget))
+          const delivered = await server.steer(sessionId, contextBudgetWrapUpPrompt(cachedTokensRead, cachedContextBudget))
           yield {
             _tag: 'ContextBudgetWarned',
             cachedTokensRead,
@@ -425,8 +453,50 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         yield { _tag: 'Failed', reason: 'The opencode session stopped sending output.' }
         return
       }
-      if (exit.code !== 0 && !failed && !completed)
+      if (request.signal.aborted) {
+        yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.' }
+        return
+      }
+      if (completed && exit.code === 0) {
+        if (usageAvailable)
+          yield { _tag: 'Usage', usage }
+        yield { _tag: 'TurnCompleted' }
+      }
+      else if (exit.code !== 0 && !failed) {
         yield { _tag: 'Failed', reason: opencodeFailureReason(standardError, exit) }
+      }
+      else if (exit.code === 0 && !failed && !completed) {
+        if (request.signal.aborted) {
+          yield { _tag: 'Failed', reason: 'The OpenCode result read was cancelled.' }
+          return
+        }
+        if (!sessionReported)
+          yield { _tag: 'SessionStarted', sessionId }
+        const read = await server.readMessages(sessionId, request.signal).catch(() => err('The OpenCode result read failed.'))
+        const recovered = read._tag === 'Err' ? read : recoverOpencodeResult(read.value, sessionId, assistantId, deliveredParts)
+        if (recovered._tag === 'Err') {
+          yield { _tag: 'Failed', reason: recovered.error }
+          return
+        }
+        if (request.signal.aborted) {
+          yield { _tag: 'Failed', reason: 'The OpenCode result read was cancelled.' }
+          return
+        }
+        yield { _tag: 'Reasoning', text: 'Recovered the completed OpenCode result after its attached stream ended.' }
+        for (const line of recovered.value) {
+          const stepUsage = opencodeAgentUsage(line)
+          if (stepUsage !== undefined) {
+            usageAvailable = true
+            usage = { _tag: 'Available', input: usage.input + stepUsage.input, cachedInput: usage.cachedInput + stepUsage.cachedInput, cacheWrite: usage.cacheWrite + stepUsage.cacheWrite, output: usage.output + stepUsage.output, reasoning: usage.reasoning + stepUsage.reasoning }
+          }
+          const event = opencodeAgentEvent(line)
+          if (event?._tag !== 'TurnCompleted' && event !== undefined)
+            yield event
+        }
+        if (usageAvailable)
+          yield { _tag: 'Usage', usage }
+        yield { _tag: 'TurnCompleted' }
+      }
     }
     finally {
       clearInterval(watchdog)
