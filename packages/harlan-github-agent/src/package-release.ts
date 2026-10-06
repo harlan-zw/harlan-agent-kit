@@ -1,3 +1,4 @@
+import ts from 'typescript'
 import { automatedDisclosure } from './review-comment.ts'
 
 /**
@@ -81,6 +82,40 @@ export function planPackageReleaseBeforeMerge(input: Omit<PackageReleaseInput, '
   return classifyPackageRelease(input, { _tag: 'BeforeMerge' })
 }
 
+function hasIncompatibleDeclaration(patch: string): boolean {
+  const printer = ts.createPrinter()
+  const declaration = (line: string) => {
+    const text = line.trim()
+    const source = ts.createSourceFile('release.ts', text.endsWith('{') ? `${text}}` : text, ts.ScriptTarget.Latest, true)
+    const node = source.statements[0]
+    if (source.statements.length !== 1 || node === undefined || !ts.isFunctionDeclaration(node)
+      || node.name === undefined || node.body === undefined
+      || !node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      return null
+    }
+    const print = (value: ts.Node) => printer.printNode(ts.EmitHint.Unspecified, value, source)
+    return {
+      identity: [node.name.text, node.asteriskToken?.kind, node.modifiers.map(print), node.typeParameters?.map(print), node.type === undefined ? null : print(node.type)],
+      parameters: node.parameters.map(parameter => ({ text: print(parameter), optional: parameter.questionToken !== undefined || parameter.initializer !== undefined })),
+    }
+  }
+  const lines = patch.split('\n')
+  const added = lines.filter(line => line.startsWith('+') && !line.startsWith('+++')).map(line => declaration(line.slice(1)))
+  return lines.some((line) => {
+    if (!line.startsWith('-') || line.startsWith('---') || !/\b(?:export|defineProps|defineEmits)\b/.test(line))
+      return false
+    const before = declaration(line.slice(1))
+    if (before === null)
+      return true
+    // A retained signature with optional trailing parameters remains callable by existing consumers.
+    return !added.some(after => after !== null
+      && JSON.stringify(before.identity) === JSON.stringify(after.identity)
+      && after.parameters.length >= before.parameters.length
+      && before.parameters.every((parameter, index) => parameter.text === after.parameters[index]?.text)
+      && after.parameters.slice(before.parameters.length).every(parameter => parameter.optional))
+  })
+}
+
 function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sourceIncluded' | 'sourceSha' | 'mergeSha'>, phase: { _tag: 'BeforeMerge' } | { _tag: 'Available', sourceSha: string, mergeSha: string }): PackageReleaseOffer {
   const unavailable = (reason: string): PackageReleaseOffer => ({ _tag: 'Unavailable', reason })
   if (!input.complete)
@@ -93,7 +128,7 @@ function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sou
     return unavailable('Breaking changes require a manual release.')
   // Missing annotations must not hide an obvious public API removal.
   if (input.files.some(file => /\.(?:[cm]?[jt]sx?|vue)$/.test(file.filename)
-    && /^-(?!-).*\b(?:export|defineProps|defineEmits)\b/m.test(file.patch))) {
+    && hasIncompatibleDeclaration(file.patch))) {
     return unavailable('A public API changed. Check compatibility before releasing.')
   }
   const type = /^(feat|fix|perf)(?:\([^\n]*\))?:/i.exec(input.title)?.[1]?.toLowerCase()

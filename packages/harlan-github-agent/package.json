@@ -44,6 +44,7 @@
     "h3": "catalog:",
     "octokit": "catalog:",
     "srvx": "catalog:",
+    "typescript": "catalog:",
     "yaml": "catalog:"
   },
   "devDependencies": {
@@ -57,7 +58,6 @@
     "nuxt": "catalog:",
     "nuxt-skew-protection": "catalog:",
     "obuild": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:",
     "vue-tsc": "catalog:"

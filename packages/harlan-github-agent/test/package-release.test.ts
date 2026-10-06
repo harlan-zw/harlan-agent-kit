@@ -19,6 +19,30 @@ const input = {
 }
 
 describe('package releases', () => {
+  it('offers a patch when a function adds an optional trailing parameter', () => {
+    const patch = '-export function setMarkdownHeaders(event: H3Event, ctx: NegotiationContext) {\n+export function setMarkdownHeaders(event: H3Event, ctx: NegotiationContext, sourceHeaders?: Headers) {'
+    expect(planPackageRelease({ ...input, files: [{ filename: 'src/runtime/server/utils/negotiation-response.ts', patch }] }))
+      .toMatchObject({ _tag: 'Available', bump: 'patch', version: '1.2.4' })
+  })
+  it.each([
+    ['export function read(value: string) {', 'export function read(value: string, options = {}) {'],
+    ['export function read(value: string) {', 'export function read(value: string, options?: [string, number]) {'],
+    ['export function read(value: string) {', 'export function read(value: string) {'],
+  ])('retains compatible function calls: %s', (before, after) => {
+    expect(planPackageRelease({ ...input, files: [{ filename: 'src/index.ts', patch: `-${before}\n+${after}` }] }))
+      .toMatchObject({ _tag: 'Available', version: '1.2.4' })
+  })
+  it.each([
+    ['export function read(value: string) {', 'export function read(value: string, options: Headers) {'],
+    ['export function read(value: string) {', 'export function read(value: number) {'],
+    ['export function read(value: string): string {', 'export function read(value: string): number {'],
+    ['export function read(value: string) {', 'export function rename(value: string) {'],
+    ['export async function read(value: string) {', 'export function read(value: string) {'],
+    ['export function read(value: string, options?: Headers) {', 'export function read(value: string) {'],
+  ])('requires manual release for an incompatible function: %s', (before, after) => {
+    expect(planPackageRelease({ ...input, files: [{ filename: 'src/index.ts', patch: `-${before}\n+${after}` }] }))
+      .toMatchObject({ _tag: 'Unavailable', reason: 'A public API changed. Check compatibility before releasing.' })
+  })
   it('offers patch for compatible fixes and minor for features', () => {
     expect(planPackageRelease(input)).toMatchObject({ _tag: 'Available', bump: 'patch', version: '1.2.4' })
     expect(planPackageRelease({ ...input, title: 'feat(parser): add streaming', commits: ['feat(parser): add streaming'] }))
