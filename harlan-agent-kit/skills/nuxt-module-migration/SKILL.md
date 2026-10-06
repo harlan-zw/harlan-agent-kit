@@ -78,7 +78,7 @@ Delete compatibility scaffolding only when the remaining imports and behavior pr
 ## Verify and hand off
 
 Keep existing tests and workflow structure. Follow the verification reference for version aliases and targeted checks.
-Use Node 22 for required checks unless the user requests a broader matrix.
+Preserve existing CI configuration, including its LTS selector. Change workflows only to fix verified migration blockers.
 Exercise meaningful module output, including supported deployment targets affected by the change.
 Measure dependency changes in equivalent clean consumers.
 Show each removal, retained dependency reason, artifact delta, and remaining untested path.
