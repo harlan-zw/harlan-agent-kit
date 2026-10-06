@@ -18,6 +18,7 @@ Tier 0.
    - Hold TypeScript on 6, as that Skill requires.
    - Hold `h3` on 1. Nuxt 4 runs nitropack v2, which needs h3 1; h3 2 belongs to Nitro v3 and Nuxt 5.
    - Expect majors to break code. On harlanzw.com, VueUse 15 replaced the `useNow` `interval` option with `scheduler: cb => useIntervalFn(cb, ms)`, and `@antfu/eslint-config` 9.5 began sorting `pnpm-workspace.yaml` and requiring `minimumReleaseAgeExcludePrune: true`. Run `eslint --fix pnpm-workspace.yaml` for the second.
+   - A `wrangler` bump changes the generated `worker-configuration.d.ts`. Regenerate it with the repository's `wrangler types` script, or CI's types check fails.
 4. **Overrides.** Remove a `vite` override that pins Vite below 8, and any `rolldown-vite` override. Nuxt 4.5 ships Vite 8 on Rolldown.
 5. **Supply-chain policy.** With `trustPolicy: no-downgrade`, pnpm rejects the cssnano 9 family that `@nuxt/vite-builder` 4.6.0 installs. Expect about 30 packages. Repeat these steps until the install passes:
    1. Run `pnpm install > install.log 2>&1 || rg -o 'trust downgrade for "([^"]+)"' -r '$1' install.log`
