@@ -12,6 +12,8 @@ Two facts make this dangerous. Both were verified on Nuxt 4.6.0.
 1. **The build still passes.** A handler that calls an auto-imported `defineEventHandler` builds with exit 0. At runtime it returns 500, because the name is undefined.
 2. **Modules hide the gap.** `addServerImports` in `@nuxt/kit` runs `config.imports ||= {}`. That replaces `imports: false`, so any module that calls it turns every server auto-import back on, and the generated types too. `nuxt-site-config`, `@nuxtjs/sitemap`, `@nuxtjs/robots`, and `@nuxt/image` all call it. A site works today by accident. It breaks the day Nuxt fixes this, or the day the site drops its last such module.
 
+[nuxt/nuxt#36468](https://github.com/nuxt/nuxt/pull/36468) proposes the 4.x fix: keep `imports` on and drop only the h3 and Nitro presets. Until a release ships it, assume the behaviour above.
+
 So neither the build nor typecheck is the gate. Make every server import explicit, then prove it with the codemod dry run.
 
 Nuxt 5 behaves differently from 4.6 here. It drops only the h3 and Nitro helper auto-imports, and keeps `server/utils`, `shared/utils`, and module helpers.
@@ -47,7 +49,7 @@ Run each step from the Nuxt app root. In a monorepo, run it once per app.
 4. Apply: add `--write`.
 5. Fix every line under "Unmapped auto-imports". See [names the script does not import](#names-the-script-does-not-import).
 6. Remove the temporary `nitroAutoImports: true`. Run `nuxt prepare`.
-7. Run the repository's ESLint fix on the changed directories. It merges and sorts the new imports.
+7. Run ESLint with `--fix` on the changed directories only, such as `eslint --fix server shared`. It merges and sorts the new imports. A repository-wide `lint:fix` also rewrites unrelated files, such as Markdown, so revert anything outside the change.
 8. Run the dry run again. **It must report `Would change 0 of N files` and exit 0.** This is the gate.
 
 The script uses the project's own TypeScript. It never imports a name the file already binds anywhere, so a rare shadowed name stays missing. Typecheck reports that case as `TS2304`.

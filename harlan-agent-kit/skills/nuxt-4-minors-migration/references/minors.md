@@ -19,6 +19,7 @@ Tier 0.
    2. Check the named package: `npm view <name>@<version> dist.attestations.provenance.predicateType repository.url`
    3. If the provenance is SLSA and the repository is the package's own, add the exact `<name>@<version>` to `trustPolicyExclude`. Group the entries under one comment that names the reason.
    4. If the provenance is missing, stop and report the package.
+   With a release age policy, pnpm adds the new Nuxt packages to `minimumReleaseAgeExclude` itself. Keep those entries; they follow the site's existing pattern.
 5. **Modules.** Build once. Upgrade each module that fails on Vite 8, unhead v3, or vue-router 5.
 
 ## 4.1
@@ -43,7 +44,8 @@ Tier 0.
   Change: write `(_nuxtApp, { signal }) => $fetch(url, { signal })`. Then `refresh`, `clear`, and `dedupe: 'cancel'` stop the request.
 - **T2: `experimental.extractAsyncDataHandlers` moves handlers into lazy chunks.** A prerendered page then ships none of them.
   Detect: most routes prerender, through `nitro.static`, `prerender` routes, or `prerender: true` route rules.
-  Change: enable it. Compare the client JavaScript total in the build output before and after. Skip it when most pages render on request.
+  Change: build with and without it. Compare the JavaScript a prerendered page loads up front: the files its HTML names through module scripts and `modulepreload` links. Keep it only when that number drops. The total in `.output/public/_nuxt` grows either way, because handlers move into extra chunks.
+  On harlanzw.com, whose handlers only query content, it raised a page from 14 files and 882,848 bytes to 21 files and 884,558 bytes, so the site keeps it off.
 - **T3: `experimental.typescriptPlugin`** adds editor features and installs `@dxup/nuxt`. Follow-up only.
 
 ## 4.3
@@ -79,9 +81,7 @@ h3 v1's `createError` reads `status` and `statusText` too, so server code can ch
 - Other `NuxtError` reads in plugins and middleware.
   Detect: `rg -n '\.statusCode\b' app layers`, then read each hit.
   Change: only reads of a `NuxtError`.
-- Redirect route rules.
-  Detect: `rg -n statusCode nuxt.config.ts`.
-  Change: `redirect: { to, status }`.
+- Redirect route rules: leave them. nitropack v2 reads only `redirect.statusCode`, so a renamed `status` silently drops the 301. See [compatibility version 5](compat-v5.md#nuxt-5-preparation-on-46).
 
 ## 4.4
 

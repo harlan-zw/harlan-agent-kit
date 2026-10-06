@@ -51,6 +51,8 @@ Open these pages and check the console for errors:
 
 Take one screenshot per changed area. Keep screenshots in the session scratchpad.
 
+Before you blame the upgrade for a console error, load the same page on a build of the base branch. On harlanzw.com the 404 page logs `NUXT_E1005` twice on both Nuxt 4.5.2 and 4.6.0.
+
 ## Pull Request
 
 Use the `pr` Skill. Commit subject: `chore(deps): upgrade nuxt to 4.6 with compatibility version 5`, or `feat:` when Tier 2 features ship.
