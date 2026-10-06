@@ -68,6 +68,15 @@ Check every lane before changing the repository's package manager pin.
 Keep the same supply-chain policy.
 Copy the repository's existing trust age policy and approved build scripts into isolated fixtures.
 Keep exact approved trust exceptions. Never disable the policy to make tests pass.
+Frozen local tarballs can trigger registry trust checks before their new versions exist on npm.
+Exclude only exact local package versions inside that isolated consumer. Keep registry dependencies under the existing policy.
+Update local tarball version and peer metadata in fixture locks when release versions change.
+
+Fresh Nuxt 4.6 resolution can flag cssnano's change from staged publishing to a trusted publisher.
+Keep the package manager pin. Check provenance, source revision, and tarball integrity before adding exact reviewed exceptions.
+Include nested dependencies when verifying a coordinated upstream release. Avoid repeated exceptions based only on each new error.
+Source: [cssnano 9.2.2 provenance](https://registry.npmjs.org/-/npm/v1/attestations/cssnano@9.2.2).
+
 Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
 Check ESM package roots through Node 22 `require(ESM)` and Nuxt's Jiti configuration loader.
 An import-only exports map can fail those loaders. Add a compatible `default` ESM entry when needed.
