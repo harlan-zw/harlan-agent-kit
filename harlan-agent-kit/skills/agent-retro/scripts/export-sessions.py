@@ -3,9 +3,10 @@
 
 Run on Hogwild. Reads both databases read-only.
 
-Usage: export-sessions.py OUT_DIR [--days 7] [--per-goal 10]
+Usage: export-sessions.py OUT_DIR [--days 7] [--per-goal 10] [--redact-env-file PATH ...]
 """
 import collections
+import argparse
 import hashlib
 import json
 import os
@@ -15,15 +16,51 @@ import sys
 import time
 from functools import cache
 
-out = sys.argv[1]
-days = 7
-per_goal = 10
-args = sys.argv[2:]
-for i, a in enumerate(args):
-    if a == '--days':
-        days = int(args[i + 1])
-    if a == '--per-goal':
-        per_goal = int(args[i + 1])
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('out')
+parser.add_argument('--days', type=int, default=7)
+parser.add_argument('--per-goal', type=int, default=10)
+parser.add_argument('--redact-env-file', action='append', default=[], metavar='PATH')
+args = parser.parse_args()
+out, days, per_goal = args.out, args.days, args.per_goal
+
+SENSITIVE_KEY = re.compile(r'token|secret|password|api_?key|private_?key', re.I)
+
+
+def load_secret_values(paths):
+    """Read explicit single-line dotenv sources. Never include values in errors."""
+    values = set()
+    for path in paths:
+        with open(path) as source:
+            for number, line in enumerate(source, 1):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                assignment = re.fullmatch(r'(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)', line)
+                if assignment is None:
+                    raise ValueError(f'Invalid environment assignment in {path}, line {number}.')
+                key, value = assignment.groups()
+                if not SENSITIVE_KEY.search(key):
+                    continue
+                if value.startswith(('"', "'")):
+                    quoted = re.fullmatch(r'(["\'])(.*?)\1\s*(?:#.*)?', value)
+                    if quoted is None:
+                        raise ValueError(f'Invalid secret assignment in {path}, line {number}. Use single-line values.')
+                    value = quoted.group(2)
+                    if quoted.group(1) == '"':
+                        try:
+                            value = json.loads('"' + value + '"')
+                        except json.JSONDecodeError:
+                            raise ValueError(f'Invalid quoted secret in {path}, line {number}.') from None
+                else:
+                    value = re.split(r'\s+#', value, maxsplit=1)[0].rstrip()
+                if value:
+                    values.add(value)
+    return sorted(values, key=len, reverse=True)
+
+
+# A missing or malformed source stops before any artifact is written.
+KNOWN_SECRETS = load_secret_values(args.redact_env_file)
 
 OPENCODE_DB = os.path.expanduser('~/.local/share/opencode/opencode.db')
 JOURNAL_DB = os.path.expanduser('~/.local/share/harlan-github-agent/state.sqlite')
@@ -53,23 +90,43 @@ TASK_KIND = {'review_fix': 'review_fix', 'resolve_conflict': 'resolve_conflict',
 
 SLUG = re.compile(r'\.harlan-agent-(?:review|fix|pull|baseline|issue|routine)-(?P<number>[^-]+)-(?P<revision>[0-9a-f]{12})')
 BASELINE_SLUG = re.compile(r'\.harlan-agent-baseline-(?P<base>[0-9a-f]{12})-(?P<lease>[0-9a-f]{12})(?:$|/)')
+TASK_LEASE_SLUG = re.compile(r'\.harlan-agent-(?:fix|pull|baseline)-[^/]+-(?P<lease>[0-9a-f]{12})(?:$|/)')
 
 # Transcripts carry raw shell output. Redact token shapes before anything reads them.
 SECRETS = [
+    (re.compile(r'((?:token|secret|password|api_key|apikey|private_key)"\s*:\s*)"(?:\\.|[^"\\])*"', re.I), r'\1"***"'),
     (re.compile(r'(x-access-token:)[^@\s]+(@)', re.I), r'\1***\2'),
     (re.compile(r'\b(gh[pousr]_)[A-Za-z0-9]{16,}\b'), r'\1***'),
     (re.compile(r'\b(github_pat_)\w{16,}\b'), r'\1***'),
     (re.compile(r'\b(sk-)[\w-]{16,}\b'), r'\1***'),
     (re.compile(r'\b(sntry[su]_)[\w-]{16,}\b'), r'\1***'),
     (re.compile(r'(Bearer\s+)[\w.-]{16,}\b', re.I), r'\1***'),
-    (re.compile(r'((?:token|secret|password|api_key|apikey)\s*[=:]\s*["\']?)[\w.-]{16,}', re.I), r'\1***'),
+    (re.compile(r'((?:token|secret|password|api_key|apikey)["\']?\s*[=:]\s*["\']?)[\w./+=-]{1,}', re.I), r'\1***'),
 ]
 
 
 def redact(s):
+    for value in KNOWN_SECRETS:
+        s = s.replace(value, '***')
+        # Index JSON escapes quotes and newlines in titles and journal reasons.
+        s = s.replace(json.dumps(value)[1:-1], '***')
     for pat, rep in SECRETS:
         s = pat.sub(rep, s)
     return s
+
+
+def redact_data(value):
+    """Redact parsed fields before serialization or presentation changes."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {
+            redact(key): '***' if SENSITIVE_KEY.search(key) and isinstance(item, str) else redact_data(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_data(item) for item in value]
+    return value
 
 
 def goal_of(directory):
@@ -88,15 +145,15 @@ def subject_of(directory):
 
 
 @cache
-def baseline_tasks_by_lease():
-    """The Baseline worktree suffix names a task lease, not a Revision."""
+def tasks_by_lease():
+    """Task worktree suffixes name exact leases, including Logged finding Repairs."""
     if journal is None:
         return {}
     tasks = {}
-    for row in journal.execute("select id, fence from tasks where kind = 'baseline_repair'"):
+    for row in journal.execute('select id, kind, fence from tasks'):
         for fence in range(1, row['fence'] + 1):
             key = hashlib.sha256(f"{row['id']}:{fence}".encode()).hexdigest()[:12]
-            tasks[key] = row['id']
+            tasks[(row['kind'], key)] = row['id']
     return tasks
 
 
@@ -135,7 +192,7 @@ def journal_outcome(goal, sess):
     m = SLUG.search(sess['directory'])
     if not m:
         return None
-    baseline = BASELINE_SLUG.search(sess['directory']) if goal == 'baseline_repair' else None
+    lease = TASK_LEASE_SLUG.search(sess['directory'])
     kind = TASK_KIND.get(goal)
     if goal == 'issue':
         row = journal.execute(
@@ -148,8 +205,8 @@ def journal_outcome(goal, sess):
             return dict(source='worker_tasks', task=row['id'][:12], state=row['state_tag'], reason=row['reason'], attempts=row['attempts'])
     if kind is None:
         return None
-    if baseline:
-        task_id = baseline_tasks_by_lease().get(baseline.group('lease'))
+    if lease:
+        task_id = tasks_by_lease().get((kind, lease.group('lease')))
         row = journal.execute(
             'select id, state_tag, reason, attempts, recovery_attempts, fence from tasks where kind = ? and id = ?',
             (kind, task_id),
@@ -164,7 +221,8 @@ def journal_outcome(goal, sess):
     transitions = journal.execute(
         'select to_tag, reason from task_transitions where task_id = ? order by created_at desc limit 3', (row['id'],),
     ).fetchall()
-    return dict(source='tasks', task=row['id'][:12], state=row['state_tag'], reason=row['reason'], attempts=row['attempts'], recovery_attempts=row['recovery_attempts'], fence=row['fence'], last_transitions=[f"{t['to_tag']}: {t['reason']}" for t in transitions])
+    task_label = row['id'] if row['id'].startswith('logged-finding:') else row['id'][:12]
+    return dict(source='tasks', task=task_label, state=row['state_tag'], reason=row['reason'], attempts=row['attempts'], recovery_attempts=row['recovery_attempts'], fence=row['fence'], last_transitions=[f"{t['to_tag']}: {t['reason']}" for t in transitions])
 
 
 def render(goal, sess):
@@ -191,7 +249,9 @@ def render(goal, sess):
     last_kind = 'none'
     body = []
     for p in parts:
-        d = json.loads(p['data'])
+        # Redact complete input and output before summaries, line selection,
+        # or whitespace changes can split a known secret into fragments.
+        d = redact_data(json.loads(p['data']))
         m = json.loads(p['mdata'])
         role = m.get('role')
         t = (p['time_created'] - t0) / 1000
@@ -257,7 +317,7 @@ def render(goal, sess):
         lines.append('repeated bash commands: ' + json.dumps(dup)[:2000])
     if edits:
         lines.append('edited files: ' + json.dumps(sorted(edits)))
-    return '\n'.join(lines), dict(tools=dict(tool_counts), tool_seconds={k: round(v) for k, v in tool_seconds.items()}, duration_min=round(dur / 60, 1), end_reason=end_reason, journal=outcome)
+    return redact('\n'.join(lines)), dict(tools=dict(tool_counts), tool_seconds={k: round(v) for k, v in tool_seconds.items()}, duration_min=round(dur / 60, 1), end_reason=end_reason, journal=outcome)
 
 
 sessions = con.execute('select * from session where time_created > ? and parent_id is null order by time_created desc', (since,)).fetchall()
@@ -296,7 +356,7 @@ for goal, ss in groups.items():
         if repeats:
             f.write('subjects with repeated sessions (subject: count): ' + json.dumps(dict(sorted(repeats.items(), key=lambda kv: -kv[1]))) + '\n\n')
         for st in stats:
-            f.write(json.dumps(st) + '\n')
+            f.write(redact(json.dumps(redact_data(st))) + '\n')
     index.append((goal, len(ss), len(picked), repeats))
 
 with open(os.path.join(out, 'INDEX.md'), 'w') as f:

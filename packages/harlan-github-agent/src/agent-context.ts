@@ -434,4 +434,8 @@ Download images only to a temporary directory outside the worktree.`
 
 /** Toolchain rules for every Agent turn that may run a command. */
 export const TOOLCHAIN_LINES = `Use pnpm for every package command. Never use npx.
-Never add debug output to tracked files.`
+Never add debug output to tracked files.
+For secret diagnostics, report only whether a value exists or whether two values match.
+Never print secret values, prefixes, cookies, tokens, signing keys, or configuration objects that contain them.
+Do not print environment files or unfiltered environment variables. Inspect only the named setting and return a boolean.
+Keep failing test evidence. Redact secret values before displaying logs or adding evidence to reports.`
