@@ -110,6 +110,8 @@ Do not cast a missing dispatch method into existence.
 Initialize any dispatcher adapter before application plugins register their drains.
 
 Keep renderer hooks separate from request and response lifecycle hooks.
+Register literal directories in `nuxt.options.watch`, rather than Chokidar glob strings.
+Prove custom file discovery handles both additions and deletions in native development.
 Preserve Node streaming behavior and edge response behavior when moving compression or body transforms.
 Nitro 3 exposes `response(response, event)`. Native `beforeResponse` and `afterResponse` hooks are absent.
 Select lifecycle adapters through `getNitroVersion`, then prove their side effects on both real builders.
