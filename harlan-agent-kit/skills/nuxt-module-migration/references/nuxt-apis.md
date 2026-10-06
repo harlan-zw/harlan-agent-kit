@@ -85,11 +85,16 @@ Do not retain a legacy handler just to support Nuxt releases below the new minim
 Nitro 3 has no `beforeResponse` or `afterResponse` lifecycle hook.
 Its response hook receives the final `Response` before the request event.
 Mutate that response's headers when changing the output sent to the client.
+Nitro 2 can pass a native `Response` as `beforeResponse`'s body.
+h3 copies its headers after that hook runs, overriding Node response headers.
+Read the body headers and pending Node headers when applying cache policy.
+Write changes into the body response too.
 Do not assume `event.res.headers` still owns those final headers.
 
 Nitro 3 uses `HookableCore`, which has no `callHookParallel` or `callHookWith`.
 Serial `callHook` stops after a rejected handler.
 Preserve independent drains when one sink fails. Exercise both sinks in a real server.
+Include synchronous throws as well as rejected promises in that exercise.
 Do not cast a missing dispatch method into existence.
 Initialize any dispatcher adapter before application plugins register their drains.
 
