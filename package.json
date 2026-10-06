@@ -7,7 +7,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "pnpm test:release && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:browser && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:nuxt-4-minors-migration && pnpm test:skills && pnpm test:skill-doc-paths && pnpm test:service && pnpm test:lockfile && pnpm test:github-public && pnpm --filter advocaat test:run && pnpm --filter harlan-github-agent test:run && pnpm test:notes-viewer",
-    "test:github-public": "vitest run scripts/github-public.test.ts",
+    "test:github-public": "vitest run scripts/github-public.test.ts scripts/agent-check.test.ts",
     "test:lockfile": "vitest run scripts/lockfile.test.ts",
     "test:notes-viewer": "vitest run packages/notes-viewer",
     "typecheck": "pnpm --filter harlan-github-agent typecheck",

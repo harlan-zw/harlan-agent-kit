@@ -141,6 +141,8 @@ For an outside contributor, use the existing Approval. A new external Revision i
 
 The Repair Agent writes each failing regression test first. It fixes every actionable finding, then runs focused checks. The controller verifies and publishes the artifact.
 
+Repair uses the [focused check recipes](../../references/focused-checks.md) for logs, declared preparation, search, and lockfiles.
+
 For a visual finding, reproduce the defect at the shown viewport when known. Capture and inspect the repaired view before pushing.
 
 When a GitHub Actions check run fails on the head commit and the same check passes on the current base, treat that failure as one material finding with resolution `Repair`. Queue it in the same handoff. Its next action names the failing check and its job logs. The Repair Agent reads those logs, fixes the cause, and runs only focused checks. Never recreate the full CI suite locally. When Repair authority is missing, record the permission boundary instead.

@@ -388,6 +388,13 @@ export function checkBudgetLines(scope: CheckScope): string {
   return `Check budget: ${scope}
 ${fullSuiteRule}${lastResort}
 Run test commands without pipes. If you pipe output, set pipefail in the same shell command and report the program's exit code.
+For complete logs without pipes, use the installed agent-check.ts <plan.json>. Put its plan and logs in scratch.
+The JSON plan has prerequisites (argv arrays), check (one argv array), and logDirectory. It stops on the first nonzero exit.
+Declare prerequisites only from the repository's scripts or the failing workflow. Run only preparation needed by the focused check.
+Exception: an explicitly declared prerequisite build may generate missing inputs for that check. It does not authorize a full validation build.
+If Nuxt types or workspace exports are missing, inspect those declarations once. Do not guess package names or retry the same check.
+Use rg -n for matching lines or rg -l for paths. Never use rg -r for recursive search; -r replaces matches.
+Regenerate pnpm-lock.yaml with the pinned pnpm version. Never edit its YAML by hand.
 If matching base evidence proves the failure existed, report it as pre-existing. Otherwise, report its cause as unknown.
 A filtered diagnostic list does not prove the command passed. Report its original exit code and the verification limit.
 Do not stash changes to verify the base. Use available base CI evidence.`
