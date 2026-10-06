@@ -1,0 +1,72 @@
+# Verification and release order
+
+## Three Nuxt lanes
+
+| Lane | Dependency | What it proves |
+| --- | --- | --- |
+| Minimum supported Nuxt | Exact `nuxt@4.6.0` | New APIs work on the declared floor, using Nitro 2 |
+| Future defaults | Exact `nuxt@4.6.0`, `future.compatibilityVersion: 5` | Future routing, head, types, and bundler defaults |
+| Actual Nuxt 5 | Exact Nuxt 5 nightly or release | Nitro 3, h3 2, and changes the compatibility flag cannot enable |
+
+Discover the Nuxt 5 nightly through `pnpm view nuxt-nightly dist-tags --json`.
+Resolve `5x` to an exact version and commit it with the fixture lockfile.
+Do not assume `nuxt-nightly@latest` is Nuxt 5.
+Record the actual Nuxt, Nitro, h3, Vue, and router versions in test evidence.
+Refresh pins before a release rather than silently floating a required check.
+Check the nightly's own Node engine before assigning it to a Node lane.
+
+The future flag does not upgrade Nitro on Nuxt 4.
+Source: [versioned Nuxt upgrade guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/1.getting-started/18.upgrade.md#testing-nuxt-5).
+
+Run the Node 22.22.3 floor and a supported newer LTS for the stable Nuxt lanes.
+Use a supported Node version for the exact Nuxt 5 nightly.
+If claiming Windows tooling support, run filesystem and resolution cases there.
+Exercise Cloudflare or other supported edge targets where server code changes.
+Use the repository's workflow for production deployment.
+
+## Packed consumers
+
+Build and pack the producer before testing consumers.
+Use isolated fixtures outside the workspace dependency graph.
+Install only the tarballs and documented consumer dependencies.
+Avoid `link:` fixtures as the only proof of published exports and dependencies.
+Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
+
+All declared support lanes must invoke non-watch test commands through required workflow jobs.
+Trace reusable workflows to their actual test command and runtime.
+A script named `test:nuxt5` proves nothing if the required command never calls it.
+Assert behavior rather than files, symbol existence, or exact key counts.
+
+| Module | Meaningful output |
+| --- | --- |
+| Site Config | Config isolation across requests, proxy origin, base URL, and i18n |
+| Robots | robots.txt, route rules, header and meta directives |
+| Sitemap | XML, exclusions, i18n, external and local sources, generate, and caching |
+| Schema.org | Valid JSON-LD in SSR and after client navigation |
+| SEO Utils | Canonical and metadata, redirects, assets, route groups, and layers |
+| OG Image | Image bytes, dimensions, caching, fonts, renderer, and edge output |
+| Link Checker | Inspection, crawling, prerender reporting, and DevTools integration |
+| Skew Protection | Old and new asset requests, client recovery, headers, and supported adapters |
+| AI Ready | Markdown negotiation, llms.txt, sitemap, indexing, and supported database providers |
+| Meta module | All modules together, user overrides, disabled modules, and cross-module hooks |
+
+Tests can share fixtures where they exercise the same contract.
+Cover optional integrations in targeted lanes rather than multiplying every combination.
+Use a failing test first for defects discovered during migration.
+
+## Coordinated release
+
+Determine dependency order from manifests and imports.
+Prepare shared runtime packages and Site Config before their consumers.
+Handle cycles explicitly, including type-only relationships and optional peers.
+Prepare DevTools artifacts and their versioned protocol alongside core packages.
+Release the meta module after compatible module versions exist in the registry.
+
+Update runtime peers, Kit dependencies, engines, catalogs, locks, examples, and compatibility claims consistently.
+Remove obsolete tests and documentation for Nuxt 3 and Unhead 2 where support was dropped.
+Keep unrelated renderer and database compatibility unless the release contract explicitly changes it.
+Use exact prereleases for cross-repository integration if stable producers are not published yet.
+Recheck package graphs and tarballs after the final dependency versions resolve.
+
+Report registry versions and CI evidence from queries, not a permanent prose status file.
+Do not claim end-to-end migration from lint or unit tests alone.
