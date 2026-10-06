@@ -1,3 +1,4 @@
+import ts from 'typescript'
 import { automatedDisclosure } from './review-comment.ts'
 
 /**
@@ -41,7 +42,7 @@ export interface PackageReleaseInput {
   currentVersion: string
   packageName: string
   commits: string[]
-  files: Array<{ filename: string, patch: string }>
+  files: Array<{ filename: string, patch: string, source?: { before: string, after: string } }>
   complete: boolean
 }
 
@@ -81,6 +82,59 @@ export function planPackageReleaseBeforeMerge(input: Omit<PackageReleaseInput, '
   return classifyPackageRelease(input, { _tag: 'BeforeMerge' })
 }
 
+function hasIncompatibleDeclaration(file: PackageReleaseInput['files'][number]): boolean {
+  if (!/^-(?!-).*\b(?:export|defineProps|defineEmits)\b/m.test(file.patch))
+    return false
+  // Complete, pinned files preserve declaration scope and inferred return behavior.
+  if (file.source === undefined || /\.vue$/.test(file.filename) || /\b(?:defineProps|defineEmits)\b/.test(file.patch))
+    return true
+  const printer = ts.createPrinter()
+  if ([file.source.before, file.source.after].some(source => ts.transpileModule(source, { fileName: file.filename, reportDiagnostics: true }).diagnostics?.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)))
+    return true
+  const before = ts.createSourceFile(file.filename, file.source.before, ts.ScriptTarget.Latest, true)
+  const after = ts.createSourceFile(file.filename, file.source.after, ts.ScriptTarget.Latest, true)
+  const exported = (source: ts.SourceFile) => source.statements.filter(node => ts.isExportDeclaration(node) || ts.isExportAssignment(node)
+    || (ts.canHaveModifiers(node) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)))
+  const print = (node: ts.Node, source: ts.SourceFile) => printer.printNode(ts.EmitHint.Unspecified, node, source)
+  const returnsVoid = (body: ts.Block) => {
+    let voidOnly = true
+    const visit = (node: ts.Node): void => {
+      if (ts.isFunctionLike(node))
+        return
+      if ((ts.isReturnStatement(node) && node.expression !== undefined) || ts.isYieldExpression(node))
+        voidOnly = false
+      ts.forEachChild(node, visit)
+    }
+    visit(body)
+    return voidOnly
+  }
+  if (exported(before).length === 0)
+    return true
+  return exported(before).some((old) => {
+    if (!ts.isFunctionDeclaration(old) || old.name === undefined)
+      return !exported(after).some(node => print(node, after) === print(old, before))
+    const identity = (node: ts.FunctionDeclaration, source: ts.SourceFile) => JSON.stringify([
+      node.name?.text,
+      node.asteriskToken?.kind,
+      node.modifiers?.map(modifier => print(modifier, source)),
+      node.typeParameters?.map(parameter => print(parameter, source)),
+      node.type === undefined ? null : print(node.type, source),
+    ])
+    return !exported(after).some((node) => {
+      if (!ts.isFunctionDeclaration(node) || identity(old, before) !== identity(node, after)
+        || node.parameters.length < old.parameters.length
+        || !old.parameters.every((parameter, index) => print(parameter, before) === print(node.parameters[index]!, after))
+        || !node.parameters.slice(old.parameters.length).every(parameter => parameter.questionToken !== undefined || parameter.initializer !== undefined)) {
+        return false
+      }
+      if (old.body === undefined || node.body === undefined)
+        return old.body === node.body
+      return old.type !== undefined || (old.parameters.length === node.parameters.length && print(old.body, before) === print(node.body, after))
+        || (returnsVoid(old.body) && returnsVoid(node.body))
+    })
+  })
+}
+
 function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sourceIncluded' | 'sourceSha' | 'mergeSha'>, phase: { _tag: 'BeforeMerge' } | { _tag: 'Available', sourceSha: string, mergeSha: string }): PackageReleaseOffer {
   const unavailable = (reason: string): PackageReleaseOffer => ({ _tag: 'Unavailable', reason })
   if (!input.complete)
@@ -93,7 +147,7 @@ function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sou
     return unavailable('Breaking changes require a manual release.')
   // Missing annotations must not hide an obvious public API removal.
   if (input.files.some(file => /\.(?:[cm]?[jt]sx?|vue)$/.test(file.filename)
-    && /^-(?!-).*\b(?:export|defineProps|defineEmits)\b/m.test(file.patch))) {
+    && hasIncompatibleDeclaration(file))) {
     return unavailable('A public API changed. Check compatibility before releasing.')
   }
   const type = /^(feat|fix|perf)(?:\([^\n]*\))?:/i.exec(input.title)?.[1]?.toLowerCase()
