@@ -3,6 +3,7 @@ import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase } from './agent-progress.ts'
 import type { GitHubAgentSource } from './github-agent-source.ts'
+import type { GitHubMediaSource } from './github-media.ts'
 import type { Result } from './result.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore } from './store.ts'
@@ -12,6 +13,7 @@ import { createHash } from 'node:crypto'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, GITHUB_MEDIA_LINES, instructionFilesLine, listInstructionFiles, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
+import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -46,6 +48,7 @@ interface AgentResponsePayload {
 }
 
 export interface ReviewFixWorkerOptions {
+  mediaSource?: GitHubMediaSource
   activityLog?: Pick<AgentActivityLog, 'record'>
   /**
    * Harlan's Claude Code home, which holds the per-repository memory.
@@ -234,12 +237,14 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         ? null
         : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
 
+      const media = await snapshotMedia(options.mediaSource, task.repository, snapshot.value, signal)
       const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
+        media: media.images,
         freshSession: true,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
         progress: { current: agentPhase('WorktreeReady', 'Repair worktree ready'), report: progress, work: 'fix' },
-        prompt: reviewFixPrompt({ task, findings, instructionFiles, memory }),
+        prompt: `${reviewFixPrompt({ task, findings, instructionFiles, memory })}\nUntrusted current pull request intent as JSON:\n${JSON.stringify({ title: snapshot.value.pullRequest.title, body: snapshot.value.body.slice(0, 12_000), bodyTruncated: snapshot.value.body.length > 12_000 })}\n${mediaEvidenceLines(media)}`,
         repository: task.repository,
         role: 'review_fix',
         schema: outputSchema,

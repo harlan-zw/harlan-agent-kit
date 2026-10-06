@@ -5,6 +5,8 @@
  * activity, and progress never see a vendor event shape.
  */
 
+import type { AgentMedia } from './github-media.ts'
+
 export type AgentProviderName = 'codex' | 'opencode'
 
 /** Keeps the failure owner intact after workers persist only its reason. */
@@ -69,6 +71,8 @@ export function agentTextEvent(text: string): Extract<AgentEvent, { _tag: 'Messa
 }
 
 export interface AgentTurnRequest {
+  /** Bounded image pixels fetched by the controller, portable across hosts. */
+  media?: readonly AgentMedia[]
   /**
    * Absolute instruction files this turn adds to the shared Agent context.
    *

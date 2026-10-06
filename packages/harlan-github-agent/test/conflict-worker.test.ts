@@ -12,6 +12,14 @@ const resolved = {
   commitMessage: 'merge: reconcile parser changes',
 }
 
+it('supplies conflict intent instead of asking a public-only CLI for private metadata', () => {
+  const task = conflictTask(repositoryMapping(), { ...pullRequestItem(), title: 'Preserve parser ordering', body: 'Keep the new ordering while merging configuration.' })
+  const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict', conflictedFiles: ['src/parser.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
+  expect(prompt).toContain('Preserve parser ordering')
+  expect(prompt).toContain('Keep the new ordering while merging configuration.')
+  expect(prompt).toContain('public reads only')
+})
+
 function conflictTask(repository = repositoryMapping(), pullRequest = pullRequestItem({ baseSha: 'previous-base' })) {
   return {
     id: 'task-1',

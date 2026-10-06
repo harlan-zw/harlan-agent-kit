@@ -9,6 +9,7 @@ import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { opencodeTurnEnvironment } from './agent-context.ts'
 import { advanceContextBudget, agentProviderFailureReason, agentTextEvent, contextBudgetWrapUpPrompt, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
+import { materializeAgentMedia } from './github-media.ts'
 import { err, ok } from './result.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
@@ -254,11 +255,12 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
  * it, which is never the worktree this turn prepared, and the process then
  * stays alive after its loop ends. Each turn therefore carries its own context.
  */
-export function opencodeArguments(request: AgentTurnRequest, prompt: string, serverUrl: string): string[] {
+export function opencodeArguments(request: AgentTurnRequest, prompt: string, serverUrl: string, mediaPaths: readonly string[] = []): string[] {
   return [
     'run',
     '--attach',
     serverUrl,
+    ...(mediaPaths.length === 0 ? [] : ['--file', ...mediaPaths]),
     '--format',
     'json',
     '--auto',
@@ -283,7 +285,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     stdio: ['ignore', 'pipe', 'pipe'],
   }))
 
-  async function* runOnce(request: AgentTurnRequest, prompt: string): AsyncGenerator<AgentEvent> {
+  async function* runOnce(request: AgentTurnRequest, prompt: string, mediaPaths: readonly string[] = []): AsyncGenerator<AgentEvent> {
     // The worktree's seeded .env carries the tokens its own scripts read.
     // This turn's own instruction files, such as the repository memory index,
     // merge on top of the shared OpenCode configuration.
@@ -302,7 +304,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     }
     const server = started.value
     const child = spawnOpencode(
-      opencodeArguments(request, prompt, server.url),
+      opencodeArguments(request, prompt, server.url, mediaPaths),
       request.workspace,
       { ...turnEnvironment.value, ...serverCredentials(server.password) },
     )
@@ -436,9 +438,17 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
 
   return {
     name: 'opencode',
-    runTurn: (request: AgentTurnRequest) => runOnce(request, `${request.prompt}
+    runTurn: (request: AgentTurnRequest) => (async function* () {
+      const media = await materializeAgentMedia(request.media)
+      try {
+        yield* runOnce(request, `${request.prompt}
 
-${jsonOutputInstruction(request.outputSchema)}`),
+${jsonOutputInstruction(request.outputSchema)}`, media.paths)
+      }
+      finally {
+        await media.release()
+      }
+    })(),
   }
 }
 

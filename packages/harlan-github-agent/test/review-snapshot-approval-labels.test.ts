@@ -6,13 +6,14 @@ import { repositoryMapping } from './fixtures.ts'
 
 const baseSha = 'b'.repeat(40)
 
-function client(labels: string[]): Octokit {
+function client(labels: string[], comments: Array<{ user: { login: string }, body: string }> = []): Octokit {
+  const issuesComments = () => undefined
   return {
-    paginate: () => Promise.resolve([]),
+    paginate: (method: unknown) => Promise.resolve(method === issuesComments ? comments.map((comment, index) => ({ ...comment, id: index, created_at: '2026-08-13T00:00:00.000Z', html_url: 'https://github.com/harlan-zw/example/pull/24' })) : []),
     rest: {
       actions: { getJobForWorkflowRun: () => Promise.reject(new Error('Unexpected job lookup.')) },
       checks: { listForRef: () => undefined },
-      issues: { listComments: () => undefined },
+      issues: { listComments: issuesComments },
       pulls: {
         get: () => Promise.resolve({
           data: {
@@ -20,7 +21,8 @@ function client(labels: string[]): Octokit {
             state: 'open',
             merged_at: null,
             title: 'Fix the broken thing',
-            body: 'Fixes the bug.',
+            body: '![Before](https://github.com/user-attachments/assets/a)',
+            body_html: '<img src="https://private-user-images.githubusercontent.com/a.svg?jwt=fixture-read-grant" alt="Before">',
             user: { login: 'harlan-zw' },
             html_url: 'https://github.com/harlan-zw/example/pull/24',
             created_at: '2026-08-01T00:00:00.000Z',
@@ -62,6 +64,16 @@ describe('review snapshot approval labels', () => {
 
     expect(result).toEqual(ok(expect.objectContaining({
       pullRequest: expect.objectContaining({ approvalLabels: ['review'] }),
+      imageReferences: [{ url: 'https://private-user-images.githubusercontent.com/a.svg?jwt=fixture-read-grant', source: 'https://github.com/user-attachments/assets/a', label: 'Before' }],
     })))
   })
+})
+
+it('selects only the pull request author comments for image evidence', async () => {
+  const source = createGitHubAgentSource({ actorLogin: () => 'bot', ownAppId: 98114, createClient: () => client([], [
+    { user: { login: 'harlan-zw' }, body: '![Before](https://github.com/user-attachments/assets/a)' },
+    { user: { login: 'another-user' }, body: '![Untrusted image](https://github.com/user-attachments/assets/b)' },
+  ]), tokens: { getToken: () => Promise.resolve(ok({ token: 'fixture', expiresAt: '2027-01-01' })), invalidate: () => undefined } })
+  const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+  expect(result).toEqual(ok(expect.objectContaining({ authorComments: ['![Before](https://github.com/user-attachments/assets/a)'] })))
 })

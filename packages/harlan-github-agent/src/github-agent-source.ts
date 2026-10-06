@@ -1,6 +1,7 @@
 import type { Octokit } from 'octokit'
 import type { AgentLabelState } from './agent-label.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
+import type { MediaReference } from './github-media.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { NativeReviewPublisher } from './native-review.ts'
 import type { Result } from './result.ts'
@@ -14,6 +15,8 @@ import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseChecks, currentBaseSha } from './github-base.ts'
+
+import { renderedMediaReferences } from './github-media.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
@@ -162,6 +165,10 @@ export type RequiredChecks
     | { _tag: 'Unavailable', reason: string }
 
 export interface PullRequestReviewSnapshot {
+  /** Controller-only signed retrieval URLs. Never serialize into Agent prompts or evidence. */
+  imageReferences?: MediaReference[]
+  /** Raw image-bearing comments by the pull request author only. */
+  authorComments?: string[]
   baseChecks: GitHubChecksSnapshot
   body: string
   checks: GitHubChecksSnapshot
@@ -504,6 +511,7 @@ function pullRequestItem(
     state: pull.state === 'closed' ? 'closed' : 'open',
     mergedAt: pull.merged_at,
     title: pull.title,
+    body: pull.body ?? '',
     author: pull.user?.login ?? 'ghost',
     url: pull.html_url,
     createdAt: pull.created_at,
@@ -1044,10 +1052,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, pull_number: pullRequestNumber, request: { signal } }
+      const request = { owner, repo, pull_number: pullRequestNumber, request: { signal }, headers: { accept: 'application/vnd.github.full+json' } }
       return Promise.all([
         octokit.value.rest.pulls.get(request),
-        octokit.value.paginate(octokit.value.rest.issues.listComments, { owner, repo, issue_number: pullRequestNumber, per_page: 100, request: { signal } }),
+        octokit.value.paginate(octokit.value.rest.issues.listComments, { owner, repo, issue_number: pullRequestNumber, per_page: 100, request: { signal }, headers: { accept: 'application/vnd.github.full+json' } }),
         octokit.value.paginate(octokit.value.rest.pulls.listReviews, { ...request, per_page: 100 }),
         octokit.value.paginate(octokit.value.rest.pulls.listReviewComments, { ...request, per_page: 100 }),
       ]).then(async ([pull, issueComments, reviews, reviewComments]) => {
@@ -1065,6 +1073,11 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         return ok({
           baseChecks,
           body: pull.data.body ?? '',
+          imageReferences: [
+            ...renderedMediaReferences(pull.data.body ?? '', 'body_html' in pull.data && typeof pull.data.body_html === 'string' ? pull.data.body_html : undefined),
+            ...[...issueComments, ...reviewComments].flatMap(comment => typeof pull.data.user?.login === 'string' && comment.user?.login.toLowerCase() === pull.data.user.login.toLowerCase() && typeof comment.body === 'string' ? renderedMediaReferences(comment.body, comment.body_html) : []),
+          ],
+          authorComments: [...issueComments, ...reviewComments].flatMap(comment => typeof pull.data.user?.login === 'string' && comment.user?.login.toLowerCase() === pull.data.user.login.toLowerCase() && typeof comment.body === 'string' ? [comment.body] : []),
           checks,
           comments: chronologicalPullRequestComments([
             ...issueComments.flatMap(comment => comment.body === undefined || comment.body === null

@@ -1,6 +1,6 @@
 import type { ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -68,6 +68,40 @@ describe('codexAgentEvent', () => {
 })
 
 describe('createCodexProvider', () => {
+  it.each(['complete', 'cancel', 'fail'])('attaches pixels outside the Worktree and cleans them after %s', async (outcome) => {
+    let path = ''
+    const image = { mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Before: diagram', source: 'https://github.com/user-attachments/assets/a' }
+    const provider = createCodexProvider({ createCodex: () => ({ startThread: () => ({ runStreamed: async (input) => {
+      if (typeof input === 'string')
+        throw new Error('Pixel attachment missing.')
+      const attachment = input.find(part => part.type === 'local_image')
+      if (attachment?.type !== 'local_image')
+        throw new Error('Pixel attachment missing.')
+      path = attachment.path
+      expect(path.startsWith('/tmp/worktree')).toBe(false)
+      expect(await readFile(path)).toEqual(Buffer.from(image.data, 'base64'))
+      return { events: (async function* () {
+        yield messageEvents[0]!
+        if (outcome === 'fail')
+          throw new Error('Fixture failure.')
+        yield* messageEvents.slice(1)
+      })() }
+    } }), resumeThread: () => { throw new Error('Unexpected resume.') } }) })
+    const events = provider.runTurn(request({ media: [image] }))
+    if (outcome === 'cancel') {
+      const iterator = events[Symbol.asyncIterator]()
+      await iterator.next()
+      await iterator.return?.()
+    }
+    else if (outcome === 'fail') {
+      await expect(collect(events)).rejects.toThrow('Fixture failure.')
+    }
+    else {
+      await collect(events)
+    }
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('starts Codex with the worktree .env layered over the service environment', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'codex-env-'))
     await writeFile(join(workspace, '.env'), 'CLOUDFLARE_API_TOKEN=from-repo\n')

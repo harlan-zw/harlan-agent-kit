@@ -124,7 +124,11 @@ The default returns actionable work only after Service Tasks stop owning that he
 Use `--timeout-seconds` for a bounded wait. Reconnect with the same command after a Service restart.
 Follow [pull request watching](../pr/references/pull-request-watch.md) for the submitting Agent's completion contract.
 
-Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and authenticated `gh` client.
+Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and a public-read-only `gh` wrapper. Private reads and GitHub writes stay in the controller.
+Review and Repair receive current snapshots and bounded image pixels on both worker hosts.
+Conflict resolution receives current pull request intent. Other roles report missing private evidence.
+SVG images arrive as PNG pixels. Missing read permission becomes an evidence limitation.
+Workers never request tokens or bypass the wrapper to fetch private evidence.
 
 `agent.provider` names the Agent provider the service starts with. It defaults to `codex`.
 
@@ -202,7 +206,7 @@ harlan-github-agent control status --config "$agent_config" | jq '.state.restart
 `conflict_resolution: true` permits a repository to queue conflict work. `mutations_enabled: true` lets the controller run and publish it.
 Maintained repositories may enable conflict resolution explicitly. Keep author, branch, and Approval checks in place.
 
-Prefer a GitHub App installation for selected repositories. If a maintained repository has no installation, require an explicit Repository mapping before Issue work. Use Harlan's authenticated GitHub account for that repository. Workers may use the authenticated `gh` client for research.
+Prefer a GitHub App installation for selected repositories. If a maintained repository has no installation, require an explicit Repository mapping before Issue work. Use Harlan's authenticated GitHub account for that repository. That account remains controller-only. Workers use supplied snapshots for private evidence and the public `gh` wrapper for research.
 
 Enable the global mutation switch only after repository mappings and publication checks pass.
 

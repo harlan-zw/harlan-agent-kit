@@ -421,17 +421,18 @@ export const PULL_REQUEST_BODY_LINES = `Pull request description rules:
 - No em dashes. Plain words. No "this means that" takeaway.`
 
 /**
- * How an Agent retrieves pull request images. A private repository serves
- * `github.com/user-attachments` URLs as 404 without a token, so a retry keyed
- * on one URL shape read real evidence as missing. Sending the token on every
- * GitHub-hosted fetch removes the retry, and curl drops the header on the
- * cross-host redirect to the signed media URL.
+ * Images arrive as controller-fetched pixels on either host. Worker credentials
+ * cannot retrieve private evidence, so the controller owns that boundary.
  */
-export const GITHUB_MEDIA_LINES = `Download images only from GitHub-hosted media URLs (github.com/user-attachments, user-images.githubusercontent.com, private-user-images.githubusercontent.com, and other github.com-hosted media paths).
-Fetch each one with the authenticated GitHub CLI token: curl -fsSL -H "Authorization: token $(gh auth token)" URL. A private repository answers 404 without it. curl drops the header on the cross-host redirect.
-Sending an Authorization header to a GitHub-hosted media URL is not an external credential transfer. Never send repository credentials to any other host.
-Download images only to a temporary directory outside the worktree.`
+export const GITHUB_MEDIA_LINES = `The controller supplies image pixels and identifies their source and labels. Inspect every attached image.
+SVG evidence arrives as rendered PNG pixels. Respect Before labels as historical evidence.
+For any unavailable image, use the controller's retrieval reason and return a material documentation finding.
+Never request credentials, use gh auth token, or bypass the worker GitHub CLI to retrieve private images.
+The worker GitHub CLI supports public reads only. Use the supplied snapshot for private metadata.
+Do not retry another repository slug or credential after a private read fails.`
 
 /** Toolchain rules for every Agent turn that may run a command. */
 export const TOOLCHAIN_LINES = `Use pnpm for every package command. Never use npx.
+The worker GitHub CLI supports public reads only. When a controller snapshot is supplied, use it for private repository evidence.
+If required private evidence is missing, report that limitation. Do not request credentials or bypass the worker CLI.
 Never add debug output to tracked files.`

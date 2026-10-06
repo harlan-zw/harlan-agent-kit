@@ -44,6 +44,7 @@ import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } f
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
+import { createGitHubMediaSource } from './github-media.ts'
 import { createGitHubRateLimitGate } from './github-rate-limit.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
@@ -577,6 +578,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     source,
   })
   const tokens = gatedTokens(routedTokens)
+  const mediaSource = createGitHubMediaSource({ tokens: routedTokens, fetch: globalThis.fetch })
   const legacyUserTokens = gatedTokens(userTokens)
   const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff })
   const pullRequestStatuses = createPullRequestStatusController({
@@ -777,6 +779,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       workerId: randomUUID(),
     })
     const subjectWorkerOptions = {
+      mediaSource,
       activityLog,
       claudeHome: agentContext.value.claudeHome,
       github: workerGithub,
@@ -993,6 +996,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           accesses: ['item_write', 'contents_write'],
           source: tokens,
           worker: createReviewFixWorker({
+            mediaSource,
             activityLog,
             claudeHome: agentContext.value.claudeHome,
             github: workerGithub,

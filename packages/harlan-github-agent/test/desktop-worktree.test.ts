@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
+import { createCodexProvider } from '../src/codex-provider.ts'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { executeDesktopTurn } from '../src/desktop-execute.ts'
 import { DESKTOP_PROTOCOL } from '../src/desktop-protocol.ts'
@@ -476,4 +477,35 @@ it('runs the turn on Hogwild when the desktop fails before its Agent starts', as
   local = 1
 
   expect(await response).toEqual({ done: false, value: { _tag: 'Message', text: 'hogwild' } })
+})
+
+it('delivers portable pixel evidence to the desktop provider and removes local files', async () => {
+  const f = await fixture()
+  const initial = await exportDesktopWorktree(f.repository, f.transfer)
+  const image = { mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Before: diagram', source: 'https://github.com/user-attachments/assets/a' }
+  let attachmentPath = ''
+  let providerWorkspace = ''
+  const provider = createCodexProvider({ createCodex: () => ({
+    startThread: (options) => {
+      providerWorkspace = options.workingDirectory!
+      return { runStreamed: async (input) => {
+        if (typeof input === 'string')
+          throw new Error('Missing pixels.')
+        const attachment = input.find(part => part.type === 'local_image')
+        if (attachment?.type !== 'local_image')
+          throw new Error('Missing pixels.')
+        attachmentPath = attachment.path
+        expect(await readFile(attachmentPath)).toEqual(Buffer.from(image.data, 'base64'))
+        return { events: (async function* () {
+          yield { type: 'turn.completed' as const, usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }
+        })() }
+      } }
+    },
+    resumeThread: () => { throw new Error('Unexpected resume.') },
+  }) })
+  const turn = JSON.parse(JSON.stringify({ id: 'media-turn', provider: 'codex', request: { model: 'test', outputSchema: {}, prompt: 'Inspect pixels.', workspace: f.repository, sessionId: null, media: [image] }, worktree: initial })) as DesktopTurn
+  await executeDesktopTurn({ turn, directory: join(f.root, 'execution'), repositories: join(f.root, 'repositories'), provider, signal: new AbortController().signal, emit: () => {} })
+  expect(providerWorkspace).not.toBe(f.repository)
+  expect(attachmentPath.startsWith(providerWorkspace)).toBe(false)
+  await expect(readFile(attachmentPath)).rejects.toMatchObject({ code: 'ENOENT' })
 })
