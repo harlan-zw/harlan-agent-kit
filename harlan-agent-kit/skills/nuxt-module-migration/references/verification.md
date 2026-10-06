@@ -2,8 +2,9 @@
 
 ## Keep existing tests
 
-Keep the original unit suite and reusable workflows close to their current form.
-Run required checks on Node 22.22.3. Do not add a Node matrix without an explicit requirement.
+Keep original test files and assertions. Make only changes required by migrated APIs or dependency upgrades.
+Keep reusable workflows close to their current form.
+Run required checks on Node 22.22.3. Remove test matrices and use one configuration per job.
 Run pull request checks once. Restrict push checks to main and ignore Markdown by default.
 Retain lint, typecheck, build, and test jobs. Preserve services required by existing tests.
 
