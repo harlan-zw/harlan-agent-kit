@@ -39,6 +39,7 @@ describe('package releases', () => {
     ['export function read(value: string) {', 'export function rename(value: string) {'],
     ['export async function read(value: string) {', 'export function read(value: string) {'],
     ['export function read(value: string, options?: Headers) {', 'export function read(value: string) {'],
+    ['export function read(value: string) { return 1 }', 'export function read(value: string) { return "changed" }'],
   ])('requires manual release for an incompatible function: %s', (before, after) => {
     expect(planPackageRelease({ ...input, files: [{ filename: 'src/index.ts', patch: `-${before}\n+${after}` }] }))
       .toMatchObject({ _tag: 'Unavailable', reason: 'A public API changed. Check compatibility before releasing.' })

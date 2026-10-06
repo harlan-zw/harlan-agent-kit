@@ -95,7 +95,7 @@ function hasIncompatibleDeclaration(patch: string): boolean {
     }
     const print = (value: ts.Node) => printer.printNode(ts.EmitHint.Unspecified, value, source)
     return {
-      identity: [node.name.text, node.asteriskToken?.kind, node.modifiers.map(print), node.typeParameters?.map(print), node.type === undefined ? null : print(node.type)],
+      identity: [node.name.text, node.asteriskToken?.kind, node.modifiers.map(print), node.typeParameters?.map(print), node.type === undefined ? null : print(node.type), print(node.body)],
       parameters: node.parameters.map(parameter => ({ text: print(parameter), optional: parameter.questionToken !== undefined || parameter.initializer !== undefined })),
     }
   }
