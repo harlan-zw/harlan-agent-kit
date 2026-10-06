@@ -63,6 +63,8 @@ Dropping Nuxt 3 does not remove Nitro 2. Nuxt 4.6 still uses it.
 Storage, cached handlers, tasks, database access, lazy handlers, and Nitro plugins need a separate audit.
 Audit third-party plugin internals too. A supported SDK version can still wrap Nitro 2-only `localFetch`.
 Nitro 3 exposes `fetch(Request)` instead. Preserve request isolation and error capture when adapting it.
+Sentry's request wrapper needs its AsyncLocalStorage strategy initialized when `withSentry` is absent.
+Prove concurrent requests retain different scope tags after an `await`.
 Fetch instrumentation must cover native app fetch and external fetch, rather than only `$fetch`.
 If instrumentation uses `useRequest()`, enable Nitro's `experimental.asyncContext` for that feature.
 Without it, native requests can succeed while request-scoped telemetry stays empty.
