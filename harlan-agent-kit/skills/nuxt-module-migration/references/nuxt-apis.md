@@ -160,7 +160,8 @@ Resolve paths relative to the generated configuration's base URL and normalize s
 Avoid rooted export declarations inside ambient modules.
 Parent aliases can still resolve deep imports across contexts. Scoped path registration does not enforce an import ban.
 Prove consumer imports with the real parent aliases present, rather than an artificially isolated namespace.
-Test packed app SSR output, server requests, and generated app and server types on all three Nuxt lanes.
+Test app SSR output, server requests, and generated app and server types on Nuxt 4.6 and actual Nuxt 5.
+Use packed consumers when package boundary changes need additional proof. Follow the verification reference for required checks.
 Keep disabled and mocked module behavior consistent with existing public functions.
 
 ## Types and Kit
