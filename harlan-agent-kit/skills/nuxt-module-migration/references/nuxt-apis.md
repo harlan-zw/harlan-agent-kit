@@ -167,6 +167,8 @@ Use `RequestEventContext` for fields on `event.context`.
 Audit `NuxtRequestContext`, `AppRouteRules`, `RuntimeConfig`, `ServerRoutes`, and `NuxtServerHooks`.
 Prefer one augmentation of `@nuxt/schema`; `nuxt/schema` mirrors its public types.
 Retain builder-specific augmentation only for builder-specific contracts.
+Generate custom Nitro hook augmentations for the selected builder.
+Exercise registrations without `as never` so type mismatches remain visible.
 Use `addServerTemplate` for server virtual files and the appropriate `addTypeTemplate` context for declarations.
 Register server declarations with `{ nuxt: true, nitro: true }` when generated API route types include their server files.
 The app compiler then needs the same request context and hook augmentations as the server compiler.

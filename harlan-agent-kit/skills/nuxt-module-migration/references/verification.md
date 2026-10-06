@@ -21,6 +21,8 @@ The future flag does not upgrade Nitro on Nuxt 4.
 Source: [versioned Nuxt upgrade guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/1.getting-started/18.upgrade.md#testing-nuxt-5).
 
 Run the Node 22.22.3 floor and a supported newer LTS for the stable Nuxt lanes.
+Run server-only unit tests in Node, rather than a browser emulator.
+Node 22's prefix-only `node:sqlite` can fail Vite resolution in browser environments.
 Use a supported Node version for the exact Nuxt 5 nightly.
 If claiming Windows tooling support, run filesystem and resolution cases there.
 Exercise Cloudflare or other supported edge targets where server code changes.
