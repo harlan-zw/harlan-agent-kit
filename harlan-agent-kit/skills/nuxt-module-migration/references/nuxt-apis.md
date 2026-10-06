@@ -61,6 +61,11 @@ Sources: [server imports](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/
 
 Dropping Nuxt 3 does not remove Nitro 2. Nuxt 4.6 still uses it.
 Storage, cached handlers, tasks, database access, lazy handlers, and Nitro plugins need a separate audit.
+Audit third-party plugin internals too. A supported SDK version can still wrap Nitro 2-only `localFetch`.
+Nitro 3 exposes `fetch(Request)` instead. Preserve request isolation and error capture when adapting it.
+Cloudflare request bindings now live under `req.runtime.cloudflare`, with the execution context beside the environment.
+Do not rely only on Nitro 2 context layouts or the isolate-wide environment.
+A legacy h3 event also has `req` and `res`. Check header capabilities before treating them as portable objects.
 If storage never uses watchers, audit whether `unstorage`'s `fs-lite` driver preserves its persistence contract.
 The full `fs` driver can introduce an optional `chokidar` dependency during server bundling.
 Use `addNitroPlugin` for Nitro plugin registration.
@@ -74,7 +79,19 @@ Do not retain a legacy handler just to support Nuxt releases below the new minim
 | Caching | `nitropack/runtime` | `nitro/cache` |
 | Plugins | `defineNitroPlugin` from `nitropack/runtime` | `definePlugin` from `nitro` |
 | Nitro hooks | `useNitroApp().hooks` | `useNitroHooks()` from `nitro/app` |
+| Response hook | `afterResponse(event, response)` | `response(response, event)` |
 | Lazy handlers | `h3` | `nitro/h3` |
+
+Nitro 3 has no `beforeResponse` or `afterResponse` lifecycle hook.
+Its response hook receives the final `Response` before the request event.
+Mutate that response's headers when changing the output sent to the client.
+Do not assume `event.res.headers` still owns those final headers.
+
+Nitro 3 uses `HookableCore`, which has no `callHookParallel` or `callHookWith`.
+Serial `callHook` stops after a rejected handler.
+Preserve independent drains when one sink fails. Exercise both sinks in a real server.
+Do not cast a missing dispatch method into existence.
+Initialize any dispatcher adapter before application plugins register their drains.
 
 Keep renderer hooks separate from request and response lifecycle hooks.
 Preserve Node streaming behavior and edge response behavior when moving compression or body transforms.
@@ -162,6 +179,29 @@ Sources: [Kit exports](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/kit/src
 [template schema](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/schema/src/types/nuxt.ts),
 [dependency installation](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/kit/src/dependency.ts),
 [layer directories](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/kit/src/layers.ts).
+
+## Fetch and AsyncData addons
+
+Use `createUseFetch` and `createUseAsyncData` when a wrapper adds state to Nuxt's data object.
+Import these factories and addon makers from `#imports` in runtime composables.
+Nuxt 4.6 does not export these runtime factories from `nuxt/app`.
+Its compiler recognizes exported top-level factory declarations.
+An untransformed factory throws instead of creating a composable.
+
+Return wrapper properties from `defineUseFetchAddon` or `defineUseAsyncDataAddon` setup.
+Nuxt attaches them to both the returned promise and the awaited data object.
+Directly assigning properties to the promise can lose them after `await`.
+Type the augmented promise as resolving to the extended data object too.
+Intersecting extensions with an existing `AsyncData` promise can leave `Awaited` unchanged.
+Build declarations and check packed subpath exports after adding factory macros.
+Use named public types when inference would expose private Nuxt paths.
+Add a real Nuxt regression for both URL and handler wrappers.
+Preserve middleware, deadlines, hydration, stale data, and request context while adopting addons.
+Use Nuxt-owned `TypedFetchRequest` and `TypedServerResponse` types for route inference.
+Keep `experimental.routeTypedFetch` scoped to a fixture when exercising that feature.
+
+Sources: [addon implementation](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/nuxt/src/app/composables/addons.ts),
+[factory transform](https://github.com/nuxt/nuxt/blob/v4.6.0/packages/nuxt/src/compiler/plugins/keyed-function-factories.ts).
 
 ## Earlier 4.x opportunities
 

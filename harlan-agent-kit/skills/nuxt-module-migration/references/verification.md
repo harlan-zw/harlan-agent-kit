@@ -34,6 +34,8 @@ An authenticated CLI alone must not enable a deployment test.
 ## Packed consumers
 
 Build and pack the producer before testing consumers.
+Run packing after checks that rebuild the same package finish.
+Concurrent prepack hooks can delete artifacts that another check is loading.
 Use isolated fixtures outside the workspace dependency graph.
 Install only the tarballs and documented consumer dependencies.
 Avoid `link:` fixtures as the only proof of published exports and dependencies.
@@ -55,6 +57,13 @@ A reused tarball path can preserve stale package-manager cache entries.
 Put temporary tarball overrides in `pnpm-workspace.yaml` with pnpm 12.
 Do not assume `package.json#pnpm.overrides` changes the resolved graph.
 Pass cross-repository artifacts through `NUXT_TEST_TARBALLS`, a package-to-absolute-path JSON map.
+Copy the repository's pinned `packageManager` into isolated fixtures too.
+A different pnpm major can enforce a different dependency trust decision.
+If resolution hangs, reproduce it with a minimal pinned consumer before changing dependencies.
+Nuxt 5 nightly resolution stalled on pnpm 11.2 and completed on 11.22 during the Harlan Nuxt migration.
+Pin the affected lane to a verified package manager version that fixes resolution.
+Check every lane before changing the repository's package manager pin.
+Keep the same supply-chain policy.
 Copy the repository's existing trust age policy and approved build scripts into isolated fixtures.
 Keep exact approved trust exceptions. Never disable the policy to make tests pass.
 Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
@@ -89,6 +98,10 @@ Assert behavior rather than files, symbol existence, or exact key counts.
 Tests can share fixtures where they exercise the same contract.
 Cover optional integrations in targeted lanes rather than multiplying every combination.
 Use a failing test first for defects discovered during migration.
+Construct a real `Request` when testing a portable body handler.
+Legacy `_body` or Node event mocks do not exercise the portable parsing boundary.
+Align Vite versions across producers and Nuxt test fixtures before investigating generated type errors.
+Different Vite and PostCSS graphs can produce incompatible plugin types.
 
 ## Coordinated release
 
