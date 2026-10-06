@@ -85,6 +85,7 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 - Find and search files: ripgrep (`rg`).
 - Rename, move, or import update spanning 2+ files: `pnpm dlx @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
+- Before using Ripast, read its skilld-managed `ripast` Skill. Use `pnpm check:skills` to check the shared installation.
 - Browser testing and automation: `dev-browser` (`--help`). Always pass `--headless` for unattended tests, even with `$DISPLAY`.
 - Launch dedicated Agent and Clients Chrome headless with `harlan-browser open <identity>`. Visible work requires an explicit user request.
 - `--headless` does not hide attached Chrome. Use `harlan-browser connect` to enforce headless connections. Never bring tabs to the foreground.
@@ -187,7 +188,7 @@ Every commit subject follows Conventional Commits: `type(scope): description`.
 ## Reference material
 
 Personal rubrics and procedures live in `~/pkg/harlan-agent-kit/harlan-agent-kit/skills/*/SKILL.md`.
-Brundlefly owns the portable Skills declared in `.skills/skilld.json`.
+Brundlefly and Ripast provide the portable Skills declared in `.skills/skilld.json`.
 Run `pnpm sync:skills` in Harlan Agent Kit to install them through skilld.
 Run `pnpm check:skills` to check their sources, Agent targets, and required Skills.
 Use personal `pr` for delivery. Its Hooks and Service policy take precedence over general pull request guidance.

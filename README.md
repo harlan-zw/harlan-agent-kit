@@ -109,7 +109,9 @@ Start a new Codex thread after a reinstall, otherwise the new Skills stay unload
 ## Skills
 
 Personal Skills live in [`harlan-agent-kit/skills/`](./harlan-agent-kit/skills).
-Portable Skills come from [Brundlefly](https://github.com/harlan-zw/brundlefly).
+Portable Skills come from [Brundlefly](https://github.com/harlan-zw/brundlefly) and [Ripast](https://github.com/harlan-zw/ripast).
+The [Ripast skill](https://github.com/harlan-zw/ripast/blob/main/packages/cli/skills/ripast/SKILL.md) lives in Ripast's repository.
+The declaration pins its source commit.
 Run `pnpm sync:skills` to install the declared Skills through skilld.
 Use a skilld CLI that supports `skilld sync`.
 Private Brundlefly delivery requires skilld authentication and GitHub App access.
@@ -158,7 +160,6 @@ Personal `pr` owns Hooks, publication, Review, and Service policy.
 | [`pr-lens`](./harlan-agent-kit/skills/pr-lens/SKILL.md) | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev) |
 | [`pr-triage`](./harlan-agent-kit/skills/pr-triage/SKILL.md) | Repair, rank, and order the owned PR backlog |
 | [`release-notes`](./harlan-agent-kit/skills/release-notes/SKILL.md) | Draft changelogs, release notes, and upgrade guides |
-| [`ripast`](./harlan-agent-kit/skills/ripast/SKILL.md) | Run AST-aware refactors with [Ripast](https://github.com/harlan-zw/ripast) |
 | [`daily-checkin`](./harlan-agent-kit/skills/daily-checkin/SKILL.md) | Run nuxt-checkin and interpret site prompt items |
 | [`dependency-updates`](./harlan-agent-kit/skills/dependency-updates/SKILL.md) | Attempt weekly dependency updates, including majors, in one pull request |
 | [`ci-review`](./harlan-agent-kit/skills/ci-review/SKILL.md) | Review CI warnings and errors, then propose verified repairs |
