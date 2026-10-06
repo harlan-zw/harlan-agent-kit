@@ -90,13 +90,24 @@ Refresh framework test doubles for native addon factories and module-owned runti
 Import template-only constants explicitly when Nuxt no longer discovers them.
 Use native Nuxt fetch types at app boundaries. Mixed app and server globals can select Nitro's legacy route matcher.
 If that matcher recurses, bind client `$fetch` through `#imports` before adding response casts or experimental compiler settings.
+Verify runtime interceptors after binding native `$fetch`. A generated import can capture the client before a plugin replaces it.
+Exercise `.raw` and `.create` through the same runtime boundary. Type correctness alone does not prove plugin auth behavior.
 Response hooks can receive streamed bodies without a header map. Read head metadata before streaming and set headers on the event.
 Verify normal HTML, error responses, and linked stylesheet requests in the built Worker.
 If Rolldown emits missing SSR stylesheet chunks, test `features.inlineStyles: false` against that exact consumer graph.
 Keep stylesheet loading and HTTP asset checks in the workaround evidence.
 Apply exact age exceptions to local archives after publication too. Their registry timestamps can trigger fixture lock verification.
+Build each deployment preset from clean output. A prior preset's Markdown can corrupt the next preset's prerender inputs.
+Declare binaries used by deployment workflows directly. SDK upgrades can remove transitive CLI packages without breaking application builds.
+Before removing optional native packages, verify provider selection on the Node floor and production adapter.
+Isolate synthetic Git fixtures from host signing settings. Keep normal commit hooks and signing policies unchanged.
 
 Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
+Nuxt fetch route schemas can traverse server handlers from the shared project. Register virtual module declarations for that context.
+Use `addTypeTemplate(..., { nuxt: true, nitro: true, shared: true })` when the shared project imports the template.
+Compile generated projects after template generation. Keep the Nuxt instance's type hooks active when refreshing declarations.
+If plugin types recurse through client barrels, test a typed Vue injection key with `vueApp.runWithContext`.
+Keep one service access path. Verify missing-provider errors and transport failures without changing auth behavior.
 Check ESM package roots through Node 22 `require(ESM)` and Nuxt's Jiti configuration loader.
 An import-only exports map can fail those loaders. Add a compatible `default` ESM entry when needed.
 
