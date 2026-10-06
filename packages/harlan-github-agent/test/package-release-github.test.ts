@@ -209,7 +209,7 @@ it.each(['failure', 'cancelled', 'timed_out'])('records a completed %s release w
   store.saveReleaseOffer({ repository: mapping.github, pullRequestNumber: 24, plan, commentId: 99, body: '', policy: JSON.stringify(mapping) })
   store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', selected: true, requestId: 'select', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
   const source = { ...task.source, prepare: async () => ({ _tag: 'Publishing' as const, tag: 'v1.0.1', sha: 'c'.repeat(40) }) }
-  const run = () => reconcilePackageReleases({ webhookReady: true, commentControls: true, repository: mapping, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  const run = () => reconcilePackageReleases({ webhookReady: true, repository: mapping, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   await run()
   expect(store.listPackageReleases(mapping.github)[0]).toMatchObject({ plan: { version: '1.0.1' }, state: { _tag: 'Blocked', reason: 'Release workflow failed: https://github.com/run/1. Review that workflow before requesting recovery.' } })
   const writes = [...task.writes]
@@ -246,7 +246,7 @@ it('recreates a deleted release comment so one pass still advances the record', 
   const store = createPackageReleaseStore(new DatabaseSync(':memory:'))
   store.saveReleaseOffer({ repository: mapping.github, pullRequestNumber: 24, plan, commentId: 99, body: '', policy: JSON.stringify(mapping) })
   expect(store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', selected: true, requestId: 'select', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })).toBe(true)
-  await reconcilePackageReleases({ webhookReady: true, commentControls: true, repository: mapping, store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  await reconcilePackageReleases({ webhookReady: true, repository: mapping, store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   expect(task.writes.some(write => write.path === '/issues/24/comments')).toBe(true)
   expect(store.listPackageReleases(mapping.github)[0]?.state).toEqual({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })
 })
@@ -314,7 +314,7 @@ it('releases a preselected pull request only after merge and passing default bra
   task.openSource()
   const db = new DatabaseSync(':memory:')
   const store = createPackageReleaseStore(db)
-  const run = () => reconcilePackageReleases({ webhookReady: true, commentControls: true, repository: mapping, store: createPackageReleaseStore(db), source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  const run = () => reconcilePackageReleases({ webhookReady: true, repository: mapping, store: createPackageReleaseStore(db), source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   store.queuePackageReleaseCommand({ repository: mapping.github, pullRequestNumber: 24, commentId: 101, requestedBy: 'harlan-zw', bump: 'auto' })
   await run()
   await run()

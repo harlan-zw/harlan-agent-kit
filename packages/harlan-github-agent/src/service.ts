@@ -1326,7 +1326,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               await reconcilePackageReleases({
                 repository,
                 webhookReady: releaseWebhookReady,
-                commentControls: webhookControls.available(repository.github),
                 store,
                 now: () => now().getTime(),
                 signal,

@@ -34,7 +34,6 @@ export function packageReleaseStatus(record: PackageReleaseRecord): string {
 export async function reconcilePackageReleases(options: {
   repository: RepositoryMapping
   webhookReady: boolean
-  commentControls: boolean
   store: PackageReleaseStore
   source: (assertLease: () => void) => PackageReleaseSource
   now: () => number
@@ -60,8 +59,6 @@ export async function reconcilePackageReleases(options: {
     return { ...record, state, plan }
   }
   const report = async (record: PackageReleaseRecord): Promise<void> => {
-    if (!options.commentControls && ['Available', 'AwaitingMerge'].includes(record.state._tag))
-      return
     const body = packageReleaseStatus(record)
     if (record.body === body)
       return
@@ -117,8 +114,6 @@ export async function reconcilePackageReleases(options: {
       await report(record)
     }
     if (store.listPackageReleases(repository.github).some(record => ['Queued', 'Prepared', 'Publishing'].includes(record.state._tag)))
-      return
-    if (!options.commentControls)
       return
     const currentRecords = store.listPackageReleases(repository.github)
     const commands = store.listPackageReleaseCommands(repository.github)

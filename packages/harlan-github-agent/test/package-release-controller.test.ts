@@ -22,24 +22,27 @@ function setup() {
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
   }
-  const run = (webhookReady = true, commentControls = true) => reconcilePackageReleases({ webhookReady, commentControls, repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
   return { database, store, source, run, click }
 }
 
 describe('release controller', () => {
-  it('does not offer a release checkbox without repository comment delivery', async () => {
+  it('offers a checkbox before comment delivery and keeps one comment across restarts', async () => {
     const task = setup()
-    await task.run(true, false)
-    expect(task.source.comment).not.toHaveBeenCalled()
-    expect(task.store.listPackageReleases(repository.github)).toEqual([])
+    await task.run()
+    expect(task.source.comment).toHaveBeenCalledWith(24, renderPackageRelease(plan), undefined)
+    expect(task.store.listPackageReleases(repository.github)[0]?.body).toContain('- [ ] Release patch')
+    expect(task.source.prepare).not.toHaveBeenCalled()
+    await task.run()
+    expect(task.source.comment).toHaveBeenCalledTimes(1)
     task.database.close()
   })
   it('finishes an authorized release across restarts without preparing twice', async () => {
     const task = setup()
     await task.run()
     expect(task.click()).toBe(true)
-    await task.run(true, false)
+    await task.run()
     expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Prepared')
     task.source.merge = vi.fn<PackageReleaseSource['merge']>(async () => ({ _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) }))
     await task.run()
@@ -109,13 +112,52 @@ it('keeps a text command that arrives before the offer exists', async () => {
   task.database.close()
 })
 
+it.each(['harlan-zw', 'contributor'])('accepts pre-merge signed text requests only from Harlan: %s', async (author) => {
+  const task = setup()
+  task.source.inspect = async () => ({ ...plan, _tag: 'BeforeMerge' })
+  await task.run()
+  const app = createWebhookApp({
+    secret: 'secret',
+    allowedOwners: ['harlan-zw'],
+    onHint: () => {},
+    logger: { info: () => {} },
+    packageRelease: {
+      allowedAuthor: 'harlan-zw',
+      actorLogin: () => 'harlan-github-agent[bot]',
+      apply: () => {},
+      command: command => task.store.queuePackageReleaseCommand(command),
+    },
+  })
+  const body = JSON.stringify({ action: 'created', repository: { full_name: repository.github }, issue: { number: 24, pull_request: {} }, sender: { login: author }, comment: { id: 101, user: { login: author }, body: 'do release patch' } })
+  await app.fetch(new Request('http://localhost/webhook', {
+    method: 'POST',
+    body,
+    headers: {
+      'x-github-event': 'issue_comment',
+      'x-github-delivery': `text-${author}`,
+      'x-hub-signature-256': `sha256=${createHmac('sha256', 'secret').update(body).digest('hex')}`,
+    },
+  }))
+  await task.run()
+  await task.run()
+  expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe(author === 'harlan-zw' ? 'AwaitingMerge' : 'Available')
+  expect(task.source.prepare).not.toHaveBeenCalled()
+  if (author === 'harlan-zw') {
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('- [x] Release patch after merge'), 99)
+    task.source.inspect = async () => plan
+    await task.run()
+    expect(task.source.prepare).toHaveBeenCalledTimes(1)
+  }
+  task.database.close()
+})
+
 it.each([
   ['User', 1],
   ['Repository', 0],
 ] as const)('offers a maintained repository release only with the %s credential opt in', async (credential, offers) => {
   const task = setup()
   const maintained = { ...repository, github: 'nuxt-modules/example', ownership: 'maintained' as const, release: { ...repository.release, credential: { _tag: credential } } }
-  await reconcilePackageReleases({ webhookReady: true, commentControls: true, repository: maintained, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  await reconcilePackageReleases({ webhookReady: true, repository: maintained, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   expect(task.source.comment).toHaveBeenCalledTimes(offers)
   task.database.close()
 })

@@ -314,6 +314,8 @@ Enable `mutations_enabled` only after the selected repository policy and GitHub 
 ## Package releases
 
 Eligible open pull requests get one release checkbox in a bot comment.
+Offers appear as soon as the signed webhook listener is ready, including after service restarts.
+The controller does not wait for another repository comment before showing the checkbox.
 Feature titles offer **Release minor after merge**. Fix and performance titles offer **Release patch after merge**.
 Select it before merging. Clear it to cancel while the pull request remains open.
 The selection survives service restarts. A changed head or release version clears the selection.
