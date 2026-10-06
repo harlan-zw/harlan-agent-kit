@@ -15,6 +15,8 @@ Record the actual Nuxt, Nitro, h3, Vue, and router versions in test evidence.
 Refresh pins before a release rather than silently floating a required check.
 Check the nightly's own Node engine before assigning it to a Node lane.
 
+Set `future.compatibilityVersion` at the top level of the Nuxt configuration.
+An `experimental.future` object does not enable that lane.
 The future flag does not upgrade Nitro on Nuxt 4.
 Source: [versioned Nuxt upgrade guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/1.getting-started/18.upgrade.md#testing-nuxt-5).
 
@@ -22,7 +24,12 @@ Run the Node 22.22.3 floor and a supported newer LTS for the stable Nuxt lanes.
 Use a supported Node version for the exact Nuxt 5 nightly.
 If claiming Windows tooling support, run filesystem and resolution cases there.
 Exercise Cloudflare or other supported edge targets where server code changes.
+Build packed consumers and serve them through local workerd. Assert real HTTP output and forwarded request context.
+Check the local Wrangler version supports the fixture's compatibility date before diagnosing module failures.
+Keep local Worker evidence separate from remote production and database adapter evidence.
 Use the repository's workflow for production deployment.
+Require an explicit opt-in for tests that deploy remotely.
+An authenticated CLI alone must not enable a deployment test.
 
 ## Packed consumers
 
@@ -30,7 +37,36 @@ Build and pack the producer before testing consumers.
 Use isolated fixtures outside the workspace dependency graph.
 Install only the tarballs and documented consumer dependencies.
 Avoid `link:` fixtures as the only proof of published exports and dependencies.
+Remove inherited fixture lockfiles before creating isolated consumers with different dependency specifications.
+A stale `link:` resolution can survive a changed `file:` specification and bypass the packed artifact.
+Audit every runtime import against published dependencies, including optional feature paths.
+Workspace development dependencies can conceal missing runtime declarations.
+For bundled modules, test the meta module alone without direct submodule dependencies or explicit registration.
+Resolve pinned nightly metadata through the meta package's dependency context when necessary.
+Distinguish disabled features from absent packages. Required dependencies remain installed when their features are disabled.
+Run packed development SSR and server requests in all three Nuxt lanes.
+Production bundling can conceal development externalization and unresolved runtime aliases.
+Check Vite transpilation for app runtime code that imports Nuxt virtual aliases.
+Check Nitro 2 inline coverage for the full reachable runtime graph, including shared files outside server directories.
+Exercise development-only hooks and disabled-module mocks through their public aliases.
+Use immutable tarball paths. Record checksums and verify the delivered artifact contains the final source changes.
+For pnpm 11 and 12 packing, use `--config.ignore-scripts=true`. Require a successful pack before hashing or copying artifacts.
+A reused tarball path can preserve stale package-manager cache entries.
+Put temporary tarball overrides in `pnpm-workspace.yaml` with pnpm 12.
+Do not assume `package.json#pnpm.overrides` changes the resolved graph.
+Pass cross-repository artifacts through `NUXT_TEST_TARBALLS`, a package-to-absolute-path JSON map.
+Copy the repository's existing trust age policy and approved build scripts into isolated fixtures.
+Keep exact approved trust exceptions. Never disable the policy to make tests pass.
 Check declaration resolution and the app, server, shared, and Node TypeScript contexts after preparation.
+Check ESM package roots through Node 22 `require(ESM)` and Nuxt's Jiti configuration loader.
+An import-only exports map can fail those loaders. Add a compatible `default` ESM entry when needed.
+
+Stable `^5.0.0` module metadata excludes Nuxt 5 nightly prereleases.
+For the actual-nightly fixture, read each imported module's public `getMeta()` before installation.
+Include transitive Nuxt modules, such as shared lifecycle modules, in that allowance.
+Include the exact pinned nightly in that fixture's metadata compatibility.
+Keep the published peer and metadata contracts unchanged.
+Assert actual module behavior. A correct Nitro version can still accompany a disabled module.
 
 All declared support lanes must invoke non-watch test commands through required workflow jobs.
 Trace reusable workflows to their actual test command and runtime.
@@ -59,6 +95,11 @@ Use a failing test first for defects discovered during migration.
 Determine dependency order from manifests and imports.
 Prepare shared runtime packages and Site Config before their consumers.
 Handle cycles explicitly, including type-only relationships and optional peers.
+Audit development installs separately from the published runtime graph. Workspace catalogs can create development-only cycles.
+Filtered pnpm installs can still resolve every project through a shared workspace lockfile.
+If consumer majors are unpublished, bootstrap an explicit source workspace with relative overrides and its own verified frozen lock.
+Preserve supply-chain policy and full consumer CI. Publish only the foundation package allowlist through its release workflow.
+Never let a recursive workspace release bump or publish a meta package whose version must stay unchanged.
 Prepare DevTools artifacts and their versioned protocol alongside core packages.
 Release the meta module after compatible module versions exist in the registry.
 

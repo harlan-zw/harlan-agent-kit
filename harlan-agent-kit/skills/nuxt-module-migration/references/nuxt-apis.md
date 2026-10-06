@@ -8,8 +8,15 @@ Import `defineEventHandler` and its helpers explicitly from `nuxt/server`.
 On Nuxt 4, the corresponding auto-imports still use h3 events.
 Mixing those handlers with portable helpers can produce `NUXT_E8012`.
 Keep `nuxt/server` external in the published module build.
+Ensure the Nuxt server builder bundles shared portable runtime entries during prerender.
+Externalized entries can import the generic `serverFetch` stub outside Nuxt's alias transformation.
+Use Nitro 2 `externals.inline` or Nitro 3 `noExternals`, preserving existing inline choices.
+Prove runtime requests and static generation from packed artifacts.
 Use it only in server code. App plugins and components cannot import its runtime.
 Type-only imports can reference its types.
+Verify default SSR and explicit SPA rules separately on each compiled builder.
+An absent `ssr` field does not imply one universal default across Nitro 2 and Nitro 3.
+Check native rule normalization and rendering behavior before deleting a builder workaround.
 App-side `useRequestEvent` follows the configured builder's event type.
 Do not assume that its event already satisfies the portable handler contract.
 
@@ -32,6 +39,16 @@ Native `fetch` and `serverFetch` do not preserve ofetch's parsing, retries, or e
 Inspect forwarded headers, base URL handling, hooks, and response status before replacement.
 Keep local and external source fetching distinct.
 Preserve cookie multiplicity and request isolation.
+Do not rely on `globalThis.$fetch` during Nitro 3 prerender hooks or scheduled tasks.
+Choose an explicit local transport for the builder and preserve configured external base URLs.
+Test additional crawling and restoration paths, rather than only the initial prerender request.
+Nitro 3 closes its prerender worker before later crawling hooks can reuse it.
+If several modules reopen the generated app, share its lifetime by renderer identity.
+Register clients during prerender initialization. Close the app only after every client releases it.
+Prove that one module finishing cannot close another module's active transport.
+Use the generated builder's public exports. Do not assume global fetch remains available.
+For packages with native optional binaries, prefer Nitro's trace dependencies over forced external package specifiers.
+A forced external can bypass the generated prerender app's absolute resolver.
 
 Use Nuxt's runtime hooks through `useServerHooks` where the hook belongs to `NuxtServerHooks`.
 For Nitro lifecycle hooks, use the appropriate Nitro API.
@@ -44,6 +61,8 @@ Sources: [server imports](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/
 
 Dropping Nuxt 3 does not remove Nitro 2. Nuxt 4.6 still uses it.
 Storage, cached handlers, tasks, database access, lazy handlers, and Nitro plugins need a separate audit.
+If storage never uses watchers, audit whether `unstorage`'s `fs-lite` driver preserves its persistence contract.
+The full `fs` driver can introduce an optional `chokidar` dependency during server bundling.
 Use `addNitroPlugin` for Nitro plugin registration.
 Use `{ nitro2: file, nitro3: file }` variants where runtime implementations differ.
 Use one portable handler when it imports only `nuxt/server`.
@@ -59,6 +78,20 @@ Do not retain a legacy handler just to support Nuxt releases below the new minim
 
 Keep renderer hooks separate from request and response lifecycle hooks.
 Preserve Node streaming behavior and edge response behavior when moving compression or body transforms.
+Nitro 3 exposes `response(response, event)`. Native `beforeResponse` and `afterResponse` hooks are absent.
+Select lifecycle adapters through `getNitroVersion`, then prove their side effects on both real builders.
+The Nitro 3 hook receives a Web `Response`. Its return value does not replace that response.
+Apply body transforms at the handler's return boundary. Set final headers on the actual response.
+Test success and error responses when hooks choose status-dependent headers.
+Check lifecycle timing when cleanup shares resources with deferred work or streamed responses.
+
+Forwarded request context can share resources across nested local requests.
+Track the request that owns a database or other cleanup resource.
+Do not let a child response close a borrowed parent resource.
+Prove that the parent response still closes the live resource on Nitro 2 and Nitro 3.
+If deferred work delays cleanup, preserve the owner's cleanup identity in the shared resource state.
+The last task can finish in a borrowed child after the owner responds.
+Prove that this task closes the owner's resource exactly once.
 Do not declare generic server-builder support while required Nitro features remain.
 The experimental Vite server lacks storage, caching, tasks, and Nitro plugins.
 
@@ -70,14 +103,44 @@ Do not mistake a passing Nitro 3 compatibility layer test for a completed portab
 
 Source: [versioned server compatibility guide](https://github.com/nuxt/nuxt/blob/v4.6.0/docs/3.guide/4.modules/9.server-compatibility.md).
 
+## Module runtime aliases
+
+Use each module's existing namespace with explicit `/app` and `/server` entry points.
+For example, expose browser composables through `#site-config/app` and server helpers through `#site-config/server`.
+Register directory aliases and create curated `index.ts` barrels inside those directories.
+A file alias can shadow existing deep imports or fail to resolve them.
+Keep Node filesystem imports and server configuration out of app barrels.
+Expose a server entry only when the module has a public server function.
+Do not invent an empty API to make every manifest look alike.
+
+Register both directory aliases in Nuxt. Also register the server alias in Nitro.
+Register app runtime directories in `build.transpile` and preserve existing entries.
+Centralize this in the alias helper so packed plugins receive Vite transformation consistently.
+Nuxt 4.6 can include server files in its generated app typecheck context.
+Add exact and wildcard TypeScript paths during `prepare:types`, using the corresponding app or server configuration.
+Resolve paths relative to the generated configuration's base URL and normalize separators.
+Avoid rooted export declarations inside ambient modules.
+Parent aliases can still resolve deep imports across contexts. Scoped path registration does not enforce an import ban.
+Prove consumer imports with the real parent aliases present, rather than an artificially isolated namespace.
+Test packed app SSR output, server requests, and generated app and server types on all three Nuxt lanes.
+Keep disabled and mocked module behavior consistent with existing public functions.
+
 ## Types and Kit
 
 Move server context and route-rule extensions to Nuxt's owned types where possible.
+Use `RequestEventContext` for fields on `event.context`.
+`NuxtRequestContext` owns the nested `event.context.nuxt` state, rather than the whole context.
 Audit `NuxtRequestContext`, `AppRouteRules`, `RuntimeConfig`, `ServerRoutes`, and `NuxtServerHooks`.
 Prefer one augmentation of `@nuxt/schema`; `nuxt/schema` mirrors its public types.
 Retain builder-specific augmentation only for builder-specific contracts.
 Use `addServerTemplate` for server virtual files and the appropriate `addTypeTemplate` context for declarations.
+Register server declarations with `{ nuxt: true, nitro: true }` when generated API route types include their server files.
+The app compiler then needs the same request context and hook augmentations as the server compiler.
 Prepare fixtures before checking generated app, server, shared, and Node TypeScript contexts.
+
+When using Site Config 5 URL helpers, preserve the application's base path explicitly.
+The path resolver removes that prefix unless the caller requests `withBase: true`.
+Prove signed URLs with a non-root application base path, including query parameters and rendered output.
 
 Read exports and signatures rather than guessing from release-note names:
 
@@ -91,6 +154,7 @@ Read exports and signatures rather than guessing from release-note names:
 | `updateAppConfig` | Consider for module-owned app configuration |
 
 The release notes describe template dependencies, but the schema property is `dependsOn`.
+This property belongs to app templates. Nuxt 4.6 `addServerTemplate` does not accept it.
 The Kit index exports `getNitroVersion` but does not export the release notes' `hasNitroVersion` name.
 Check exact exports before adding version checks.
 

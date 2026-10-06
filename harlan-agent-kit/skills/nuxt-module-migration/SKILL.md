@@ -47,6 +47,7 @@ Use a clean consumer to measure installed dependencies. A maintainer workspace i
 Never add per-module totals together and call that a collection total.
 
 Classify each dependency as build-time, portable runtime, Node runtime, optional integration, or DevTools.
+For this migration, prefer native APIs where verified equivalent, even if `pkg-conform` recommends an UnJS dependency.
 Trace imports from every public export. A subpath export or dynamic import still installs declared dependencies.
 Record concrete removals and shared transitive dependencies that remain reachable.
 Do not promise a reduction before comparing clean installations.
@@ -57,6 +58,7 @@ Read these references before their corresponding changes:
 - [Native Node APIs](references/native-node.md): replacement candidates and semantic limits.
 - [Optional DevTools](references/devtools.md): package boundaries and loading behavior.
 - [Verification and release order](references/verification.md): fixtures, runtime proof, and coordinated release requirements.
+- [Codemods](references/codemods.md): dry-run manifest automation and safe source-transform boundaries.
 
 ## Implement the migration
 
@@ -64,7 +66,8 @@ Read these references before their corresponding changes:
 2. Remove Nuxt 3 branches, fixtures, adapters, old API paths, and documentation claims.
 3. Replace portable server work with explicit `nuxt/server` imports and `RequestEvent` types.
 4. Retain explicit Nitro 2 and Nitro 3 implementations where caching, plugins, storage, or tasks require them.
-5. Remove redundant dependencies and separate optional DevTools code from core installation.
+5. Register curated app and server runtime aliases with their generated TypeScript contexts.
+6. Remove redundant dependencies and separate optional DevTools code from core installation.
 
 Load `ts-design-patterns` for non-trivial API changes.
 Load `unit-tests` before new regression tests. Reproduce bugs with a failing behavior test first.
