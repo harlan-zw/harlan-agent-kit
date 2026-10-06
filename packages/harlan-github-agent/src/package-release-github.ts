@@ -359,7 +359,7 @@ export function createPackageReleaseSource(options: {
       if (run === undefined || run.status !== 'completed')
         return null
       if (run.conclusion !== 'success')
-        throw new Error(`Release workflow failed: ${run.html_url}. Re-run that workflow for the same version.`)
+        return blocked(`Release workflow failed: ${run.html_url}. Review that workflow before requesting recovery.`)
       for (const path of config.versionFiles.filter(path => path.endsWith('package.json'))) {
         const pkg = await manifest(path, sha)
         if (pkg.private)

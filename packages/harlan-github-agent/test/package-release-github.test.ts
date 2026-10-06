@@ -22,7 +22,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
   let merged = false
   let changedTree = false
   let published = false
-  let workflowSuccess = false
+  let workflowConclusion: string | null = null
   let rangeSha = mergeSha
   let commentBody = ''
   let sourceOpen = false
@@ -112,7 +112,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
       data = { number: 25 }
     }
     else if (path.includes('/actions/workflows/')) {
-      data = { workflow_runs: workflowSuccess ? [{ id: 1, head_branch: 'v1.0.1', status: 'completed', conclusion: 'success', html_url: 'https://github.com/run/1' }] : [] }
+      data = { workflow_runs: workflowConclusion === null ? [] : [{ id: 1, head_branch: 'v1.0.1', status: 'completed', conclusion: workflowConclusion, html_url: 'https://github.com/run/1' }] }
     }
     else if (path === '/releases/tags/v1.0.1') {
       data = { draft: false, prerelease: false, html_url: 'https://github.com/release/v1.0.1' }
@@ -159,8 +159,8 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     changedTree = true
   }, publish: () => {
     published = true
-  }, workflowDone: () => {
-    workflowSuccess = true
+  }, workflowDone: (conclusion = 'success') => {
+    workflowConclusion = conclusion
   }, removeSource: () => {
     rangeSha = 'f'.repeat(40)
   } }
@@ -199,6 +199,24 @@ it('refuses a tag collision without writing or republishing', async () => {
   task.refs.set('tags/v1.0.1', 'f'.repeat(40))
   expect(await task.source.publish({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha } })).toEqual({ _tag: 'Blocked', reason: 'The release tag already points to a different commit.' })
   expect(task.writes).toEqual([])
+})
+
+it.each(['failure', 'cancelled', 'timed_out'])('records a completed %s release workflow once and keeps its pinned version', async (conclusion) => {
+  const task = fixture()
+  task.workflowDone(conclusion)
+  const database = new DatabaseSync(':memory:')
+  const store = createPackageReleaseStore(database)
+  store.saveReleaseOffer({ repository: mapping.github, pullRequestNumber: 24, plan, commentId: 99, body: '', policy: JSON.stringify(mapping) })
+  store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', selected: true, requestId: 'select', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
+  const source = { ...task.source, prepare: async () => ({ _tag: 'Publishing' as const, tag: 'v1.0.1', sha: 'c'.repeat(40) }) }
+  const run = () => reconcilePackageReleases({ webhookReady: true, commentControls: true, repository: mapping, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  await run()
+  expect(store.listPackageReleases(mapping.github)[0]).toMatchObject({ plan: { version: '1.0.1' }, state: { _tag: 'Blocked', reason: 'Release workflow failed: https://github.com/run/1. Review that workflow before requesting recovery.' } })
+  const writes = [...task.writes]
+  await run()
+  expect(task.writes).toEqual(writes)
+  expect(task.writes.filter(write => write.path === '/git/refs')).toHaveLength(1)
+  database.close()
 })
 
 it('waits for Review, then verifies the actual merge before allowing a tag', async () => {
