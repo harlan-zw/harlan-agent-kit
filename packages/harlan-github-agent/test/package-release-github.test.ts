@@ -17,6 +17,7 @@ const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 9
 function fixture(repository: RepositoryMapping = mapping, files = [{ filename: 'src/index.ts', patch: '+return []' }] as Array<{ filename: string, patch?: string }>) {
   const writes: Array<{ path: string, body: Record<string, unknown> }> = []
   const refs = new Map<string, string>([['heads/main', sha], ['tags/v1.0.0', mergeSha]])
+  const sources = new Map<string, string>()
   let ready = false
   let merged = false
   let changedTree = false
@@ -58,7 +59,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
       data = { tree: { sha: changedTree ? 'unexpected-tree' : 'release-tree' } }
     }
     else if (path === '/pulls/24') {
-      data = { merged: !sourceOpen, draft: false, state: sourceOpen ? 'open' : 'closed', commits: 1, changed_files: files.length, merge_commit_sha: sourceOpen ? null : mergeSha, base: { ref: 'main' }, title: sourceTitle, body: '', head: { sha: sourceHead } }
+      data = { merged: !sourceOpen, draft: false, state: sourceOpen ? 'open' : 'closed', commits: 1, changed_files: files.length, merge_commit_sha: sourceOpen ? null : mergeSha, base: { ref: 'main', sha }, title: sourceTitle, body: '', head: { sha: sourceHead } }
     }
     else if (path === '/pulls/24/commits') {
       data = [{ sha: sourceHead, commit: { message: sourceTitle } }]
@@ -70,7 +71,15 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
       data = { total_count: 1, workflow_runs: [{ id: 10, check_suite_id: 10, head_sha: url.searchParams.get('head_sha'), event: checkEvent, head_branch: checkBranch, status: mainChecks ? 'completed' : 'in_progress', conclusion: mainChecks ? 'success' : null }] }
     }
     else if (path.startsWith('/contents/')) {
-      data = { type: 'file', content: Buffer.from(path.endsWith('.yml') ? 'on:\n  push:\n    tags: [\'v*\']\n' : JSON.stringify({ name: 'example', version: url.searchParams.get('ref') === 'c'.repeat(40) ? '1.0.1' : '1.0.0' })).toString('base64') }
+      if (path === '/contents/src/index.ts') {
+        const source = sources.get(url.searchParams.get('ref') ?? '')
+        if (source === undefined)
+          return Response.json({ message: 'Not Found' }, { status: 404 })
+        data = { type: 'file', content: Buffer.from(source).toString('base64') }
+      }
+      else {
+        data = { type: 'file', content: Buffer.from(path.endsWith('.yml') ? 'on:\n  push:\n    tags: [\'v*\']\n' : JSON.stringify({ name: 'example', version: url.searchParams.get('ref') === 'c'.repeat(40) ? '1.0.1' : '1.0.0' })).toString('base64') }
+      }
     }
     else if (path.startsWith('/compare/')) {
       data = { status: 'ahead', total_commits: 1, commits: [{ sha: rangeSha, commit: { message: 'fix: handle input' } }], files }
@@ -131,7 +140,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     return response
   }
   const source = createPackageReleaseSource({ repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: token => new Octokit({ auth: token, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
-  return { source, writes, refs, openSource: (title = 'fix: handle input') => {
+  return { source, writes, refs, sources, openSource: (title = 'fix: handle input') => {
     sourceOpen = true
     sourceTitle = title
   }, mergeSource: () => {
@@ -228,6 +237,21 @@ it.each(['fix: handle input', 'feat: add input'])('offers the matching selection
   const task = fixture()
   task.openSource(title)
   expect(await task.source.inspect(24)).toMatchObject({ _tag: 'BeforeMerge', bump: title.startsWith('feat') ? 'minor' : 'patch', headSha: 'f'.repeat(40) })
+  expect(task.writes).toEqual([])
+})
+
+it.each([false, true])('reads pinned source files before offering optional parameters, open: %s', async (open) => {
+  const before = 'export function read(value: string) { return }'
+  const after = 'export function read(value: string, options?: Headers) { return }'
+  const task = fixture(mapping, [{ filename: 'src/index.ts', patch: `-${before}\n+${after}` }])
+  task.sources.set('v1.0.0', before)
+  task.sources.set(sha, after)
+  task.sources.set('f'.repeat(40), after)
+  if (open)
+    task.openSource()
+  expect(await task.source.inspect(24)).toMatchObject({ _tag: open ? 'BeforeMerge' : 'Available', version: '1.0.1' })
+  task.sources.delete('v1.0.0')
+  expect(await task.source.inspect(24)).toMatchObject({ _tag: 'Unavailable', reason: 'A public API changed. Check compatibility before releasing.' })
   expect(task.writes).toEqual([])
 })
 

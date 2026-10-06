@@ -85,6 +85,19 @@ export function createPackageReleaseSource(options: {
     }
     return value as Manifest
   }
+  const releaseFiles = async (files: Array<{ filename: string, patch?: string, previous_filename?: string }>, before: string, after: string) => Promise.all(files.map(async (file) => {
+    const patch = file.patch ?? ''
+    if (file.previous_filename !== undefined || !/\.[cm]?[jt]sx?$/.test(file.filename) || !/^-(?!-).*\bexport\b/m.test(patch))
+      return { filename: file.filename, patch }
+    const read = (path: string, ref: string) => content(path, ref).catch((error: unknown) => {
+      // Removed or renamed exports need manual compatibility review.
+      if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404)
+        return null
+      throw error
+    })
+    const [oldSource, newSource] = await Promise.all([read(file.previous_filename ?? file.filename, before), read(file.filename, after)])
+    return { filename: file.filename, patch, ...(oldSource === null || newSource === null ? {} : { source: { before: oldSource, after: newSource } }) }
+  }))
   const registry = async (name: string): Promise<{ 'versions': Record<string, { version: string, gitHead?: string }>, 'dist-tags': Record<string, string> } | null> => {
     const response = await (options.fetch ?? globalThis.fetch)(`https://registry.npmjs.org/${encodeURIComponent(name)}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) })
     if (response.status === 404)
@@ -171,7 +184,7 @@ export function createPackageReleaseSource(options: {
       currentVersion: pkg.version,
       packageName: pkg.name,
       commits: range.commits.map(commit => commit.commit.message),
-      files: (range.files ?? []).map(file => ({ filename: file.filename, patch: file.patch ?? '' })),
+      files: await releaseFiles(range.files ?? [], tag, sha),
       complete: ['ahead', 'identical'].includes(range.status) && range.total_commits === range.commits.length
         && range.commits.length < 250 && range.files !== undefined && range.files.length < 300
         && range.files.every(hasReleasePatch),
@@ -188,7 +201,7 @@ export function createPackageReleaseSource(options: {
         || current.state !== pull.state || current.draft !== pull.draft || current.merged !== pull.merged) {
         return unavailable('The pull request changed while reading its release range.')
       }
-      return planPackageReleaseBeforeMerge({ ...common, commits: [...common.commits, ...commits.map(commit => commit.commit.message)], files: [...common.files, ...files.map(file => ({ filename: file.filename, patch: file.patch ?? '' }))], complete: common.complete && commits.length === pull.commits && commits.length < 250
+      return planPackageReleaseBeforeMerge({ ...common, commits: [...common.commits, ...commits.map(commit => commit.commit.message)], files: [...common.files, ...await releaseFiles(files, pull.base.sha, pull.head.sha)], complete: common.complete && commits.length === pull.commits && commits.length < 250
         && files.length === pull.changed_files && files.length < 300 && files.every(hasReleasePatch) })
     }
     return planPackageRelease({ ...common, merged: true, sourceIncluded: pull.merge_commit_sha !== null && range.commits.some(commit => commit.sha === pull.merge_commit_sha), sourceSha: sha, mergeSha: pull.merge_commit_sha ?? '' })
