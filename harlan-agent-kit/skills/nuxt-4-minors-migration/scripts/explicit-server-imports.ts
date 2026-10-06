@@ -140,7 +140,7 @@ function summarize(result: Extract<RunResult, { _tag: 'Ok' }>, write: boolean): 
   if (unmapped.length)
     lines.push('', `Unmapped auto-imports (${unmapped.length}). Import these by hand:`, ...unmapped)
   if (kept.length)
-    lines.push('', `Left as auto-imports (${kept.length} names). A module registers these with no public path. They keep working on 4.6 and on Nuxt 5:`, ...kept)
+    lines.push('', `Left as auto-imports (${kept.length} names). A module registers these with no public path. Read the server imports reference before you ship them:`, ...kept)
   if (portable.length)
     lines.push('', `Portable to nuxt/server (${portable.length}). Every server helper here behaves the same there:`, ...portable)
   if (!write && changed.length)

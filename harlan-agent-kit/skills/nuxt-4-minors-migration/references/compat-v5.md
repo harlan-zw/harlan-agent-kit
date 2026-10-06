@@ -163,9 +163,9 @@ Tier 1. Nuxt 5 removes these. They work on 4.6, so change them now.
 - **Removed experimental options.**
   Detect: `rg -n 'externalVue|renderJsonPayloads|parseErrorData' nuxt.config.ts layers`.
   Fix: delete them. With `parseErrorData: false`, also delete `JSON.parse(error.data)`.
-- **Redirect route rule `statusCode`.**
-  Detect: `rg -n 'redirect:\s*\{[^}]*statusCode' nuxt.config.ts layers`.
-  Fix: rename it to `status`.
+- **Redirect route rule `statusCode`.** Keep it on Nuxt 4.
+  nitropack v2 reads only `redirect.statusCode`, so a renamed `status` is ignored and the redirect falls back to the default code instead of a 301. Typecheck reports the renamed key as `TS2353`.
+  Rename it to `status` only when the site moves to Nuxt 5.
 - **`nitro.typescript.tsConfig`.**
   Detect: `rg -n -A3 'typescript:' nuxt.config.ts`, inside `nitro`.
   Fix: move it to `typescript.serverTsConfig`.
