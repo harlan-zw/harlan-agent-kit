@@ -14,8 +14,9 @@ export interface ReviewProofProcess {
 export function createReviewProofLauncher(prepare: (input: ReviewProofLaunch) => Promise<ReviewProofProcess>): (input: ReviewProofLaunch) => Promise<ReviewProofOutcome> {
   return async (input) => {
     const runtime = await prepare(input)
+    let outcome: ReviewProofOutcome | undefined
     try {
-      return await new Promise<ReviewProofOutcome>((resolve, reject) => {
+      outcome = await new Promise<ReviewProofOutcome>((resolve, reject) => {
         const child = spawn(runtime.binary, runtime.arguments, { detached: true, cwd: input.workspace, env: runtime.environment, stdio: ['ignore', 'pipe', 'pipe', ...(runtime.extraFileDescriptors ?? [])] })
         let output = ''
         let timedOut = false
@@ -54,7 +55,15 @@ export function createReviewProofLauncher(prepare: (input: ReviewProofLaunch) =>
       })
     }
     finally {
-      await runtime.release()
+      await runtime.release().catch((error: unknown) => {
+        if (outcome === undefined)
+          throw error
+        const warning = `\nReview proof cleanup failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1000)
+        outcome = outcome._tag === 'LaunchFailed'
+          ? { ...outcome, reason: `${outcome.reason}${warning}`.slice(-500) }
+          : { ...outcome, output: `${outcome.output}${warning}`.slice(-12_000) }
+      })
     }
+    return outcome
   }
 }

@@ -103,6 +103,13 @@ jobs:
           bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL \
             --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
             --proc /proc --dev /dev /usr/bin/true
+          # Proof regressions require a private user scope with a fixed memory limit.
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          systemd-run --user --scope --quiet --collect \
+            --property=MemoryMax=64M --property=MemorySwapMax=0 /usr/bin/true
 
       - name: Release preview
         run: pnpm test:release

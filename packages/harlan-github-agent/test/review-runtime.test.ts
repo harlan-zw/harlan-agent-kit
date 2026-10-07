@@ -107,6 +107,7 @@ process.stdin.once('end', () => {
   let text = 'writable'
   try { writeFileSync(${JSON.stringify(join(workspace, 'owned'))}, 'bad') }
   catch (error) { text = error.code === 'EROFS' ? 'readonly' : error.code }
+  if (!process.argv.includes('web_search="disabled"')) text = 'readonly-web-enabled'
   console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fixture' }))
   console.log(JSON.stringify({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text } }))
   console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }))

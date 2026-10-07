@@ -48,3 +48,16 @@ it('kills an infinite probe and retains bounded output', async () => {
     expect(result.output.length).toBeLessThanOrEqual(12_000)
   }
 })
+
+it('retains process evidence when cleanup fails', async () => {
+  const launch = createReviewProofLauncher(async () => ({ binary: process.execPath, arguments: ['-e', 'console.log("assertion evidence"); process.exit(7)'], environment: {}, release: async () => {
+    throw new Error('scope cleanup failed')
+  } }))
+  const result = await launch({ workspace: tmpdir(), sourcePath: '/unused', nodeArguments: [], timeoutMilliseconds: 1000 })
+  expect(result._tag).toBe('Exited')
+  if (result._tag === 'Exited') {
+    expect(result.exitCode).toBe(7)
+    expect(result.output).toContain('assertion evidence')
+    expect(result.output).toContain('Review proof cleanup failed: scope cleanup failed')
+  }
+})

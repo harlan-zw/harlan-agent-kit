@@ -85,3 +85,21 @@ it('terminates the whole Bubblewrap group when an infinite proof reaches its dea
     await rm(root, { recursive: true, force: true })
   }
 }, 5000)
+
+it('contains a bounded native allocation in a controller-owned low-memory scope', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'proof-memory-'))
+  try {
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace)
+    const sourcePath = join(root, 'source.ts')
+    await writeFile(sourcePath, 'console.log("allocating bounded fixture"); const bytes = Buffer.alloc(96 * 1024 * 1024, 1); console.log(bytes.length)', { mode: 0o400 })
+    const launch = createReviewProofLauncher(input => prepareReviewProofSandbox(input, { memoryMaxBytes: 64 * 1024 * 1024 }))
+    const result = await launch({ workspace, sourcePath, nodeArguments: ['--disable-sigusr1', '--experimental-strip-types', '--permission', '--allow-fs-read=/run/proof/proof.ts', '/run/proof/proof.ts'], timeoutMilliseconds: 5000 })
+    // The scope launcher can die with its child or report the child's shell exit.
+    expect(result._tag === 'Signaled' ? ['SIGKILL', 'SIGTERM'].includes(result.signal) : result._tag === 'Exited' && result.exitCode === 137, JSON.stringify(result)).toBe(true)
+    expect(result).toEqual(expect.objectContaining({ output: 'allocating bounded fixture\n' }))
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 10_000)

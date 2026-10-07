@@ -163,7 +163,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         const baseOptions = {
           model: request.model,
           workingDirectory: request.workspace,
-          webSearchMode: 'live',
+          webSearchMode: review === undefined ? 'live' : 'disabled',
           approvalPolicy: 'never',
           ...(review === undefined ? {} : { sandboxMode: 'read-only' as const }),
         } satisfies ThreadOptions
