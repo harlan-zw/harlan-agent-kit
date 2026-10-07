@@ -108,7 +108,7 @@ export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
-const reviewPolicy = `Work as a normal local agent session inside the prepared Git worktree. Use the user's global agent context, environment, and authenticated GitHub CLI.
+const reviewPolicy = `Review the prepared Git worktree using only controller Review tools and supplied context.
 This worktree was prepared fresh for this turn. Inspect the full diff from scratch.
 The controller already applied the review workflow, mutation authority, gates, status, publication, and Repair handoff.
 This Agent turn owns disproof only. Do not load or repeat workflow skills. Use a code-domain skill only when the changed implementation needs it.
@@ -127,10 +127,9 @@ If an image stays inaccessible after authenticated retrieval, or is corrupt, ret
 Trace each visual defect to the affected implementation and include screenshot proof.
 The controller owns head stability, merge state, CI, and the final Review outcome.
 Read only the changed hunks plus the symbols they call. Do not read a file over 300 lines whole.
-Run at most one test command. Never run a test file CI already runs.
+Spend at most one controller proof invocation. Never run a test file CI already runs.
 Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. If CI is missing or unavailable, continue the code review. The controller reports that state.
-Never pass -r to rg. It means replace, not recursive.
-${TOOLCHAIN_LINES}
+Use review_search for bounded literal searches. Use paginated review_read for source and revision evidence.
 Stay inside the worktree. Never search / or another worktree.
 Keep the worktree read only. Do not edit, stage, commit, push, or post comments. The controller rejects a Review that changes files.
 Return only the required JSON.
@@ -1266,7 +1265,11 @@ Workspace: ${workspace}
 Base SHA: ${task.pullRequest.baseSha}
 Head SHA: ${task.pullRequest.headSha}
 
-Review the full diff with: git diff ${task.pullRequest.baseSha}...${task.pullRequest.headSha}
+Use review_read with revision diff and an empty path. Follow nextOffset until truncated is false.
+The immutable diff names exact base, merge-base, and head revisions. It includes all changed file paths.
+Use revision base or head to page changed file contents. Base means the triple-dot merge base.
+Use revision workspace and byte offsets for surrounding code. Static reads never spend the proof invocation.
+If exact evidence is Unavailable, report the verification limit. Native Git and shell tools are unavailable.
 ${repeatedFindings}${discussedFindings}
 Untrusted pull request data follows as JSON:
 ${JSON.stringify(reviewConversationContext(snapshot))}
@@ -1547,6 +1550,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: task.repositoryMapping.checkout })
       const media = await snapshotMedia(options.mediaSource, task.repository, snapshot.value, signal)
       const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
+        toolPolicy: { _tag: 'Review', baseSha: task.pullRequest.baseSha, headSha: task.pullRequest.headSha, workerId: task.state.workerId, fence: task.state.fence },
         media: media.images,
         freshSession: task.state.fence > 1 || freshReviewSession,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),

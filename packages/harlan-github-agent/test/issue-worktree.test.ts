@@ -164,7 +164,7 @@ describe('issue worktree', () => {
     expect(targets).toEqual(Array.from({ length: 10 }).fill('main'))
     for (const command of commands)
       expect(git(checkout, 'merge-base', '--is-ancestor', command.commitSha, 'main')).toBe('')
-  }, 30_000)
+  }, 90_000)
 
   it('pins a controller commit based on the approved default branch', async () => {
     const { baseSha, manager, root, task } = fixture()

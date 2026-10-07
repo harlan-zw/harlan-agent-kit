@@ -23,8 +23,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 5: bounded controller image evidence carried in the turn request.
  * 6: provider processes require the isolated Agent worker configuration.
  * 7: authenticated controller proof callbacks through desktop child duplex IO.
+ * 8: exact base revision supplied for immutable Review static evidence.
  */
-export const DESKTOP_PROTOCOL = 7
+export const DESKTOP_PROTOCOL = 8
 
 /**
  * Why one desktop turn failed.

@@ -211,11 +211,14 @@ export async function prepareAgentSandbox(input: {
   networkMode?: 'command' | 'opencode-server' | 'opencode-client'
   transportDirectory?: string
   readOnly?: boolean
+  /** Task-owned home with only named provider login and trusted Review configuration. */
+  reviewHome?: string
 }): Promise<AgentSandbox> {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
   const profile = configuration(JSON.parse(await readFile(profilePath, 'utf8')))
-  const isolatedHome = await permittedPath(profile.home, controllerHome)
+  const readOnly = input.readOnly === true || input.reviewHome !== undefined
+  const isolatedHome = await permittedPath(input.reviewHome ?? profile.home, controllerHome)
   if (within(controllerHome, isolatedHome) || isolatedHome === '/home' || isolatedHome === '/')
     throw new Error('The Agent worker home must not contain the controller home.')
   const scratch = await mkdtemp(join(tmpdir(), 'agent-sandbox-'))
@@ -258,8 +261,26 @@ export async function prepareAgentSandbox(input: {
     for (const path of input.writablePaths ?? [])
       args.push('--bind', await permittedPath(path, controllerHome), path)
     const workspace = await realpath(input.workspace)
-    const repositoryBind = input.readOnly === true ? '--ro-bind' : '--bind'
+    const repositoryBind = readOnly ? '--ro-bind' : '--bind'
     args.push(repositoryBind, workspace, workspace)
+    if (input.reviewHome !== undefined) {
+      for (const name of ['.codex/config.toml', '.config/opencode/opencode.json']) {
+        const path = join(isolatedHome, name)
+        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
+          args.push('--ro-bind', path, join(workerHome, name))
+      }
+      // Project configuration can register another tool or plugin. Hide it before either provider starts.
+      for (const name of ['.codex', '.opencode']) {
+        const path = join(workspace, name)
+        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
+          args.push('--tmpfs', path)
+      }
+      for (const name of ['opencode.json', 'opencode.jsonc']) {
+        const path = join(workspace, name)
+        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
+          args.push('--ro-bind', join(input.reviewHome, '.config/opencode/opencode.json'), path)
+      }
+    }
     const { stdout } = await execute('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
     const common = await realpath(stdout.trim())
     const objects = join(common, 'objects')
@@ -296,7 +317,7 @@ export async function prepareAgentSandbox(input: {
     args.push('--ro-bind', gitConfig, join(common, 'config'))
     args.push('--ro-bind', gitConfig, join(taskDirectory, 'config.worktree'))
     args.push('--chdir', workspace, '--', '/run/agent/node', '--experimental-strip-types', '/run/agent/runtime.ts', input.networkMode ?? 'command')
-    const environment = workspaceEnvironment({
+    const baseEnvironment: NodeJS.ProcessEnv = {
       HOME: workerHome,
       PATH: `${workerHome}/.local/share/harlan-agent-kit/github-bin:${profile.tools.join(':')}:/usr/local/bin:/usr/bin:/bin`,
       LANG: input.environment.LANG ?? 'C.UTF-8',
@@ -307,10 +328,13 @@ export async function prepareAgentSandbox(input: {
       CODEX_HOME: `${workerHome}/.codex`,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
+      ...(input.reviewHome === undefined ? {} : { OPENCODE_DISABLE_PROJECT_CONFIG: 'true' }),
       ...(input.environment.OPENCODE_CONFIG_CONTENT === undefined ? {} : { OPENCODE_CONFIG_CONTENT: input.environment.OPENCODE_CONFIG_CONTENT }),
       ...(input.environment.OPENCODE_SERVER_USERNAME === undefined ? {} : { OPENCODE_SERVER_USERNAME: input.environment.OPENCODE_SERVER_USERNAME }),
       ...(input.environment.OPENCODE_SERVER_PASSWORD === undefined ? {} : { OPENCODE_SERVER_PASSWORD: input.environment.OPENCODE_SERVER_PASSWORD }),
-    }, workspace, input.taskId)
+    }
+    // Review tools use only controller configuration. Repository loader variables can restore execution.
+    const environment = input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment
     // Repository variables belong inside the boundary. Loader variables must
     // never affect host Bubblewrap before namespace creation.
     args.splice(args.indexOf('--'), 0, '--clearenv', ...Object.entries(environment).flatMap(([key, value]) => value === undefined ? [] : ['--setenv', key, value]))
@@ -341,7 +365,7 @@ export async function prepareAgentSandbox(input: {
     return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, adapterPath, providerBinary: profile[input.provider], release: () => {
       released ??= (async () => {
         try {
-          if (input.readOnly !== true)
+          if (!readOnly)
             await saveGit()
         }
         finally {

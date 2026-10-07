@@ -1,12 +1,15 @@
 import type { CodexOptions, Input, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import type { AgentSandbox } from './agent-sandbox.ts'
+import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
+import type { ReviewRuntime } from './review-runtime.ts'
 import { dirname } from 'node:path'
 import process from 'node:process'
 import { Codex } from '@openai/codex-sdk'
 import { agentProviderFailureReason, agentTextEvent } from './agent-provider.ts'
 import { prepareAgentSandbox } from './agent-sandbox.ts'
 import { materializeAgentMedia } from './github-media.ts'
+import { createReviewRuntime, REVIEW_CODEX_FEATURES } from './review-runtime.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 interface CodexThread {
@@ -19,6 +22,7 @@ export interface CodexThreadClient {
 }
 
 export interface CodexProviderOptions {
+  reviewProofAuthority?: ReviewProofAuthorityFactory
   createCodex?: (options: CodexOptions) => CodexThreadClient
   readOnly?: boolean
 }
@@ -114,13 +118,27 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
     runTurn: (request: AgentTurnRequest) => (async function* () {
       const media = await materializeAgentMedia(request.media)
       let sandbox: AgentSandbox | undefined
+      let review: ReviewRuntime | undefined
       try {
+        if (request.toolPolicy?._tag === 'Review') {
+          if (options.reviewProofAuthority === undefined) {
+            yield { _tag: 'Failed', reason: 'The Review requires its controller proof authority.' }
+            return
+          }
+          const prepared = await createReviewRuntime({ request, provider: 'codex', environment: process.env, authority: options.reviewProofAuthority }).then(value => ({ _tag: 'Ok' as const, value })).catch((error: unknown) => ({ _tag: 'Err' as const, error }))
+          if (prepared._tag === 'Err') {
+            yield { _tag: 'Failed', reason: `The Review tools failed to start: ${prepared.error instanceof Error ? prepared.error.message : String(prepared.error)}` }
+            return
+          }
+          review = prepared.value
+        }
         if (options.createCodex === undefined) {
           const prepared = await prepareAgentSandbox({
             workspace: request.workspace,
             environment: process.env,
             provider: 'codex',
-            readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? [])],
+            readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? []), ...(review?.readOnlyPaths ?? [])],
+            ...(review === undefined ? {} : { reviewHome: review.home, readOnly: true }),
             ...(request.taskId === undefined ? {} : { taskId: request.taskId }),
             ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
           }).then(value => ({ _tag: 'Ok' as const, value })).catch((error: unknown) => ({ _tag: 'Err' as const, error }))
@@ -132,7 +150,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         }
         // Production uses the trusted adapter and its sanitized environment.
         // Injected clients exercise only the provider's event translation.
-        const client = factory(sandbox === undefined
+        const client = factory({ ...(sandbox === undefined
           ? { env: definedEntries(workspaceEnvironment(process.env, request.workspace, request.taskId)) }
           : {
               codexPathOverride: sandbox.adapterPath,
@@ -141,12 +159,13 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
                 HARLAN_AGENT_SANDBOX_ARGS: JSON.stringify([...sandbox.args, sandbox.providerBinary]),
                 HARLAN_AGENT_SANDBOX_ENV: JSON.stringify(sandbox.environment),
               },
-            })
+            }), ...(review === undefined ? {} : { config: { features: REVIEW_CODEX_FEATURES, agents: { enabled: false, max_depth: 0 } } }) })
         const baseOptions = {
           model: request.model,
           workingDirectory: request.workspace,
-          webSearchMode: 'live',
+          webSearchMode: review === undefined ? 'live' : 'disabled',
           approvalPolicy: 'never',
+          ...(review === undefined ? {} : { sandboxMode: 'read-only' as const }),
         } satisfies ThreadOptions
         const threadOptions: ThreadOptions = request.reasoningEffort === undefined
           ? baseOptions
@@ -157,7 +176,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
           signal: request.signal,
         })
 
-        if (request.sessionId !== null) {
+        if (request.sessionId !== null && review === undefined) {
           try {
             const resumed = await run(client.resumeThread(request.sessionId, threadOptions))
             yield* providerEvents(resumed.events)
@@ -174,8 +193,20 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         yield* providerEvents(started.events)
       }
       finally {
-        await sandbox?.release()
-        await media.release()
+        let released: Awaited<ReturnType<ReviewRuntime['release']>> | undefined
+        try {
+          await sandbox?.release()
+        }
+        finally {
+          try {
+            released = await review?.release()
+          }
+          finally {
+            await media.release()
+          }
+        }
+        for (const text of released?.warnings ?? [])
+          yield { _tag: 'Reasoning', text: `Controller warning: ${text}` }
       }
     })(),
   }

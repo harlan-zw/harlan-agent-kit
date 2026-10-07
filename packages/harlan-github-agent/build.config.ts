@@ -13,6 +13,8 @@ export default defineBuildConfig({
         './src/agent-sandbox-runtime.ts',
         './src/github-media-render.ts',
         './src/repair-regression-reporter.ts',
+        './src/review-mcp.ts',
+        './src/review-evidence-cli.ts',
       ],
     },
   ],

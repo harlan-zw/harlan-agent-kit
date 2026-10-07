@@ -108,3 +108,23 @@ The smoke proves filesystem, process, environment, and Git isolation with fake c
 It also checks direct private connections, proxy refusal, and real public HTTPS when the live flag is set.
 Both default providers complete fixture turns through the actual launch and transport paths.
 The smoke does not prove live provider login or each production repository's tooling.
+
+## Review proof limits
+
+Review exposes bounded reading, literal search, and one controller-reserved Node proof invocation.
+Review launches exclude repository environment files and use controller-selected provider configuration.
+Static reads accept byte offsets and return the next offset for each bounded page.
+Revision reads expose the complete triple-dot diff and changed file contents at its merge base and head.
+The controller collects this immutable evidence using fixed Git reads inside a separate read-only namespace.
+Evidence names the supplied base SHA, actual merge base SHA, and head SHA.
+The evidence limit is 500 changed paths, 1000000 bytes per blob, and 8000000 bytes total.
+Over-limit or binary changes return Unavailable. Revision reads exclude symlinks and submodule contents.
+Static evidence never reserves a proof invocation.
+The proof supports exported TypeScript APIs without installation, network access, or child processes.
+Unsupported preparation is a verification limit.
+The proof runs with an empty home, read-only files, and socket and process creation denied.
+Its controller-owned user scope limits memory to 512 MiB and disables swap.
+Each host requires its Service account's systemd user manager and bus.
+Missing scope authority stops verification without a weaker fallback.
+The controller retains failed output and cleanup warnings when the invocation ends.
+The limit counts one controller invocation, rather than assertions inside that invocation.

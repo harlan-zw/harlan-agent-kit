@@ -123,7 +123,7 @@ it('pins proof callbacks to the active desktop turn and refuses cancelled or dis
   } })
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
   const controller = new AbortController()
-  const policy = { _tag: 'Review' as const, headSha: 'a'.repeat(40), workerId: 'reviewer', fence: 7 }
+  const policy = { _tag: 'Review' as const, baseSha: 'a'.repeat(40), headSha: 'a'.repeat(40), workerId: 'reviewer', fence: 7 }
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, taskId: 'review-task', toolPolicy: policy, signal: controller.signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
   const stopped = expect(response).rejects.toThrow()
