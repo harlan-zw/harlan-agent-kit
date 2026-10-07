@@ -9,6 +9,7 @@ import { prepareAgentSandbox } from '../src/agent-sandbox.ts'
 import { createCodexProvider } from '../src/codex-provider.ts'
 import { requestReviewProof } from '../src/review-proof-transport.ts'
 import { createReviewRuntime } from '../src/review-runtime.ts'
+import { createReviewTools } from '../src/review-tools.ts'
 
 const execute = promisify(execFile)
 it('runs the proof in a readonly namespace and retains the first failure across a second request', async () => {
@@ -22,19 +23,26 @@ it('runs the proof in a readonly namespace and retains the first failure across 
   await writeFile(join(home, '.config/harlan-github-agent/worker.json'), JSON.stringify({ home: worker, codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [], readOnlyPaths: [] }))
   await execute('git', ['init', primary])
   await writeFile(join(primary, 'api.ts'), 'export const answer = () => 42')
-  await execute('git', ['-C', primary, 'add', 'api.ts'])
+  await writeFile(join(primary, 'old.ts'), 'export const deleted = 42')
+  await writeFile(join(primary, 'large.ts'), `${'x'.repeat(64_000)}before`)
+  await execute('git', ['-C', primary, 'add', '.'])
   await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '-m', 'test: seed fixture'])
   const wtConfig = join(root, 'wt.toml')
   await writeFile(wtConfig, '[list]\njson-schema = 2\n')
   await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'review', '--base', 'HEAD', '--yes'])
   const listing = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout) as { items: { branch: string, worktree: { path: string } }[] }
   const workspace = listing.items.find(item => item.branch === 'review')!.worktree.path
+  const baseSha = (await execute('git', ['-C', workspace, 'rev-parse', 'HEAD'])).stdout.trim()
+  await rm(join(workspace, 'old.ts'))
+  await writeFile(join(workspace, 'large.ts'), `${'x'.repeat(64_000)}after`)
+  await execute('git', ['-C', workspace, 'add', '.'])
+  await execute('git', ['-C', workspace, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '-m', 'test: change fixture'])
   const loginAlias = join(workspace, 'provider-login')
   await symlink('/home/agent/.codex/auth.json', loginAlias)
   const headSha = (await execute('git', ['-C', workspace, 'rev-parse', 'HEAD'])).stdout.trim()
   let reserved = false
   const receipts: ReviewProofReceipt[] = []
-  const runtime = await createReviewRuntime({ environment: { HOME: home }, provider: 'codex', request: { taskId: 'task', toolPolicy: { _tag: 'Review', headSha, workerId: 'worker', fence: 1 }, workspace, prompt: '', model: '', outputSchema: {}, sessionId: null, signal: AbortSignal.timeout(30_000) }, authority: () => ({
+  const runtime = await createReviewRuntime({ environment: { HOME: home }, provider: 'codex', request: { taskId: 'task', toolPolicy: { _tag: 'Review', baseSha, headSha, workerId: 'worker', fence: 1 }, workspace, prompt: '', model: '', outputSchema: {}, sessionId: null, signal: AbortSignal.timeout(30_000) }, authority: () => ({
     async reserve() {
       if (reserved)
         return { _tag: 'Refused', reason: 'The first proof remains final.', ...(receipts[0] === undefined ? {} : { receipt: receipts[0] }) }
@@ -46,6 +54,14 @@ it('runs the proof in a readonly namespace and retains the first failure across 
     },
   }) })
   try {
+    const staticTools = createReviewTools({ workspace, evidencePath: join(runtime.readOnlyPaths[0]!, 'evidence.json'), proof: async () => {
+      throw new Error('Static evidence must not launch a proof.')
+    } })
+    expect(await staticTools.call('review_read', { revision: 'base', path: 'old.ts' })).toMatchObject({ _tag: 'Read', text: 'export const deleted = 42', baseSha, headSha, mergeBaseSha: baseSha })
+    expect(await staticTools.call('review_read', { revision: 'head', path: 'large.ts', offset: 64_000 })).toMatchObject({ _tag: 'Read', text: 'after', truncated: false })
+    const diff = await staticTools.call('review_read', { revision: 'diff', path: '', offset: 128_000 })
+    expect(JSON.stringify(diff)).toContain('deleted')
+    expect(reserved).toBe(false)
     const socket = runtime.readOnlyPaths[1]!
     const first = await requestReviewProof(socket, { planId: 'node-typescript', source: `
 import assert from 'node:assert/strict'
@@ -127,7 +143,7 @@ process.stdin.once('end', () => {
       for (const concurrent of [false, true]) {
         await writeFile(join(worker, '.codex/auth.json'), '{"login":"fixture-original"}')
         const events = []
-        for await (const event of provider.runTurn({ taskId: 'task', toolPolicy: { _tag: 'Review', headSha, workerId: 'worker', fence: 1 }, workspace, prompt: '', model: 'fixture', outputSchema: {}, sessionId: null, signal: AbortSignal.timeout(10_000) })) {
+        for await (const event of provider.runTurn({ taskId: 'task', toolPolicy: { _tag: 'Review', baseSha: headSha, headSha, workerId: 'worker', fence: 1 }, workspace, prompt: '', model: 'fixture', outputSchema: {}, sessionId: null, signal: AbortSignal.timeout(10_000) })) {
           events.push(event)
           if (concurrent && event._tag === 'Message')
             await writeFile(join(worker, '.codex/auth.json'), '{"login":"fixture-external"}')

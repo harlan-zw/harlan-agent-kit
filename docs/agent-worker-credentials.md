@@ -113,6 +113,13 @@ The smoke does not prove live provider login or each production repository's too
 
 Review exposes bounded reading, literal search, and one controller-reserved Node proof invocation.
 Review launches exclude repository environment files and use controller-selected provider configuration.
+Static reads accept byte offsets and return the next offset for each bounded page.
+Revision reads expose the complete triple-dot diff and changed file contents at its merge base and head.
+The controller collects this immutable evidence using fixed Git reads inside a separate read-only namespace.
+Evidence names the supplied base SHA, actual merge base SHA, and head SHA.
+The evidence limit is 500 changed paths, 1000000 bytes per blob, and 8000000 bytes total.
+Over-limit or binary changes return Unavailable. Revision reads exclude symlinks and submodule contents.
+Static evidence never reserves a proof invocation.
 The proof supports exported TypeScript APIs without installation, network access, or child processes.
 Unsupported preparation is a verification limit.
 The proof runs with an empty home, read-only files, and socket and process creation denied.

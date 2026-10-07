@@ -6,7 +6,7 @@ import { createOpencodeProvider } from '../src/opencode-provider.ts'
 it.each([createCodexProvider, createOpencodeProvider])('refuses Review before starting a provider without central proof ownership', async (createProvider) => {
   const request: AgentTurnRequest = {
     taskId: 'review-task',
-    toolPolicy: { _tag: 'Review', headSha: 'a'.repeat(40), workerId: 'worker', fence: 1 },
+    toolPolicy: { _tag: 'Review', baseSha: 'a'.repeat(40), headSha: 'a'.repeat(40), workerId: 'worker', fence: 1 },
     workspace: '/missing-worktree',
     prompt: '',
     model: '',

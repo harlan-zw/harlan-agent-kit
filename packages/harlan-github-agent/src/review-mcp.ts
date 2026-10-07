@@ -4,10 +4,10 @@ import { requestReviewProof } from './review-proof-transport.ts'
 import { createReviewTools, REVIEW_TOOLS } from './review-tools.ts'
 
 async function main(): Promise<void> {
-  const [workspace, socketPath] = process.argv.slice(2)
-  if (workspace === undefined || socketPath === undefined)
-    throw new Error('The Review tools require a worktree and proof socket.')
-  const tools = createReviewTools({ workspace, proof: input => requestReviewProof(socketPath, input) })
+  const [workspace, socketPath, evidencePath] = process.argv.slice(2)
+  if (workspace === undefined || socketPath === undefined || evidencePath === undefined)
+    throw new Error('The Review tools require a worktree, proof socket, and revision evidence.')
+  const tools = createReviewTools({ workspace, evidencePath, proof: input => requestReviewProof(socketPath, input) })
   let pending = ''
   const send = (value: unknown) => {
     process.stdout.write(`${JSON.stringify(value)}\n`)

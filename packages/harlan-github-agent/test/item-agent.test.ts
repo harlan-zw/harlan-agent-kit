@@ -165,7 +165,8 @@ describe('subject Workers', () => {
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
     expect(capture.requests[0]?.prompt).toContain('stays inaccessible after authenticated retrieval')
     expect(capture.requests[0]?.media).toEqual([image])
-    expect(capture.requests[0]?.prompt).toContain('Use pnpm for every package command. Never use npx.')
+    expect(capture.requests[0]?.prompt).toContain('Use review_read with revision diff and an empty path.')
+    expect(capture.requests[0]?.prompt).not.toContain('Review the full diff with: git diff')
   })
 
   it.each(['None', 'Stale'] as const)('reviews afresh when a complete comment has %s local target evidence', async (storedTag) => {

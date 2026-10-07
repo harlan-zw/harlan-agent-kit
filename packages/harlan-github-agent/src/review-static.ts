@@ -4,7 +4,7 @@ import { constants } from 'node:fs'
 import { lstat, open, opendir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
-export type ReviewStaticRead = { _tag: 'Read', text: string, truncated: boolean } | { _tag: 'Refused', reason: string }
+export type ReviewStaticRead = { _tag: 'Read', text: string, truncated: boolean, nextOffset?: number } | { _tag: 'Refused', reason: string }
 export type ReviewStaticSearch = { _tag: 'Matches', matches: { path: string, line: number, text: string }[], truncated: boolean } | { _tag: 'Refused', reason: string }
 const maximumFileBytes = 16_000
 const maximumFiles = 400
@@ -16,9 +16,11 @@ function contained(path: string, root: string): boolean {
 }
 
 /** Run this reader inside the worker namespace. It never reads controller paths. */
-export function createReviewStaticReader(workspace: string): { read: (path: unknown) => Promise<ReviewStaticRead>, search: (text: unknown) => Promise<ReviewStaticSearch> } {
+export function createReviewStaticReader(workspace: string): { read: (path: unknown, offset?: unknown) => Promise<ReviewStaticRead>, search: (text: unknown) => Promise<ReviewStaticSearch> } {
   const root = resolve(workspace)
-  const read = async (input: unknown): Promise<ReviewStaticRead> => {
+  const read = async (input: unknown, offset: unknown = 0): Promise<ReviewStaticRead> => {
+    if (!Number.isSafeInteger(offset) || Number(offset) < 0 || Number(offset) > 32_000_000)
+      return { _tag: 'Refused', reason: 'The read offset must be between 0 and 32000000 bytes.' }
     if (typeof input !== 'string' || input.length > 500 || isAbsolute(input))
       return { _tag: 'Refused', reason: 'Use a relative file path inside the Review worktree.' }
     const path = resolve(root, input)
@@ -48,8 +50,11 @@ export function createReviewStaticReader(workspace: string): { read: (path: unkn
       if (!contained(openedPath, root) || !(await file.stat()).isFile())
         return { _tag: 'Refused', reason: 'The opened file leaves the Review worktree.' }
       const bytes = Buffer.alloc(maximumFileBytes + 1)
-      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0)
-      return { _tag: 'Read', text: bytes.subarray(0, Math.min(bytesRead, maximumFileBytes)).toString('utf8'), truncated: bytesRead > maximumFileBytes }
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, Number(offset))
+      let end = Math.min(bytesRead, maximumFileBytes)
+      while (end > 0 && end < bytesRead && (bytes[end]! & 0xC0) === 0x80)
+        end--
+      return { _tag: 'Read', text: bytes.subarray(0, end).toString('utf8'), truncated: bytesRead > end, ...(bytesRead > end ? { nextOffset: Number(offset) + end } : {}) }
     }
     finally {
       await file.close()
