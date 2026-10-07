@@ -14,6 +14,7 @@ import type { RepairRecoveryTarget } from './repair-recovery.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { Result } from './result.ts'
 import type { ReviewApproval } from './review-approval.ts'
+import type { ReviewProofStore } from './review-proof-store.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
 import type {
@@ -136,6 +137,7 @@ import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
 import { buildStats } from './stats.ts'
 import { createTakeOwnershipStore } from './take-ownership-store.ts'
@@ -764,7 +766,7 @@ export type StoredIssueTriageRun
       decidedAt: string
     }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore {
   inspectRepairRecovery: (taskId: string, commitSha: string) => Result<RepairRecoveryTarget, string>
   claimRepairRecovery: (target: RepairRecoveryTarget, workerId: string, at: string, leaseMilliseconds: number) => Result<ClaimedReviewFixTask, string>
   getPullRequestWatchState: (repository: string, number: number) => PullRequestWatchState | null
@@ -7223,6 +7225,7 @@ export function openJournalStore(
   const database = openDatabase(path)
   const packageReleaseStore = createPackageReleaseStore(database)
   const takeOwnershipStore = createTakeOwnershipStore(database)
+  const reviewProofStore = createReviewProofStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
   const loggedFindingStore = createLoggedFindingStore(database, {
@@ -16084,6 +16087,7 @@ export function openJournalStore(
 
   return {
     ...takeOwnershipStore,
+    ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,
     syncRoutines,

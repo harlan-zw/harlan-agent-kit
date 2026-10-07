@@ -1,6 +1,7 @@
 import type { ConsolaInstance } from 'consola'
 import type { Server } from 'srvx'
 import type { AgentProviderName } from './agent-provider.ts'
+import type { CodexProviderOptions } from './codex-provider.ts'
 import type { ReloadableExternalWatchController } from './external-watch.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
@@ -11,6 +12,7 @@ import type { AgentSlotCounts } from './host-memory.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunReport } from './review-check-run.ts'
 import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
+import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
 import type { JournalStore } from './store.ts'
@@ -79,6 +81,7 @@ import { applyReviewApproval } from './review-approval.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
 import { refreshReviewGates } from './review-gate-sweep.ts'
+import { createReviewProofAuthority } from './review-proof-controller.ts'
 import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { createReviewStatusScheduler } from './review-status-scheduler.ts'
@@ -470,7 +473,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
-  const desktop = createDesktopBroker({ now: () => now().getTime(), settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json') })
+  const reviewProofAuthority = createReviewProofAuthority(store, now)
+  const codexProofOptions: CodexProviderOptions & { reviewProofAuthority: ReviewProofAuthorityFactory } = { reviewProofAuthority }
+  const desktop = createDesktopBroker({ now: () => now().getTime(), settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json'), reviewProofAuthority })
   const sizing = agentSlotSizing(
     configuredProfile.maximumActiveAgents,
     await localAgentMemoryBytes(config.agent.hostReserveGiB),
@@ -510,13 +515,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,
         now,
-        provider: hosts.provider(createCodexProvider(), desktop.provider('codex')),
+        provider: hosts.provider(createCodexProvider(codexProofOptions), desktop.provider('codex')),
         store,
       }),
       opencode: createCircuitProtectedProvider({
         credential: agentProfile('opencode').authentication,
         now,
-        provider: hosts.provider(createOpencodeProvider({ cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }), desktop.provider('opencode')),
+        provider: hosts.provider(createOpencodeProvider({ ...codexProofOptions, cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }), desktop.provider('opencode')),
         store,
       }),
     },

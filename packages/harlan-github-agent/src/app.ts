@@ -458,6 +458,12 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const body = await desktopBody(event)
     return { accepted: typeof body.id === 'string' && options.desktop?.events(body.id, desktopInput(parseDesktopEvents, body.events)) === true }
   })
+  app.post('/api/desktop/proof', async (event) => {
+    const body = await desktopBody(event)
+    if (typeof body.id !== 'string' || options.desktop === undefined)
+      throw createError({ statusCode: 400, message: 'An active desktop turn is required.' })
+    return options.desktop.proof(body.id, body.action, body.input)
+  })
   app.post('/api/desktop/complete', async (event) => {
     const body = await desktopBody(event)
     const result = body.result === null ? null : desktopInput(parseDesktopWorktree, body.result)
