@@ -118,6 +118,7 @@ function safeJob(job: FailedJobContext): FailedJobContext {
     logTail: log.slice(-8_000).split('\n').slice(-80),
     logTruncated: job.logTruncated === true || log.length > 8_000 || job.logTail.length > 80,
     ...(execution === undefined ? {} : { execution, executionTruncated: job.executionTruncated === true || job.execution!.length > 20 || job.execution!.some(entry => entry.run.length > 1_000) }),
+    ...(job.workflow === undefined ? {} : { workflow: job.workflow._tag === 'Unavailable' ? { _tag: 'Unavailable' as const, reason: safeText(job.workflow.reason) } : job.workflow }),
   }
 }
 
