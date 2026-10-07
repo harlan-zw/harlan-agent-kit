@@ -112,6 +112,7 @@ The smoke does not prove live provider login or each production repository's too
 ## Review proof limits
 
 Review exposes bounded reading, literal search, and one controller-reserved Node proof invocation.
+Review launches exclude repository environment files and use controller-selected provider configuration.
 The proof supports exported TypeScript APIs without installation, network access, or child processes.
 Unsupported preparation is a verification limit.
 The proof runs with an empty home, read-only files, and socket and process creation denied.

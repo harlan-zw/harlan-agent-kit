@@ -317,7 +317,7 @@ export async function prepareAgentSandbox(input: {
     args.push('--ro-bind', gitConfig, join(common, 'config'))
     args.push('--ro-bind', gitConfig, join(taskDirectory, 'config.worktree'))
     args.push('--chdir', workspace, '--', '/run/agent/node', '--experimental-strip-types', '/run/agent/runtime.ts', input.networkMode ?? 'command')
-    const environment = workspaceEnvironment({
+    const baseEnvironment: NodeJS.ProcessEnv = {
       HOME: workerHome,
       PATH: `${workerHome}/.local/share/harlan-agent-kit/github-bin:${profile.tools.join(':')}:/usr/local/bin:/usr/bin:/bin`,
       LANG: input.environment.LANG ?? 'C.UTF-8',
@@ -332,7 +332,9 @@ export async function prepareAgentSandbox(input: {
       ...(input.environment.OPENCODE_CONFIG_CONTENT === undefined ? {} : { OPENCODE_CONFIG_CONTENT: input.environment.OPENCODE_CONFIG_CONTENT }),
       ...(input.environment.OPENCODE_SERVER_USERNAME === undefined ? {} : { OPENCODE_SERVER_USERNAME: input.environment.OPENCODE_SERVER_USERNAME }),
       ...(input.environment.OPENCODE_SERVER_PASSWORD === undefined ? {} : { OPENCODE_SERVER_PASSWORD: input.environment.OPENCODE_SERVER_PASSWORD }),
-    }, workspace, input.taskId)
+    }
+    // Review tools use only controller configuration. Repository loader variables can restore execution.
+    const environment = input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment
     // Repository variables belong inside the boundary. Loader variables must
     // never affect host Bubblewrap before namespace creation.
     args.splice(args.indexOf('--'), 0, '--clearenv', ...Object.entries(environment).flatMap(([key, value]) => value === undefined ? [] : ['--setenv', key, value]))
