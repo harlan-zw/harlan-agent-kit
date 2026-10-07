@@ -87,6 +87,8 @@ function repositoryName(repository: string): string {
 function permissions(access: GitHubRepositoryAccess): Record<string, PermissionLevel> {
   if (access === 'read')
     return { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }
+  if (access === 'deployments_read')
+    return { deployments: 'read', metadata: 'read' }
   if (access === 'checks_read')
     return { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }
   if (access === 'check_write')

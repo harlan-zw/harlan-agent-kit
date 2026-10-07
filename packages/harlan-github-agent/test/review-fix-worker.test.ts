@@ -38,11 +38,12 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        getFailedJobContext: () => Promise.resolve(ok({ runId: 42, jobName: 'test', failedStep: 'focused test', logTail: ['Private controller log: missing generated inputs'], execution: [{ run: 'pnpm dev:prepare', shell: 'bash -e {0}', workingDirectory: 'packages/site' }] })),
         findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getPullRequestReviewSnapshot: () => Promise.resolve(ok({
           baseChecks: { _tag: 'Available', checks: [] },
           body: '',
-          checks: { _tag: 'Available', checks: [] },
+          checks: { _tag: 'Available', checks: [{ id: 42, name: 'test', status: 'completed', conclusion: 'failure', failure: { _tag: 'StepFailed' }, source: { _tag: 'CheckRun', appId: 15368 } }] },
           comments: [],
           priorAutomatedReview: { _tag: 'None' },
           pullRequest,
@@ -91,6 +92,8 @@ describe('review fix Worker', () => {
       usage: { _tag: 'Unavailable' },
     }))
     expect(committedMessage).toBe('')
+    expect(capture.requests[0]?.prompt).toContain('Private controller log: missing generated inputs')
+    expect(capture.requests[0]?.prompt).toContain('pnpm dev:prepare')
   })
 
   it.each([

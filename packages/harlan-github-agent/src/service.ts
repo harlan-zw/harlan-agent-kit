@@ -96,6 +96,7 @@ import { createCompletionSource } from './take-ownership-github.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
 import { createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
+import { createRoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
 import { agentWorktreeLeaseKey, confirmRepairRecoveryRegression, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createRepairRecoveryWorktreeManager, createReviewFixWorktreeManager, runRepairRecoveryChecks, sweepAgentWorktrees } from './worktree.ts'
 
@@ -923,6 +924,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
           activityLog,
+          githubEvidence: createRoutineGitHubEvidenceSource({ tokens: routedTokens, now, jobs: workerGithub }),
           logger: {
             error: message => options.logger.error(message),
             info: message => options.logger.info(message),
