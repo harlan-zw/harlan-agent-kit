@@ -390,14 +390,18 @@ export function nextRecoveryAt(failedAt: string, recoveryAttempts: number): stri
  * to the repository fixes that, and every past Agent turn on one produced a
  * mask: a retry wrapper, a concurrency limit, or a build flag. A person repairs
  * the host, then re-runs the check.
+ * `Indeterminate` means the evidence cannot authorize repository changes.
  */
 export type CheckFailureClass
   = | { _tag: 'Repairable' }
     | { _tag: 'Infrastructure', reason: string }
+    | { _tag: 'Indeterminate', reason: string }
 
 export interface CheckFailureSignal {
   name: string
   conclusion: string | null
+  /** The actual failing step, or null when GitHub reports none. */
+  failedStep: string | null
   /** What the job steps say, when the controller could read them. */
   runnerLost?: boolean
   /** The last lines of the failed job log, oldest first. Empty when unavailable. */
@@ -416,7 +420,6 @@ const runnerKillPatterns: RegExp[] = [
   /\blost communication with the server\b/i,
   /\bThe hosted runner\b.+\blost communication\b/i,
   /\bThe self-hosted runner\b.+\blost communication\b/i,
-  /\bThe operation was canceled\b/i,
 ]
 
 /** Remote services a workflow downloads from, which the repository does not control. */
@@ -459,12 +462,11 @@ function remoteFetchFailure(logTail: string[]): string | null {
  *
  * Only a runner kill or a remote download failure is Infrastructure. A heap
  * limit inside a step stays Repairable, because the workflow's `NODE_OPTIONS`
- * is the repository's to change. An unreadable log stays Repairable, because
- * an Agent can still read the repository. A `timed_out` conclusion stays
- * Repairable unless the log shows the host or a download stalled.
+ * is the repository's to change. Missing logs or a missing failed step remain
+ * Indeterminate. Cancellation alone does not identify the cause.
  */
 export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureClass {
-  if (signal.runnerLost === true)
+  if (signal.runnerLost === true && signal.conclusion !== 'cancelled')
     return { _tag: 'Infrastructure', reason: `The runner lost the job for check "${signal.name}" before any step failed.` }
   // A `timed_out` conclusion alone says nothing about who hung. A repository
   // test can hang as easily as a host can stall, so the log decides.
@@ -477,6 +479,12 @@ export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureCl
   const host = remoteFetchFailure(signal.logTail)
   if (host !== null)
     return { _tag: 'Infrastructure', reason: `A download from ${host} failed during check "${signal.name}".` }
+  if (signal.logTail.every(line => line.trim().length === 0))
+    return { _tag: 'Indeterminate', reason: `Check "${signal.name}" has no readable failure log.` }
+  if (signal.logTail.every(line => line.trim().length === 0 || /\bThe operation was canceled\b/i.test(line)))
+    return { _tag: 'Indeterminate', reason: `Check "${signal.name}" reports cancellation without a failure cause.` }
+  if (signal.failedStep === null || signal.failedStep.trim().length === 0)
+    return { _tag: 'Indeterminate', reason: `Check "${signal.name}" has no confirmed failed step (${signal.conclusion ?? 'unknown'}).` }
   return { _tag: 'Repairable' }
 }
 
@@ -520,9 +528,7 @@ export async function classifyCheckFailureWithResidual(input: {
   abort?: AbortSignal
 }): Promise<CheckFailureClass> {
   const classified = classifyCheckFailure(input.signal)
-  if (classified._tag === 'Infrastructure' || input.classification === null)
-    return classified
-  if (input.signal.logTail.length === 0)
+  if (classified._tag !== 'Repairable' || input.classification === null)
     return classified
   const result = await input.classification.classify({
     state: { check: input.signal.name, conclusion: input.signal.conclusion, logTail: input.signal.logTail.slice(-30) },

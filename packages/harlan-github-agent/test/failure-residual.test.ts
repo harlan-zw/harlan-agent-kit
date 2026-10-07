@@ -8,6 +8,7 @@ const signal: CheckFailureSignal = {
   name: 'test',
   conclusion: 'failure',
   runnerLost: false,
+  failedStep: 'Run tests',
   logTail: ['Error: spawn ENOMEM', '    at ChildProcess.spawn (node:internal/child_process:521:17)'],
 }
 
@@ -51,7 +52,7 @@ describe('check failure residual classification', () => {
       },
     }
     const classified = await classifyCheckFailureWithResidual({
-      signal: { ...signal, logTail: ['##[error]The operation was canceled as planning was cancelled'] },
+      signal: { ...signal, logTail: ['##[error]The runner has received a shutdown signal'] },
       classification,
     })
     expect(classified._tag).toBe('Infrastructure')
@@ -77,7 +78,7 @@ describe('check failure residual classification', () => {
         return Promise.resolve({ _tag: 'Err' as const, error: { _tag: 'Aborted' as const } })
       },
     }
-    await expect(classifyCheckFailureWithResidual({ signal: { ...signal, logTail: [] }, classification })).resolves.toEqual({ _tag: 'Repairable' })
+    await expect(classifyCheckFailureWithResidual({ signal: { ...signal, logTail: [] }, classification })).resolves.toMatchObject({ _tag: 'Indeterminate' })
     expect(asked).toBe(false)
   })
 
