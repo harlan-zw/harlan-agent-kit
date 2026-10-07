@@ -24,6 +24,7 @@ export interface PreparedConflictWorktree {
   headSha: string
   baseSha: string
   conflictedFiles: string[]
+  writablePaths: string[]
 }
 
 /**
@@ -607,6 +608,19 @@ async function pinPublicationArtifact(
     : err(`Could not pin the publication artifact: ${pinned.stderr}`)
 }
 
+async function conflictWritablePaths(
+  worktree: Omit<PreparedConflictWorktree, 'writablePaths'>,
+  signal: AbortSignal,
+): Promise<Result<string[], string>> {
+  const mergeBase = await runGitScalar(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
+  if (mergeBase.exitCode !== 0)
+    return err(`Could not resolve the merge base: ${mergeBase.stderr}`)
+  const merged = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', mergeBase.stdout, worktree.baseSha], signal)
+  if (merged.exitCode !== 0)
+    return err(`Could not inspect what the base branch changed: ${merged.stderr}`)
+  return ok([...new Set([...worktree.conflictedFiles, ...merged.stdout.split('\0').filter(Boolean)])].sort())
+}
+
 export function createConflictWorktreeManager(options: ConflictWorktreeManagerOptions): ConflictWorktreeManager {
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
@@ -674,14 +688,18 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       return err(`Git could not merge ${baseBranch} into the pull request head: ${cleanLine(merge.stderr || merge.stdout)}`)
     }
 
+    const prepared = {
+      path: worktree.value,
+      headSha: head.stdout,
+      baseSha: base.stdout,
+      conflictedFiles: unmerged.stdout.split('\0').filter(Boolean).sort(),
+    }
+    const writablePaths = await conflictWritablePaths(prepared, signal)
+    if (writablePaths._tag === 'Err')
+      return writablePaths
     return ok({
       _tag: 'Conflicted',
-      worktree: {
-        path: worktree.value,
-        headSha: head.stdout,
-        baseSha: base.stdout,
-        conflictedFiles: unmerged.stdout.split('\0').filter(Boolean).sort(),
-      },
+      worktree: { ...prepared, writablePaths: writablePaths.value },
     })
   }
 
@@ -746,13 +764,10 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     // or the call site the base branch moved, and refusing those killed correct
     // resolutions outright. Anything the merge did not touch is still unrelated
     // work that has no place in a merge commit.
-    const mergeBase = await runGitScalar(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
-    if (mergeBase.exitCode !== 0)
-      return err(`Could not resolve the merge base: ${mergeBase.stderr}`)
-    const merged = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', mergeBase.stdout, worktree.baseSha], signal)
-    if (merged.exitCode !== 0)
-      return err(`Could not inspect what the base branch changed: ${merged.stderr}`)
-    const writablePaths = new Set([...worktree.conflictedFiles, ...merged.stdout.split('\0').filter(Boolean)])
+    const writable = await conflictWritablePaths(worktree, signal)
+    if (writable._tag === 'Err')
+      return writable
+    const writablePaths = new Set(writable.value)
     const unexpectedPath = workerChangedPaths.find(path => !writablePaths.has(path))
     if (unexpectedPath !== undefined)
       return err(`The worker changed a file the merge did not touch: ${unexpectedPath}.`)

@@ -14,7 +14,7 @@ const resolved = {
 
 it('supplies conflict intent instead of asking a public-only CLI for private metadata', () => {
   const task = conflictTask(repositoryMapping(), { ...pullRequestItem(), title: 'Preserve parser ordering', body: 'Keep the new ordering while merging configuration.' })
-  const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict', conflictedFiles: ['src/parser.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
+  const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict', conflictedFiles: ['src/parser.ts'], writablePaths: ['src/parser.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
   expect(prompt).toContain('Preserve parser ordering')
   expect(prompt).toContain('Keep the new ordering while merging configuration.')
   expect(prompt).toContain('public reads only')
@@ -45,7 +45,7 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
     },
     validateMapping: () => Promise.resolve(ok(repository)),
     worktrees: {
-      prepare: () => Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'] } })),
+      prepare: () => Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'], writablePaths: ['file.ts'] } })),
       verify: () => Promise.resolve(ok({ digest: 'digest', changedFiles: 1 })),
       commit: () => Promise.resolve(ok({ commitSha: 'commit', baseSha: current.baseSha, artifactRef: 'artifact', digest: 'digest', changedFiles: 1 })),
     },
@@ -55,7 +55,7 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 describe('conflict worker', () => {
   it('requires base evidence for an unchanged consumer failure and blocks repair outside the merge scope', () => {
     const task = conflictTask()
-    const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict-prompt', conflictedFiles: ['src/producer.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
+    const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict-prompt', conflictedFiles: ['src/producer.ts'], writablePaths: ['src/producer.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
 
     expect(prompt).toMatch(/matching base evidence.*pre-existing/)
     expect(prompt).toMatch(/Otherwise, report its cause as unknown/)
@@ -182,7 +182,7 @@ describe('conflict worker', () => {
       worktrees: {
         prepare: (task) => {
           preparedBaseSha = task.pullRequest.baseSha
-          return Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'] } }))
+          return Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['file.ts'], writablePaths: ['file.ts'] } }))
         },
         verify: () => Promise.resolve(ok({ digest: 'digest', changedFiles: 1 })),
         commit: (_task, _worktree, _patch, message) => {
@@ -207,7 +207,7 @@ describe('conflict worker', () => {
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
       worktrees: {
         ...conflictWorkerOptions(repository, current).worktrees,
-        prepare: () => Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: 'head-sha', baseSha: 'current-base', conflictedFiles: ['src/a.ts', 'src/b.vue'] } })),
+        prepare: () => Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: 'head-sha', baseSha: 'current-base', conflictedFiles: ['src/a.ts', 'src/b.vue'], writablePaths: ['src/a.ts', 'src/b.vue'] } })),
       },
     })
 
