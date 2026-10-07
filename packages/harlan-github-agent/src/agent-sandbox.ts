@@ -1,5 +1,7 @@
+import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +11,111 @@ import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
 const workerHome = '/home/agent'
+
+const mutableGitFiles = ['HEAD', 'index', 'ORIG_HEAD', 'MERGE_HEAD', 'MERGE_MSG', 'MERGE_MODE', 'FETCH_HEAD', 'AUTO_MERGE', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'REBASE_HEAD', 'SQUASH_MSG', 'logs/HEAD'] as const
+
+/** Read an ordinary Git data file without following an untrusted file or directory alias. */
+async function gitData(root: string, name: string): Promise<Buffer | null> {
+  const file = await open(join(root, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT')
+      return null
+    throw error
+  })
+  if (file === null)
+    return null
+  try {
+    const canonicalRoot = await realpath(root)
+    const path = await realpath(`/proc/self/fd/${file.fd}`)
+    const metadata = await file.stat()
+    const limit = name === 'index' ? 128 * 1024 * 1024 : 16 * 1024 * 1024
+    if (!path.startsWith(`${canonicalRoot}/`) || !metadata.isFile() || metadata.size > limit)
+      throw new Error('The Agent Git data must use bounded regular files inside its task directory.')
+    const buffer = Buffer.alloc(Math.min(metadata.size + 1, limit + 1))
+    let size = 0
+    while (size < buffer.length) {
+      const { bytesRead } = await file.read(buffer, size, buffer.length - size, size)
+      if (bytesRead === 0)
+        break
+      size += bytesRead
+    }
+    if (size > metadata.size)
+      throw new Error('The Agent Git data changed while being read.')
+    return buffer.subarray(0, size)
+  }
+  finally {
+    await file.close()
+  }
+}
+
+/** Keep atomic Git writes private. Copy back only index, head and merge data, never configuration. */
+async function privateGitData(scratch: string, taskDirectory: string): Promise<{ directory: string, save: () => Promise<void> }> {
+  const directory = join(scratch, 'git-task')
+  await mkdir(join(directory, 'logs'), { recursive: true, mode: 0o700 })
+  for (const name of [...mutableGitFiles, 'commondir', 'gitdir']) {
+    const data = await gitData(taskDirectory, name)
+    if (data !== null)
+      await writeFile(join(directory, name), data, { mode: 0o600 })
+  }
+  return { directory, save: async () => {
+    // Parse every source before changing trusted task data.
+    const data = await Promise.all(mutableGitFiles.map(async name => ({ name, value: await gitData(directory, name) })))
+    const staging = await mkdtemp(join(taskDirectory, '.agent-data-'))
+    try {
+      for (const { name, value } of data) {
+        if (value === null) {
+          await rm(join(taskDirectory, name), { force: true })
+        }
+        else {
+          await mkdir(dirname(join(staging, name)), { recursive: true, mode: 0o700 })
+          await writeFile(join(staging, name), value, { mode: 0o600 })
+          await mkdir(dirname(join(taskDirectory, name)), { recursive: true, mode: 0o700 })
+          await rename(join(staging, name), join(taskDirectory, name))
+        }
+      }
+    }
+    finally {
+      await rm(staging, { recursive: true, force: true })
+    }
+  } }
+}
+
+/** Copy bounded trusted refs. The worker can mutate only this disposable copy. */
+async function privateGitCommon(scratch: string, common: string): Promise<string> {
+  const directory = join(scratch, 'git-common')
+  await mkdir(join(directory, 'objects/info'), { recursive: true, mode: 0o700 })
+  await mkdir(join(directory, 'refs'), { recursive: true, mode: 0o700 })
+  await writeFile(join(directory, 'objects/info/alternates'), '/run/agent/base-objects\n', { mode: 0o600 })
+  let count = 0
+  const copyRefs = async (name: string, depth: number): Promise<void> => {
+    if (depth > 32)
+      throw new Error('The Agent Git refs exceed their directory limit.')
+    for (const entry of await readdir(join(common, name), { withFileTypes: true })) {
+      if (++count > 20_000)
+        throw new Error('The Agent Git refs exceed their file limit.')
+      const relative = join(name, entry.name)
+      if (entry.isDirectory()) {
+        await mkdir(join(directory, relative), { mode: 0o700 })
+        await copyRefs(relative, depth + 1)
+      }
+      else if (entry.isFile()) {
+        const data = await gitData(common, relative)
+        if (data === null || data.length > 64 * 1024)
+          throw new Error('The Agent Git ref must use a bounded regular file.')
+        await writeFile(join(directory, relative), data, { mode: 0o600 })
+      }
+      else {
+        throw new Error('The Agent Git refs must not use file aliases.')
+      }
+    }
+  }
+  await copyRefs('refs', 0)
+  for (const name of ['HEAD', 'packed-refs', 'shallow']) {
+    const data = await gitData(common, name)
+    if (data !== null)
+      await writeFile(join(directory, name), data, { mode: 0o600 })
+  }
+  return directory
+}
 
 interface WorkerConfiguration {
   home: string
@@ -99,6 +206,7 @@ export async function prepareAgentSandbox(input: {
   profilePath?: string
   provider: 'codex' | 'opencode'
   readOnlyPaths?: readonly string[]
+  writablePaths?: readonly string[]
   taskId?: string
   networkMode?: 'command' | 'opencode-server' | 'opencode-client'
   transportDirectory?: string
@@ -149,6 +257,8 @@ export async function prepareAgentSandbox(input: {
       else
         args.push('--ro-bind', await permittedPath(path, controllerHome), path)
     }
+    for (const path of input.writablePaths ?? [])
+      args.push('--bind', await permittedPath(path, controllerHome), path)
     const workspace = await realpath(input.workspace)
     const repositoryBind = input.readOnly === true || input.reviewHome !== undefined ? '--ro-bind' : '--bind'
     args.push(repositoryBind, workspace, workspace)
@@ -172,36 +282,45 @@ export async function prepareAgentSandbox(input: {
     }
     const { stdout } = await execute('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
     const common = await realpath(stdout.trim())
-    // Share only Git's object/ref storage and this task's index. Never expose
-    // the common directory's host config, other tasks, hooks, or extra files.
-    args.push('--tmpfs', common)
-    for (const name of ['HEAD', 'objects', 'refs', 'logs', 'packed-refs', 'shallow']) {
-      const path = join(common, name)
-      if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
-        args.push(repositoryBind, path, path)
-    }
+    const objects = join(common, 'objects')
+    if (await realpath(objects) !== objects || !(await stat(objects)).isDirectory())
+      throw new Error('The Agent host object store must use its own ordinary directory.')
+    // No writable host Git storage enters the worker namespace.
+    const privateCommon = await privateGitCommon(scratch, common)
+    args.push(repositoryBind, privateCommon, common)
+    args.push('--ro-bind', objects, '/run/agent/base-objects')
+    args.push('--ro-bind', join(privateCommon, 'objects/info/alternates'), join(common, 'objects/info/alternates'))
     const taskDirectory = await execute('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-dir']).then(result => realpath(result.stdout.trim()))
-    if (taskDirectory === common)
+    if (!within(taskDirectory, join(common, 'worktrees')) || taskDirectory === join(common, 'worktrees'))
       throw new Error('The Agent worker needs a prepared linked worktree.')
-    args.push(repositoryBind, taskDirectory, taskDirectory)
-    // Git metadata is shared with publication. Hide its host helpers and hooks.
+    await mkdir(join(privateCommon, taskDirectory.slice(common.length + 1)), { recursive: true, mode: 0o700 })
+    const privateGit = await privateGitData(scratch, taskDirectory)
+    const originalHead = await gitData(taskDirectory, 'HEAD')
+    if (originalHead === null || !/^ref: refs\/heads\/[^\r\n]+\n?$/.test(originalHead.toString('utf8')))
+      throw new Error('The Agent worker needs an approved local Git branch.')
+    const branch = originalHead.toString('utf8').trim().slice('ref: '.length)
+    const originalSha = (await execute('git', ['-C', workspace, 'rev-parse', '--verify', 'HEAD'])).stdout.trim()
+    args.push(repositoryBind, privateGit.directory, taskDirectory)
+    // Administrative pointers remain immutable. Only explicit Git data returns to the host.
+    for (const name of ['commondir', 'gitdir'])
+      args.push('--ro-bind', join(privateGit.directory, name), join(taskDirectory, name))
+    args.push('--ro-bind', join(workspace, '.git'), join(workspace, '.git'))
     const gitConfig = join(scratch, 'gitconfig')
     const origin = await execute('git', ['-C', workspace, 'remote', 'get-url', 'origin']).then(result => result.stdout.trim()).catch(() => '')
     const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(origin)
     if (origin !== '' && match === null)
       throw new Error('The Agent worker origin must use a GitHub URL without credentials.')
     await writeFile(gitConfig, `[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = /home/agent/.config/git/hooks\n${match ? `[remote "origin"]\n url = https://github.com/${match[1]}.git\n fetch = +refs/heads/*:refs/remotes/origin/*\n` : ''}`, { mode: 0o600 })
+    await writeFile(join(privateCommon, 'config'), '', { mode: 0o600 })
+    await writeFile(join(privateGit.directory, 'config.worktree'), '', { mode: 0o600 })
     args.push('--ro-bind', gitConfig, join(common, 'config'))
-    if (taskDirectory !== common) {
-      const worktreeConfig = join(taskDirectory, 'config.worktree')
-      if (await stat(worktreeConfig).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
-        args.push('--ro-bind', gitConfig, worktreeConfig)
-    }
+    args.push('--ro-bind', gitConfig, join(taskDirectory, 'config.worktree'))
     args.push('--chdir', workspace, '--', '/run/agent/node', '--experimental-strip-types', '/run/agent/runtime.ts', input.networkMode ?? 'command')
     const environment = workspaceEnvironment({
       HOME: workerHome,
       PATH: `${workerHome}/.local/share/harlan-agent-kit/github-bin:${profile.tools.join(':')}:/usr/local/bin:/usr/bin:/bin`,
       LANG: input.environment.LANG ?? 'C.UTF-8',
+      ...(input.environment.CI === undefined ? {} : { CI: input.environment.CI }),
       XDG_CONFIG_HOME: `${workerHome}/.config`,
       XDG_DATA_HOME: `${workerHome}/.local/share`,
       XDG_STATE_HOME: `${workerHome}/.local/state`,
@@ -217,8 +336,44 @@ export async function prepareAgentSandbox(input: {
     // never affect host Bubblewrap before namespace creation.
     args.splice(args.indexOf('--'), 0, '--clearenv', ...Object.entries(environment).flatMap(([key, value]) => value === undefined ? [] : ['--setenv', key, value]))
     let released: Promise<void> | undefined
+    const saveGit = async () => {
+      const finalHead = await gitData(privateGit.directory, 'HEAD')
+      if (finalHead === null || !finalHead.equals(originalHead))
+        throw new Error('The Agent changed its approved Git branch.')
+      const safeGit = ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-C', workspace]
+      const exportArgs = [...args]
+      exportArgs[exportArgs.lastIndexOf('/run/agent/runtime.ts') + 1] = 'command'
+      const guest = [...exportArgs, ...safeGit]
+      const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: { PATH: '/usr/bin:/bin' }, timeout: 30_000 })).stdout.trim()
+      if (!/^[a-f0-9]{40}$/.test(newSha) || !/^[a-f0-9]{40}$/.test(originalSha))
+        throw new Error('The Agent Git head must use a complete commit SHA.')
+      if (newSha !== originalSha) {
+        const exporting = execute('/usr/bin/bwrap', [...guest, 'pack-objects', '--stdout', '--revs', '--thin'], { env: { PATH: '/usr/bin:/bin' }, encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, timeout: 30_000 })
+        exporting.child.stdin!.end(`${newSha}\n^${originalSha}\n`)
+        const pack = (await exporting).stdout
+        // Host Git reads only a pack stream. It never reads worker configuration or aliases.
+        const importing = execute('/usr/bin/git', [...safeGit.slice(1), 'index-pack', '--stdin', '--fix-thin'], { env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, encoding: 'buffer', maxBuffer: 1024 * 1024, timeout: 30_000 })
+        importing.child.stdin!.end(pack)
+        await importing
+      }
+      await execute('/usr/bin/git', [...safeGit.slice(1), 'update-ref', branch, newSha, originalSha], { env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, timeout: 30_000 })
+      await privateGit.save()
+    }
     return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, adapterPath, providerBinary: profile[input.provider], release: () => {
-      released ??= egress.close().then(() => rm(scratch, { recursive: true, force: true }))
+      released ??= (async () => {
+        try {
+          if (input.readOnly !== true)
+            await saveGit()
+        }
+        finally {
+          try {
+            await egress.close()
+          }
+          finally {
+            await rm(scratch, { recursive: true, force: true })
+          }
+        }
+      })()
       return released
     } }
   }
@@ -226,5 +381,34 @@ export async function prepareAgentSandbox(input: {
     await egress.close()
     await rm(scratch, { recursive: true, force: true })
     throw error
+  }
+}
+
+/** Run repository checks through the same boundary used by implementation Agents. */
+export async function runAgentSandboxCommand(input: {
+  workspace: string
+  command: string
+  args: string[]
+  signal: AbortSignal
+  environment: NodeJS.ProcessEnv
+  profilePath?: string
+  readOnlyPaths?: readonly string[]
+  writablePaths?: readonly string[]
+}): Promise<{ exitCode: number, stdout: string, stderr: string }> {
+  const sandbox = await prepareAgentSandbox({ ...input, provider: 'codex' })
+  try {
+    return await execute(sandbox.binary, [...sandbox.args, input.command, ...input.args], {
+      cwd: input.workspace,
+      env: sandbox.environment,
+      signal: input.signal,
+      maxBuffer: 10 * 1024 * 1024,
+    }).then(result => ({ exitCode: 0, ...result })).catch((error: Error & { code?: string | number, stdout: string, stderr: string }) => {
+      if (typeof error.code === 'number')
+        return { exitCode: error.code, stdout: error.stdout, stderr: error.stderr }
+      throw error
+    })
+  }
+  finally {
+    await sandbox.release()
   }
 }

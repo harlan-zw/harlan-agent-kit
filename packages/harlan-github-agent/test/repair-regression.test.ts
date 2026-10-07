@@ -1,10 +1,32 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
 import { expect, it } from 'vitest'
 import { confirmRepairRecoveryRegression } from '../src/worktree.ts'
+
+it('refuses repository checks when worker isolation is unavailable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-missing-boundary-'))
+  const originalHome = process.env.HOME
+  const originalPath = process.env.PATH
+  const marker = join(root, 'host-command-ran')
+  try {
+    mkdirSync(join(root, 'bin'))
+    const binary = join(root, 'bin/pnpm')
+    writeFileSync(binary, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')\n`)
+    chmodSync(binary, 0o700)
+    process.env.HOME = root
+    process.env.PATH = `${join(root, 'bin')}:${originalPath}`
+    await expect(confirmRepairRecoveryRegression(root, ['selected.test.ts'], AbortSignal.timeout(5_000))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(() => execFileSync('test', ['-e', marker])).toThrow()
+  }
+  finally {
+    process.env.HOME = originalHome
+    process.env.PATH = originalPath
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 it.each(['assertion', 'output', 'import', 'setup', 'runtime', 'passed'])('accepts only current assertion evidence: %s', async (mode) => {
   const path = mkdtempSync(join(tmpdir(), 'repair-regression-'))
@@ -35,7 +57,15 @@ it.each(['assertion', 'output', 'import', 'setup', 'runtime', 'passed'])('accept
             ? 'it(\'keeps input\', () => { throw new TypeError(\'missing helper\') })'
             : 'it(\'keeps input\', () => expect(1).toBe(1))'
     writeFileSync(join(path, 'selected.test.ts'), `import { it, expect, beforeEach } from 'vitest'\n${source}\n`)
-    const result = await confirmRepairRecoveryRegression(path, ['selected.test.ts'], AbortSignal.timeout(20_000))
+    // These trusted reporter fixtures exercise classification. Boundary checks use the real sandbox separately.
+    const result = await confirmRepairRecoveryRegression(path, ['selected.test.ts'], AbortSignal.timeout(20_000), input => new Promise((resolve, reject) => {
+      execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal }, (error) => {
+        if (error !== null && typeof error.code !== 'number')
+          reject(error)
+        else
+          resolve({ exitCode: typeof error?.code === 'number' ? error.code : 0 })
+      })
+    }))
     if (mode === 'assertion' || mode === 'output') {
       expect(result._tag, JSON.stringify(result)).toBe('Ok')
     }
