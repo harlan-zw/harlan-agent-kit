@@ -87,6 +87,9 @@ jobs:
           sudo install "$RUNNER_TEMP/wt" /usr/local/bin/wt
           wt --version
 
+      - name: Install Agent process isolation
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - name: Release preview
         run: pnpm test:release
 

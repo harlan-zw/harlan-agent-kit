@@ -10,11 +10,13 @@ import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { checkAgentWorker } from './agent-sandbox.ts'
 import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
 import { desktopCommand } from './desktop-worktree.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
 async function main(): Promise<void> {
+  await checkAgentWorker(process.env)
   const origin = process.env.HARLAN_GITHUB_AGENT_CONTROLLER_URL
   if (origin === undefined || !origin.startsWith('https://'))
     throw new Error('An HTTPS controller URL is required.')

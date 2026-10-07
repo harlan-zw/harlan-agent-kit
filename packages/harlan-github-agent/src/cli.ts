@@ -6,6 +6,7 @@ import process from 'node:process'
 import { jev } from 'advocaat'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
+import { checkAgentWorker } from './agent-sandbox.ts'
 import { createClassificationSource } from './classification.ts'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
@@ -547,6 +548,7 @@ const checkConfig = defineCommand({
       process.exitCode = 1
       return
     }
+    await checkAgentWorker(process.env)
     consola.success(`This revision accepts ${configPath}.`)
   },
 })
@@ -580,6 +582,7 @@ const command = defineCommand({
       throw new Error(describePreflightIssues(inputs.error))
 
     const { classificationToken, config, dashboardPassword, gitIdentity, githubPrivateKey, webhookSecret } = inputs.value
+    await checkAgentWorker(process.env)
     const classification = config.classification
     const webhook = config.webhook
 

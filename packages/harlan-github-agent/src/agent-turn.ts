@@ -25,8 +25,8 @@ import { err, ok } from './result.ts'
 const PROGRESS_HEARTBEAT_MILLISECONDS = 15 * 60_000
 
 /**
- * Shared instructions, not enforced isolation. Providers still expose shell
- * tools and inherited credentials. Keep production writes with the controller.
+ * Provider isolation protects controller credentials. Repository tooling may
+ * retain production credentials. These instructions define permitted production actions.
  */
 const PRODUCTION_ACCESS_LINES = `Production access is read only for this Agent turn.
 Do not change live product state to investigate or reproduce a defect.
