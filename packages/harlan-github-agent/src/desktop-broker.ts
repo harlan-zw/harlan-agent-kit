@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentProvider, AgentTurnRequest } from './agent-provider.ts'
 import type { DesktopErrorCause, DesktopFailure } from './desktop-protocol.ts'
 import type { DesktopWorktree } from './desktop-worktree.ts'
+import type { ReviewProofAuthorityFactory, ReviewProofOwnership } from './review-proof-authority.ts'
 import type { RunnerJobs } from './runner-jobs.ts'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -10,6 +11,7 @@ import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, desktopErrorCause } from './desktop-protocol.ts'
 import { exportDesktopWorktree, importDesktopWorktree } from './desktop-worktree.ts'
+import { parseReviewProofReceipt, parseReviewProofReservation } from './review-proof-controller.ts'
 
 export interface DesktopTurn {
   id: string
@@ -36,7 +38,7 @@ export interface DesktopReport {
   jobs?: RunnerJobs
 }
 
-export function createDesktopBroker(options: { now: () => number, settingsPath?: string }) {
+export function createDesktopBroker(options: { now: () => number, settingsPath?: string, reviewProofAuthority?: ReviewProofAuthorityFactory }) {
   const pending = new Map<string, PendingTurn>()
   let report: DesktopReport | null = null
   let seenAt = 0
@@ -84,6 +86,30 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
       return true
     },
     active: (id: string) => pending.get(id)?.state === 'running',
+    proof: async (id: string, action: unknown, input: unknown): Promise<unknown> => {
+      const entry = pending.get(id)
+      const request = entry?.turn.request as (DesktopTurn['request'] & { toolPolicy?: unknown }) | undefined
+      const policy = request?.toolPolicy
+      if (entry?.state !== 'running' || !connected() || !current() || options.reviewProofAuthority === undefined
+        || request?.taskId === undefined || typeof policy !== 'object' || policy === null
+        || !('_tag' in policy) || policy._tag !== 'Review'
+        || !('headSha' in policy) || typeof policy.headSha !== 'string'
+        || !('workerId' in policy) || typeof policy.workerId !== 'string'
+        || !('fence' in policy) || !Number.isSafeInteger(policy.fence)) {
+        throw new Error('The desktop proof no longer owns an active Review turn.')
+      }
+      const ownership: ReviewProofOwnership = { taskId: request.taskId, headSha: policy.headSha, workerId: policy.workerId, fence: Number(policy.fence) }
+      const authority = options.reviewProofAuthority(ownership)
+      if (action === 'reserve')
+        return authority.reserve(parseReviewProofReservation(input))
+      if (action === 'finish' && typeof input === 'object' && input !== null && 'reservationId' in input
+        && typeof input.reservationId === 'string' && input.reservationId.length <= 100 && 'receipt' in input
+        && Object.keys(input).length === 2) {
+        await authority.finish({ reservationId: input.reservationId, receipt: parseReviewProofReceipt(input.receipt) })
+        return { _tag: 'Recorded' }
+      }
+      throw new Error('The desktop proof callback is invalid.')
+    },
     events: (id: string, events: AgentEvent[]) => {
       const entry = pending.get(id)
       if (entry?.state !== 'running')

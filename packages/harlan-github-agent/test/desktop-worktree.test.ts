@@ -111,6 +111,40 @@ it('imports one desktop result and rejects late duplicate completion', async () 
   expect(broker.complete(claimed.id, claimed.worktree, null)).toBe(false)
 })
 
+it('pins proof callbacks to the active desktop turn and refuses cancelled or disconnected turns', async () => {
+  const f = await fixture()
+  let now = 1
+  const owners: unknown[] = []
+  const broker = createDesktopBroker({ now: () => now, reviewProofAuthority: (owner) => {
+    owners.push(owner)
+    return { reserve: async input => input.taskId === owner.taskId && input.headSha === owner.headSha
+      ? { _tag: 'Reserved', reservationId: 'controller-reservation' }
+      : { _tag: 'Refused', reason: 'Wrong Task.' }, finish: async () => {} }
+  } })
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  const controller = new AbortController()
+  const policy = { _tag: 'Review' as const, headSha: 'a'.repeat(40), workerId: 'reviewer', fence: 7 }
+  const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, taskId: 'review-task', toolPolicy: policy, signal: controller.signal, workspace: f.repository })[Symbol.asyncIterator]()
+  const response = iterator.next()
+  const stopped = expect(response).rejects.toThrow()
+  let turn: ReturnType<typeof broker.claim> = null
+  await vi.waitFor(() => {
+    turn = broker.claim()
+    expect(turn).not.toBeNull()
+  })
+  const claimed = turn as unknown as DesktopTurn
+  const input = { taskId: 'review-task', headSha: policy.headSha, sourceSha256: 'b'.repeat(64), startedAt: '2026-10-07T00:00:00.000Z' }
+  expect(await broker.proof(claimed.id, 'reserve', input)).toEqual({ _tag: 'Reserved', reservationId: 'controller-reservation' })
+  expect(owners).toEqual([{ taskId: 'review-task', headSha: policy.headSha, workerId: 'reviewer', fence: 7 }])
+  expect(await broker.proof(claimed.id, 'reserve', { ...input, taskId: 'another-task' })).toEqual({ _tag: 'Refused', reason: 'Wrong Task.' })
+  await expect(broker.proof('other-turn', 'reserve', input)).rejects.toThrow('active Review')
+  now = 16_000
+  await expect(broker.proof(claimed.id, 'reserve', input)).rejects.toThrow('active Review')
+  controller.abort()
+  await stopped
+  await expect(broker.proof(claimed.id, 'reserve', input)).rejects.toThrow('active Review')
+})
+
 it('revokes cancelled desktop work before accepting another result', async () => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })

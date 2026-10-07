@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { checkAgentWorker } from './agent-sandbox.ts'
 import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
 import { desktopCommand } from './desktop-worktree.ts'
+import { parseReviewProofCallback } from './review-proof-duplex.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
 async function main(): Promise<void> {
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
     await rm(join(directory, 'result.json'), { force: true })
     const extension = fileURLToPath(import.meta.url).endsWith('.ts') ? 'ts' : 'mjs'
     const executable = join(dirname(fileURLToPath(import.meta.url)), `desktop-execute.${extension}`)
-    const child = spawn(capacity, ['run', turn.id, String(DESKTOP_MEMORY_PER_AGENT_GIB), process.execPath, '--experimental-strip-types', executable, input], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(capacity, ['run', turn.id, String(DESKTOP_MEMORY_PER_AGENT_GIB), process.execPath, '--experimental-strip-types', executable, input], { stdio: ['pipe', 'pipe', 'pipe'] })
     let stderr = ''
     child.stderr.on('data', (chunk) => {
       stderr = (stderr + String(chunk)).slice(-8000)
@@ -85,6 +86,10 @@ async function main(): Promise<void> {
     const stop = () => {
       child.kill('SIGTERM')
     }
+    child.stdin.on('error', (error) => {
+      console.error('The desktop proof callback disconnected.', error)
+      stop()
+    })
     shutdown.signal.addEventListener('abort', stop, { once: true })
     const heartbeat = new AbortController()
     const watching = (async () => {
@@ -118,6 +123,14 @@ async function main(): Promise<void> {
     try {
       for await (const line of createInterface({ input: child.stdout })) {
         const event: unknown = JSON.parse(line)
+        const proof = parseReviewProofCallback(event)
+        if (proof !== null) {
+          const answer = await api<unknown>('/api/desktop/proof', { id: turn.id, action: proof.action, input: proof.input })
+            .then(result => ({ id: proof.id, result }))
+            .catch((error: unknown) => ({ id: proof.id, error: error instanceof Error ? error.message.slice(0, 500) : 'The controller proof callback failed.' }))
+          child.stdin.write(`${JSON.stringify(answer)}\n`)
+          continue
+        }
         // Capacity refusal is handled after exit, before any provider starts.
         if (typeof event === 'object' && event !== null && '_tag' in event && event._tag === 'AtCapacity')
           continue

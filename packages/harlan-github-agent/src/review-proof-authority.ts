@@ -29,7 +29,7 @@ export interface ReviewProofReservation {
 
 export type ReviewProofReserveResult
   = | { _tag: 'Reserved', reservationId: string }
-    | { _tag: 'Refused', reason: string }
+    | { _tag: 'Refused', reason: string, receipt?: ReviewProofReceipt }
 
 /** Only the trusted provider runtime receives this dependency. */
 export interface ReviewProofAuthority {

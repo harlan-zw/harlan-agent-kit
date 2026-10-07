@@ -22,8 +22,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 4: the `ContextBudgetWarned` Agent event.
  * 5: bounded controller image evidence carried in the turn request.
  * 6: provider processes require the isolated Agent worker configuration.
+ * 7: authenticated controller proof callbacks through desktop child duplex IO.
  */
-export const DESKTOP_PROTOCOL = 6
+export const DESKTOP_PROTOCOL = 7
 
 /**
  * Why one desktop turn failed.

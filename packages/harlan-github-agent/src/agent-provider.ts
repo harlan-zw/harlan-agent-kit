@@ -81,6 +81,8 @@ export interface AgentTurnRequest {
   instructionPaths?: readonly string[]
   /** Durable Task identity used to fence one provider health canary. */
   taskId?: string
+  /** Captured Review ownership used only by the trusted proof runtime. */
+  toolPolicy?: { _tag: 'Review', headSha: string, workerId: string, fence: number }
   /** Provider-specific model identifier taken from the worker profile. */
   model: string
   /** JSON Schema the turn must answer with. */
