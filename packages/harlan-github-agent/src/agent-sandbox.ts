@@ -334,7 +334,11 @@ export async function prepareAgentSandbox(input: {
       ...(input.environment.OPENCODE_SERVER_PASSWORD === undefined ? {} : { OPENCODE_SERVER_PASSWORD: input.environment.OPENCODE_SERVER_PASSWORD }),
     }
     // Review tools use only controller configuration. Repository loader variables can restore execution.
-    const environment = input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment
+    const environment = {
+      ...(input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment),
+      // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
+      ...(input.provider === 'opencode' ? { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true' } : {}),
+    }
     // Repository variables belong inside the boundary. Loader variables must
     // never affect host Bubblewrap before namespace creation.
     args.splice(args.indexOf('--'), 0, '--clearenv', ...Object.entries(environment).flatMap(([key, value]) => value === undefined ? [] : ['--setenv', key, value]))
