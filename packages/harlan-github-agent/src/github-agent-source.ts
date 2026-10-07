@@ -2,6 +2,7 @@ import type { Octokit } from 'octokit'
 import type { AgentLabelState } from './agent-label.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { MediaReference } from './github-media.ts'
+import type { JobWorkflowContext } from './job-workflow-context.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { NativeReviewPublisher } from './native-review.ts'
 import type { Result } from './result.ts'
@@ -19,6 +20,7 @@ import { renderedMediaReferences } from './github-media.ts'
 
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
+import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
 import { err, ok } from './result.ts'
@@ -262,6 +264,7 @@ export interface FailedJobContext {
   logTruncated?: boolean
   executionTruncated?: boolean
   execution?: Array<{ run: string, shell: string | null, workingDirectory: string | null }>
+  workflow?: JobWorkflowContext
 }
 
 export const FAILED_JOB_LOG_TAIL_LINES = 80
@@ -667,12 +670,27 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return Promise.all([
         octokit.value.rest.actions.getJobForWorkflowRun({ owner, repo, job_id: jobId, request: { signal } }),
         octokit.value.rest.actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: jobId, request: { signal } }),
-      ]).then(([job, log]): Result<FailedJobContext, string> => {
+      ]).then(async ([job, log]): Promise<Result<FailedJobContext, string>> => {
         if (typeof log.data !== 'string')
           return err(`GitHub returned no log text for job ${jobId}.`)
         const lines = log.data.split(/\r?\n/)
         while (lines.length > 0 && lines[lines.length - 1]?.trim() === '')
           lines.pop()
+        const workflow = await octokit.value.rest.actions.getWorkflowRun({ owner, repo, run_id: job.data.run_id, request: { signal } })
+          .then(async ({ data }): Promise<JobWorkflowContext> => {
+            const contents = await client(repository.github, 'read', signal)
+            if (contents._tag === 'Err')
+              return { _tag: 'Unavailable', reason: contents.error }
+            return collectJobWorkflowContext({ path: data.path ?? '', ref: data.head_sha, jobName: job.data.name, readFile: async (path, ref) => contents.value.rest.repos.getContent({ owner, repo, path, ref, request: { signal } })
+              .then((response): Result<string, string> => {
+                const value = response.data
+                return !Array.isArray(value) && value.type === 'file' && value.encoding === 'base64' && value.content.length <= 90_000
+                  ? ok(Buffer.from(value.content, 'base64').toString('utf8'))
+                  : err('GitHub returned no bounded workflow file.')
+              })
+              .catch((error: unknown): Result<string, string> => err(message(error))) })
+          })
+          .catch((error: unknown): JobWorkflowContext => ({ _tag: 'Unavailable', reason: message(error) }))
         return ok({
           runId: job.data.run_id,
           jobName: job.data.name,
@@ -681,6 +699,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           execution: jobExecutionContext(lines),
           logTruncated: lines.length > FAILED_JOB_LOG_TAIL_LINES,
           executionTruncated: lines.filter(line => line.includes('##[group]Run ')).length > 30,
+          workflow,
         })
       }).catch((error: unknown): Result<FailedJobContext, string> => err(message(error)))
     },
