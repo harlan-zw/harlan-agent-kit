@@ -104,6 +104,18 @@ function fixture(): DashboardSnapshot {
     ],
     incidents: [
       {
+        id: 'retained-repair',
+        scope: { _tag: 'Task', taskId: `logged-finding:${hex('d')}`, repository: nuxtSeo, itemNumber: 412 },
+        kind: 'unknown',
+        severity: 'error',
+        message: `Could not pin the repair artifact: fatal: invalid refspec '+${'e'.repeat(40)}:refs/harlan-github-agent/publications/logged-finding:${hex('d')}'`,
+        operation: 'publication',
+        recovery: { _tag: 'ActionRequired' },
+        occurrences: 1,
+        firstSeenAt: minutesAgo(35),
+        lastSeenAt: minutesAgo(2),
+      },
+      {
         id: 'incident-1',
         scope: { _tag: 'Repository', repository: unhead },
         kind: 'github_access',

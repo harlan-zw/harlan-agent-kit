@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import type { RepairRecoveryRequest } from '../../../src/repair-recovery.ts'
 import type { AgentActivityItem } from '../../../src/types.ts'
+import { repairRecoveryCandidate } from '../../../src/repair-recovery.ts'
 import {
   activeProviderCircuits,
   incidentKindLabel,
@@ -23,10 +25,19 @@ import HostWork from './system/HostWork.vue'
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.
  *
- * Nothing here acts on a Task. Watch logs and Eject live on the running card.
+ * Watch logs and Eject live on the running card. Retained Repairs offer inspection here.
  */
 const { snapshot, incidents, relativeTime, now, requestUpdate, controlPending, setAgentSlots } = useDashboard()
 const { open } = useSystemPane()
+const recoveryOpen = ref(false)
+const recoveryCandidate = ref<Extract<RepairRecoveryRequest, { _tag: 'Plan' }> | null>(null)
+function inspectRecovery(candidate: Extract<RepairRecoveryRequest, { _tag: 'Plan' }> | null): void {
+  if (candidate === null)
+    return
+  recoveryCandidate.value = candidate
+  open.value = false
+  recoveryOpen.value = true
+}
 const { connection: host, history: hostHistory } = useHogwildStatus()
 
 const capacity = computed(() => snapshot.value.providerCapacities.map(capacityRow))
@@ -131,6 +142,9 @@ function activityLine(item: AgentActivityItem): string {
 <template>
   <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10' }">
     <template #body>
+      <section class="lg:hidden" aria-label="Agent selection">
+        <AgentSelectionMenu />
+      </section>
       <section aria-labelledby="system-execution">
         <h3 id="system-execution" class="field-label flex items-center gap-2">
           Hosts
@@ -387,6 +401,9 @@ function activityLine(item: AgentActivityItem): string {
             <p class="text-sm text-muted">
               {{ incidentRecoveryLabel(incident) }} · <span class="font-mono">{{ incident.occurrences }}×</span> · {{ relativeTime(incident.firstSeenAt) }}
             </p>
+            <UButton v-if="repairRecoveryCandidate(incident)" class="min-h-11" color="neutral" variant="outline" @click="inspectRecovery(repairRecoveryCandidate(incident))">
+              Inspect Repair recovery
+            </UButton>
           </li>
         </ul>
         <p v-else class="mt-2 text-sm text-muted">
@@ -552,4 +569,5 @@ function activityLine(item: AgentActivityItem): string {
       </section>
     </template>
   </USlideover>
+  <RepairRecoverySlideover v-model:open="recoveryOpen" :candidate="recoveryCandidate" />
 </template>
