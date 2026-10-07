@@ -193,9 +193,18 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         yield* providerEvents(started.events)
       }
       finally {
-        await sandbox?.release()
-        const released = await review?.release()
-        await media.release()
+        let released: Awaited<ReturnType<ReviewRuntime['release']>> | undefined
+        try {
+          await sandbox?.release()
+        }
+        finally {
+          try {
+            released = await review?.release()
+          }
+          finally {
+            await media.release()
+          }
+        }
         for (const text of released?.warnings ?? [])
           yield { _tag: 'Reasoning', text: `Controller warning: ${text}` }
       }

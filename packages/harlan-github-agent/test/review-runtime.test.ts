@@ -1,6 +1,6 @@
 import type { ReviewProofReceipt } from '../src/review-proof-authority.ts'
 import { execFile } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -115,6 +115,8 @@ process.stdin.once('end', () => {
     await chmod(binary, 0o700)
     await writeFile(join(home, '.config/harlan-github-agent/worker.json'), JSON.stringify({ home: worker, codex: binary, opencode: '/usr/bin/true', tools: [binary], readOnlyPaths: [] }))
     const originalHome = process.env.HOME
+    const gitDirectory = (await execute('git', ['-C', workspace, 'rev-parse', '--absolute-git-dir'])).stdout.trim()
+    const originalIndex = (await stat(join(gitDirectory, 'index'))).ino
     process.env.HOME = home
     try {
       const provider = createCodexProvider({ readOnly: false, reviewProofAuthority: () => ({ reserve: async () => ({ _tag: 'Refused', reason: 'Unused fixture authority.' }), finish: async () => {} }) })
@@ -127,6 +129,7 @@ process.stdin.once('end', () => {
             await writeFile(join(worker, '.codex/auth.json'), '{"login":"fixture-external"}')
         }
         expect(events).toContainEqual({ _tag: 'Message', text: 'readonly' })
+        expect((await stat(join(gitDirectory, 'index'))).ino).toBe(originalIndex)
         expect(await readFile(join(worker, '.codex/auth.json'), 'utf8')).toBe(concurrent ? '{"login":"fixture-external"}' : '{"login":"fixture-refreshed"}')
         if (concurrent)
           expect(events).toContainEqual({ _tag: 'Reasoning', text: 'Controller warning: The Review login changed concurrently. The controller preserved the current login.' })

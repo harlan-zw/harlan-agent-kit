@@ -51,13 +51,19 @@ export async function createReviewRuntime(input: { request: AgentTurnRequest, pr
   let home: Awaited<ReturnType<typeof createReviewProviderHome>> | undefined
   let server: Awaited<ReturnType<typeof serveReviewProof>> | undefined
   const release = async () => {
+    let released: ReviewHomeRelease | undefined
     try {
       await server?.close()
-      return await home?.release() ?? { _tag: 'Released' as const, warnings: [] }
     }
     finally {
-      await rm(root, { recursive: true, force: true })
+      try {
+        released = await home?.release()
+      }
+      finally {
+        await rm(root, { recursive: true, force: true })
+      }
     }
+    return released ?? { _tag: 'Released' as const, warnings: [] }
   }
   try {
     const sourceMode = import.meta.url.endsWith('.ts')

@@ -217,6 +217,7 @@ export async function prepareAgentSandbox(input: {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
   const profile = configuration(JSON.parse(await readFile(profilePath, 'utf8')))
+  const readOnly = input.readOnly === true || input.reviewHome !== undefined
   const isolatedHome = await permittedPath(input.reviewHome ?? profile.home, controllerHome)
   if (within(controllerHome, isolatedHome) || isolatedHome === '/home' || isolatedHome === '/')
     throw new Error('The Agent worker home must not contain the controller home.')
@@ -260,7 +261,7 @@ export async function prepareAgentSandbox(input: {
     for (const path of input.writablePaths ?? [])
       args.push('--bind', await permittedPath(path, controllerHome), path)
     const workspace = await realpath(input.workspace)
-    const repositoryBind = input.readOnly === true || input.reviewHome !== undefined ? '--ro-bind' : '--bind'
+    const repositoryBind = readOnly ? '--ro-bind' : '--bind'
     args.push(repositoryBind, workspace, workspace)
     if (input.reviewHome !== undefined) {
       for (const name of ['.codex/config.toml', '.config/opencode/opencode.json']) {
@@ -362,7 +363,7 @@ export async function prepareAgentSandbox(input: {
     return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, adapterPath, providerBinary: profile[input.provider], release: () => {
       released ??= (async () => {
         try {
-          if (input.readOnly !== true)
+          if (!readOnly)
             await saveGit()
         }
         finally {

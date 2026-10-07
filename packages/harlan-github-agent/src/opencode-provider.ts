@@ -607,8 +607,15 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
 ${jsonOutputInstruction(request.outputSchema)}`, media.paths, review)
       }
       finally {
-        await media.release()
-        await review?.release()
+        let released: Awaited<ReturnType<ReviewRuntime['release']>> | undefined
+        try {
+          released = await review?.release()
+        }
+        finally {
+          await media.release()
+        }
+        for (const text of released?.warnings ?? [])
+          yield { _tag: 'Reasoning', text: `Controller warning: ${text}` }
       }
     })(),
   }
