@@ -77,7 +77,7 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
   const capacity = snapshot.hostCapacity
   const maximum = capacity === undefined
     ? snapshot.agentProfile.maximumActiveAgents
-    : capacity.localMaximum + (capacity.desktopConnected ? capacity.desktopMaximum : 0)
+    : capacity.localMaximum + (capacity.desktopAvailable ? capacity.desktopMaximum : 0)
   const counts: SystemChipCounts = { active, maximum, live: active > 0 }
   if (snapshot.incidents.length > 0)
     return { _tag: 'Incident', incidents: snapshot.incidents.length, ...counts }

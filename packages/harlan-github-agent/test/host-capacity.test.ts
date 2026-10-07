@@ -21,7 +21,7 @@ function provider(name: 'codex' | 'opencode', started: () => void): AgentProvide
 
 describe('host admission', () => {
   it('accounts for controller checks in the existing local host capacity', async () => {
-    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopAvailable: () => true, wait: async () => {} })
     const lease = pool.tryAcquireLocal('recovery')
     expect(lease).not.toBeNull()
     expect(pool.tryAcquireLocal('duplicate')).toBeNull()
@@ -35,7 +35,7 @@ describe('host admission', () => {
     expect(pool.read().localActive).toBe(0)
   })
   it('removes a host assignment when its provider fails', async () => {
-    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopAvailable: () => true, wait: async () => {} })
     const failing: AgentProvider = { name: 'codex', async* runTurn() {
       yield { _tag: 'Message', text: 'started' }
       throw new Error('Provider stopped')
@@ -47,19 +47,19 @@ describe('host admission', () => {
     expect(pool.tasks()).toEqual([])
   })
   it('keeps the desktop idle while Hogwild has capacity', () => {
-    expect(agentHost({ localActive: 1, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true })).toBe('hogwild')
+    expect(agentHost({ localActive: 1, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true })).toBe('hogwild')
   })
 
   it('uses the desktop only when Hogwild is full and the desktop can answer', () => {
-    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }
     expect(agentHost(capacity)).toBe('desktop')
-    expect(agentHost({ ...capacity, desktopConnected: false })).toBeNull()
+    expect(agentHost({ ...capacity, desktopAvailable: false })).toBeNull()
     expect(agentHost({ ...capacity, desktopActive: 1 })).toBeNull()
   })
 
   it('shares the local limit across providers and releases it when a turn closes', async () => {
     const starts: string[] = []
-    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopAvailable: () => true, wait: async () => {} })
     const first = pool.provider(provider('codex', () => starts.push('local')), provider('codex', () => starts.push('desktop'))).runTurn({ ...request, taskId: 'first' })[Symbol.asyncIterator]()
     const second = pool.provider(provider('opencode', () => starts.push('local')), provider('opencode', () => starts.push('desktop'))).runTurn({ ...request, taskId: 'second' })[Symbol.asyncIterator]()
     await first.next()
@@ -91,7 +91,7 @@ it('withholds the extra Task claim while the desktop is unavailable', () => {
 
 describe('a Worktree the desktop cannot carry', () => {
   it('runs the turn on Hogwild as soon as a local slot frees', async () => {
-    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopAvailable: () => true, wait: async () => {} })
     const local: AgentProvider = { name: 'codex', async* runTurn() {
       yield { _tag: 'Message', text: 'hogwild' } satisfies AgentEvent
     } }
@@ -117,7 +117,7 @@ describe('a Worktree the desktop cannot carry', () => {
   })
 
   it('fails a session already pinned to the desktop, because no other host owns it', async () => {
-    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopConnected: () => true, wait: async () => {} })
+    const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopAvailable: () => true, wait: async () => {} })
     const local: AgentProvider = { name: 'codex', async* runTurn() {
       yield { _tag: 'Message', text: 'hogwild' } satisfies AgentEvent
     } }
@@ -132,7 +132,7 @@ describe('a Worktree the desktop cannot carry', () => {
   })
 
   it('keeps a refused host out of the next selection', () => {
-    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }
     expect(agentHost(capacity)).toBe('desktop')
     expect(agentHost(capacity, new Set(['desktop']))).toBeNull()
   })
@@ -143,7 +143,7 @@ describe('agent slots', () => {
 
   it('admits a turn against the slot count in force, not the one the pool started with', async () => {
     let hogwild = 0
-    const pool = createHostAgentPool({ localMaximum: () => hogwild, desktopMaximum: 0, desktopConnected: () => false, wait: async () => {} })
+    const pool = createHostAgentPool({ localMaximum: () => hogwild, desktopMaximum: 0, desktopAvailable: () => false, wait: async () => {} })
     const local = provider('codex', () => {})
     const turn = pool.provider(local, local).runTurn({ ...request, taskId: 'raised' })[Symbol.asyncIterator]()
     const started = turn.next()
@@ -156,7 +156,7 @@ describe('agent slots', () => {
 
   it('runs two desktop turns when the desktop holds two slots', async () => {
     const hosts: string[] = []
-    const pool = createHostAgentPool({ localMaximum: 0, desktopMaximum: () => 2, desktopConnected: () => true, wait: async () => {} })
+    const pool = createHostAgentPool({ localMaximum: 0, desktopMaximum: () => 2, desktopAvailable: () => true, wait: async () => {} })
     const first = pool.provider(provider('codex', () => hosts.push('local')), provider('codex', () => hosts.push('desktop'))).runTurn({ ...request, taskId: 'first' })[Symbol.asyncIterator]()
     const second = pool.provider(provider('codex', () => hosts.push('local')), provider('codex', () => hosts.push('desktop'))).runTurn({ ...request, taskId: 'second' })[Symbol.asyncIterator]()
     await first.next()

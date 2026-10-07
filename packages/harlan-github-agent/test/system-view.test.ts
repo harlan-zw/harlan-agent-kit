@@ -112,11 +112,11 @@ describe('systemChipState', () => {
   })
 
   it('counts the Agent slots each host holds, so the chip follows the control', () => {
-    const capacity = { localActive: 1, localMaximum: 3, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+    const capacity = { localActive: 1, localMaximum: 3, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }
     const connected = systemChipState(dashboardSnapshot({ agentStart: { _tag: 'Available' }, hostCapacity: capacity }))
     expect(connected).toMatchObject({ maximum: 4 })
 
-    const alone = systemChipState(dashboardSnapshot({ agentStart: { _tag: 'Available' }, hostCapacity: { ...capacity, desktopConnected: false } }))
+    const alone = systemChipState(dashboardSnapshot({ agentStart: { _tag: 'Available' }, hostCapacity: { ...capacity, desktopAvailable: false } }))
     expect(alone).toMatchObject({ maximum: 3 })
   })
 

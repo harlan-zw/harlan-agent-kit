@@ -729,7 +729,7 @@ class IndicatorDisplayTest(unittest.TestCase):
 
     def test_offers_every_agent_slot_count_the_controller_allows(self):
         dashboard = {
-            'hostCapacity': {'localActive': 1, 'localMaximum': 2, 'desktopActive': 0, 'desktopMaximum': 1, 'desktopConnected': True},
+            'hostCapacity': {'localActive': 1, 'localMaximum': 2, 'desktopActive': 0, 'desktopMaximum': 1, 'desktopAvailable': True},
             'agentSlots': {'hogwildCeiling': 4, 'hogwildMemoryMaximum': 2, 'desktopCeiling': 2, 'memoryPerAgentGiB': 8},
         }
 
@@ -753,7 +753,7 @@ class IndicatorDisplayTest(unittest.TestCase):
             'queue': [],
             'incidents': [],
             'hostTasks': [{'taskId': 'task-1', 'host': 'hogwild'}],
-            'hostCapacity': {'localActive': 1, 'localMaximum': 2, 'desktopActive': 0, 'desktopMaximum': 1, 'desktopConnected': True},
+            'hostCapacity': {'localActive': 1, 'localMaximum': 2, 'desktopActive': 0, 'desktopMaximum': 1, 'desktopAvailable': True},
             'agentSlots': {'hogwildCeiling': 4, 'hogwildMemoryMaximum': 2, 'desktopCeiling': 2, 'memoryPerAgentGiB': 8},
         }}}
         stub = StubIndicator()
