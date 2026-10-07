@@ -13625,7 +13625,23 @@ export function openJournalStore(
       subjectCount: row.subject_count,
     }))
     const incidents = listIncidents()
-    const status = repositories.some(repository => repository.lastError !== null) || incidents.length > 0
+    const retainedRepairs = database.prepare(`
+      SELECT tasks.id AS taskId, tasks.reason, tasks.evidence, tasks.fence,
+        repositories.github AS repository, subjects.github_number AS pullRequestNumber
+      FROM tasks
+      JOIN subjects ON subjects.id = tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE tasks.kind = 'review_fix' AND tasks.state_tag = 'Failed' AND tasks.id LIKE 'logged-finding:%'
+        AND repositories.enabled = 1
+        AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id)
+        AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+      ORDER BY tasks.updated_at DESC, tasks.id
+    `).all() as unknown as Array<{ taskId: string, reason: string | null, evidence: string | null, fence: number, repository: string, pullRequestNumber: number }>
+    const repairRecoveryCandidates: DashboardSnapshot['repairRecoveryCandidates'] = retainedRepairs.flatMap((task) => {
+      const proof = repairRecoveryProof(task)
+      return proof === null ? [] : [{ _tag: 'Plan' as const, taskId: task.taskId, commitSha: proof.commitSha, repository: task.repository, pullRequestNumber: task.pullRequestNumber, reason: task.reason ?? proof.originalFailure }]
+    })
+    const status = repositories.some(repository => repository.lastError !== null) || incidents.length > 0 || repairRecoveryCandidates.length > 0
       ? 'degraded'
       : repositories.some(repository => repository.lastSuccessAt === null) ? 'starting' : 'ready'
     const items = subjectRows.map(row => subjectFromRow(database, row))
@@ -13855,6 +13871,7 @@ export function openJournalStore(
       providerCircuits: listProviderCircuits(),
       agents,
       incidents,
+      repairRecoveryCandidates,
       queue: dashboardQueue(
         items.filter(item => !item.dismissed),
         tasks,

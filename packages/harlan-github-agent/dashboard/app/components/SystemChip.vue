@@ -11,13 +11,16 @@ const { show } = useSystemPane()
 const chip = computed(() => systemChipState(snapshot.value))
 
 const tone = computed(() => {
-  if (chip.value._tag === 'Incident')
+  if (chip.value._tag === 'Incident' || chip.value._tag === 'RepairRecovery')
     return 'error'
   return chip.value._tag === 'CannotStart' ? 'warning' : 'neutral'
 })
 
 const incidentLabel = computed(() => chip.value._tag === 'Incident'
   ? `${chip.value.incidents} ${chip.value.incidents === 1 ? 'Incident' : 'Incidents'}`
+  : undefined)
+const recoveryLabel = computed(() => chip.value._tag === 'RepairRecovery'
+  ? `Repair recovery: ${chip.value.repairs}`
   : undefined)
 
 const ariaLabel = computed(() => {
@@ -26,6 +29,8 @@ const ariaLabel = computed(() => {
   const agents = `${chip.value.active} of ${chip.value.maximum} agents running`
   if (chip.value._tag === 'Incident')
     return `System: ${agents}, ${incidentLabel.value}`
+  if (chip.value._tag === 'RepairRecovery')
+    return `System: ${agents}, ${recoveryLabel.value}`
   if (chip.value._tag === 'CannotStart')
     return `System: ${agents}, ${chip.value.reason}`
   return `System: ${agents}`
@@ -40,5 +45,6 @@ const ariaLabel = computed(() => {
     <span v-if="chip._tag === 'CannotStart'" class="status-warning">{{ chip.reason }}</span>
 
     <span v-else-if="chip._tag === 'Incident'" class="status-error">{{ incidentLabel }}</span>
+    <span v-else-if="chip._tag === 'RepairRecovery'" class="status-error">{{ recoveryLabel }}</span>
   </UButton>
 </template>
