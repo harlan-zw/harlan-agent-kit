@@ -1,7 +1,7 @@
 import type { AgentPermitPool } from './agent-permit-pool.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { ClaimedReviewFixTask, RepositoryMapping } from './types.ts'
+import type { ClaimedReviewFixTask, Incident, RepositoryMapping } from './types.ts'
 import type { PreparedConflictPublication } from './worktree.ts'
 import { err, ok } from './result.ts'
 import { runClaimedTask } from './task-scheduler.ts'
@@ -30,6 +30,14 @@ export interface RepairRecoveryArtifact {
 export type RepairRecoveryRequest
   = | { _tag: 'Plan', taskId: string, commitSha: string }
     | { _tag: 'Apply', taskId: string, commitSha: string, expectedBase: string }
+
+/** An Incident offers inspection only. The controller rechecks stored proof and authority before Apply. */
+export function repairRecoveryCandidate(incident: Pick<Incident, 'scope' | 'message' | 'recovery'>): Extract<RepairRecoveryRequest, { _tag: 'Plan' }> | null {
+  if (incident.scope._tag !== 'Task' || incident.recovery._tag === 'Retrying')
+    return null
+  const proof = repairRecoveryProof({ taskId: incident.scope.taskId, reason: incident.message, evidence: null, fence: 1 })
+  return proof === null ? null : { _tag: 'Plan', taskId: incident.scope.taskId, commitSha: proof.commitSha }
+}
 
 export interface RepairRecoveryPlan extends RepairRecoveryArtifact {
   _tag: 'Plan'
