@@ -194,8 +194,10 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
       }
       finally {
         await sandbox?.release()
-        await review?.release()
+        const released = await review?.release()
         await media.release()
+        for (const text of released?.warnings ?? [])
+          yield { _tag: 'Reasoning', text: `Controller warning: ${text}` }
       }
     })(),
   }

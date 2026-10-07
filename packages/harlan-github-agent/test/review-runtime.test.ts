@@ -1,11 +1,12 @@
 import type { ReviewProofReceipt } from '../src/review-proof-authority.ts'
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
 import { prepareAgentSandbox } from '../src/agent-sandbox.ts'
+import { createCodexProvider } from '../src/codex-provider.ts'
 import { requestReviewProof } from '../src/review-proof-transport.ts'
 import { createReviewRuntime } from '../src/review-runtime.ts'
 
@@ -96,6 +97,44 @@ assert.equal(answer(), 43)
     }
     finally {
       await sandbox.release()
+    }
+    const binary = join(root, 'fake-codex.ts')
+    await writeFile(binary, `#!/run/agent/node --experimental-strip-types
+import { writeFileSync } from 'node:fs'
+process.stdin.resume()
+process.stdin.once('end', () => {
+  writeFileSync(process.env.HOME + '/.codex/auth.json', '{"login":"fixture-refreshed"}')
+  let text = 'writable'
+  try { writeFileSync(${JSON.stringify(join(workspace, 'owned'))}, 'bad') }
+  catch (error) { text = error.code === 'EROFS' ? 'readonly' : error.code }
+  console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fixture' }))
+  console.log(JSON.stringify({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text } }))
+  console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }))
+})
+`)
+    await chmod(binary, 0o700)
+    await writeFile(join(home, '.config/harlan-github-agent/worker.json'), JSON.stringify({ home: worker, codex: binary, opencode: '/usr/bin/true', tools: [binary], readOnlyPaths: [] }))
+    const originalHome = process.env.HOME
+    process.env.HOME = home
+    try {
+      const provider = createCodexProvider({ readOnly: false, reviewProofAuthority: () => ({ reserve: async () => ({ _tag: 'Refused', reason: 'Unused fixture authority.' }), finish: async () => {} }) })
+      for (const concurrent of [false, true]) {
+        await writeFile(join(worker, '.codex/auth.json'), '{"login":"fixture-original"}')
+        const events = []
+        for await (const event of provider.runTurn({ taskId: 'task', toolPolicy: { _tag: 'Review', headSha, workerId: 'worker', fence: 1 }, workspace, prompt: '', model: 'fixture', outputSchema: {}, sessionId: null, signal: AbortSignal.timeout(10_000) })) {
+          events.push(event)
+          if (concurrent && event._tag === 'Message')
+            await writeFile(join(worker, '.codex/auth.json'), '{"login":"fixture-external"}')
+        }
+        expect(events).toContainEqual({ _tag: 'Message', text: 'readonly' })
+        expect(await readFile(join(worker, '.codex/auth.json'), 'utf8')).toBe(concurrent ? '{"login":"fixture-external"}' : '{"login":"fixture-refreshed"}')
+        if (concurrent)
+          expect(events).toContainEqual({ _tag: 'Reasoning', text: 'Controller warning: The Review login changed concurrently. The controller preserved the current login.' })
+      }
+      await expect(readFile(join(workspace, 'owned'))).rejects.toMatchObject({ code: 'ENOENT' })
+    }
+    finally {
+      process.env.HOME = originalHome
     }
   }
   finally {

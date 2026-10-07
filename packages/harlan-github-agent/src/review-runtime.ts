@@ -1,5 +1,6 @@
 import type { AgentTurnRequest } from './agent-provider.ts'
 import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
+import type { ReviewHomeRelease } from './review-provider-home.ts'
 import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,7 +15,7 @@ export interface ReviewRuntime {
   home: string
   readOnlyPaths: string[]
   opencodeConfiguration: string
-  release: () => Promise<void>
+  release: () => Promise<ReviewHomeRelease>
 }
 
 export const REVIEW_TOOL_NAMES = ['controller_review_review_read', 'controller_review_review_search', 'controller_review_review_proof'] as const
@@ -50,9 +51,13 @@ export async function createReviewRuntime(input: { request: AgentTurnRequest, pr
   let home: Awaited<ReturnType<typeof createReviewProviderHome>> | undefined
   let server: Awaited<ReturnType<typeof serveReviewProof>> | undefined
   const release = async () => {
-    await server?.close()
-    await home?.release()
-    await rm(root, { recursive: true, force: true })
+    try {
+      await server?.close()
+      return await home?.release() ?? { _tag: 'Released' as const, warnings: [] }
+    }
+    finally {
+      await rm(root, { recursive: true, force: true })
+    }
   }
   try {
     const sourceMode = import.meta.url.endsWith('.ts')

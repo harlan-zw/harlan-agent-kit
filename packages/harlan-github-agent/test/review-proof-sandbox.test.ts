@@ -78,7 +78,7 @@ it('terminates the whole Bubblewrap group when an infinite proof reaches its dea
     await mkdir(workspace)
     const sourcePath = join(root, 'source.ts')
     await writeFile(sourcePath, 'console.log("started"); while (true) {}', { mode: 0o400 })
-    const result = await createReviewProofLauncher(prepareReviewProofSandbox)({ workspace, sourcePath, nodeArguments: ['--disable-sigusr1', '--experimental-strip-types', '--permission', '--allow-fs-read=/run/proof/proof.ts', '/run/proof/proof.ts'], timeoutMilliseconds: 300 })
+    const result = await createReviewProofLauncher(prepareReviewProofSandbox)({ workspace, sourcePath, nodeArguments: ['--disable-sigusr1', '--experimental-strip-types', '--permission', '--allow-fs-read=/run/proof/proof.ts', '/run/proof/proof.ts'], timeoutMilliseconds: 2_000 })
     expect(result).toEqual({ _tag: 'TimedOut', output: 'started\n' })
   }
   finally {

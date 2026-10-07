@@ -90,6 +90,10 @@ The triage agent resumes its own session, selects the matching installed skills,
 
 Review stays read only. Repair starts fresh with every structured finding. It writes each failing regression test before its fix.
 
+Review uses bounded file reads, literal searches, and one controller proof invocation per Task. The controller reserves that invocation before execution. It retains failed output across retries and desktop offload. The proof supports exported TypeScript APIs through one fixed Node invocation. It cannot install packages, start another process, access sockets, or write files. Unsupported preparation and runtimes remain verification limits.
+
+Each Review uses a private provider home with named login files and controller configuration. Cleanup saves refreshed named login files only. Controller Review writers share a login lock. If the destination differs from its initial snapshot, cleanup preserves it and reports a warning. External SDK writers do not share this lock. Their changes detected before the final rename are preserved; comparison and rename are not globally atomic.
+
 Review decides the pull request premise once. A sound premise permits Repair. A wrong premise recommends Dismissal and never starts Repair.
 
 GitHub status, comments, and labels hold durable workflow truth. The local journal coordinates leases, Agent sessions, Recovery, and Review usage.
