@@ -798,7 +798,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   markPullRequestTriageSettled: (repository: string, pullRequestNumber: number, headSha: string, at: string) => boolean
   /** Whether a Review Task for this exact head is queued or running, as a rerun is. */
   hasActiveReviewTask: (repository: string, pullRequestNumber: number, headSha: string) => boolean
-  hasPriorityAgentTask: () => boolean
+  hasPriorityAgentTask: (now: string) => boolean
   claimNextAdversarialReviewTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedAdversarialReviewTask | null
   claimNextBaselineRepairTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedBaselineRepairTask | null
   claimNextConflictTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedConflictResolutionTask | null
@@ -3897,6 +3897,34 @@ function supersededAfterStarting(database: DatabaseSync, taskId: string): boolea
   return row?.from_tag === 'Running' || row?.from_tag === 'Publishing'
 }
 
+/** Wait for quiet base inputs, but never delay a burst beyond five minutes. */
+const CONFLICT_BASE_QUIET_MS = 120_000
+const CONFLICT_BASE_MAX_WAIT_MS = 300_000
+
+function updateConflictDispatchWindow(database: DatabaseSync, subjectId: number, previous: GitHubItem | null, current: GitHubItem, at: string): void {
+  const clear = () => database.prepare('DELETE FROM conflict_dispatch_windows WHERE subject_id = ?').run(subjectId)
+  if (current.kind !== 'pull_request' || previous?.kind !== 'pull_request'
+    || current.state !== 'open' || previous.state !== 'open' || current.draft || previous.draft
+    || current.mergeState === 'clean' || previous.mergeState === 'clean'
+    || current.headSha !== previous.headSha || current.baseRef !== previous.baseRef) {
+    clear()
+    return
+  }
+  if (current.baseSha === previous.baseSha)
+    return
+  const prior = database.prepare('SELECT first_movement_at FROM conflict_dispatch_windows WHERE subject_id = ?')
+    .get(subjectId) as { first_movement_at: string } | undefined
+  if (previous.mergeState !== 'conflicting' && prior === undefined)
+    return
+  const firstMovement = prior?.first_movement_at ?? at
+  const dispatchAt = new Date(Math.min(Date.parse(at) + CONFLICT_BASE_QUIET_MS, Date.parse(firstMovement) + CONFLICT_BASE_MAX_WAIT_MS)).toISOString()
+  database.prepare(`
+    INSERT INTO conflict_dispatch_windows (subject_id, head_sha, base_ref, first_movement_at, dispatch_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(subject_id) DO UPDATE SET dispatch_at = excluded.dispatch_at
+  `).run(subjectId, current.headSha, current.baseRef ?? null, firstMovement, dispatchAt)
+}
+
 function planConflictResolution(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4481,6 +4509,7 @@ function cancelStoredTask(database: DatabaseSync, taskId: string, at: string, re
     recordWorkerTransition(database, { taskId, from: worker.state_tag, to: 'Superseded', reason, fence: worker.fence, at })
   }
 
+  database.prepare('DELETE FROM conflict_dispatch_windows WHERE subject_id IN (SELECT subject_id FROM tasks WHERE id = ? AND kind = \'resolve_conflict\')').run(taskId)
   database.prepare('INSERT INTO task_cancellations (task_id, cancelled_at, reason) VALUES (?, ?, ?)')
     .run(taskId, at, reason)
   resolveTaskIncidents(database, taskId, at)
@@ -6801,6 +6830,16 @@ function installSchema(database: DatabaseSync): void {
     // route the journal took here, and never lowers the recorded version.
     const target = Math.max(version, 79)
     applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS conflict_dispatch_windows (
+        subject_id INTEGER PRIMARY KEY REFERENCES subjects(id),
+        head_sha TEXT NOT NULL,
+        base_ref TEXT,
+        first_movement_at TEXT NOT NULL,
+        dispatch_at TEXT NOT NULL
+      );
+      PRAGMA user_version = ${target};
+    `)
+    applyMigration(database, `
       CREATE TABLE IF NOT EXISTS revision_files (
         subject_id INTEGER NOT NULL REFERENCES subjects(id),
         revision_id TEXT NOT NULL,
@@ -7713,8 +7752,10 @@ export function openJournalStore(
       const dismissed = (): boolean =>
         database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(subject.id) !== undefined
       const planCurrentWork = (): void => {
+        updateConflictDispatchWindow(database, subject.id, subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem, input.subject, input.observedAt)
         // A Dismissal outranks every planner. Nothing is queued, whatever changed.
         if (dismissed()) {
+          database.prepare('DELETE FROM conflict_dispatch_windows WHERE subject_id = ?').run(subject.id)
           cancelSubjectTasks(database, subject.id, input.observedAt, 'The item is dismissed.')
           return
         }
@@ -9439,7 +9480,7 @@ export function openJournalStore(
     })
   }
 
-  const nextMutationTask = (kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' | null, exactTaskId?: string, includeQueuedBatches = false): ClaimRow | undefined => database.prepare(`
+  const nextMutationTask = (kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' | null, now: string, exactTaskId?: string, includeQueuedBatches = false): ClaimRow | undefined => database.prepare(`
         SELECT
           tasks.id,
           tasks.kind,
@@ -9462,6 +9503,13 @@ export function openJournalStore(
         JOIN repositories ON repositories.id = subjects.repository_id
         JOIN revisions ON revisions.id = tasks.revision_id
         WHERE (? IS NULL OR tasks.kind = ?) AND tasks.state_tag = 'Queued'
+          AND (tasks.kind != 'resolve_conflict' OR NOT EXISTS (
+            SELECT 1 FROM conflict_dispatch_windows AS window
+            WHERE window.subject_id = tasks.subject_id
+              AND window.head_sha = json_extract(revisions.payload, '$.headSha')
+              AND window.base_ref IS json_extract(revisions.payload, '$.baseRef')
+              AND window.dispatch_at > ?
+          ))
           -- Retained recovery belongs only to explicit Control. A future
           -- planner must never send its proof-tagged Task to an implementation Agent.
           AND COALESCE(CASE WHEN json_valid(tasks.evidence) THEN json_extract(tasks.evidence, '$._tag') END, '') != 'RepairRecovery'
@@ -9556,14 +9604,14 @@ export function openJournalStore(
           CASE WHEN tasks.kind = 'issue_work' THEN 0 ELSE 1 END DESC,
           tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, kind, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests) as ClaimRow | undefined
+      `).get(kind, kind, now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests) as ClaimRow | undefined
 
   const deliveryPriority = (kind: AgentTask['kind']): number => kind === 'issue_work' || kind === 'issue_triage' ? 0 : 1
 
   // A waiting Review must get a free permit before another issue starts.
   // Compare only claimable work, so missing Approval never holds the Queue.
-  const hasHigherPriorityTask = (priority: number, kind: AgentTask['kind'] = 'issue_work'): boolean =>
-    [nextMutationTask(null, undefined, true), nextWorkerTask(null)].some((row) => {
+  const hasHigherPriorityTask = (priority: number, now: string, kind: AgentTask['kind'] = 'issue_work'): boolean =>
+    [nextMutationTask(null, now, undefined, true), nextWorkerTask(null)].some((row) => {
       if (row === undefined)
         return false
       const candidatePriority = (JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0
@@ -9581,7 +9629,7 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       recoverExpiredTasks(now)
-      const row = nextMutationTask(kind, exactTaskId)
+      const row = nextMutationTask(kind, now, exactTaskId)
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -9589,7 +9637,7 @@ export function openJournalStore(
 
       // A Batch already owns an Agent permit when it claims an exact unit Task.
       // New priority work competes for free permits without interrupting that Batch.
-      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, kind)) {
+      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind)) {
         database.exec('COMMIT')
         return null
       }
@@ -9625,6 +9673,8 @@ export function openJournalStore(
       if (update.changes !== 1)
         throw new Error(`Task claim lost for ${row.id}.`)
       recordTransition(database, { taskId: row.id, from: 'Queued', to: 'Running', reason: null, fence, at: now })
+      if (kind === 'resolve_conflict')
+        database.prepare('DELETE FROM conflict_dispatch_windows WHERE subject_id = ?').run(row.subject_id)
       database.exec('COMMIT')
 
       const taskBase = {
@@ -9659,7 +9709,7 @@ export function openJournalStore(
 
   const batchStore = createBatchStore(database, {
     recoverExpiredTasks,
-    canClaimIssueWorkTask: exactTaskId => nextMutationTask('issue_work', exactTaskId) !== undefined,
+    canClaimIssueWorkTask: (exactTaskId, now) => nextMutationTask('issue_work', now, exactTaskId) !== undefined,
     hasHigherPriorityTask,
     claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
       const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)
@@ -10128,7 +10178,7 @@ export function openJournalStore(
         return null
       }
 
-      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, kind)) {
+      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind)) {
         database.exec('COMMIT')
         return null
       }
@@ -16082,7 +16132,7 @@ export function openJournalStore(
     getRevisionFiles,
     hasActiveReviewTask,
     markPullRequestTriageSettled,
-    hasPriorityAgentTask: () => hasHigherPriorityTask(0, 'adversarial_review'),
+    hasPriorityAgentTask: now => hasHigherPriorityTask(0, now, 'adversarial_review'),
     claimNextAdversarialReviewTask,
     claimNextBaselineRepairTask,
     claimNextConflictTask,
