@@ -1049,7 +1049,7 @@ describe('journal store', () => {
     expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
   })
 
-  it('does not requeue a conflict whose base merges cleanly until the head or the base changes', () => {
+  it('keeps completed clean merges settled until changed base inputs become stable', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const subject = pullRequestItem({ mergeState: 'conflicting', headSha: 'head-1', baseSha: 'base-1' })
@@ -1078,7 +1078,9 @@ describe('journal store', () => {
 
     // The base moved, so the merge must be redone and the stale warning closes.
     store.recordObservation({ externalId: 'clean-merge-moved', observedAt: at(), source: 'poll', subject: { ...subject, baseSha: 'base-2' } })
-    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).not.toBeNull()
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    elapsed += 120_000
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)?.pullRequest.baseSha).toBe('base-2')
     expect(store.listIncidents()).toEqual([])
   })
 

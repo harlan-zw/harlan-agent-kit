@@ -305,8 +305,8 @@ export async function resolveUserLogin(
 }
 
 /** Whether a Routine run may take a free Agent permit. */
-export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask'>): boolean {
-  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask())
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask'>, now: string): boolean {
+  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask(now))
 }
 
 export interface ExternalWatchReloadOptions {
@@ -907,7 +907,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       })),
       routines: createWorkerTaskScheduler({
-        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store),
+        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store, now().toISOString()),
         claim: store.claimNextRoutineRun,
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
