@@ -341,6 +341,7 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
             name: context.check.name,
             conclusion: context.check.conclusion,
             runnerLost: context.check.failure._tag === 'RunnerLost',
+            failedStep: context._tag === 'Available' ? context.job.failedStep : null,
             logTail: context._tag === 'Available' ? context.job.logTail : [],
           },
           classification: options.classification ?? null,
@@ -349,6 +350,18 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       })))
       const infrastructure = classified.flatMap(entry => entry.failure._tag === 'Infrastructure' ? [{ check: entry.context.check, reason: entry.failure.reason }] : [])
       const repairable = classified.flatMap(entry => entry.failure._tag === 'Repairable' ? [entry.context] : [])
+      const indeterminate = classified.flatMap(entry => entry.failure._tag === 'Indeterminate'
+        ? [{ check: entry.context.check.name, reason: entry.context._tag === 'Unavailable' ? entry.context.reason : entry.failure.reason }]
+        : [])
+      // A known failed step cannot explain another cancelled or unreadable check.
+      // Resolve every unknown cause before authorizing repository changes.
+      if (indeterminate.length > 0) {
+        return ok({
+          _tag: 'ActionRequired',
+          reason: cleanLine(`Failure evidence is incomplete. ${indeterminate.map(entry => `Check "${entry.check}": ${entry.reason}`).join(' ')} Read the failed step and cancellation cause before starting Baseline repair.`),
+          evidence: JSON.stringify(indeterminate),
+        })
+      }
       // No change to the repository fixes a dead runner or a remote outage.
       // Every Agent turn spent on one produced a mask, so none starts.
       if (repairable.length === 0) {
