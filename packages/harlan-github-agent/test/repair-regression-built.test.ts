@@ -30,6 +30,7 @@ it('runs current regression evidence through the built package export', () => {
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { confirmRepairRecoveryRegression } from 'harlan-github-agent'
+import { execFile } from 'node:child_process'
 const fixture = ${JSON.stringify(fixture)}
 const results = []
 for (const source of [
@@ -40,7 +41,12 @@ for (const source of [
   "it('passed', () => expect(1).toBe(1))",
 ]) {
   writeFileSync(join(fixture, 'selected.test.ts'), "import { it, expect, beforeEach } from 'vitest'\\n" + source)
-  results.push(await confirmRepairRecoveryRegression(fixture, ['selected.test.ts'], AbortSignal.timeout(20_000)))
+  results.push(await confirmRepairRecoveryRegression(fixture, ['selected.test.ts'], AbortSignal.timeout(20_000), input => new Promise((resolve, reject) => {
+    execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal }, error => {
+      if (error !== null && typeof error.code !== 'number') reject(error)
+      else resolve({ exitCode: error?.code ?? 0 })
+    })
+  })))
 }
 console.log(JSON.stringify(results))
 `)

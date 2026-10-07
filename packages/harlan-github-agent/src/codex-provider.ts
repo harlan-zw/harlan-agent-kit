@@ -1,8 +1,11 @@
 import type { CodexOptions, Input, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
+import type { AgentSandbox } from './agent-sandbox.ts'
+import { dirname } from 'node:path'
 import process from 'node:process'
 import { Codex } from '@openai/codex-sdk'
 import { agentProviderFailureReason, agentTextEvent } from './agent-provider.ts'
+import { prepareAgentSandbox } from './agent-sandbox.ts'
 import { materializeAgentMedia } from './github-media.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
@@ -17,6 +20,7 @@ export interface CodexThreadClient {
 
 export interface CodexProviderOptions {
   createCodex?: (options: CodexOptions) => CodexThreadClient
+  readOnly?: boolean
 }
 
 function isMissingSession(error: unknown): boolean {
@@ -109,13 +113,35 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
     name: 'codex',
     runTurn: (request: AgentTurnRequest) => (async function* () {
       const media = await materializeAgentMedia(request.media)
+      let sandbox: AgentSandbox | undefined
       try {
-      // The SDK replaces the inherited environment when `env` is set, so the
-      // whole service environment goes with the worktree's seeded .env on top.
-      // Codex takes no per-turn instruction file, so it ignores
-      // `request.instructionPaths`. The prompt names the memory index path, and
-      // the turn opens it as a file instead.
-        const client = factory({ env: definedEntries(workspaceEnvironment(process.env, request.workspace, request.taskId)) })
+        if (options.createCodex === undefined) {
+          const prepared = await prepareAgentSandbox({
+            workspace: request.workspace,
+            environment: process.env,
+            provider: 'codex',
+            readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? [])],
+            ...(request.taskId === undefined ? {} : { taskId: request.taskId }),
+            ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
+          }).then(value => ({ _tag: 'Ok' as const, value })).catch((error: unknown) => ({ _tag: 'Err' as const, error }))
+          if (prepared._tag === 'Err') {
+            yield { _tag: 'Failed', reason: `The Codex Agent worker isolation failed: ${prepared.error instanceof Error ? prepared.error.message : String(prepared.error)}` }
+            return
+          }
+          sandbox = prepared.value
+        }
+        // Production uses the trusted adapter and its sanitized environment.
+        // Injected clients exercise only the provider's event translation.
+        const client = factory(sandbox === undefined
+          ? { env: definedEntries(workspaceEnvironment(process.env, request.workspace, request.taskId)) }
+          : {
+              codexPathOverride: sandbox.adapterPath,
+              env: {
+                PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+                HARLAN_AGENT_SANDBOX_ARGS: JSON.stringify([...sandbox.args, sandbox.providerBinary]),
+                HARLAN_AGENT_SANDBOX_ENV: JSON.stringify(sandbox.environment),
+              },
+            })
         const baseOptions = {
           model: request.model,
           workingDirectory: request.workspace,
@@ -148,6 +174,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         yield* providerEvents(started.events)
       }
       finally {
+        await sandbox?.release()
         await media.release()
       }
     })(),

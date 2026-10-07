@@ -21,8 +21,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 3: tagged `DesktopFailure`, which says whether the Agent provider started.
  * 4: the `ContextBudgetWarned` Agent event.
  * 5: bounded controller image evidence carried in the turn request.
+ * 6: provider processes require the isolated Agent worker configuration.
  */
-export const DESKTOP_PROTOCOL = 5
+export const DESKTOP_PROTOCOL = 6
 
 /**
  * Why one desktop turn failed.

@@ -87,6 +87,23 @@ jobs:
           sudo install "$RUNNER_TEMP/wt" /usr/local/bin/wt
           wt --version
 
+      - name: Install Agent process isolation
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Hosted Ubuntu blocks private loopback setup through its AppArmor gate.
+          # Permit namespace creation on this disposable runner. Worker capabilities stay dropped.
+          if [ -f /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL \
+            --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+            --proc /proc --dev /dev /usr/bin/true
+
       - name: Release preview
         run: pnpm test:release
 
