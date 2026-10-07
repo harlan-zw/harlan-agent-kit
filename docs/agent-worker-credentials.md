@@ -34,7 +34,7 @@ The corresponding provider then needs login before it can serve turns.
 Tools with external runtime directories need additional `--tool-dir` or `--read-only` arguments.
 For example, mount pnpm's installation directory if its executable imports sibling modules.
 Mount exact installation directories; never mount a complete home, configuration directory, or Service state directory.
-Mounts are read only, except the worker home, worktree, and required Git metadata.
+Host mounts are read only, except the worker home, worktree files, and selected temporary evidence directories.
 Do not place controller credentials in the worker home or tool directories.
 
 ## Verify before restart
@@ -62,7 +62,7 @@ If a tool cannot resolve a runtime path, add that exact trusted directory and re
 Never disable isolation to recover availability.
 
 Deploy through the existing Service update path after provisioning both hosts.
-Desktop protocol 6 prevents an older desktop from receiving a turn from the new controller.
+The desktop protocol check refuses incompatible desktop helpers.
 Worker provider sessions use the separate home; older provider sessions may need a fresh turn.
 Provider refreshes update the worker's own login files.
 Repeat provisioning only when those files need intentional replacement.
@@ -71,7 +71,13 @@ Repeat provisioning only when those files need intentional replacement.
 
 The worker sees its separate home, its worktree, selected instructions, and selected tool installations.
 Git receives a generated configuration with a credential-free GitHub origin.
-The namespace exposes only shared Git objects, refs, logs, and this task's Git directory.
+The namespace gives Git private objects, refs, logs, and task data.
+Existing host objects enter through read-only alternates.
+The worktree's administrative pointers and generated Git configuration remain read only.
+After the turn, isolated Git exports a pack capped at 128 MiB.
+Host Git validates that pack before updating the approved branch.
+The update compares the original head SHA and refuses a newer host head.
+Only bounded index, head, and merge data returns to the host.
 The host's Git configuration, hooks, extra Git files, and other task indexes remain hidden.
 Repository environment files remain available for repository tooling.
 Their credentials retain the authority already granted to that repository.
@@ -79,7 +85,11 @@ Their credentials retain the authority already granted to that repository.
 The worker receives private process and network namespaces, plus private `/proc`, `/tmp`, and `/run` mounts.
 Controller environment variables do not enter the worker environment.
 OpenCode's server and attachment client both run inside the boundary.
+The attachment client receives a read-only worktree and never returns Git data.
+The server completes Git export before the turn releases its worktree.
 Codex enters through a trusted executable adapter before any model tool runs.
+Repair recovery runs installation, regression checks, and build commands through the same isolation boundary.
+Missing worker configuration stops those commands before repository code runs.
 
 Network traffic leaves through a trusted HTTP proxy over a dedicated Unix socket.
 The proxy permits ports 80 and 443 on public IPv4 destinations.

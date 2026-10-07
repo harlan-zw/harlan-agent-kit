@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { runAgentSandboxCommand } from './agent-sandbox.ts'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -1030,7 +1031,11 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
 }
 
 /** Runs current selected evidence without copying credentials into repository scripts. */
-export async function confirmRepairRecoveryRegression(path: string, regressionPaths: string[], signal: AbortSignal): Promise<Result<void, string>> {
+type RecoveryCommand = (input: { workspace: string, command: string, args: string[], signal: AbortSignal, readOnlyPaths?: readonly string[], writablePaths?: readonly string[] }) => Promise<{ exitCode: number }>
+
+const runRecoveryCommand: RecoveryCommand = input => runAgentSandboxCommand({ ...input, environment: { ...process.env, CI: 'true' } })
+
+export async function confirmRepairRecoveryRegression(path: string, regressionPaths: string[], signal: AbortSignal, runCommand: RecoveryCommand = runRecoveryCommand): Promise<Result<void, string>> {
   const sourceReporter = fileURLToPath(new URL('./repair-regression-reporter.ts', import.meta.url))
   const reporter = existsSync(sourceReporter)
     ? sourceReporter
@@ -1039,14 +1044,8 @@ export async function confirmRepairRecoveryRegression(path: string, regressionPa
   const evidenceFile = join(evidenceDirectory, 'result.json')
   let output: string | undefined
   try {
-    await new Promise<void>((resolve) => {
-      execFile('pnpm', ['exec', 'vitest', 'run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...regressionPaths], {
-        cwd: path,
-        env: { ...gitEnvironment(), CI: 'true' },
-        signal,
-        maxBuffer: 10 * 1024 * 1024,
-      }, () => resolve()) // An assertion failure exits nonzero. The reporter supplies the failure category.
-    })
+    // Assertion failures are expected. The isolated reporter supplies their category.
+    await runCommand({ workspace: path, command: 'pnpm', args: ['exec', 'vitest', 'run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...regressionPaths], signal, readOnlyPaths: [reporter], writablePaths: [evidenceDirectory] })
     output = await readFile(evidenceFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT')
         return undefined
@@ -1074,7 +1073,7 @@ export async function confirmRepairRecoveryRegression(path: string, regressionPa
     : err('The selected regression tests must fail on the current base without setup errors.')
 }
 
-export async function runRepairRecoveryChecks(path: string, regressionPaths: string[], signal: AbortSignal): Promise<Result<string[], string>> {
+export async function runRepairRecoveryChecks(path: string, regressionPaths: string[], signal: AbortSignal, runCommand: RecoveryCommand = runRecoveryCommand): Promise<Result<string[], string>> {
   const commands: Array<{ command: string, args: string[] }> = [
     { command: 'pnpm', args: ['install', '--frozen-lockfile'] },
     { command: 'pnpm', args: ['exec', 'vitest', 'run', ...regressionPaths] },
@@ -1088,11 +1087,7 @@ export async function runRepairRecoveryChecks(path: string, regressionPaths: str
     commands.push({ command: 'pnpm', args: ['build'] })
   const checks: string[] = []
   for (const command of commands) {
-    const passed = await new Promise<boolean>((resolve) => {
-      const child = spawn(command.command, command.args, { cwd: path, env: { ...gitEnvironment(), CI: 'true' }, signal, stdio: 'ignore' })
-      child.on('error', () => resolve(false))
-      child.on('close', code => resolve(code === 0))
-    })
+    const passed = (await runCommand({ workspace: path, ...command, signal })).exitCode === 0
     if (!passed)
       return err(`Fresh Repair checks failed: ${command.command} ${command.args.join(' ')}.`)
     checks.push(`${command.command} ${command.args.join(' ')} passed`.trim())
@@ -1104,6 +1099,7 @@ export async function runRepairRecoveryChecks(path: string, regressionPaths: str
 export function createRepairRecoveryWorktreeManager(options: ConflictWorktreeManagerOptions & {
   runChecks: typeof runRepairRecoveryChecks
   confirmRegression: typeof confirmRepairRecoveryRegression
+  runCommand?: RecoveryCommand
   recordChecks: (task: ClaimedReviewFixTask, checks: string[]) => boolean
 }): RepairRecoveryWorktrees {
   const fixes = createReviewFixWorktreeManager(options)
@@ -1161,11 +1157,7 @@ export function createRepairRecoveryWorktreeManager(options: ConflictWorktreeMan
       if (baseline.exitCode !== 0 || tests.exitCode !== 0)
         return err('The selected regression tests could not be isolated on the current base.')
       // Prepare dependencies before the red run. The same current base owns both test runs.
-      const installed = await new Promise<boolean>((resolve) => {
-        const child = spawn('pnpm', ['install', '--frozen-lockfile'], { cwd: workspace.path, env: { ...gitEnvironment(), CI: 'true' }, signal, stdio: 'ignore' })
-        child.on('error', () => resolve(false))
-        child.on('close', code => resolve(code === 0))
-      })
+      const installed = (await (options.runCommand ?? runRecoveryCommand)({ workspace: workspace.path, command: 'pnpm', args: ['install', '--frozen-lockfile'], signal })).exitCode === 0
       if (!installed)
         return err('Current base dependencies could not be installed for regression evidence.')
       const regression = await options.confirmRegression(workspace.path, plan.regressionPaths, signal)

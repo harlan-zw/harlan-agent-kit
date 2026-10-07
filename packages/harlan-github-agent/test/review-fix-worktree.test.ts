@@ -129,7 +129,7 @@ describe('review fix worktree', () => {
       if (mode === 'patch-change')
         writeFileSync(join(path, 'other.ts'), 'unexpected check output\n')
       return mode === 'checks-fail' ? err('Fresh checks failed.') : ok(['check passed'])
-    }, recordChecks: () => true })
+    }, runCommand: async () => ({ exitCode: 0 }), recordChecks: () => true })
     const signal = new AbortController().signal
     const artifact = await manager.inspectRecovery(target, signal)
     if (mode === 'wrong-ref' || mode === 'merge') {

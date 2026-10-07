@@ -49,7 +49,7 @@ export interface OpencodeServer {
   steer: (sessionId: string, text: string) => Promise<Result<void, string>>
   readMessages: (sessionId: string, signal: AbortSignal) => Promise<Result<unknown, string>>
   /** Stops the server, and with it every model call the session still makes. */
-  close: (signal: NodeJS.Signals) => void
+  close: (signal: NodeJS.Signals) => void | Promise<void>
 }
 
 export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv, readOnlyPaths?: readonly string[], taskId?: string) => Promise<Result<OpencodeServer, string>>
@@ -94,6 +94,19 @@ export function spawnOpencodeServer(readOnly?: boolean): StartOpencodeServer {
         env: sandbox.environment,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
+      const closed = new Promise<void>(resolve => child.once('close', () => resolve()))
+      let cleanup: Promise<void> | undefined
+      const release = () => {
+        cleanup ??= closed.then(async () => {
+          try {
+            await sandbox.release()
+          }
+          finally {
+            await releaseTransport()
+          }
+        })
+        return cleanup
+      }
       let output = ''
       let settled = false
       const settle = (result: Result<OpencodeServer, string>) => {
@@ -110,22 +123,32 @@ export function spawnOpencodeServer(readOnly?: boolean): StartOpencodeServer {
       const read = (chunk: string) => {
         output = `${output}${chunk}`.slice(-maximumErrorCharacters)
         const url = opencodeServerUrl(output)
-        if (url !== undefined)
-          settle(ok({ ...opencodeServer(transport.url, password, workspace, child), transportDirectory }))
+        if (url !== undefined) {
+          settle(ok({ ...opencodeServer(transport.url, password, workspace, child), transportDirectory, close: async (signal) => {
+            child.kill(signal)
+            const stop = setTimeout(() => child.kill('SIGKILL'), 5_000)
+            stop.unref()
+            try {
+              await release()
+            }
+            finally {
+              clearTimeout(stop)
+            }
+          } }))
+        }
       }
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
       child.stdout.on('data', read)
       child.stderr.on('data', read)
       child.once('error', (error) => {
-        void sandbox.release().catch(error => process.stderr.write(`Agent sandbox cleanup failed: ${error.message}\n`))
-        void releaseTransport().catch(error => process.stderr.write(`Agent transport cleanup failed: ${error.message}\n`))
-        settle(err(error.message))
+        void release().then(() => settle(err(error.message)), failure => settle(err(`Agent cleanup failed: ${failure.message}`)))
       })
       child.once('exit', (code, signal) => {
-        void sandbox.release().catch(error => process.stderr.write(`Agent sandbox cleanup failed: ${error.message}\n`))
-        void releaseTransport().catch(error => process.stderr.write(`Agent transport cleanup failed: ${error.message}\n`))
-        settle(err(opencodeFailureReason(output, { code, signal })))
+        void release().then(() => settle(err(opencodeFailureReason(output, { code, signal }))), (failure) => {
+          process.stderr.write(`Agent cleanup failed: ${failure.message}\n`)
+          settle(err(`Agent cleanup failed: ${failure.message}`))
+        })
       })
     })
   }
@@ -146,7 +169,7 @@ function opencodeServer(url: string, password: string, workspace: string, child:
     })
       .then((response): Result<void, string> => response.ok ? ok(undefined) : err(`The opencode server answered ${response.status}.`))
       .catch((error: unknown) => err(`The opencode server did not take the message: ${error instanceof Error ? error.message : String(error)}`)),
-    close: signal => child.kill(signal),
+    close: (signal) => { child.kill(signal) },
   }
 }
 
@@ -317,7 +340,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
   const spawnOpencode = options.spawnOpencode ?? (async (args: string[], workspace: string, environment: NodeJS.ProcessEnv, mediaPaths: readonly string[], taskId?: string, transportDirectory?: string) => {
     if (transportDirectory === undefined)
       throw new Error('The OpenCode client needs its isolated turn transport.')
-    const sandbox = await prepareAgentSandbox({ workspace, environment, provider: 'opencode', readOnlyPaths: [...opencodeSandboxPaths(environment), ...mediaPaths], networkMode: 'opencode-client', transportDirectory, ...(taskId === undefined ? {} : { taskId }), ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }) })
+    const sandbox = await prepareAgentSandbox({ workspace, environment, provider: 'opencode', readOnlyPaths: [...opencodeSandboxPaths(environment), ...mediaPaths], networkMode: 'opencode-client', transportDirectory, ...(taskId === undefined ? {} : { taskId }), readOnly: true })
     const child = spawn(sandbox.binary, [...sandbox.args, sandbox.providerBinary, ...args], {
       cwd: workspace,
       env: sandbox.environment,
@@ -354,7 +377,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     const server = started.value
     const created = await server.createSession(request.signal).catch(() => err('The OpenCode session creation failed.'))
     if (created._tag === 'Err' || request.signal.aborted) {
-      server.close('SIGTERM')
+      await server.close('SIGTERM')
       yield { _tag: 'Failed', reason: created._tag === 'Err' ? created.error : 'The OpenCode turn was cancelled.' }
       return
     }
@@ -367,14 +390,14 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       server.transportDirectory,
     )).then(ok).catch((error: unknown) => err(`The OpenCode client isolation failed: ${error instanceof Error ? error.message : String(error)}`))
     if (launched._tag === 'Err') {
-      server.close('SIGTERM')
+      await server.close('SIGTERM')
       yield { _tag: 'Failed', reason: launched.error }
       return
     }
     const child = launched.value
     const stop = (signal: NodeJS.Signals) => {
       child.kill(signal)
-      server.close(signal)
+      void Promise.resolve(server.close(signal)).catch(error => process.stderr.write(`Agent cleanup failed: ${error.message}\n`))
     }
     const abort = () => stop('SIGTERM')
     request.signal.addEventListener('abort', abort, { once: true })
@@ -550,7 +573,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       clearInterval(watchdog)
       request.signal.removeEventListener('abort', abort)
       // The run ended, so its server has no session left to serve.
-      server.close('SIGTERM')
+      await server.close('SIGTERM')
     }
   }
 
