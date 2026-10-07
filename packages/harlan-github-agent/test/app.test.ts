@@ -3,6 +3,8 @@ import type { AgentAppOptions } from '../src/app.ts'
 import type { StatsRange, StatsSnapshot } from '../src/stats.ts'
 import type { RestartOperation, SelectionMode } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
@@ -76,6 +78,41 @@ function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof c
 }
 
 describe('dashboard HTTP app', () => {
+  it('keeps its dashboard generation while an update replaces files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agent-dashboard-'))
+    const headers = { authorization, host: allowedHost }
+    const options = {
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot: root,
+      now,
+      store: { ...agentControls, getDashboardSnapshot: () => dashboardSnapshot() } as AgentAppOptions['store'],
+    }
+    mkdirSync(join(root, '_nuxt'))
+    writeFileSync(join(root, 'index.html'), '<script src="/_nuxt/old.js"></script>Old dashboard')
+    writeFileSync(join(root, '_nuxt/old.js'), 'old controller client')
+    const oldApp = createAgentApp(options)
+    rmSync(join(root, '_nuxt/old.js'))
+    writeFileSync(join(root, 'index.html'), '<script src="/_nuxt/new.js"></script>New dashboard')
+    writeFileSync(join(root, '_nuxt/new.js'), 'new controller client')
+    const newApp = createAgentApp(options)
+    // Remove the build completely, as prepare-update does before generating it.
+    rmSync(root, { recursive: true })
+
+    const oldHtml = await oldApp.request(`${allowedOrigin}/`, { headers })
+    expect(await oldHtml.text()).toContain('Old dashboard')
+    const oldAsset = await oldApp.request(`${allowedOrigin}/_nuxt/old.js`, { headers })
+    expect(oldAsset.status).toBe(200)
+    expect(await oldAsset.text()).toBe('old controller client')
+    expect((await oldApp.request(`${allowedOrigin}/_nuxt/new.js`, { headers })).status).toBe(404)
+    const newHtml = await newApp.request(`${allowedOrigin}/`, { headers })
+    expect(await newHtml.text()).toContain('New dashboard')
+    const newAsset = await newApp.request(`${allowedOrigin}/_nuxt/new.js`, { headers })
+    expect(await newAsset.text()).toBe('new controller client')
+    expect((await newApp.request(`${allowedOrigin}/_nuxt/old.js`, { headers })).status).toBe(404)
+    expect((await oldApp.request(`${allowedOrigin}/_nuxt/old.js`, { headers: { host: allowedHost } })).status).toBe(401)
+  })
+
   it('accepts explicit Repair recovery only through authenticated control', async () => {
     const taskId = `logged-finding:${'a'.repeat(64)}`
     const recover = vi.fn(async () => ({ _tag: 'Ok' as const, value: { _tag: 'Accepted' as const, taskId, fence: 4 } }))

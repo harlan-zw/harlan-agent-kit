@@ -9,8 +9,7 @@ import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, relative } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -165,19 +164,41 @@ function dashboardPath(root: string, requestPath: string): string {
   return candidate
 }
 
-function staticAsset(root: string, requestPath: string): Promise<Response> {
-  const path = dashboardPath(root, requestPath)
-  return readFile(path)
-    .then(body => new Response(body, {
-      headers: { 'content-type': contentTypes[extname(path)] ?? 'application/octet-stream' },
-    }))
-    .catch(() => {
-      throw createError({ status: 404, statusText: 'Not Found' })
-    })
+/** Pin the complete build before an update replaces its files during drain. */
+function dashboardAssets(root: string): ReadonlyMap<string, Buffer> {
+  const assets = new Map<string, Buffer>()
+  // The Control API can start before the dashboard has been built.
+  if (!existsSync(root))
+    return assets
+  const readDirectory = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory())
+        readDirectory(path)
+      else if (entry.isFile())
+        assets.set(path, readFileSync(path))
+      // Do not follow symlinks outside the dashboard build.
+    }
+  }
+  readDirectory(root)
+  return assets
 }
 
-async function dashboardHtml(root: string, requestPath: string, nonce: string): Promise<Response> {
-  const html = await readFile(dashboardPath(root, requestPath), 'utf8')
+function readDashboardAsset(assets: ReadonlyMap<string, Buffer>, root: string, requestPath: string): Buffer {
+  const body = assets.get(dashboardPath(root, requestPath))
+  if (body === undefined)
+    throw createError({ status: 404, statusText: 'Not Found' })
+  return body
+}
+
+function staticAsset(assets: ReadonlyMap<string, Buffer>, root: string, requestPath: string): Response {
+  return new Response(readDashboardAsset(assets, root, requestPath), {
+    headers: { 'content-type': contentTypes[extname(requestPath)] ?? 'application/octet-stream' },
+  })
+}
+
+function dashboardHtml(assets: ReadonlyMap<string, Buffer>, root: string, requestPath: string, nonce: string): Response {
+  const html = readDashboardAsset(assets, root, requestPath).toString('utf8')
   return new Response(
     html.replaceAll('<script', `<script nonce="${nonce}"`).replaceAll('<style', `<style nonce="${nonce}"`),
     { headers: { 'content-type': 'text/html; charset=utf-8' } },
@@ -356,6 +377,7 @@ function desktopInput<Value>(parse: (value: unknown) => Value, value: unknown): 
 
 export function createAgentApp(options: AgentAppOptions): H3 {
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot()
+  const assets = dashboardAssets(dashboardRoot)
   const originByHost = new Map([options.allowedOrigin, options.listenOrigin]
     .filter(origin => origin !== undefined)
     .map(origin => [new URL(origin).host, new URL(origin).origin]))
@@ -863,14 +885,14 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   })
 
   app.get('/favicon.ico', () => new Response(null, { status: 204 }))
-  app.get('/_payload.json', () => staticAsset(dashboardRoot, '_payload.json'))
-  app.get('/_nuxt/**', event => staticAsset(dashboardRoot, new URL(event.req.url).pathname.slice(1)))
-  app.get('/_fonts/**', event => staticAsset(dashboardRoot, new URL(event.req.url).pathname.slice(1)))
-  app.get('/_nuxt-skew-sw.js', () => staticAsset(dashboardRoot, '_nuxt-skew-sw.js'))
-  app.get('/', event => dashboardHtml(dashboardRoot, 'index.html', String(event.context.dashboardNonce)))
+  app.get('/_payload.json', () => staticAsset(assets, dashboardRoot, '_payload.json'))
+  app.get('/_nuxt/**', event => staticAsset(assets, dashboardRoot, new URL(event.req.url).pathname.slice(1)))
+  app.get('/_fonts/**', event => staticAsset(assets, dashboardRoot, new URL(event.req.url).pathname.slice(1)))
+  app.get('/_nuxt-skew-sw.js', () => staticAsset(assets, dashboardRoot, '_nuxt-skew-sw.js'))
+  app.get('/', event => dashboardHtml(assets, dashboardRoot, 'index.html', String(event.context.dashboardNonce)))
   DASHBOARD_PAGES.forEach((page) => {
-    app.get(`/${page}`, event => dashboardHtml(dashboardRoot, `${page}/index.html`, String(event.context.dashboardNonce)))
-    app.get(`/${page}/_payload.json`, () => staticAsset(dashboardRoot, `${page}/_payload.json`))
+    app.get(`/${page}`, event => dashboardHtml(assets, dashboardRoot, `${page}/index.html`, String(event.context.dashboardNonce)))
+    app.get(`/${page}/_payload.json`, () => staticAsset(assets, dashboardRoot, `${page}/_payload.json`))
   })
 
   return app
