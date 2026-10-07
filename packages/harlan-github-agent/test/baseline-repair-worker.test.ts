@@ -243,13 +243,12 @@ describe('baseline repair worker', () => {
     await runWorker({
       capture,
       workspace: { hasAgentsFile: true, nodeOptions: '--max-old-space-size=8192' },
-      checks: [actionsCheck({ name: 'test' }), actionsCheck({ id: 2, name: 'lint', source: { _tag: 'CommitStatus' } })],
+      checks: [actionsCheck({ name: 'test' })],
     })
     const prompt = capture.requests[0]?.prompt ?? ''
 
     expect(prompt).toContain('Run id 33466651519, job "test (24)", failed step "Run pnpm test".')
     expect(prompt).toContain('Tests 1 failed | 12 passed')
-    expect(prompt).toContain('Check "lint", conclusion failure.\n  Run id, job, step, and log: unavailable (the check is not a GitHub Actions job).')
     expect(prompt).toContain('NODE_OPTIONS=--max-old-space-size=8192')
     expect(prompt).toContain('Read AGENTS.md')
     expect(prompt).toContain('Never run sudo or systemctl.')
@@ -257,14 +256,20 @@ describe('baseline repair worker', () => {
     expect(prompt).not.toMatch(/PR skill|pull request template/i)
   })
 
-  it('says the log is unavailable and skips AGENTS.md when the worktree has none', async () => {
+  it.each([
+    { job: err('Private job log unavailable') },
+    { job: ok(jobContext({ logTail: [] })) },
+    { job: ok(jobContext({ failedStep: null })) },
+    { checks: [actionsCheck({ conclusion: 'cancelled' })], job: ok(jobContext({ failedStep: null, logTail: ['##[error]The operation was canceled.'] })) },
+    { checks: [actionsCheck({ conclusion: 'cancelled', failure: { _tag: 'RunnerLost', incompleteSteps: 2 } })], job: err('Cancelled job log unavailable') },
+    { checks: [actionsCheck({ source: { _tag: 'CommitStatus' } })] },
+    { checks: [actionsCheck(), actionsCheck({ id: 2, source: { _tag: 'CommitStatus' } })] },
+  ])('requires failure evidence before starting repository repair: %j', async (input) => {
     const capture: ProviderCapture = { requests: [] }
-    await runWorker({ capture, job: err('Gone - https://docs.github.com/rest/actions/workflow-jobs') })
-    const prompt = capture.requests[0]?.prompt ?? ''
-
-    expect(prompt).toContain('unavailable (Gone - https://docs.github.com/rest/actions/workflow-jobs)')
-    expect(prompt).not.toContain('AGENTS.md')
-    expect(prompt).not.toContain('NODE_OPTIONS')
+    const { result, agentStarted } = await runWorker({ ...input, capture })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired', reason: expect.stringMatching(/evidence/i) })))
+    expect(agentStarted).toBe(false)
+    expect(capture.requests).toEqual([])
   })
 
   it('keeps repairable checks in scope and names infrastructure checks as out of scope', async () => {

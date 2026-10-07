@@ -5,6 +5,7 @@ import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
 import type { PackageReleaseConfig, PackageReleaseDefaults } from './package-release.ts'
+import type { RepairRecoveryCandidate } from './repair-recovery.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { RoutineName } from './routines/index.ts'
 import type { CompletionTask } from './take-ownership-store.ts'
@@ -1148,7 +1149,7 @@ export interface ClaimedIssueTriageCommentCommand extends IssueTriageCommentComm
  * token that covers one kind and not the other fails half of those calls. One
  * level means no caller can pick the wrong one.
  */
-export type GitHubRepositoryAccess = 'check_write' | 'read' | 'checks_read' | 'contents_write' | 'item_write' | 'pull_request_merge' | 'workflows_write'
+export type GitHubRepositoryAccess = 'check_write' | 'read' | 'deployments_read' | 'checks_read' | 'contents_write' | 'item_write' | 'pull_request_merge' | 'workflows_write'
 
 export interface GitHubRepositoryToken {
   token: string
@@ -1619,6 +1620,8 @@ export interface DashboardSnapshot {
   providerCircuits: ProviderCircuit[]
   agents: DashboardAgent[]
   incidents: Incident[]
+  /** Failed retained Repairs available for inspection. Apply rechecks current authority. */
+  repairRecoveryCandidates: RepairRecoveryCandidate[]
   queue: QueueEntry[]
   repositories: RepositoryStatus[]
   items: ItemSummary[]

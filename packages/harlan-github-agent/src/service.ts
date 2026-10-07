@@ -99,6 +99,7 @@ import { createCompletionSource } from './take-ownership-github.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
 import { createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
+import { createRoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
 import { agentWorktreeLeaseKey, confirmRepairRecoveryRegression, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createRepairRecoveryWorktreeManager, createReviewFixWorktreeManager, runRepairRecoveryChecks, sweepAgentWorktrees } from './worktree.ts'
 
@@ -308,8 +309,8 @@ export async function resolveUserLogin(
 }
 
 /** Whether a Routine run may take a free Agent permit. */
-export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask'>): boolean {
-  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask())
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask'>, now: string): boolean {
+  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask(now))
 }
 
 export interface ExternalWatchReloadOptions {
@@ -912,7 +913,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       })),
       routines: createWorkerTaskScheduler({
-        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store),
+        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store, now().toISOString()),
         claim: store.claimNextRoutineRun,
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
@@ -928,6 +929,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
           activityLog,
+          githubEvidence: createRoutineGitHubEvidenceSource({ tokens: routedTokens, now, jobs: workerGithub }),
           logger: {
             error: message => options.logger.error(message),
             info: message => options.logger.info(message),

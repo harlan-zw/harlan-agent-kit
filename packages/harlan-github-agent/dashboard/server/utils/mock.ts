@@ -104,6 +104,18 @@ function fixture(): DashboardSnapshot {
     ],
     incidents: [
       {
+        id: 'retained-repair',
+        scope: { _tag: 'Task', taskId: `logged-finding:${hex('d')}`, repository: nuxtSeo, itemNumber: 412 },
+        kind: 'unknown',
+        severity: 'error',
+        message: 'Repair recovery was interrupted. Apply the retained commit again.',
+        operation: 'publication',
+        recovery: { _tag: 'ActionRequired' },
+        occurrences: 1,
+        firstSeenAt: minutesAgo(35),
+        lastSeenAt: minutesAgo(2),
+      },
+      {
         id: 'incident-1',
         scope: { _tag: 'Repository', repository: unhead },
         kind: 'github_access',
@@ -116,6 +128,7 @@ function fixture(): DashboardSnapshot {
         lastSeenAt: minutesAgo(2),
       },
     ],
+    repairRecoveryCandidates: [{ _tag: 'Plan', taskId: `logged-finding:${hex('d')}`, commitSha: 'e'.repeat(40), repository: nuxtSeo, pullRequestNumber: 412, reason: 'Repair recovery was interrupted. Apply the retained commit again.' }],
     queue: [
       { kind: 'pull_request', position: 1, revisionId: hex('a'), repository: nuxtSeo, repositoryUrl: `https://github.com/${nuxtSeo}`, number: 412, title: reviewPullRequest.title, author: 'harlan-zw', subjectUrl: reviewPullRequest.url, headSha: reviewPullRequest.headSha, commitUrl: `https://github.com/${nuxtSeo}/commit/${reviewPullRequest.headSha}`, createdAt: minutesAgo(40), updatedAt: minutesAgo(4), state: { _tag: 'Active', work: 'review_fix' } },
       { kind: 'pull_request', position: 2, revisionId: hex('b'), repository: nuxtSeo, repositoryUrl: `https://github.com/${nuxtSeo}`, number: 418, title: contributorPullRequest.title, author: 'octocat', subjectUrl: contributorPullRequest.url, headSha: contributorPullRequest.headSha, commitUrl: `https://github.com/${nuxtSeo}/commit/${contributorPullRequest.headSha}`, createdAt: minutesAgo(90), updatedAt: minutesAgo(8), state: { _tag: 'AwaitingApproval', kind: 'review' } },
@@ -173,7 +186,9 @@ function scenario(base: DashboardSnapshot): DashboardSnapshot {
     case 'paused':
       return { ...base, agentControl: { _tag: 'Paused', pausedAt: minutesAgo(5), safeToRestart: false }, agentStart: { _tag: 'Paused' } }
     case 'calm':
-      return { ...base, status: 'ready', incidents: [], queue: base.queue.filter(entry => entry.state._tag !== 'AwaitingApproval'), repositories: base.repositories.map(repository => ({ ...repository, lastError: null })) }
+      return { ...base, status: 'ready', incidents: [], repairRecoveryCandidates: [], queue: base.queue.filter(entry => entry.state._tag !== 'AwaitingApproval'), repositories: base.repositories.map(repository => ({ ...repository, lastError: null })) }
+    case 'recovery':
+      return { ...base, status: 'degraded', incidents: [] }
     default:
       return base
   }

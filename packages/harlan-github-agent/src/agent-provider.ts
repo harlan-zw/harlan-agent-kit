@@ -163,7 +163,10 @@ export function contextBudgetWrapUpPrompt(cachedTokensRead: number, budget: numb
   return `Controller notice: this session read ${millions(cachedTokensRead)} million of its ${millions(budget)} million cached context token budget.
 At the budget, the controller stops the session, and all work without a result is lost.
 Do not start new work. Do not explore further.
-Keep the changes that pass the checks you already ran. Revert a change that does not pass.
+Preserve unresolved regression tests and their failure evidence.
+Do not delete or weaken an assertion to make a check pass.
+If required checks failed or remain incomplete, return blocked or partial. Do not report implementation complete.
+Revert an unsafe implementation change only when needed. Keep the regression evidence and explain the remaining failure.
 Commit only if your instructions tell you to commit.
 Return your final result now, in the required format.
 In the summary, name the work you finished and the work that is left.

@@ -147,7 +147,7 @@ export function providerCapacityPresentation(entry: ProviderCapacityStatus): Pro
 
 /** The highest priority System state visible at one glance. */
 export function systemState(snapshot: DashboardSnapshot): { label: string, tone: StatusTone } {
-  if (snapshot.incidents.some(incident => incident.recovery._tag !== 'Retrying'))
+  if (snapshot.incidents.some(incident => incident.recovery._tag !== 'Retrying') || snapshot.repairRecoveryCandidates.length > 0)
     return { label: 'Action required', tone: 'error' }
   if (snapshot.incidents.length > 0 || snapshot.status === 'degraded')
     return { label: 'Retrying', tone: 'warning' }

@@ -182,6 +182,9 @@ ${TOOLCHAIN_LINES}
 Investigation defaults, unless repository policy sets a narrower scope:
 - Select every installed code-domain skill whose trigger matches the affected implementation.
 - Inspect enough surrounding code to expose hidden scope. Verify that the target file and symbol exist. Do not run test suites. Do not prove library types exist.
+- If the implementation is absent, inspect its declared location and local history once.
+- If that does not identify its repository, choose NEEDS_INFO. Name the missing implementation repository in nextAction.
+- Do not search another checkout or upstream project to reconstruct an absent implementation.
 - Choose the route once intent, scope, and the next action are clear. Leave implementation checks to Issue work.
 - Do not start a browser or dev server. Do not install packages.
 - Search this repository's open issues and pull request history with the GitHub CLI. Read promising matches before deciding.
@@ -189,6 +192,8 @@ Investigation defaults, unless repository policy sets a narrower scope:
 - Keep at most three relatedPullRequests. Give each number and a concrete reason. Return [] when no match is verified.
 - Set duplicateIssue only for an open issue with the same cause and required fix. Give its number and reason, then choose WAIT_TO_IMPLEMENT.
 - A related pull request alone does not make an issue a duplicate. If search fails, say so in the summary and continue triage.
+- The GitHub CLI supports public reads only. Use supplied evidence for private repository history.
+- After a private read fails, do not retry another repository name or credential. Report the evidence limit.
 
 Choose exactly one route:
 - READY_TO_IMPLEMENT: desired behavior and success criteria are clear, the scope is bounded, and one implementation Agent can likely finish safely.

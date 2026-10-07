@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { RepairRecoveryRequest } from '../../../src/repair-recovery.ts'
 import type { AgentActivityItem } from '../../../src/types.ts'
 import {
   activeProviderCircuits,
@@ -23,10 +24,17 @@ import HostWork from './system/HostWork.vue'
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.
  *
- * Nothing here acts on a Task. Watch logs and Eject live on the running card.
+ * Watch logs and Eject live on the running card. Retained Repairs offer inspection here.
  */
 const { snapshot, incidents, relativeTime, now, requestUpdate, controlPending, setAgentSlots } = useDashboard()
 const { open } = useSystemPane()
+const recoveryOpen = ref(false)
+const recoveryCandidate = ref<Extract<RepairRecoveryRequest, { _tag: 'Plan' }> | null>(null)
+function inspectRecovery(candidate: Extract<RepairRecoveryRequest, { _tag: 'Plan' }>): void {
+  recoveryCandidate.value = { _tag: 'Plan', taskId: candidate.taskId, commitSha: candidate.commitSha }
+  open.value = false
+  recoveryOpen.value = true
+}
 const { connection: host, history: hostHistory } = useHogwildStatus()
 
 const capacity = computed(() => snapshot.value.providerCapacities.map(capacityRow))
@@ -131,6 +139,9 @@ function activityLine(item: AgentActivityItem): string {
 <template>
   <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10' }">
     <template #body>
+      <section class="lg:hidden" aria-label="Agent selection">
+        <AgentSelectionMenu />
+      </section>
       <section aria-labelledby="system-execution">
         <h3 id="system-execution" class="field-label flex items-center gap-2">
           Hosts
@@ -394,6 +405,26 @@ function activityLine(item: AgentActivityItem): string {
         </p>
       </section>
 
+      <section v-if="snapshot.repairRecoveryCandidates.length > 0" aria-labelledby="system-repair-recovery">
+        <h3 id="system-repair-recovery" class="field-label flex items-center gap-2">
+          Repair recovery
+          <span class="h-px flex-1 bg-border" aria-hidden="true" />
+        </h3>
+        <ul class="mt-1 divide-y divide-default">
+          <li v-for="candidate in snapshot.repairRecoveryCandidates" :key="candidate.taskId" class="space-y-2 py-3">
+            <a :href="`https://github.com/${candidate.repository}/pull/${candidate.pullRequestNumber}`" target="_blank" rel="noreferrer" class="entity-link break-all text-sm">
+              {{ candidate.repository }}#{{ candidate.pullRequestNumber }}
+            </a>
+            <p class="break-all text-sm">
+              {{ candidate.reason }}
+            </p>
+            <UButton class="min-h-11" color="neutral" variant="outline" :aria-label="`Inspect Repair recovery for ${candidate.repository} number ${candidate.pullRequestNumber}`" @click="inspectRecovery(candidate)">
+              Inspect Repair recovery
+            </UButton>
+          </li>
+        </ul>
+      </section>
+
       <section v-if="batches.length > 0" aria-labelledby="system-batches">
         <h3 id="system-batches" class="field-label flex items-center gap-2">
           Batches
@@ -552,4 +583,5 @@ function activityLine(item: AgentActivityItem): string {
       </section>
     </template>
   </USlideover>
+  <RepairRecoverySlideover v-model:open="recoveryOpen" :candidate="recoveryCandidate" />
 </template>

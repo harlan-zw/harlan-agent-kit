@@ -6,6 +6,7 @@ import { ok } from '../src/result.ts'
 describe('gitHub App authentication', () => {
   it.each([
     ['read', { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }],
+    ['deployments_read', { deployments: 'read', metadata: 'read' }],
     ['checks_read', { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }],
     ['check_write', { checks: 'write', metadata: 'read' }],
     ['contents_write', { contents: 'write', metadata: 'read' }],

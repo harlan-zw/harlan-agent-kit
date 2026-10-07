@@ -44,6 +44,7 @@ function workerFor(
   activityLog?: ReturnType<typeof createAgentActivityLog>,
 ) {
   return createRoutineScanWorker({
+    githubEvidence: { collect: async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [{ number: 7, title: 'Private controller issue' }], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' }, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' } }) },
     ...(activityLog === undefined ? {} : { activityLog }),
     logger: { error: () => undefined, info: () => undefined },
     ...(maximumChangedFiles === undefined ? {} : { maximumChangedFiles }),
@@ -101,12 +102,15 @@ describe('building the scan prompt', () => {
       })
       const fresh = { ...candidate, fingerprint: 'scripts/alerts.log#count', title: 'Alert count grew by one' }
       const task = claimStoredRun(store)
-      const result = await workerFor(store, scanning({ report: 'One repeat, one new.', candidates: [candidate, fresh] }))
+      const capture = { prompts: [] as string[] }
+      const result = await workerFor(store, scanning({ report: 'One repeat, one new.', candidates: [candidate, fresh] }, capture))
         .run(task, new AbortController().signal)
 
       expect(result._tag).toBe('Ok')
       if (result._tag !== 'Ok')
         throw new Error(result.error)
+      expect(capture.prompts[0]).toContain('Private controller issue')
+      expect(capture.prompts[0]).toContain('Controller cannot read Actions')
       expect(result.value.evidence).toContain('1 already known')
       expect(result.value.evidence).toContain('1 new')
       const known = store.listCandidates('harlan-zw/example:ci-review').find(entry => entry.fingerprint === candidate.fingerprint)

@@ -103,7 +103,7 @@ it('keeps ordinary Review outside the repository priority override for Routines'
   const store = setup(true)
   store.recordObservation({ externalId: 'review', observedAt: later, source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
 
-  expect(store.hasPriorityAgentTask()).toBe(false)
+  expect(store.hasPriorityAgentTask(later)).toBe(false)
   expect(store.claimNextAdversarialReviewTask('review', later, 60_000)?.pullRequestNumber).toBe(24)
 })
 
@@ -145,7 +145,7 @@ it('gives queued priority batches the next permit before background work across 
   store.recordObservation({ externalId: 'conflict', observedAt: later, source: 'poll', subject: pullRequestItem() })
   store.recordObservation({ externalId: 'triage', observedAt: later, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
 
-  expect(store.hasPriorityAgentTask()).toBe(true)
+  expect(store.hasPriorityAgentTask(later)).toBe(true)
   expect(store.claimNextConflictTask('conflict', later, 60_000)).toBeNull()
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)).toBeNull()
   expect(store.claimNextIssueWorkTask('issue', later, 60_000)).toBeNull()
@@ -166,7 +166,7 @@ it.each(['paused', 'capped', 'writes disabled'] as const)('lets background work 
     store.syncRepositories([repositoryMapping(), repositoryMapping({ github: priority, priority: 100, maxOpenPullRequests: 0 })], later)
   store.recordObservation({ externalId: 'triage', observedAt: later, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
 
-  expect(store.hasPriorityAgentTask()).toBe(false)
+  expect(store.hasPriorityAgentTask(later)).toBe(false)
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe('harlan-zw/example')
 })
 
@@ -410,7 +410,7 @@ it.each([
   store.openRoutineRun({ routineId: routine.id, scheduledFor: earlier, specSha: 'spec', at: earlier })
   const started: string[] = []
   const scheduler = createWorkerTaskScheduler({
-    canClaim: () => canClaimRoutineRun(true, triggers, store),
+    canClaim: () => canClaimRoutineRun(true, triggers, store, later),
     claim: store.claimNextRoutineRun,
     complete: store.completeRoutineRun,
     fail: store.failRoutineRun,
@@ -470,6 +470,6 @@ it('ignores combined issues from settled units when a suspended batch asks for p
   store.suspendBatch({ batchId: batch.id, workerId: 'batch', fence: batch.state.fence, at: later })
   store.recordObservation({ externalId: 'background', observedAt: later, source: 'poll', subject: issueItem({ author: 'harlan-zw' }) })
 
-  expect(store.hasPriorityAgentTask()).toBe(false)
+  expect(store.hasPriorityAgentTask(later)).toBe(false)
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe('harlan-zw/example')
 })

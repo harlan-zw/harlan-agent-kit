@@ -102,6 +102,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     providerCircuits: [],
     agents: [],
     incidents: [],
+    repairRecoveryCandidates: [],
     queue: [],
     repositories: [],
     items: [],
