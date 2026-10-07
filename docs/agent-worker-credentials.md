@@ -16,7 +16,7 @@ For ZAI, it extracts only the named provider API key from OpenCode configuration
 It does not copy the controller's GitHub login, Git helpers, or SSH keys.
 
 ```bash
-node --experimental-strip-types scripts/agent-worker.ts \
+pnpm exec node --experimental-strip-types scripts/agent-worker.ts \
   --source-home "$HOME" \
   --worker-home "$HOME/.local/share/harlan-agent-kit/worker-home" \
   --config "$HOME/.config/harlan-github-agent/worker.json" \
@@ -53,8 +53,8 @@ pnpm build
 From a linked worktree, run each configured provider's version command before restarting the Service.
 
 ```bash
-node --experimental-strip-types scripts/agent-worker-check.ts --workspace "$PWD" --provider codex
-node --experimental-strip-types scripts/agent-worker-check.ts --workspace "$PWD" --provider opencode
+pnpm exec node --experimental-strip-types scripts/agent-worker-check.ts --workspace "$PWD" --provider codex
+pnpm exec node --experimental-strip-types scripts/agent-worker-check.ts --workspace "$PWD" --provider opencode
 ```
 
 Verify every repository's required tooling within an isolated turn.
