@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -73,6 +73,7 @@ if (process.argv[2] === 'serve') {
   await chmod(fakeProvider, 0o755)
   const profile = join(home, '.config/harlan-github-agent/worker.json')
   await execute(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('../../../scripts/agent-worker.ts', import.meta.url)), '--source-home', home, '--worker-home', worker, '--config', profile, '--codex', fakeProvider, '--opencode', fakeProvider])
+  expect((await stat(worker)).mode & 0o777).toBe(0o700)
   expect(JSON.parse(await readFile(join(worker, '.config/opencode/opencode.json'), 'utf8'))).toEqual({ provider: { 'zai-coding-plan': { options: { apiKey: 'fake-provider-key' } } } })
   await checkAgentWorker({ HOME: home }, profile)
   const unsafeProfile = join(root, 'unsafe-worker.json')

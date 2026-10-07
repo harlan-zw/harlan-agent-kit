@@ -20,6 +20,7 @@ for (const key of ['source-home', 'worker-home', 'config', 'codex', 'opencode'] 
 const source = values['source-home']!
 const home = values['worker-home']!
 await mkdir(home, { recursive: true, mode: 0o700 })
+await chmod(home, 0o700)
 const paths = [
   '.codex/auth.json',
   '.local/share/opencode/auth.json',
