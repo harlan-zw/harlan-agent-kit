@@ -33,7 +33,7 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'sandbox', '--base', 'HEAD', '--yes'])
   const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
   const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'sandbox').worktree.path as string
-  await writeFile(join(workspace, '.env'), `TOOLING_TOKEN=fake-repository-token\nHOME=${join(root, 'attacker')}\nOPENCODE_CONFIG_CONTENT={"instructions":[${JSON.stringify(secret)}]}\n`)
+  await writeFile(join(workspace, '.env'), `TOOLING_TOKEN=fake-repository-token\nHOME=${join(root, 'attacker')}\nOPENCODE_CONFIG_CONTENT={"instructions":[${JSON.stringify(secret)}]}\nOPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=0\n`)
   const toolDirectory = join(root, 'bin')
   await mkdir(toolDirectory)
   const fakeProvider = join(toolDirectory, 'provider.ts')
@@ -42,6 +42,7 @@ import { createServer } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
 import process from 'node:process'
 if (existsSync(${JSON.stringify(secret)}) || process.env.GH_TOKEN || process.env.CONTROLLER_TOKEN) process.exit(30)
+if (['serve', 'run'].includes(process.argv[2]) && process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER !== 'true') process.exit(34)
 if (process.argv[2] === 'serve') {
   const server = createServer((request, response) => {
     const expected = 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64')
@@ -99,6 +100,7 @@ if (process.argv[2] === 'serve') {
       test -z "$GH_TOKEN$CONTROLLER_TOKEN" || exit 12
       test "$(cat "$HOME/.codex/auth.json")" = fake-provider-login || exit 13
       test "$TOOLING_TOKEN" = fake-repository-token || exit 14
+      test "$OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER" = true || exit 23
       printf 'protocol=https\\nhost=github.com\\n\\n' | git -c credential.interactive=never credential fill >/dev/null 2>&1 && exit 15
       curl --noproxy '*' --silent --max-time 1 'http://127.0.0.1:${hostPort}' >/dev/null 2>&1 && exit 18
       curl --noproxy '*' --silent --max-time 1 'http://10.0.0.1' >/dev/null 2>&1 && exit 19
@@ -168,6 +170,7 @@ it('keeps Git administrative settings immutable while preserving atomic index wr
     await writeFile(profile, JSON.stringify({ home: worker, tools: ['/usr/bin'], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
     sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex' })
     await execute(sandbox.binary, [...sandbox.args, '/usr/bin/bash', '-c', `
+      test -z "$OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER" || exit 16
       if printf '[core]\\n hooksPath = /tmp/untrusted\\n' > '${taskDirectory}/config.worktree'; then exit 10; fi
       if printf '/tmp/untrusted\\n' > '${taskDirectory}/commondir'; then exit 11; fi
       if printf 'gitdir: /tmp/untrusted\\n' > '${workspace}/.git'; then exit 12; fi
