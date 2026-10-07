@@ -1,7 +1,7 @@
 import type { AgentPermitPool } from './agent-permit-pool.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { ClaimedReviewFixTask, Incident, RepositoryMapping } from './types.ts'
+import type { ClaimedReviewFixTask, RepositoryMapping } from './types.ts'
 import type { PreparedConflictPublication } from './worktree.ts'
 import { err, ok } from './result.ts'
 import { runClaimedTask } from './task-scheduler.ts'
@@ -31,12 +31,24 @@ export type RepairRecoveryRequest
   = | { _tag: 'Plan', taskId: string, commitSha: string }
     | { _tag: 'Apply', taskId: string, commitSha: string, expectedBase: string }
 
-/** An Incident offers inspection only. The controller rechecks stored proof and authority before Apply. */
-export function repairRecoveryCandidate(incident: Pick<Incident, 'scope' | 'message' | 'recovery'>): Extract<RepairRecoveryRequest, { _tag: 'Plan' }> | null {
-  if (incident.scope._tag !== 'Task' || incident.recovery._tag === 'Retrying')
-    return null
-  const proof = repairRecoveryProof({ taskId: incident.scope.taskId, reason: incident.message, evidence: null, fence: 1 })
-  return proof === null ? null : { _tag: 'Plan', taskId: incident.scope.taskId, commitSha: proof.commitSha }
+/** Saved failed Repair proof enables inspection. It grants no Apply authority. */
+export type RepairRecoveryCandidate = Extract<RepairRecoveryRequest, { _tag: 'Plan' }> & {
+  repository: string
+  pullRequestNumber: number
+  reason: string
+}
+
+export function parseRepairRecoveryCandidate(value: unknown): Result<RepairRecoveryCandidate, string> {
+  const request = parseRepairRecoveryRequest(value)
+  if (request._tag === 'Err' || request.value._tag !== 'Plan')
+    return err('The Service returned invalid Repair inspection data.')
+  const input = value as Record<string, unknown>
+  if (typeof input.repository !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(input.repository)
+    || !Number.isSafeInteger(input.pullRequestNumber) || Number(input.pullRequestNumber) < 1
+    || typeof input.reason !== 'string') {
+    return err('The Service returned invalid Repair inspection data.')
+  }
+  return ok({ ...request.value, repository: input.repository, pullRequestNumber: Number(input.pullRequestNumber), reason: input.reason })
 }
 
 export interface RepairRecoveryPlan extends RepairRecoveryArtifact {

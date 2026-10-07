@@ -1,5 +1,6 @@
 import type { ActiveAgent, AgentStartState, Incident, QueueEntry } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
+import { systemState } from '../dashboard/app/utils/dashboard.ts'
 import { hostTasks } from '../dashboard/app/utils/host-tasks.ts'
 import {
   capacityRow,
@@ -90,6 +91,14 @@ describe('documentTitle', () => {
 })
 
 describe('systemChipState', () => {
+  it('shows retained Repair recovery after its Incident has cleared', () => {
+    const snapshot = dashboardSnapshot({
+      agentStart: { _tag: 'Available' },
+      repairRecoveryCandidates: [{ _tag: 'Plan', taskId: `logged-finding:${'a'.repeat(64)}`, commitSha: 'b'.repeat(40), repository: 'harlan-zw/example', pullRequestNumber: 24, reason: 'Recovery was interrupted.' }],
+    })
+    expect(systemChipState(snapshot)).toMatchObject({ _tag: 'RepairRecovery', repairs: 1 })
+    expect(systemState(snapshot)).toEqual({ label: 'Action required', tone: 'error' })
+  })
   it('reports nothing before the first snapshot, so placeholder state never reads as amber', () => {
     expect(systemChipState(dashboardSnapshot({ generatedAt: '', agentStart: { _tag: 'WritesDisabled' } }))).toEqual({ _tag: 'Loading' })
   })

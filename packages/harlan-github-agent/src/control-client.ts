@@ -5,7 +5,7 @@ import type { CancelTaskResult } from './store.ts'
 import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
-import { parseRepairRecoveryResponse } from './repair-recovery.ts'
+import { parseRepairRecoveryCandidate, parseRepairRecoveryResponse } from './repair-recovery.ts'
 import { err, ok } from './result.ts'
 
 export interface ControlHealth {
@@ -111,11 +111,19 @@ function parseState(value: unknown): Parsed<DashboardSnapshot> {
     || typeof input.mutationsEnabled !== 'boolean'
     || !Array.isArray(input.agents)
     || !Array.isArray(input.incidents)
+    || !Array.isArray(input.repairRecoveryCandidates)
     || !Array.isArray(input.repositories)
     || !Array.isArray(input.tasks)) {
     return err('The service returned invalid state data.')
   }
-  return ok(input as unknown as DashboardSnapshot)
+  const candidates: DashboardSnapshot['repairRecoveryCandidates'] = []
+  for (const candidate of input.repairRecoveryCandidates) {
+    const parsed = parseRepairRecoveryCandidate(candidate)
+    if (parsed._tag === 'Err')
+      return err(parsed.error)
+    candidates.push(parsed.value)
+  }
+  return ok({ ...input, repairRecoveryCandidates: candidates } as unknown as DashboardSnapshot)
 }
 
 function parseAgentControl(value: unknown): Parsed<StoredAgentControl> {

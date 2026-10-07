@@ -21,6 +21,15 @@ function clientWith(responses: Response[], requests: Request[]) {
 }
 
 describe('harlan GitHub Agent control client', () => {
+  it.each([
+    [{ _tag: 'Apply', taskId: `logged-finding:${'a'.repeat(64)}`, commitSha: 'b'.repeat(40), expectedBase: 'c'.repeat(40), repository: 'harlan-zw/example', pullRequestNumber: 24, reason: 'Failed' }],
+    [{ _tag: 'Plan', taskId: 'another-task', commitSha: 'b'.repeat(40), repository: 'harlan-zw/example', pullRequestNumber: 24, reason: 'Failed' }],
+  ])('refuses invalid Repair inspection data: %j', async (candidate) => {
+    const created = clientWith([Response.json({ ...dashboardSnapshot(), repairRecoveryCandidates: [candidate] })], [])
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.state()).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+  })
   it('returns durable Repair acceptance without waiting for repository checks', async () => {
     const requests: Request[] = []
     const taskId = `logged-finding:${'a'.repeat(64)}`

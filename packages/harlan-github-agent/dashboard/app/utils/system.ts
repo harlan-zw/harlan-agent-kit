@@ -38,6 +38,7 @@ export type SystemChipState
     | ({ _tag: 'Normal' } & SystemChipCounts)
     | ({ _tag: 'CannotStart', reason: string } & SystemChipCounts)
     | ({ _tag: 'Incident', incidents: number } & SystemChipCounts)
+    | ({ _tag: 'RepairRecovery', repairs: number } & SystemChipCounts)
 
 const cannotStartReasons: Record<Exclude<AgentStartState['_tag'], 'Available'>, string> = {
   Paused: 'Paused',
@@ -80,6 +81,8 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
   const counts: SystemChipCounts = { active, maximum, live: active > 0 }
   if (snapshot.incidents.length > 0)
     return { _tag: 'Incident', incidents: snapshot.incidents.length, ...counts }
+  if (snapshot.repairRecoveryCandidates.length > 0)
+    return { _tag: 'RepairRecovery', repairs: snapshot.repairRecoveryCandidates.length, ...counts }
   if (snapshot.agentStart._tag !== 'Available') {
     const reason = snapshot.agentStart._tag === 'RestartRequested' && snapshot.restartRequest?.operation._tag === 'Update'
       ? 'Updating after current work'

@@ -1,6 +1,6 @@
 import type { RepairRecoveryResponse } from '../../../../src/repair-recovery.ts'
 import { createError, defineEventHandler, readBody } from 'h3'
-import { parseRepairRecoveryRequest, repairRecoveryCandidate } from '../../../../src/repair-recovery.ts'
+import { parseRepairRecoveryRequest } from '../../../../src/repair-recovery.ts'
 import { assertDevMock, currentMockSnapshot, updateMock } from '../../utils/mock.ts'
 
 /** Dev-only retained Repair. Production uses the controller's fresh authority checks. */
@@ -11,19 +11,16 @@ export default defineEventHandler(async (event): Promise<RepairRecoveryResponse>
     throw createError({ statusCode: 400, statusMessage: parsed.error })
   const input = parsed.value
   const snapshot = currentMockSnapshot()
-  const incident = snapshot.incidents.find((entry) => {
-    const candidate = repairRecoveryCandidate(entry)
-    return candidate?.taskId === input.taskId && candidate.commitSha === input.commitSha
-  })
-  if (incident === undefined || incident.scope._tag !== 'Task' || incident.scope.itemNumber === null)
+  const candidate = snapshot.repairRecoveryCandidates.find(entry => entry.taskId === input.taskId && entry.commitSha === input.commitSha)
+  if (candidate === undefined)
     throw createError({ statusCode: 409, statusMessage: 'The retained Repair is unavailable. Request a new Plan.' })
   const expectedBase = 'f'.repeat(40)
   if (input._tag === 'Plan') {
     return {
       _tag: 'Plan',
       taskId: input.taskId,
-      repository: incident.scope.repository,
-      pullRequestNumber: incident.scope.itemNumber,
+      repository: candidate.repository,
+      pullRequestNumber: candidate.pullRequestNumber,
       commitSha: input.commitSha,
       expectedBase,
       parentSha: 'a'.repeat(40),
@@ -38,6 +35,6 @@ export default defineEventHandler(async (event): Promise<RepairRecoveryResponse>
     throw createError({ statusCode: 409, statusMessage: 'The base changed. Request a new Plan.' })
   if (!snapshot.mutationsEnabled || snapshot.agentControl._tag !== 'Running' || snapshot.agentStart._tag !== 'Available')
     throw createError({ statusCode: 409, statusMessage: 'Service control prevents Repair recovery.' })
-  updateMock(state => ({ ...state, incidents: state.incidents.filter(entry => entry.id !== incident.id) }))
+  updateMock(state => ({ ...state, incidents: state.incidents.filter(entry => entry.scope._tag !== 'Task' || entry.scope.taskId !== input.taskId), repairRecoveryCandidates: state.repairRecoveryCandidates.filter(entry => entry.taskId !== input.taskId) }))
   return { _tag: 'Accepted', taskId: input.taskId, fence: 1 }
 })

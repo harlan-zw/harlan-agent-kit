@@ -42,6 +42,7 @@ function emptySnapshot(): DashboardSnapshot {
     providerCircuits: [],
     agents: [],
     incidents: [],
+    repairRecoveryCandidates: [],
     queue: [],
     repositories: [],
     items: [],

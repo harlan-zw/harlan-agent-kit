@@ -77,10 +77,13 @@ describe('durable Logged finding pickup', () => {
     }
     if (target._tag === 'Err')
       throw new Error(target.error)
+    const candidate = expect.objectContaining({ _tag: 'Plan', taskId: task.id, commitSha, repository: mapping.github, pullRequestNumber: pullRequest.number })
+    expect(store.getDashboardSnapshot(at).repairRecoveryCandidates).toContainEqual(candidate)
     const recovered = store.claimRepairRecovery(target.value, 'recovery', at, 60_000)
     expect(recovered._tag).toBe('Ok')
     expect(store.claimRepairRecovery(target.value, 'duplicate', at, 60_000)._tag).toBe('Err')
     expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.recoveryAttempts).toBe(0)
+    expect(store.getDashboardSnapshot(at).repairRecoveryCandidates).toEqual([])
     if (mode === 'restart')
       store.recoverInterruptedAgentTasks(at)
     if (mode === 'write-loss' || mode === 'transient') {
@@ -97,11 +100,13 @@ describe('durable Logged finding pickup', () => {
       expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.state._tag).toBe('Failed')
       const retry = store.inspectRepairRecovery(task.id, commitSha)
       expect(retry).toMatchObject({ _tag: 'Ok', value: { proof: { commitSha, originalFence: task.state.fence } } })
+      expect(store.getDashboardSnapshot(at).repairRecoveryCandidates).toContainEqual(candidate)
     }
     if (['restart', 'write-loss', 'transient'].includes(mode)) {
       expect(store.claimNextReviewFixTask('implementation', at, 60_000)).toBeNull()
       expect(store.inspectRepairRecovery(task.id, commitSha)).toMatchObject({ _tag: 'Ok', value: { proof: { commitSha, originalFence: task.state.fence } } })
       expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.recoveryAttempts).toBe(0)
+      expect(store.getDashboardSnapshot(at).repairRecoveryCandidates).toContainEqual(candidate)
     }
   })
   it('queues only the selected finding after merge and shows its progress beside the finding', () => {

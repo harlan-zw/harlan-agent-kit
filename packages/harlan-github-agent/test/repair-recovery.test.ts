@@ -1,23 +1,13 @@
 import type { RepairRecoveryTarget } from '../src/repair-recovery.ts'
 import { expect, it, vi } from 'vitest'
 import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
-import { createRepairRecoveryController, parseRepairRecoveryRequest, repairRecoveryCandidate } from '../src/repair-recovery.ts'
+import { createRepairRecoveryController, parseRepairRecoveryRequest } from '../src/repair-recovery.ts'
 import { err, ok } from '../src/result.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const commitSha = 'c'.repeat(40)
 const baseSha = 'b'.repeat(40)
 const taskId = `logged-finding:${'a'.repeat(64)}`
-it('offers a retained repair only for the matching failed Task', () => {
-  const input = {
-    scope: { _tag: 'Task' as const, taskId, repository: 'harlan-zw/example', itemNumber: 24 },
-    message: `Could not pin the repair artifact: fatal: invalid refspec '+${commitSha}:refs/harlan-github-agent/publications/${taskId}'`,
-    recovery: { _tag: 'ActionRequired' as const },
-  }
-  expect(repairRecoveryCandidate(input)).toEqual({ _tag: 'Plan', taskId, commitSha })
-  expect(repairRecoveryCandidate({ ...input, scope: { ...input.scope, taskId: `logged-finding:${'b'.repeat(64)}` } })).toBeNull()
-  expect(repairRecoveryCandidate({ ...input, recovery: { _tag: 'Retrying', attempt: 1, nextAttemptAt: '' } })).toBeNull()
-})
 it('rejects malformed input without calling object coercion', () => {
   expect(parseRepairRecoveryRequest({ _tag: 'Plan', taskId: { toString: 1 }, commitSha })).toMatchObject({ _tag: 'Err' })
 })
