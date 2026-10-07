@@ -79,3 +79,18 @@ it('binds trusted callbacks to their captured owner and rejects pass claims or o
   await authority.finish({ reservationId: result.reservationId, receipt })
   expect(await authority.reserve(reservation)).toEqual({ _tag: 'Refused', reason: 'This Review already spent its one proof invocation.', receipt })
 })
+
+it('rejects the old worker fence after takeover and keeps its disconnected attempt spent', () => {
+  const { store, request } = fixture()
+  const reserved = store.reserveReviewProof(request)
+  if (reserved._tag !== 'Reserved')
+    throw new Error('Expected reservation.')
+  const takeoverAt = '2026-10-07T00:01:01.000Z'
+  const next = store.claimNextAdversarialReviewTask('replacement', takeoverAt, 60_000)!
+  expect(next.id).toBe(request.taskId)
+  expect(next.state.fence).toBeGreaterThan(request.fence)
+  const receipt = { taskId: request.taskId, headSha: request.headSha, sourceSha256: request.sourceSha256, startedAt: at, outcome: { _tag: 'Exited' as const, exitCode: 0, output: 'late result' } }
+  expect(store.finishReviewProof({ ...request, at: takeoverAt, reservationId: reserved.reservationId, receipt })).toBe(false)
+  expect(store.reserveReviewProof({ ...request, workerId: next.state.workerId, fence: next.state.fence, at: takeoverAt })._tag).toBe('Refused')
+  expect(store.getReviewProofReceipt(request.taskId)).toBeNull()
+})
