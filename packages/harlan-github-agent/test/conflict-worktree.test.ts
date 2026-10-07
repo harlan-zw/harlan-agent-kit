@@ -234,6 +234,7 @@ describe('conflict worktree', () => {
     })
     const prepared = await conflicted(manager, task)
     writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+    prepared.writablePaths.push('keep.ts')
     if (change === 'delete') {
       git(prepared.path, 'rm', '--', 'keep.ts')
     }
@@ -469,6 +470,7 @@ describe('conflict worktree', () => {
     })
     const prepared = await conflicted(manager, task)
     expect(prepared.conflictedFiles).toEqual(['file.txt'])
+    expect(prepared.writablePaths).toEqual(['file.txt', 'helper.ts'])
     writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
     writeFileSync(join(prepared.path, 'helper.ts'), 'export const limit = 3\n')
 

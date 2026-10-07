@@ -80,6 +80,7 @@ const conflictWorktree: PreparedConflictWorktree = {
   headSha: 'head-sha',
   baseSha: 'current-base',
   conflictedFiles: ['src/a.ts'],
+  writablePaths: ['src/a.ts'],
 }
 
 const batchIssues = [{
