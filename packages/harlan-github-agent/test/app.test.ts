@@ -1366,7 +1366,7 @@ describe('dashboard HTTP app', () => {
 
 describe('agent slot HTTP boundary', () => {
   const limits = { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 }
-  const capacity = { localActive: 0, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+  const capacity = { localActive: 0, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }
 
   function createSlotApp() {
     const written: Array<{ host: string, slots: number }> = []

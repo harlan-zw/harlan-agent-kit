@@ -6,7 +6,8 @@ export interface HostCapacity {
   localMaximum: number
   desktopActive: number
   desktopMaximum: number
-  desktopConnected: boolean
+  /** Protocol and free memory permit Agent work. state.desktop.connected reports the connection. */
+  desktopAvailable: boolean
 }
 
 export type AgentHost = 'hogwild' | 'desktop'
@@ -51,7 +52,7 @@ export function parseAgentSlots(value: unknown, limits: AgentSlotLimits): { host
 export function agentHost(capacity: HostCapacity, refused: ReadonlySet<AgentHost> = new Set()): AgentHost | null {
   if (!refused.has('hogwild') && capacity.localActive < capacity.localMaximum)
     return 'hogwild'
-  if (!refused.has('desktop') && capacity.desktopConnected && capacity.desktopActive < capacity.desktopMaximum)
+  if (!refused.has('desktop') && capacity.desktopAvailable && capacity.desktopActive < capacity.desktopMaximum)
     return 'desktop'
   return null
 }
@@ -78,7 +79,7 @@ function hostLimit(limit: HostAgentLimit): number {
 export function createHostAgentPool(options: {
   localMaximum: HostAgentLimit
   desktopMaximum: HostAgentLimit
-  desktopConnected: () => boolean
+  desktopAvailable: () => boolean
   wait: (signal: AbortSignal) => Promise<void>
 }): HostAgentPool {
   // A function limit is read at every admission, so Agent slots set from the
@@ -93,7 +94,7 @@ export function createHostAgentPool(options: {
     localMaximum: hostLimit(options.localMaximum),
     desktopActive,
     desktopMaximum: hostLimit(options.desktopMaximum),
-    desktopConnected: options.desktopConnected(),
+    desktopAvailable: options.desktopAvailable(),
   })
   return {
     tryAcquireLocal(taskId) {
@@ -125,7 +126,7 @@ export function createHostAgentPool(options: {
           if (pinned !== null && refused.has(pinned))
             return null
           if (pinned === 'desktop')
-            return state.desktopConnected && state.desktopActive < state.desktopMaximum ? 'desktop' : null
+            return state.desktopAvailable && state.desktopActive < state.desktopMaximum ? 'desktop' : null
           if (pinned === 'hogwild')
             return state.localActive < state.localMaximum ? 'hogwild' : null
           return agentHost(state, refused)

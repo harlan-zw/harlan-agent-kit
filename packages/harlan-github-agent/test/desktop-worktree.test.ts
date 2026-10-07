@@ -493,7 +493,7 @@ it('runs the turn on Hogwild when the desktop fails before its Agent starts', as
   const broker = createDesktopBroker({ now: () => 1 })
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
   let local = 1
-  const pool = createHostAgentPool({ localMaximum: () => local, desktopMaximum: 1, desktopConnected: () => true, wait: () => new Promise(resolve => setTimeout(resolve, 10)) })
+  const pool = createHostAgentPool({ localMaximum: () => local, desktopMaximum: 1, desktopAvailable: () => true, wait: () => new Promise(resolve => setTimeout(resolve, 10)) })
   const hogwild = { name: 'codex' as const, async* runTurn() {
     yield { _tag: 'Message', text: 'hogwild' } satisfies AgentEvent
   } }

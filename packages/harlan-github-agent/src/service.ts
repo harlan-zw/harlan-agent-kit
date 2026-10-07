@@ -500,7 +500,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const hosts = createHostAgentPool({
     localMaximum: () => agentSlots().hogwild,
     desktopMaximum: () => agentSlots().desktop,
-    desktopConnected: desktop.available,
+    desktopAvailable: desktop.available,
     wait: signal => waitForHost(500, undefined, { signal }),
   })
   const runtime = createAgentRuntimeSource({
