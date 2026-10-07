@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
-import { checkAgentWorker, prepareAgentSandbox } from '../src/agent-sandbox.ts'
+import { checkAgentWorker, prepareAgentSandbox, runAgentSandboxCommand } from '../src/agent-sandbox.ts'
 import { createCodexProvider } from '../src/codex-provider.ts'
 import { createOpencodeProvider } from '../src/opencode-provider.ts'
 
@@ -111,6 +111,8 @@ if (process.argv[2] === 'serve') {
       echo protected
     `], { env: sandbox.environment, cwd: workspace })
     expect(result.stdout.trim()).toBe('protected')
+    expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: seed fixture')
+    await sandbox.release()
     expect(await readFile(secret, 'utf8')).toBe('fake-controller-secret')
     expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: prove isolated Git writes')
     expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe('?? .env\n')
@@ -141,3 +143,70 @@ if (process.argv[2] === 'serve') {
 it('refuses a missing worker configuration instead of launching outside isolation', async () => {
   await expect(prepareAgentSandbox({ workspace: '/tmp', environment: {}, profilePath: '/does-not-exist/worker.json', provider: 'opencode' })).rejects.toThrow()
 })
+
+it('keeps Git administrative settings immutable while preserving atomic index writes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-git-settings-'))
+  const primary = join(root, 'primary')
+  const controller = join(root, 'controller')
+  const worker = join(root, 'worker')
+  await Promise.all([mkdir(primary), mkdir(controller), mkdir(worker)])
+  let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
+  try {
+    await execute('git', ['init', primary])
+    await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+    await execute('git', ['-C', primary, 'config', 'extensions.worktreeConfig', 'true'])
+    const wtConfig = join(root, 'wt.toml')
+    await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+    await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'settings', '--base', 'HEAD', '--yes'])
+    const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+    const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'settings').worktree.path as string
+    const taskDirectory = (await execute('git', ['-C', workspace, 'rev-parse', '--absolute-git-dir'])).stdout.trim()
+    const common = (await execute('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout.trim()
+    const originalPointer = await readFile(join(workspace, '.git'), 'utf8')
+    const originalCommon = await readFile(join(taskDirectory, 'commondir'), 'utf8')
+    const profile = join(root, 'worker.json')
+    await writeFile(profile, JSON.stringify({ home: worker, tools: ['/usr/bin'], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
+    sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex' })
+    await execute(sandbox.binary, [...sandbox.args, '/usr/bin/bash', '-c', `
+      if printf '[core]\\n hooksPath = /tmp/untrusted\\n' > '${taskDirectory}/config.worktree'; then exit 10; fi
+      if printf '/tmp/untrusted\\n' > '${taskDirectory}/commondir'; then exit 11; fi
+      if printf 'gitdir: /tmp/untrusted\\n' > '${workspace}/.git'; then exit 12; fi
+      printf 'change\\n' > change.txt
+      git add change.txt || exit 13
+      git -c user.name=Agent -c user.email=agent@example.com commit -m 'test: preserve atomic Git writes' || exit 14
+      if printf 'fixture\\n' > /run/agent/base-objects/info/private-fixture; then exit 15; fi
+      printf 'fixture\\n' > '${common}/objects/info/private-fixture'
+      mkdir -p '${common}/refs/private'
+      printf 'fixture\\n' > '${common}/refs/private/disposable'
+    `], { env: sandbox.environment })
+    await sandbox.release()
+    expect(await readFile(join(workspace, '.git'), 'utf8')).toBe(originalPointer)
+    expect(await readFile(join(taskDirectory, 'commondir'), 'utf8')).toBe(originalCommon)
+    await expect(readFile(join(taskDirectory, 'config.worktree'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(common, 'objects/info/private-fixture'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(common, 'refs/private/disposable'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe('')
+    expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: preserve atomic Git writes')
+    const evidence = join(root, 'evidence')
+    await mkdir(evidence)
+    const protectedFile = join(controller, 'private-fixture')
+    await writeFile(protectedFile, 'private fixture')
+    const probe = join(workspace, 'check.ts')
+    await writeFile(probe, `import { existsSync, writeFileSync } from 'node:fs'\nimport process from 'node:process'\nif (existsSync(${JSON.stringify(protectedFile)}) || process.env.GH_TOKEN) process.exit(1)\nif (process.env.CI !== 'true') process.exit(2)\nwriteFileSync(${JSON.stringify(join(evidence, 'result'))}, 'isolated')\n`)
+    const result = await runAgentSandboxCommand({ workspace, command: '/run/agent/node', args: ['--experimental-strip-types', probe], signal: AbortSignal.timeout(5_000), environment: { HOME: controller, GH_TOKEN: 'fixture', CI: 'true' }, profilePath: profile, writablePaths: [evidence] })
+    expect(result.exitCode).toBe(0)
+    expect(await readFile(join(evidence, 'result'), 'utf8')).toBe('isolated')
+    const stale = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex' })
+    await execute('git', ['-C', workspace, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: preserve newer host head'])
+    await expect(stale.release()).rejects.toThrow('cannot lock ref')
+    expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: preserve newer host head')
+    await rename(join(common, 'objects'), join(root, 'aliased-objects'))
+    await symlink(join(root, 'aliased-objects'), join(common, 'objects'))
+    const aliased = prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex' })
+    await expect(aliased).rejects.toThrow('own ordinary directory')
+  }
+  finally {
+    await sandbox?.release()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
