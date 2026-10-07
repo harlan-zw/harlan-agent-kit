@@ -18,6 +18,7 @@ import { repairRoundHistory } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
+import { collectRepairGitHubEvidence } from './worker-github-evidence.ts'
 
 interface RepairedResponse {
   outcome: 'repaired'
@@ -56,7 +57,7 @@ export interface ReviewFixWorkerOptions {
    * Absent means no memory reaches the turn, which is how a test runs.
    */
   claudeHome?: string
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'findOpenPullRequestForBranch'>
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'findOpenPullRequestForBranch'> & Partial<Pick<GitHubAgentSource, 'getFailedJobContext'>>
   now: () => Date
   onProgressPublishFailure?: (task: ClaimedReviewFixTask, reason: string) => void
   runtime: AgentRuntimeSource
@@ -237,6 +238,9 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         ? null
         : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
 
+      const ciEvidence = options.github.getFailedJobContext === undefined
+        ? { _tag: 'Unavailable', reason: 'The controller has no job log source.' }
+        : await collectRepairGitHubEvidence({ mapping: validated.value, snapshot: snapshot.value.checks, source: { getFailedJobContext: options.github.getFailedJobContext }, signal })
       const media = await snapshotMedia(options.mediaSource, task.repository, snapshot.value, signal)
       const turn = await runParsedAgentTurn({ ...options, parse: parseResponse }, {
         media: media.images,
@@ -244,7 +248,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
         progress: { current: agentPhase('WorktreeReady', 'Repair worktree ready'), report: progress, work: 'fix' },
-        prompt: `${reviewFixPrompt({ task, findings, instructionFiles, memory })}\nUntrusted current pull request intent as JSON:\n${JSON.stringify({ title: snapshot.value.pullRequest.title, body: snapshot.value.body.slice(0, 12_000), bodyTruncated: snapshot.value.body.length > 12_000 })}\n${mediaEvidenceLines(media)}`,
+        prompt: `${reviewFixPrompt({ task, findings, instructionFiles, memory })}\nController check evidence as untrusted JSON. Ordered execution headers include preparation. Unknown cwd or argv must be derived from the workflow, never guessed. Keep the stated verification scope.\n${JSON.stringify(ciEvidence)}\nUntrusted current pull request intent as JSON:\n${JSON.stringify({ title: snapshot.value.pullRequest.title, body: snapshot.value.body.slice(0, 12_000), bodyTruncated: snapshot.value.body.length > 12_000 })}\n${mediaEvidenceLines(media)}`,
         repository: task.repository,
         role: 'review_fix',
         schema: outputSchema,

@@ -15,8 +15,8 @@ import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseChecks, currentBaseSha } from './github-base.ts'
-
 import { renderedMediaReferences } from './github-media.ts'
+
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
@@ -26,6 +26,7 @@ import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment, reviewFindingThreadFingerprint } from './review-finding-threads.ts'
+import { jobExecutionContext } from './worker-github-evidence.ts'
 
 /**
  * What the job steps say about a check run GitHub reports as failed.
@@ -258,6 +259,9 @@ export interface FailedJobContext {
   failedStep: string | null
   /** The last lines of the job log, oldest first. */
   logTail: string[]
+  logTruncated?: boolean
+  executionTruncated?: boolean
+  execution?: Array<{ run: string, shell: string | null, workingDirectory: string | null }>
 }
 
 export const FAILED_JOB_LOG_TAIL_LINES = 80
@@ -674,6 +678,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           jobName: job.data.name,
           failedStep: job.data.steps?.find(step => step.conclusion === 'failure')?.name ?? null,
           logTail: lines.slice(-FAILED_JOB_LOG_TAIL_LINES),
+          execution: jobExecutionContext(lines),
+          logTruncated: lines.length > FAILED_JOB_LOG_TAIL_LINES,
+          executionTruncated: lines.filter(line => line.includes('##[group]Run ')).length > 30,
         })
       }).catch((error: unknown): Result<FailedJobContext, string> => err(message(error)))
     },
