@@ -1542,6 +1542,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: task.repositoryMapping.checkout })
       const media = await snapshotMedia(options.mediaSource, task.repository, snapshot.value, signal)
       const turn = await runParsedAgentTurn({ ...options, parse: parseReviewResponse, runtime: () => reviewRuntime }, {
+        toolPolicy: { _tag: 'Review', headSha: task.pullRequest.headSha, workerId: task.state.workerId, fence: task.state.fence },
         media: media.images,
         freshSession: task.state.fence > 1 || freshReviewSession,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),

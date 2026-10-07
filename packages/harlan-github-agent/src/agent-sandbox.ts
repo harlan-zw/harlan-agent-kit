@@ -103,11 +103,13 @@ export async function prepareAgentSandbox(input: {
   networkMode?: 'command' | 'opencode-server' | 'opencode-client'
   transportDirectory?: string
   readOnly?: boolean
+  /** Task-owned home with only named provider login and trusted Review configuration. */
+  reviewHome?: string
 }): Promise<AgentSandbox> {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
   const profile = configuration(JSON.parse(await readFile(profilePath, 'utf8')))
-  const isolatedHome = await permittedPath(profile.home, controllerHome)
+  const isolatedHome = await permittedPath(input.reviewHome ?? profile.home, controllerHome)
   if (within(controllerHome, isolatedHome) || isolatedHome === '/home' || isolatedHome === '/')
     throw new Error('The Agent worker home must not contain the controller home.')
   const scratch = await mkdtemp(join(tmpdir(), 'agent-sandbox-'))
@@ -148,8 +150,26 @@ export async function prepareAgentSandbox(input: {
         args.push('--ro-bind', await permittedPath(path, controllerHome), path)
     }
     const workspace = await realpath(input.workspace)
-    const repositoryBind = input.readOnly === true ? '--ro-bind' : '--bind'
+    const repositoryBind = input.readOnly === true || input.reviewHome !== undefined ? '--ro-bind' : '--bind'
     args.push(repositoryBind, workspace, workspace)
+    if (input.reviewHome !== undefined) {
+      for (const name of ['.codex/config.toml', '.config/opencode/opencode.json']) {
+        const path = join(isolatedHome, name)
+        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
+          args.push('--ro-bind', path, join(workerHome, name))
+      }
+      // Project configuration can register another tool or plugin. Hide it before either provider starts.
+      for (const name of ['.codex', '.opencode']) {
+        const path = join(workspace, name)
+        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
+          args.push('--tmpfs', path)
+      }
+      for (const name of ['opencode.json', 'opencode.jsonc']) {
+        const path = join(workspace, name)
+        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
+          args.push('--ro-bind', join(input.reviewHome, '.config/opencode/opencode.json'), path)
+      }
+    }
     const { stdout } = await execute('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
     const common = await realpath(stdout.trim())
     // Share only Git's object/ref storage and this task's index. Never expose
@@ -188,6 +208,7 @@ export async function prepareAgentSandbox(input: {
       CODEX_HOME: `${workerHome}/.codex`,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
+      ...(input.reviewHome === undefined ? {} : { OPENCODE_DISABLE_PROJECT_CONFIG: 'true' }),
       ...(input.environment.OPENCODE_CONFIG_CONTENT === undefined ? {} : { OPENCODE_CONFIG_CONTENT: input.environment.OPENCODE_CONFIG_CONTENT }),
       ...(input.environment.OPENCODE_SERVER_USERNAME === undefined ? {} : { OPENCODE_SERVER_USERNAME: input.environment.OPENCODE_SERVER_USERNAME }),
       ...(input.environment.OPENCODE_SERVER_PASSWORD === undefined ? {} : { OPENCODE_SERVER_PASSWORD: input.environment.OPENCODE_SERVER_PASSWORD }),

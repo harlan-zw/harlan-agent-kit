@@ -1,7 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase, AgentProgressWork } from './agent-progress.ts'
-import type { AgentTokenUsage } from './agent-provider.ts'
+import type { AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import type { AgentMedia } from './github-media.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
@@ -49,6 +49,7 @@ export interface AgentTurnOptions {
 }
 
 export interface AgentTurnInput {
+  toolPolicy?: AgentTurnRequest['toolPolicy']
   media?: AgentMedia[]
   /** Start without prior session context, while still saving the new session for Eject. */
   freshSession?: boolean
@@ -171,6 +172,7 @@ export async function runAgentTurn(
   const runtime = options.runtime(input.repository)
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({
+    ...(input.toolPolicy === undefined ? {} : { toolPolicy: input.toolPolicy }),
     ...(input.media === undefined ? {} : { media: input.media }),
     ...(input.instructionPaths === undefined ? {} : { instructionPaths: input.instructionPaths }),
     taskId: input.taskId,

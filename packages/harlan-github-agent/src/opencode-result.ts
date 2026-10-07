@@ -66,8 +66,11 @@ export function readOpencodeMessages(input: ServerRead & { sessionId: string }):
 }
 
 /** Start an empty session in the exact workspace, independent of CLI event delivery. */
-export async function createOpencodeSession(input: ServerRead): Promise<Result<string, string>> {
-  const result = await readOpencodeJson({ ...input, path: '/session', method: 'POST', body: JSON.stringify({ permission: ['question', 'plan_enter', 'plan_exit'].map(permission => ({ permission, pattern: '*', action: 'deny' })) }) })
+export async function createOpencodeSession(input: ServerRead & { reviewTools?: readonly string[] }): Promise<Result<string, string>> {
+  const permission = input.reviewTools === undefined
+    ? ['question', 'plan_enter', 'plan_exit'].map(permission => ({ permission, pattern: '*', action: 'deny' }))
+    : [{ permission: '*', pattern: '*', action: 'deny' }, ...input.reviewTools.map(permission => ({ permission, pattern: '*', action: 'allow' }))]
+  const result = await readOpencodeJson({ ...input, path: '/session', method: 'POST', body: JSON.stringify({ permission }) })
   if (result._tag === 'Err')
     return result
   if (!record(result.value) || typeof result.value.id !== 'string' || !/^ses_[a-z\d]+$/i.test(result.value.id))
