@@ -415,7 +415,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   }
   else {
     app.get('/api/sessions', () => {
-      throw createError({ status: 503, message: 'Enable desktop sessions after installing the private ingress.' })
+      throw createError({ status: 503, message: 'Enable Agent sessions after installing the private ingress.' })
     })
     // A disabled interactive feature must leave maintenance offload working.
     app.post('/api/desktop/sessions/report', () => ({ accepted: false, stops: [] }))

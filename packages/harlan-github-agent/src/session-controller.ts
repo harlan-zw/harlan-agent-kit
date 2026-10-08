@@ -1,5 +1,5 @@
 import type { AgentEvent } from './agent-provider.ts'
-import type { DesktopSession, SessionFence, SessionProject, SessionTurn, StartSessionRequest } from './session-protocol.ts'
+import type { DesktopSession, SessionFence, SessionHost, SessionProject, SessionTurn, StartSessionRequest } from './session-protocol.ts'
 import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -7,13 +7,30 @@ import { SESSION_PROTOCOL } from './session-protocol.ts'
 
 interface ActiveTurn { turnId: string, leaseToken: string, instanceId: string | null, expiresAt: number, batchSeq: number }
 interface StoredSession { session: DesktopSession, turn: ActiveTurn | null }
-interface State { version: 1, sessions: StoredSession[], requests: Record<string, { sessionId: string, fingerprint: string }> }
-export interface SessionSnapshot { desktop: { connected: boolean, current: boolean }, projects: SessionProject[], sessions: DesktopSession[] }
-export function createSessionController(options: { path: string, now: () => Date, availableSlots?: () => number }) {
-  let state: State = existsSync(options.path) ? JSON.parse(readFileSync(options.path, 'utf8')) : { version: 1, sessions: [], requests: {} }
-  if (state.version !== 1 || !Array.isArray(state.sessions) || typeof state.requests !== 'object')
+interface State { version: 2, sessions: StoredSession[], requests: Record<string, { sessionId: string, fingerprint: string }> }
+interface HostReport { instanceId: string, protocol: number, reportedAt: number, projects: SessionProject[] }
+export interface SessionSnapshot { hosts: Record<SessionHost, { connected: boolean, current: boolean }>, projects: Record<SessionHost, SessionProject[]>, sessions: DesktopSession[] }
+function startFingerprint(input: StartSessionRequest): string {
+  return JSON.stringify({ host: input.host, projectId: input.projectId, provider: input.provider, model: input.model, reasoningEffort: input.reasoningEffort, prompt: input.prompt, requestId: input.requestId })
+}
+export function createSessionController(options: { path: string, now: () => Date, availableSlots?: (host: SessionHost) => number }) {
+  const loaded = existsSync(options.path) ? JSON.parse(readFileSync(options.path, 'utf8')) : { version: 2, sessions: [], requests: {} }
+  if ((loaded.version !== 1 && loaded.version !== 2) || !Array.isArray(loaded.sessions) || typeof loaded.requests !== 'object' || loaded.requests === null)
     throw new Error('Stored Agent sessions are invalid.')
-  let desktop: { instanceId: string, protocol: number, reportedAt: number, projects: SessionProject[] } | null = null
+  if (loaded.version === 1) {
+    for (const stored of loaded.sessions)
+      stored.session.host = 'desktop'
+    for (const request of Object.values(loaded.requests) as Array<{ fingerprint: string }>) {
+      const original = JSON.parse(request.fingerprint)
+      if (typeof original.projectId === 'string')
+        request.fingerprint = startFingerprint({ ...original, host: 'desktop' })
+    }
+    loaded.version = 2
+  }
+  let state: State = loaded
+  if (state.sessions.some(stored => stored.session.host !== 'desktop' && stored.session.host !== 'hogwild'))
+    throw new Error('A stored Agent session has an invalid host.')
+  const hosts: Record<SessionHost, HostReport | null> = { desktop: null, hogwild: null }
   const timestamp = () => options.now().toISOString()
   let committed = structuredClone(state)
   function save(): void {
@@ -51,13 +68,13 @@ export function createSessionController(options: { path: string, now: () => Date
       stored.session.status = 'interrupted'
     stored.session.updatedAt = timestamp()
   }
-  // A controller restart cannot prove that an old desktop process stopped.
+  // A controller restart cannot prove that an old host process stopped.
   for (const stored of state.sessions) {
     if (stored.turn?.instanceId !== null && stored.turn !== null)
       interrupt(stored)
   }
   save()
-  const connected = () => desktop !== null && options.now().getTime() - desktop.reportedAt < 30_000
+  const connected = (host: SessionHost) => hosts[host] !== null && options.now().getTime() - hosts[host]!.reportedAt < 30_000
   function recover(): void {
     let changed = false
     for (const stored of state.sessions) {
@@ -76,10 +93,12 @@ export function createSessionController(options: { path: string, now: () => Date
     return stored
   }
   function fenced(input: SessionFence): StoredSession | null {
-    recover()
     const stored = state.sessions.find(candidate => candidate.session.id === input.sessionId)
+    if (stored === undefined || stored.session.host !== input.host)
+      return null
+    recover()
     const turn = stored?.turn
-    return stored !== undefined && stored.session.status !== 'interrupted' && (turn?.expiresAt ?? 0) > options.now().getTime() && turn !== null && turn !== undefined && turn.turnId === input.turnId && turn.leaseToken === input.leaseToken && turn.instanceId === input.instanceId ? stored : null
+    return stored !== undefined && stored.session.host === input.host && stored.session.status !== 'interrupted' && (turn?.expiresAt ?? 0) > options.now().getTime() && turn !== null && turn !== undefined && turn.turnId === input.turnId && turn.leaseToken === input.leaseToken && turn.instanceId === input.instanceId ? stored : null
   }
   function duplicate(requestId: string, fingerprint: string): DesktopSession | null {
     const previous = Object.hasOwn(state.requests, requestId) ? state.requests[requestId] : undefined
@@ -91,9 +110,9 @@ export function createSessionController(options: { path: string, now: () => Date
   }
   function enqueue(stored: StoredSession, prompt: string, requestId: string, fingerprint: string): DesktopSession {
     if (stored.turn !== null || stored.session.status === 'interrupted')
-      throw new Error('Confirm the desktop Agent stopped before starting another turn.')
-    if (!connected() || desktop?.protocol !== SESSION_PROTOCOL)
-      throw new Error('Connect the current desktop Agent before sending a message.')
+      throw new Error('Confirm the Agent stopped before starting another turn.')
+    if (!connected(stored.session.host) || hosts[stored.session.host]?.protocol !== SESSION_PROTOCOL)
+      throw new Error('Connect the selected Agent host before sending a message.')
     const at = timestamp()
     stored.session.messages.push({ id: requestId, role: 'user', text: prompt, createdAt: at })
     stored.session.status = 'queued'
@@ -106,36 +125,37 @@ export function createSessionController(options: { path: string, now: () => Date
   return {
     snapshot(): SessionSnapshot {
       recover()
-      return structuredClone({ desktop: { connected: connected(), current: desktop?.protocol === SESSION_PROTOCOL }, projects: desktop?.projects ?? [], sessions: state.sessions.map(stored => stored.session) })
+      return structuredClone({ hosts: { desktop: { connected: connected('desktop'), current: hosts.desktop?.protocol === SESSION_PROTOCOL }, hogwild: { connected: connected('hogwild'), current: hosts.hogwild?.protocol === SESSION_PROTOCOL } }, projects: { desktop: hosts.desktop?.projects ?? [], hogwild: hosts.hogwild?.projects ?? [] }, sessions: state.sessions.map(stored => stored.session) })
     },
     get(id: string): DesktopSession {
       recover()
       return structuredClone(find(id).session)
     },
-    report(input: { instanceId: string, protocol: number, projects: SessionProject[] }): { accepted: boolean, stops: SessionFence[] } {
-      if (desktop !== null && desktop.instanceId !== input.instanceId) {
+    report(input: { host: SessionHost, instanceId: string, protocol: number, projects: SessionProject[] }): { accepted: boolean, stops: SessionFence[] } {
+      const previous = hosts[input.host]
+      if (previous !== null && previous.instanceId !== input.instanceId) {
         for (const stored of state.sessions) {
-          if (stored.turn?.instanceId !== null && stored.turn !== null)
+          if (stored.session.host === input.host && stored.turn?.instanceId !== null && stored.turn !== null)
             interrupt(stored)
         }
         save()
       }
-      desktop = { ...input, reportedAt: options.now().getTime() }
-      return { accepted: input.protocol === SESSION_PROTOCOL, stops: state.sessions.filter(stored => stored.session.status === 'stopping' && stored.turn?.instanceId != null).map(stored => ({ sessionId: stored.session.id, turnId: stored.turn!.turnId, leaseToken: stored.turn!.leaseToken, instanceId: stored.turn!.instanceId! })) }
+      hosts[input.host] = { ...input, reportedAt: options.now().getTime() }
+      return { accepted: input.protocol === SESSION_PROTOCOL, stops: state.sessions.filter(stored => stored.session.host === input.host && stored.session.status === 'stopping' && stored.turn?.instanceId != null).map(stored => ({ host: input.host, sessionId: stored.session.id, turnId: stored.turn!.turnId, leaseToken: stored.turn!.leaseToken, instanceId: stored.turn!.instanceId! })) }
     },
     start(input: StartSessionRequest): DesktopSession {
-      const fingerprint = JSON.stringify(input)
+      const fingerprint = startFingerprint(input)
       const previous = duplicate(input.requestId, fingerprint)
       if (previous !== null)
         return previous
-      const project = desktop?.projects.find(project => project.id === input.projectId)
+      const project = hosts[input.host]?.projects.find(project => project.id === input.projectId)
       if (project === undefined)
-        throw new Error('Select a project reported by the desktop Agent.')
+        throw new Error('Select a project reported by the selected Agent host.')
       const at = timestamp()
-      const stored: StoredSession = { turn: null, session: { id: randomUUID(), project, provider: input.provider, model: input.model, reasoningEffort: input.reasoningEffort, title: input.prompt.slice(0, 80), createdAt: at, updatedAt: at, status: 'idle', workspacePath: null, providerSessionId: null, messages: [], events: [] } }
+      const stored: StoredSession = { turn: null, session: { id: randomUUID(), host: input.host, project, provider: input.provider, model: input.model, reasoningEffort: input.reasoningEffort, title: input.prompt.slice(0, 80), createdAt: at, updatedAt: at, status: 'idle', workspacePath: null, providerSessionId: null, messages: [], events: [] } }
       // Validate availability before adding the session to persistent state.
-      if (!connected() || desktop?.protocol !== SESSION_PROTOCOL)
-        throw new Error('Connect the current desktop Agent before starting an Agent session.')
+      if (!connected(input.host) || hosts[input.host]?.protocol !== SESSION_PROTOCOL)
+        throw new Error('Connect the selected Agent host before starting an Agent session.')
       state.sessions.push(stored)
       return enqueue(stored, input.prompt, input.requestId, fingerprint)
     },
@@ -161,12 +181,13 @@ export function createSessionController(options: { path: string, now: () => Date
       save()
       return structuredClone(stored.session)
     },
-    claim(input: { instanceId: string, freeSlots: number }): SessionTurn | null {
+    claim(input: { host: SessionHost, instanceId: string, freeSlots: number }): SessionTurn | null {
       recover()
-      const active = state.sessions.filter(stored => stored.turn?.instanceId !== null && stored.turn !== null).length
-      if (!connected() || desktop?.protocol !== SESSION_PROTOCOL || desktop.instanceId !== input.instanceId || input.freeSlots < 1 || active >= (options.availableSlots?.() ?? 1))
+      const active = state.sessions.filter(stored => stored.session.host === input.host && stored.turn?.instanceId !== null && stored.turn !== null).length
+      const host = hosts[input.host]
+      if (!connected(input.host) || host?.protocol !== SESSION_PROTOCOL || host.instanceId !== input.instanceId || input.freeSlots < 1 || active >= (options.availableSlots?.(input.host) ?? 1))
         return null
-      const stored = state.sessions.find(stored => stored.session.status === 'queued' && stored.turn?.instanceId === null)
+      const stored = state.sessions.find(stored => stored.session.host === input.host && stored.session.status === 'queued' && stored.turn?.instanceId === null)
       if (stored === undefined || stored.turn === null)
         return null
       stored.turn.instanceId = input.instanceId
@@ -174,7 +195,7 @@ export function createSessionController(options: { path: string, now: () => Date
       stored.session.status = 'running'
       stored.session.updatedAt = timestamp()
       save()
-      return structuredClone({ sessionId: stored.session.id, turnId: stored.turn.turnId, leaseToken: stored.turn.leaseToken, project: stored.session.project, provider: stored.session.provider, model: stored.session.model, reasoningEffort: stored.session.reasoningEffort, prompt: stored.session.messages.at(-1)!.text, workspacePath: stored.session.workspacePath, providerSessionId: stored.session.providerSessionId })
+      return structuredClone({ host: stored.session.host, sessionId: stored.session.id, turnId: stored.turn.turnId, leaseToken: stored.turn.leaseToken, project: stored.session.project, provider: stored.session.provider, model: stored.session.model, reasoningEffort: stored.session.reasoningEffort, prompt: stored.session.messages.at(-1)!.text, workspacePath: stored.session.workspacePath, providerSessionId: stored.session.providerSessionId })
     },
     heartbeat(input: SessionFence): { active: boolean, cancelled: boolean } {
       const stored = fenced(input)
@@ -220,7 +241,7 @@ export function createSessionController(options: { path: string, now: () => Date
     complete(input: SessionFence & { outcome: 'completed' | 'stopped' | 'failed', reason?: string, workspacePath?: string, providerSessionId?: string }): { accepted: boolean } {
       const held = state.sessions.find(candidate => candidate.session.id === input.sessionId)
       const retired = held?.turn
-      const stopped = input.outcome === 'stopped' && retired?.turnId === input.turnId && retired?.leaseToken === input.leaseToken && retired?.instanceId === input.instanceId
+      const stopped = input.outcome === 'stopped' && held?.session.host === input.host && retired?.turnId === input.turnId && retired?.leaseToken === input.leaseToken && retired?.instanceId === input.instanceId
       const stored = stopped ? held! : fenced(input)
       if (stored === null)
         return { accepted: false }

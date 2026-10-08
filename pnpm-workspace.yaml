@@ -86,6 +86,7 @@ catalog:
   eslint-plugin-harlanzw: ^0.23.0
   h3: ^2.0.1
   image-size: ^2.0.4
+  marked: ^17.0.6
   mermaid: ^12.1.0
   nuxt: ^4.5.2
   nuxt-skew-protection: ^1.6.1

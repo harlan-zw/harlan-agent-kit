@@ -2,7 +2,7 @@ import type { H3, H3Event } from 'h3'
 import type { SessionController } from './session-controller.ts'
 import { createError } from 'h3'
 import { parseDesktopEvents } from './desktop-protocol.ts'
-import { parseSessionFence, parseSessionMessage, parseSessionProjects, parseStartSession, sessionRecord, sessionText } from './session-protocol.ts'
+import { parseSessionFence, parseSessionHost, parseSessionMessage, parseSessionProjects, parseStartSession, sessionRecord, sessionText } from './session-protocol.ts'
 
 export function registerSessionRoutes(app: H3, controller: SessionController): void {
   function route(method: 'get' | 'post', path: string, handler: (event: H3Event) => unknown): void {
@@ -32,13 +32,13 @@ export function registerSessionRoutes(app: H3, controller: SessionController): v
     const input = await body(event.req)
     if (!Number.isSafeInteger(input.protocol))
       throw new Error('Set a valid desktop Session protocol.')
-    return controller.report({ instanceId: sessionText(input.instanceId, 'desktop instance'), protocol: Number(input.protocol), projects: parseSessionProjects(input.projects) })
+    return controller.report({ host: parseSessionHost(input.host), instanceId: sessionText(input.instanceId, 'host instance'), protocol: Number(input.protocol), projects: parseSessionProjects(input.projects) })
   }))
   route('post', '/api/desktop/sessions/claim', event => boundary(async () => {
     const input = await body(event.req)
-    if (!Number.isSafeInteger(input.freeSlots) || Number(input.freeSlots) < 0 || Number(input.freeSlots) > 2)
+    if (!Number.isSafeInteger(input.freeSlots) || Number(input.freeSlots) < 0)
       throw new Error('Set valid free Agent slots.')
-    return controller.claim({ instanceId: sessionText(input.instanceId, 'desktop instance'), freeSlots: Number(input.freeSlots) })
+    return controller.claim({ host: parseSessionHost(input.host), instanceId: sessionText(input.instanceId, 'host instance'), freeSlots: Number(input.freeSlots) })
   }))
   route('post', '/api/desktop/sessions/heartbeat', event => boundary(async () => controller.heartbeat(parseSessionFence(await body(event.req)))))
   route('post', '/api/desktop/sessions/defer', event => boundary(async () => controller.defer(parseSessionFence(await body(event.req)))))

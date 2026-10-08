@@ -1,11 +1,12 @@
 import type { ThreadEvent, ThreadOptions, TurnOptions } from '@openai/codex-sdk'
 import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
+import { opencodeAgentEnvironment } from '../src/agent-context.ts'
 import { createDesktopSessionProvider } from '../src/desktop-session-provider.ts'
 
 const request: AgentTurnRequest = { model: 'test-model', prompt: 'Explain this code.', outputSchema: undefined, sessionId: null, signal: new AbortController().signal, workspace: '/tmp' }
@@ -95,4 +96,29 @@ describe('desktop session provider', () => {
     const provider = createDesktopSessionProvider({ provider: 'opencode', environment: process.env, launchOpencode: (_args, options) => spawn(process.execPath, ['-e', 'process.stderr.write("Login expired"); process.exit(1)'], options) })
     expect(await collect(provider.runTurn(request))).toContainEqual({ _tag: 'Failed', reason: 'The opencode session failed: Login expired' })
   })
+})
+
+it('preserves process ownership through context and repository environment for both providers', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'session-owner-env-'))
+  await writeFile(join(workspace, '.env'), 'HARLAN_SESSION_PROCESS_OWNER=repository-value\n')
+  const environment = opencodeAgentEnvironment({ context: { claudeHome: workspace, instructionPaths: [], skillDirectories: [] }, environment: { ...process.env, HARLAN_SESSION_PROCESS_OWNER: 'trusted-turn-owner' } })
+  if (environment._tag === 'Err')
+    throw new Error(environment.error)
+  try {
+    for (const kind of ['codex', 'opencode'] as const) {
+      let owner: string | undefined
+      const provider = createDesktopSessionProvider({ provider: kind, environment: environment.value, createCodex: (env) => {
+        owner = env.HARLAN_SESSION_PROCESS_OWNER
+        return { startThread: () => ({ runStreamed: async () => ({ events: (async function* () {})() }) }), resumeThread: () => {
+          throw new Error('Unexpected resume.')
+        } }
+      }, launchOpencode: (_args, options) => {
+        owner = options.env?.HARLAN_SESSION_PROCESS_OWNER
+        return spawn(process.execPath, ['-e', `process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({type:'step_finish',part:{reason:'stop'}})))`], options)
+      } })
+      await collect(provider.runTurn({ ...request, workspace }))
+      expect(owner).toBe('trusted-turn-owner')
+    }
+  }
+  finally { await rm(workspace, { recursive: true, force: true }) }
 })

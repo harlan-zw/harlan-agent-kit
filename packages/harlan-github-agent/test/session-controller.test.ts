@@ -10,8 +10,8 @@ function fixture() {
   const path = join(mkdtempSync(join(tmpdir(), 'agent-sessions-')), 'sessions.json')
   const options = { path, now: () => time }
   const controller = createSessionController(options)
-  controller.report({ instanceId: 'desktop-1', protocol: 1, projects: [{ id: 'pkg/example', name: 'example', path: '/home/harlan/pkg/example', kind: 'pkg' }] })
-  const input = { projectId: 'pkg/example', provider: 'codex' as const, model: 'gpt-5.6-sol', reasoningEffort: 'high' as const, prompt: 'Fix this project.', requestId: 'request-1' }
+  controller.report({ host: 'desktop' as const, instanceId: 'desktop-1', protocol: 2, projects: [{ id: 'pkg/example', name: 'example', path: '/home/harlan/pkg/example', kind: 'pkg' }] })
+  const input = { host: 'desktop' as const, projectId: 'pkg/example', provider: 'codex' as const, model: 'gpt-5.6-sol', reasoningEffort: 'high' as const, prompt: 'Fix this project.', requestId: 'request-1' }
   return { controller, options, input, advance: () => {
     time = new Date(time.getTime() + 31_000)
   } }
@@ -34,21 +34,21 @@ describe('desktop Agent sessions', () => {
   it('stores ordered events and resumes the same desktop Worktree', () => {
     const { controller, input } = fixture()
     const session = controller.start(input)
-    const turn = controller.claim({ instanceId: 'desktop-1', freeSlots: 1 })!
-    const fence = { instanceId: 'desktop-1', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken }
+    const turn = controller.claim({ host: 'desktop' as const, instanceId: 'desktop-1', freeSlots: 1 })!
+    const fence = { host: 'desktop' as const, instanceId: 'desktop-1', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken }
     expect(() => controller.events({ ...fence, seq: 2, events: [] })).toThrow('order')
     expect(controller.events({ ...fence, seq: 1, events: [{ _tag: 'Message', text: 'Done' }] }).accepted).toBe(true)
     controller.events({ ...fence, seq: 1, events: [{ _tag: 'Message', text: 'Done' }] })
     controller.complete({ ...fence, outcome: 'completed', workspacePath: '/home/harlan/pkg/example.agent-session', providerSessionId: 'native-session' })
     expect(controller.get(session.id).events.map(event => event.event)).toEqual([{ _tag: 'Message', text: 'Done' }])
     controller.message(session.id, { prompt: 'Continue', requestId: 'request-2' })
-    expect(controller.claim({ instanceId: 'desktop-1', freeSlots: 1 })).toMatchObject({ workspacePath: '/home/harlan/pkg/example.agent-session', providerSessionId: 'native-session', prompt: 'Continue' })
+    expect(controller.claim({ host: 'desktop' as const, instanceId: 'desktop-1', freeSlots: 1 })).toMatchObject({ workspacePath: '/home/harlan/pkg/example.agent-session', providerSessionId: 'native-session', prompt: 'Continue' })
   })
   it('requires desktop confirmation before a running stop finishes', () => {
     const { controller, input } = fixture()
     const session = controller.start(input)
-    const turn = controller.claim({ instanceId: 'desktop-1', freeSlots: 1 })!
-    const fence = { instanceId: 'desktop-1', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken }
+    const turn = controller.claim({ host: 'desktop' as const, instanceId: 'desktop-1', freeSlots: 1 })!
+    const fence = { host: 'desktop' as const, instanceId: 'desktop-1', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken }
     expect(controller.stop(session.id).status).toBe('stopping')
     expect(controller.heartbeat(fence)).toEqual({ active: true, cancelled: true })
     controller.complete({ ...fence, outcome: 'stopped' })
@@ -57,16 +57,16 @@ describe('desktop Agent sessions', () => {
   it('fences lost desktops and never replays uncertain work', () => {
     const { controller, input, advance } = fixture()
     const session = controller.start(input)
-    const turn = controller.claim({ instanceId: 'desktop-1', freeSlots: 1 })!
+    const turn = controller.claim({ host: 'desktop' as const, instanceId: 'desktop-1', freeSlots: 1 })!
     advance()
     expect(controller.get(session.id).status).toBe('interrupted')
     expect(controller.events({ instanceId: 'desktop-1', ...turn, seq: 1, events: [{ _tag: 'Message', text: 'Late' }] }).accepted).toBe(false)
-    expect(controller.claim({ instanceId: 'desktop-1', freeSlots: 1 })).toBeNull()
+    expect(controller.claim({ host: 'desktop' as const, instanceId: 'desktop-1', freeSlots: 1 })).toBeNull()
   })
   it('preserves messages across controller restart without replaying running work', () => {
     const { controller, options, input } = fixture()
     const session = controller.start(input)
-    controller.claim({ instanceId: 'desktop-1', freeSlots: 1 })
+    controller.claim({ host: 'desktop' as const, instanceId: 'desktop-1', freeSlots: 1 })
     const restarted = createSessionController(options)
     expect(restarted.get(session.id)).toMatchObject({ status: 'interrupted', messages: [{ text: input.prompt }] })
     expect(restarted.start(input).id).toBe(session.id)
@@ -76,18 +76,18 @@ describe('desktop Agent sessions', () => {
 it('resumes interrupted work only after the desktop confirms the old process stopped', () => {
   const { controller, input, advance } = fixture()
   const session = controller.start(input)
-  const turn = controller.claim({ instanceId: 'desktop-1', freeSlots: 1 })!
-  const fence = { instanceId: 'desktop-1', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken }
+  const turn = controller.claim({ host: 'desktop' as const, instanceId: 'desktop-1', freeSlots: 1 })!
+  const fence = { host: 'desktop' as const, instanceId: 'desktop-1', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken }
   advance()
   expect(controller.get(session.id).status).toBe('interrupted')
   controller.stop(session.id)
-  const report = controller.report({ instanceId: 'desktop-2', protocol: 1, projects: [session.project] })
+  const report = controller.report({ host: 'desktop' as const, instanceId: 'desktop-2', protocol: 2, projects: [session.project] })
   expect(report.stops).toEqual([fence])
   expect(controller.events({ ...fence, seq: 1, events: [] }).accepted).toBe(false)
   expect(controller.complete({ ...fence, outcome: 'completed' }).accepted).toBe(false)
   expect(controller.complete({ ...fence, outcome: 'stopped', workspacePath: '/saved/worktree', providerSessionId: 'native' }).accepted).toBe(true)
   controller.message(session.id, { prompt: 'Resume', requestId: 'resume' })
-  expect(controller.claim({ instanceId: 'desktop-2', freeSlots: 1 })).toMatchObject({ workspacePath: '/saved/worktree', providerSessionId: 'native' })
+  expect(controller.claim({ host: 'desktop' as const, instanceId: 'desktop-2', freeSlots: 1 })).toMatchObject({ workspacePath: '/saved/worktree', providerSessionId: 'native' })
 })
 
 it('deduplicates prototype-named request IDs across restart', () => {

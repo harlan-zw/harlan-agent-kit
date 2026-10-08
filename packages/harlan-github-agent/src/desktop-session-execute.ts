@@ -27,7 +27,17 @@ export async function executeDesktopSessionTurn(options: {
   let completed = false
   for await (const event of options.provider.runTurn({
     workspace: workspacePath,
-    prompt: turn.prompt,
+    prompt: `Session context:
+Workspace: ${workspacePath}
+Claim owner: ${turn.sessionId}
+This Session already owns the current Worktree and its global claim.
+The controller renews this claim and releases it after all Session processes stop.
+If you acquire or renew the claim, use this owner.
+Reuse this task-owned Worktree for ordinary Session work.
+Do not create another Worktree for ordinary Session work.
+
+User request:
+${turn.prompt}`,
     model: turn.model,
     reasoningEffort: turn.reasoningEffort,
     sessionId: providerSessionId,
@@ -82,7 +92,7 @@ async function main() {
   const capture = () => writeFile(join(directory, 'result.json'), JSON.stringify(result), { mode: 0o600 })
   result = await executeDesktopSessionTurn({
     turn,
-    home: homedir(),
+    home: process.argv[3] ?? homedir(),
     signal: signal.signal,
     provider: createDesktopSessionProvider({ provider: turn.provider, environment: environment.value }),
     prepared: async (workspacePath) => {

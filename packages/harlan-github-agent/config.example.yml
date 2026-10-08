@@ -36,8 +36,8 @@ github:
   private_key_path: /home/harlan/.config/harlan-github-agent/app.pem
   allowed_owners: [harlan-zw]
 server:
-  # Install the Tailscale session ingress before enabling local desktop credentials.
-  desktop_sessions: false
+  # Install the Tailscale session ingress before enabling host credentials.
+  agent_sessions: false
   host: 127.0.0.1
   port: 3210
   allowed_origin: https://harlan-github-agent.localhost
