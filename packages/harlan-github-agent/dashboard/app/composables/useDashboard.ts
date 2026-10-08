@@ -9,8 +9,7 @@ import type {
   ReviewAgent,
   SelectionMode,
 } from '../../../src/types.ts'
-import type { EjectedSessionNotice } from '../utils/eject.ts'
-import { createSharedComposable, formatTimeAgo, useBrowserLocation, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
+import { createSharedComposable, formatTimeAgo, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
 import { CODEX_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import {
   agentStartState,
@@ -19,7 +18,6 @@ import {
   isSnapshotStale,
   taskNumber,
 } from '../utils/dashboard.ts'
-import { ejectRecoveryFromError, ejectSessionCommand } from '../utils/eject.ts'
 
 function emptySnapshot(): DashboardSnapshot {
   return {
@@ -70,9 +68,6 @@ function createDashboard() {
   const approvalErrors = ref<Record<string, string>>({})
   const cancelPending = ref<string>()
   const cancelErrors = ref<Record<string, string>>({})
-  const ejectPending = ref<string>()
-  const ejectErrors = ref<Record<string, string>>({})
-  const ejectedSession = ref<EjectedSessionNotice>()
   const rerunPending = ref<string>()
   const rerunErrors = ref<Record<string, string>>({})
   const feedbackPending = ref<string>()
@@ -82,7 +77,6 @@ function createDashboard() {
   const dismissErrors = ref<Record<string, string>>({})
 
   const visibility = useDocumentVisibility()
-  const browserLocation = useBrowserLocation()
   const now = useNow({ interval: 1_000 })
 
   const {
@@ -254,44 +248,6 @@ function createDashboard() {
       })
   }
 
-  async function ejectAgent(taskId: string): Promise<void> {
-    ejectPending.value = taskId
-    ejectErrors.value = without(ejectErrors.value, taskId)
-    return $fetch<{
-      _tag: 'Ejected'
-      provider: 'codex' | 'opencode'
-      sessionId: string
-      opencodeTaskKey?: string
-      repository: string
-      itemNumber: number
-    }>('/api/agents/eject', { method: 'POST', body: { taskId } })
-      .then((ejected) => {
-        const host = browserLocation.value.hostname ?? 'hogwild'
-        ejectedSession.value = {
-          _tag: 'Ejected',
-          command: ejectSessionCommand(ejected.provider, ejected.sessionId, host, ejected.opencodeTaskKey),
-          itemNumber: ejected.itemNumber,
-          repository: ejected.repository,
-        }
-        return loadState()
-      })
-      .catch((error: unknown) => {
-        const recovery = ejectRecoveryFromError(error, browserLocation.value.hostname ?? 'hogwild')
-        if (recovery !== undefined) {
-          ejectedSession.value = recovery
-          return loadState()
-        }
-        ejectErrors.value = { ...ejectErrors.value, [taskId]: failed(error) }
-      })
-      .finally(() => {
-        ejectPending.value = undefined
-      })
-  }
-
-  function clearEjectedSession(): void {
-    ejectedSession.value = undefined
-  }
-
   async function approveQueueEntry(entry: QueueEntry): Promise<void> {
     if (entry.state._tag !== 'AwaitingApproval')
       return
@@ -437,10 +393,6 @@ function createDashboard() {
     approvalErrors,
     cancelPending,
     cancelErrors,
-    ejectPending,
-    ejectErrors,
-    ejectedSession,
-    clearEjectedSession,
     rerunPending,
     rerunErrors,
     feedbackPending,
@@ -475,7 +427,6 @@ function createDashboard() {
     rerunReview,
     recordAgentFeedback,
     cancelAgentTask,
-    ejectAgent,
     approveQueueEntry,
     approvalKeyFor,
     approvalErrorFor,

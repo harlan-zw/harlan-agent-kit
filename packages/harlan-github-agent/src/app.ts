@@ -19,7 +19,6 @@ import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseAgentSlots } from './host-capacity.ts'
-import { opencodeTaskKey } from './opencode-storage.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
 import { registerSessionRoutes } from './session-routes.ts'
@@ -40,8 +39,6 @@ export interface AgentAppOptions {
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead'>
-  settleTask?: (taskId: string) => Promise<boolean>
-  ejectSettlementTimeoutMilliseconds?: number
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -61,7 +58,6 @@ export interface AgentAppOptions {
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
 const DASHBOARD_PAGES = ['sessions', 'history', 'watching', 'routines', 'flow', 'stats'] as const
-const EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS = 12_000
 
 const securityHeaders = {
   'cache-control': 'no-store',
@@ -112,26 +108,6 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
       : agent),
     routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog.read(run.id) })),
   }
-}
-
-function settleEjectedTask(options: AgentAppOptions, taskId: string): Promise<boolean> {
-  const settleTask = options.settleTask
-  if (settleTask === undefined)
-    return Promise.resolve(false)
-  const timeoutMilliseconds = options.ejectSettlementTimeoutMilliseconds ?? EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS
-  return new Promise((resolve) => {
-    let answered = false
-    const answer = (settled: boolean) => {
-      if (answered)
-        return
-      answered = true
-      clearTimeout(timeout)
-      resolve(settled)
-    }
-    const timeout = setTimeout(answer, timeoutMilliseconds, false)
-    timeout.unref()
-    settleTask(taskId).then(answer, () => answer(false))
-  })
 }
 
 async function setRepositoryWrites(options: AgentAppOptions, event: { req: { json: () => Promise<unknown> } }, writesEnabled: boolean): Promise<{ github: string, writesEnabled: boolean }> {
@@ -249,17 +225,6 @@ interface IssueApprovalRequest {
 
 interface CancelTaskRequest {
   taskId: string
-}
-
-type ParsedAgentSession
-  = | { _tag: 'Codex', id: string, provider: 'codex' }
-    | { _tag: 'Opencode', id: string, provider: 'opencode' }
-
-function parseAgentSession(provider: 'codex' | 'opencode', id: string): ParsedAgentSession | undefined {
-  const nativeId = id.startsWith('desktop:') ? id.slice('desktop:'.length) : id
-  if (provider === 'codex')
-    return /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(nativeId) ? { _tag: 'Codex', id, provider } : undefined
-  return /^ses_[a-z\d]{8,}$/i.test(nativeId) ? { _tag: 'Opencode', id, provider } : undefined
 }
 
 interface ReviewRerunRequest {
@@ -601,51 +566,6 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (selection._tag === 'Err')
       throw createError({ status: 400, statusText: 'Bad Request', message: selection.error })
     return options.store.selectAgent(selection.value, options.now().toISOString())
-  })
-
-  app.post('/api/agents/eject', async (event) => {
-    const body = cancelTaskRequest(await event.req.json().catch(() => {
-      // Request validation below reports malformed JSON as a bad request.
-      return undefined
-    }))
-    if (body === undefined)
-      throw createError({ status: 400, statusText: 'Bad Request', message: 'A valid task ID is required.' })
-    const agent = dashboardSnapshot(options).agents.find(candidate => candidate._tag === 'ActiveAgent' && candidate.id === body.taskId)
-    if (agent?._tag !== 'ActiveAgent')
-      throw createError({ status: 404, statusText: 'Not Found', message: 'The running agent was not found.' })
-    if (agent.session._tag !== 'Connected')
-      throw createError({ status: 409, statusText: 'Conflict', message: 'The agent session is still starting.' })
-    const session = parseAgentSession(agent.provider, agent.session.id)
-    if (session === undefined)
-      throw createError({ status: 409, statusText: 'Conflict', message: 'The saved agent session is invalid.' })
-    if (options.settleTask === undefined)
-      throw createError({ status: 503, statusText: 'Service Unavailable', message: 'The agent session cannot be transferred safely.' })
-    const cancelled = options.store.cancelTask({ taskId: body.taskId, at: options.now().toISOString() })
-    if (cancelled._tag === 'Rejected')
-      throw createError({ status: 409, statusText: 'Conflict', message: 'The agent already finished. Refresh before ejecting.' })
-    const settled = await settleEjectedTask(options, body.taskId)
-    if (!settled) {
-      throw createError({
-        status: 503,
-        statusText: 'Service Unavailable',
-        message: 'The agent stop could not be confirmed.',
-        data: {
-          _tag: 'EjectDelayed',
-          provider: session.provider,
-          sessionId: session.id,
-          ...(session.provider === 'opencode' ? { opencodeTaskKey: opencodeTaskKey(body.taskId) } : {}),
-          nextAction: 'Stop Harlan GitHub Agent. Then resume this saved session.',
-        },
-      })
-    }
-    return {
-      _tag: 'Ejected',
-      provider: session.provider,
-      sessionId: session.id,
-      ...(session.provider === 'opencode' ? { opencodeTaskKey: opencodeTaskKey(body.taskId) } : {}),
-      repository: agent.repository,
-      itemNumber: agent.itemNumber,
-    }
   })
 
   app.post('/api/repositories/writes/enable', event => setRepositoryWrites(options, event, true))

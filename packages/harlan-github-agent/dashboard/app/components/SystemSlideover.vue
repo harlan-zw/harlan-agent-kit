@@ -24,7 +24,7 @@ import HostWork from './system/HostWork.vue'
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.
  *
- * Watch logs and Eject live on the running card. Retained Repairs offer inspection here.
+ * Watch logs opens Sessions from the running Agent. Retained Repairs offer inspection here.
  */
 const { snapshot, incidents, relativeTime, now, requestUpdate, controlPending, setAgentSlots } = useDashboard()
 const { open } = useSystemPane()

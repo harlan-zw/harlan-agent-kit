@@ -5,8 +5,8 @@ import type { UiIcon as UiIconName } from '../../utils/ui-icons.ts'
 /**
  * UiSectionHeader — within-a-page section title: icon + heading, optional
  * status badge, info tooltip, description, and a trailing actions area
- * (defaults to a "View all" link when `to` is set). The nuxtseo eject targets
- * are dropped: this dashboard has no chat or MCP surface to eject into.
+ * (defaults to a "View all" link when `to` is set). The nuxtseo action targets
+ * are dropped: this dashboard uses a separate Agent session view.
  */
 const {
   title,

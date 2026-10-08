@@ -52,7 +52,7 @@ export interface AgentTurnOptions {
 export interface AgentTurnInput {
   toolPolicy?: AgentTurnRequest['toolPolicy']
   media?: AgentMedia[]
-  /** Start without prior session context, while still saving the new session for Eject. */
+  /** Start without prior session context, while still saving the new session for later turns. */
   freshSession?: boolean
   /** Absolute instruction files this turn adds, such as the memory index. */
   instructionPaths?: readonly string[]

@@ -166,7 +166,7 @@ Three shapes for three questions. A Needs you entry is a one-line row, because a
 - Conflicting contributor pull requests show `Approve on GitHub` when the current head still requires Approval.
 - `Dismiss` is recommended only by the latest review of the current head. It still confirms the consequence.
 - Unknown blockers use `View details`. They never imply Approval or Dismissal.
-- No card or row carries a second button. `Eject` sits in the Running card's menu and confirms in a modal.
+- No card or row carries a second button. `Watch logs` opens the running Agent in Sessions.
 - Every other action sits in the card's overflow menu: `Open on GitHub`, `Rerun review`, `Cancel`, `Dismiss`. Cancel and Dismiss confirm in a modal that states the consequence in one sentence.
 - Clicking the face opens the card slideover: full reason text, session and commit identifiers, terminal, timeline, and the same actions.
 - Done rows are recessive and show the outcome and identity only. Evidence lives on History.
@@ -335,7 +335,7 @@ The `Ui*` components under `app/components/ui/` are ports of the nuxtseo.com des
 - The Running face lost its last-command line. "Ran read /home/…" beside a phase and an elapsed time was a second liveness signal; the stalled warning already covers silence, and the terminal is one click away.
 - Needs you reasons are clamped and ink. Sixteen red paragraphs made the column that matters most the loudest and least readable; the column heading and the primary button carry the decision.
 - Secondary card actions live in an overflow menu. Four buttons on a card face made the one that mattered hard to find.
-- Cancel and Dismiss confirm in a modal from the menu. Eject stays inline and arms then confirms, because it is pressed while watching a live agent and a modal would cover the terminal.
+- Cancel and Dismiss confirm in a modal from the menu. Watch logs opens read-only activity in Sessions.
 - Primary is ink, not a hue. The only colours on the page are state colours, so a decision or a failure is the most saturated thing in view.
 - Neutrals are warm tinted. True neutral read as a diagnostic tool; a trace of warmth reads as a desk.
 - Mona Sans replaces Geist. The dashboard is a GitHub tool and borrows GitHub's face; Geist read as Vercel.

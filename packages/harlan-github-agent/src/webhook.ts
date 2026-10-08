@@ -177,7 +177,7 @@ export interface WebhookAppOptions {
  *
  * This app accepts signed Review cancellation and reconciliation hints. It runs on its own
  * port so that exposing it through a tunnel cannot reach the control API, which
- * can pause agents, approve pull requests, and eject sessions.
+ * can pause agents, approve pull requests, and cancel Tasks.
  */
 export function createWebhookApp(options: WebhookAppOptions): H3 {
   const app = new H3()

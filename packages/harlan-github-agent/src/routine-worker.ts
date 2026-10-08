@@ -41,7 +41,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
    *
    * Inventing an Item number to hang a session on would put a Routine in the
    * table every Item lookup reads. A scan runs without a saved session instead,
-   * which is why Eject cannot reach a Routine run yet.
+   * so Routine logs use the live activity stream.
    */
   const sessionlessStore = {
     getWorkerSession: () => null,

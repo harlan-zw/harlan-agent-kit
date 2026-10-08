@@ -19,7 +19,7 @@ export function assertDevMock(event: H3Event): void {
 
 const hex = (seed: string): string => seed.repeat(64).slice(0, 64)
 
-/** Task IDs are 64 hex characters, so Cancel and Eject validate them like the controller does. */
+/** Task IDs are 64 hex characters, so Cancel validates them like the controller does. */
 export const mockTaskId = (): string => randomBytes(32).toString('hex')
 const minutesAgo = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString()
 const daysAhead = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString()

@@ -228,8 +228,6 @@ const historyRows = [
   { work: 'review_fix', title: 'fix(sitemap): trailing slash on index', repository: 'harlan-zw/nuxt-seo', number: 611, tone: 'warning', outcome: 'PENDING', at: '18m ago' },
   { work: 'issue_work', title: 'chore(deps): bump unhead', repository: 'harlan-zw/unhead', number: 402, tone: 'error', outcome: 'BLOCKED', at: '1h ago' },
 ] as const
-
-const ejected = ref(0)
 </script>
 
 <template>
@@ -487,16 +485,6 @@ const ejected = ref(0)
               <span class="text-sm text-muted">Repair</span>
               <span class="font-mono text-sm text-dimmed">04:12</span>
             </div>
-            <div class="mt-2 flex justify-end">
-              <ConfirmButton
-                label="Eject"
-                confirm-label="Confirm eject"
-                aria-label="Eject this agent"
-                confirm-aria-label="Confirm eject of this agent"
-                icon="i-octicon-terminal-16"
-                @confirm="ejected += 1"
-              />
-            </div>
           </UCard>
         </div>
 
@@ -518,9 +506,6 @@ const ejected = ref(0)
           </UCard>
         </div>
       </div>
-      <p v-if="ejected > 0" class="mt-3 font-mono text-sm text-dimmed">
-        Eject confirmed {{ ejected }} times.
-      </p>
     </section>
 
     <section class="mt-10 border-t border-default pt-6">
