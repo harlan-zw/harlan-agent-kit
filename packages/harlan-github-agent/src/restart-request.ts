@@ -23,6 +23,7 @@ export function createRestartController(options: {
   now: () => Date
   onActionRequired: (reason: string) => void
   prepareUpdate: (targetCommit: string) => Promise<Result<void, string>>
+  ready?: () => boolean
   intervalMilliseconds?: number
   maximumWaitMilliseconds?: number
 }): RestartController {
@@ -54,7 +55,7 @@ export function createRestartController(options: {
         return
       }
 
-      if (!options.store.prepareForRestart(at))
+      if (options.ready?.() === false || !options.store.prepareForRestart(at))
         return
       if (request.operation._tag === 'Update') {
         const prepared = await options.prepareUpdate(request.operation.targetCommit)

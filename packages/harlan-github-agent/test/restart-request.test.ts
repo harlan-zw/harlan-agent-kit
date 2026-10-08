@@ -23,6 +23,33 @@ function createStore() {
 }
 
 describe('restart request', () => {
+  it('waits for native Sessions before preparing an Update', async () => {
+    vi.useFakeTimers()
+    const store = createStore()
+    store.requestRestart({ id: 'session-update', source: 'dashboard', operation: { _tag: 'Update', targetCommit: 'a'.repeat(40) }, at: '2026-08-29T01:00:00.000Z' })
+    let ready = false
+    const prepareUpdate = vi.fn(async () => ({ _tag: 'Ok' as const, value: undefined }))
+    const controller = createRestartController({
+      store,
+      processId: 'session-process',
+      now: () => new Date('2026-08-29T01:00:10.000Z'),
+      ready: () => ready,
+      prepareUpdate,
+      onActionRequired: vi.fn(),
+      intervalMilliseconds: 1_000,
+    })
+    controller.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(store.getRestartRequest()?._tag).toBe('Requested')
+    expect(prepareUpdate).not.toHaveBeenCalled()
+    ready = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    await controller.waitForRestart()
+    expect(store.getRestartRequest()?._tag).toBe('Restarting')
+    expect(prepareUpdate).toHaveBeenCalledWith('a'.repeat(40))
+    controller.stop()
+  })
+
   it('stops new Task claims without changing Pause', () => {
     const state = resolveAgentStartState({
       mutationsEnabled: true,
