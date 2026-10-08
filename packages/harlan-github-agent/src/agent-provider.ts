@@ -230,8 +230,10 @@ export function extractJsonObject(text: string): string {
       closers.push(character === '{' ? '}' : ']')
       continue
     }
-    if (start === -1 || (character !== '}' && character !== ']'))
+    if (character !== '}' && character !== ']')
       continue
+    if (start === -1)
+      return text
     if (closers.pop() !== character)
       return text
     if (closers.length !== 0)

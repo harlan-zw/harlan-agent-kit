@@ -334,6 +334,10 @@ describe('review fix Worker', () => {
     { label: 'fenced string result', response: '```json\n"{\\"outcome\\":\\"disputed\\",\\"summary\\":\\"Verified.\\",\\"checks\\":[],\\"commitMessage\\":\\"\\"}"\n```', rejection: 'invalid Repair result' },
     { label: 'unclosed array wrapper', response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}', rejection: 'malformed Repair JSON' },
     { label: 'mismatched array wrapper', response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}}', rejection: 'malformed Repair JSON' },
+    { label: 'unmatched leading array closer', response: ']{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}', rejection: 'malformed Repair JSON' },
+    { label: 'unmatched trailing array closer', response: '{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]', rejection: 'malformed Repair JSON' },
+    { label: 'unmatched leading object closer', response: '}{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}', rejection: 'malformed Repair JSON' },
+    { label: 'unmatched trailing object closer', response: '{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}}', rejection: 'malformed Repair JSON' },
   ])('queues one fresh Review after parsing or correcting $label', async ({ response, rejection }) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const mapping = repositoryMapping({ ownership: 'maintained' })
