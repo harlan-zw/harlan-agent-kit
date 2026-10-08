@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -265,23 +265,30 @@ export async function prepareAgentSandbox(input: {
       args.push('--bind', await permittedPath(path, controllerHome), path)
     const workspace = await realpath(input.workspace)
     const repositoryBind = readOnly ? '--ro-bind' : '--bind'
-    args.push(repositoryBind, workspace, workspace)
+    if (input.reviewHome === undefined) {
+      args.push(repositoryBind, workspace, workspace)
+    }
+    else {
+      // A private root omits configuration paths without following their aliases or assuming their file type.
+      // Keep ordinary symlinks intact, so hiding a config alias never masks its repository target.
+      args.push('--tmpfs', workspace)
+      const projectConfiguration = new Set(['.codex', '.opencode', 'opencode.json', 'opencode.jsonc'])
+      for (const entry of await readdir(workspace, { withFileTypes: true })) {
+        if (projectConfiguration.has(entry.name))
+          continue
+        const path = join(workspace, entry.name)
+        if (entry.isSymbolicLink())
+          args.push('--symlink', await readlink(path), path)
+        else
+          args.push('--ro-bind', path, path)
+      }
+      args.push('--remount-ro', workspace)
+    }
     if (input.reviewHome !== undefined) {
       for (const name of ['.codex/config.toml', '.config/opencode/opencode.json']) {
         const path = join(isolatedHome, name)
         if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
           args.push('--ro-bind', path, join(workerHome, name))
-      }
-      // Project configuration can register another tool or plugin. Hide it before either provider starts.
-      for (const name of ['.codex', '.opencode']) {
-        const path = join(workspace, name)
-        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
-          args.push('--tmpfs', path)
-      }
-      for (const name of ['opencode.json', 'opencode.jsonc']) {
-        const path = join(workspace, name)
-        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
-          args.push('--ro-bind', join(input.reviewHome, '.config/opencode/opencode.json'), path)
       }
     }
     const { stdout } = await execute('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir'])

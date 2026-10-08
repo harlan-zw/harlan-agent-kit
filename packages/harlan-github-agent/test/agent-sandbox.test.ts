@@ -234,3 +234,66 @@ it('keeps Git administrative settings immutable while preserving atomic index wr
     await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
+
+it.each(['directory', 'file', 'directory-alias', 'file-alias', 'external-directory-alias', 'external-file-alias', 'dangling-alias'] as const)('hides Review project configuration with %s paths without changing repository files', async (kind) => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-review-config-'))
+  const primary = join(root, 'primary')
+  const controller = join(root, 'controller')
+  const worker = join(root, 'worker')
+  const reviewHome = join(root, 'review')
+  await Promise.all([mkdir(primary), mkdir(controller), mkdir(worker), mkdir(join(reviewHome, '.config/opencode'), { recursive: true })])
+  let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
+  try {
+    await execute('git', ['init', primary])
+    await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+    const wtConfig = join(root, 'wt.toml')
+    await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+    await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'review', '--base', 'HEAD', '--yes'])
+    const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+    const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'review').worktree.path as string
+    await mkdir(join(workspace, 'ordinary'))
+    await writeFile(join(workspace, 'ordinary/fixture'), 'repository data')
+    await symlink('ordinary/fixture', join(workspace, 'ordinary-alias'))
+    await mkdir(join(root, 'outside'))
+    await writeFile(join(root, 'outside/fixture'), 'outside data')
+    await writeFile(join(reviewHome, '.config/opencode/opencode.json'), '{}')
+    for (const name of ['.codex', '.opencode', 'opencode.json', 'opencode.jsonc']) {
+      const path = join(workspace, name)
+      if (kind === 'directory') {
+        await mkdir(path)
+        await writeFile(join(path, 'config.toml'), 'malicious configuration')
+      }
+      else if (kind === 'file') {
+        await writeFile(path, 'malicious configuration')
+      }
+      else {
+        const target = kind === 'directory-alias' ? 'ordinary' : kind === 'file-alias' ? 'ordinary/fixture' : kind === 'external-directory-alias' ? join(root, 'outside') : kind === 'external-file-alias' ? join(root, 'outside/fixture') : 'missing'
+        await symlink(target, path)
+      }
+    }
+    const profile = join(root, 'worker.json')
+    await writeFile(profile, JSON.stringify({ home: worker, tools: ['/usr/bin'], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
+    sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', reviewHome })
+    const result = await execute(sandbox.binary, [...sandbox.args, '/usr/bin/bash', '-c', `
+      for path in .codex .opencode opencode.json opencode.jsonc; do
+        test ! -e "$path" && test ! -L "$path" || exit 10
+      done
+      test "$(cat ordinary/fixture)" = 'repository data' || exit 11
+      test "$(cat ordinary-alias)" = 'repository data' || exit 12
+      if echo forbidden > new-file; then exit 13; fi
+      if echo forbidden > ordinary/fixture; then exit 14; fi
+      git rev-parse --verify HEAD >/dev/null || exit 15
+      echo protected
+    `], { env: sandbox.environment })
+    expect(result.stdout.trim()).toBe('protected')
+    expect(await readFile(join(workspace, 'ordinary/fixture'), 'utf8')).toBe('repository data')
+    expect(await readFile(join(root, 'outside/fixture'), 'utf8')).toBe('outside data')
+    const before = (await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout
+    await sandbox.release()
+    expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe(before)
+  }
+  finally {
+    await sandbox?.release()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
