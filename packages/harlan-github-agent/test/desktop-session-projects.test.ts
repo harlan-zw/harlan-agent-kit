@@ -1,3 +1,4 @@
+import type { SessionTurn } from '../src/session-protocol.ts'
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -60,19 +61,28 @@ it('preserves session edits across turns and rejects a substituted Worktree', as
   expect(await readFile(join(repo, 'file.txt'), 'utf8')).toBe('original')
   await expect(prepareDesktopSessionWorkspace(home, 'pkg/app', id, repo, signal)).rejects.toThrow('unavailable')
   const events: unknown[] = []
+  const turn: SessionTurn = {
+    sessionId: id,
+    turnId: id,
+    leaseToken: 'test',
+    project: { id: 'pkg/app', name: 'app', path: repo, kind: 'pkg' },
+    provider: 'codex',
+    model: 'test',
+    reasoningEffort: 'high',
+    prompt: 'Continue',
+    workspacePath: workspace,
+    providerSessionId: 'saved-native-session',
+  }
+  await expect(executeDesktopSessionTurn({
+    turn,
+    home,
+    signal,
+    provider: { name: 'codex', async* runTurn() { yield { _tag: 'Message', text: 'Partial response' } } },
+    prepared: async () => {},
+    emit: async () => {},
+  })).rejects.toThrow('complete')
   const result = await executeDesktopSessionTurn({
-    turn: {
-      sessionId: id,
-      turnId: id,
-      leaseToken: 'test',
-      project: { id: 'pkg/app', name: 'app', path: repo, kind: 'pkg' },
-      provider: 'codex',
-      model: 'test',
-      reasoningEffort: 'high',
-      prompt: 'Continue',
-      workspacePath: workspace,
-      providerSessionId: 'saved-native-session',
-    },
+    turn,
     home,
     signal,
     provider: { name: 'codex', async* runTurn(request) {
@@ -81,6 +91,7 @@ it('preserves session edits across turns and rejects a substituted Worktree', as
       expect(request.outputSchema).toBeUndefined()
       yield { _tag: 'SessionStarted', sessionId: 'saved-native-session' }
       yield { _tag: 'Message', text: 'Done. {This is plain text.}' }
+      yield { _tag: 'TurnCompleted' }
     } },
     prepared: async () => {},
     emit: async (event) => { events.push(event) },

@@ -23,6 +23,7 @@ export async function executeDesktopSessionTurn(options: {
   await options.prepared(workspacePath)
   let providerSessionId = turn.providerSessionId
   let failure: string | null = null
+  let completed = false
   for await (const event of options.provider.runTurn({
     workspace: workspacePath,
     prompt: turn.prompt,
@@ -36,11 +37,15 @@ export async function executeDesktopSessionTurn(options: {
       providerSessionId = event.sessionId
     if (event._tag === 'Failed')
       failure = event.reason
+    if (event._tag === 'TurnCompleted')
+      completed = true
     await options.emit(event)
   }
   if (failure !== null)
     throw new Error(failure)
   signal.throwIfAborted()
+  if (!completed)
+    throw new Error('The Agent did not complete this turn.')
   return { workspacePath, providerSessionId }
 }
 async function main() {
