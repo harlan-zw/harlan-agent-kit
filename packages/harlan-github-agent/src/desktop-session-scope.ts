@@ -7,6 +7,15 @@ import { promisify } from 'node:util'
 const exec = promisify(execFile)
 export const SESSION_PROCESS_OWNER = 'HARLAN_SESSION_PROCESS_OWNER'
 
+/** A cgroup removed after open returns ENODEV during read instead of ENOENT. */
+async function readCgroup(path: string): Promise<string | null> {
+  return await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT' || error.code === 'ENODEV')
+      return null
+    throw error
+  })
+}
+
 async function inspect(unit: string) {
   if (!/^harlan-(?:session-[a-f0-9-]{36}|desktop-agent-\d+)\.scope$/.test(unit))
     throw new Error('The Session scope name is invalid.')
@@ -18,11 +27,9 @@ async function ownsScope(path: string | undefined, owner: string | undefined) {
     return false
   if (!path.startsWith('/') || path.split('/').includes('..'))
     throw new Error('The Session cgroup path is invalid.')
-  const pids = await readFile(join('/sys/fs/cgroup', path, 'cgroup.procs'), 'utf8').catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT')
-      return ''
-    throw error
-  })
+  const pids = await readCgroup(join('/sys/fs/cgroup', path, 'cgroup.procs'))
+  if (pids === null)
+    return false
   for (const pid of pids.trim().split('\n').filter(Boolean)) {
     const environment = await readFile(`/proc/${pid}/environ`).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT' || error.code === 'ESRCH')
@@ -67,11 +74,7 @@ export async function stopDesktopSessionScope(unit: string, authority: { owner?:
       return true
     if (!current.ControlGroup)
       return current.ActiveState === 'inactive' || current.ActiveState === 'failed'
-    const events = await readFile(join('/sys/fs/cgroup', current.ControlGroup, 'cgroup.events'), 'utf8').catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT')
-        return null
-      throw error
-    })
+    const events = await readCgroup(join('/sys/fs/cgroup', current.ControlGroup, 'cgroup.events'))
     return events === null || /^populated 0$/m.test(events)
   }
   await command(['kill', '--kill-whom=all', '--signal=SIGTERM'])
@@ -96,11 +99,7 @@ export async function stopDesktopSessionScope(unit: string, authority: { owner?:
       continue
     if (!path.startsWith('/') || path.split('/').includes('..'))
       throw new Error('The Session cgroup path is invalid.')
-    const events = await readFile(join('/sys/fs/cgroup', path, 'cgroup.events'), 'utf8').catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT')
-        return null
-      throw error
-    })
+    const events = await readCgroup(join('/sys/fs/cgroup', path, 'cgroup.events'))
     if (events !== null && !/^populated 0$/m.test(events))
       throw new Error('The Session scope still contains running processes.')
   }
