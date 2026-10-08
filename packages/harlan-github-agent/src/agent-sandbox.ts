@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import { createAgentEgress } from './agent-egress.ts'
 import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
+import { workerMemoryCommand } from './worker-memory.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -137,6 +138,7 @@ export interface AgentSandbox {
   workerStateHome: string
   providerBinary: string
   adapterPath: string
+  memoryExceeded: () => Promise<boolean>
   release: () => Promise<void>
 }
 
@@ -211,6 +213,7 @@ export async function prepareAgentSandbox(input: {
   environment: NodeJS.ProcessEnv
   profilePath?: string
   provider: 'codex' | 'opencode'
+  memoryPerAgentGiB?: number
   readOnlyPaths?: readonly string[]
   writablePaths?: readonly string[]
   taskId?: string
@@ -392,7 +395,9 @@ export async function prepareAgentSandbox(input: {
       await execute('/usr/bin/git', [...safeGit.slice(1), 'update-ref', branch, newSha, originalSha], { env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, timeout: 30_000 })
       await privateGit.save()
     }
-    return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, workerStateHome, adapterPath, providerBinary: profile[input.provider], release: () => {
+    const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
+    const launchEnvironment = { PATH: '/usr/bin:/bin', ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
+    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, providerBinary: profile[input.provider], memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
       released ??= (async () => {
         try {
           if (!readOnly)
@@ -403,7 +408,12 @@ export async function prepareAgentSandbox(input: {
             await egress.close()
           }
           finally {
-            await rm(scratch, { recursive: true, force: true })
+            try {
+              await rm(scratch, { recursive: true, force: true })
+            }
+            finally {
+              await memory?.release()
+            }
           }
         }
       })()

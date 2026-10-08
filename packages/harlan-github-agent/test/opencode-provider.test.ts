@@ -118,6 +118,26 @@ describe('opencodeArguments', () => {
 })
 
 describe('attached result recovery', () => {
+  it('shares a generated Task identity between the server and client', async () => {
+    const server = fakeServer()
+    const identities: unknown[] = []
+    const provider = createOpencodeProvider({
+      startOpencodeServer: async (_workspace, _environment, _paths, taskId) => {
+        identities.push(taskId)
+        return server.start()
+      },
+      spawnOpencode: (...input: unknown[]) => {
+        identities.push(input[4])
+        return replay([textLine, completedLine])(input[0] as string[])
+      },
+    })
+    expect(await collect(provider.runTurn(request()))).toContainEqual({ _tag: 'TurnCompleted' })
+    expect(identities).toEqual([expect.stringMatching(/^[a-f0-9-]{36}$/), identities[0]])
+  })
+  it('attributes a startup memory failure to the Task budget', async () => {
+    const provider = createOpencodeProvider({ startOpencodeServer: async () => ({ _tag: 'Err', error: { _tag: 'ResourceLimit', reason: 'The Agent Task exceeded its memory budget.' } }) })
+    expect(await collect(provider.runTurn(request()))).toEqual([{ _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' }])
+  })
   it('reports a closed prompt pipe and releases the turn server', async () => {
     const server = fakeServer()
     const provider = createOpencodeProvider({

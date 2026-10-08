@@ -22,6 +22,7 @@ export interface CodexThreadClient {
 }
 
 export interface CodexProviderOptions {
+  memoryPerAgentGiB?: number
   reviewProofAuthority?: ReviewProofAuthorityFactory
   createCodex?: (options: CodexOptions) => CodexThreadClient
   readOnly?: boolean
@@ -85,14 +86,14 @@ export function codexAgentUsage(event: ThreadEvent): Extract<AgentTokenUsage, { 
   }
 }
 
-async function* providerEvents(events: AsyncIterable<ThreadEvent>): AsyncGenerator<AgentEvent> {
+async function* providerEvents(events: AsyncIterable<ThreadEvent>, memoryExceeded?: () => Promise<boolean>): AsyncGenerator<AgentEvent> {
   for await (const event of events) {
     const usage = codexAgentUsage(event)
     if (usage !== undefined)
       yield { _tag: 'Usage', usage }
     const mapped = codexAgentEvent(event)
     if (mapped !== undefined)
-      yield mapped
+      yield mapped._tag === 'Failed' && await memoryExceeded?.() ? { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' } : mapped
   }
 }
 
@@ -137,6 +138,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
             workspace: request.workspace,
             environment: process.env,
             provider: 'codex',
+            ...(options.memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB: options.memoryPerAgentGiB }),
             readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? []), ...(review?.readOnlyPaths ?? [])],
             ...(review === undefined ? {} : { reviewHome: review.home, readOnly: true }),
             ...(request.taskId === undefined ? {} : { taskId: request.taskId }),
@@ -157,6 +159,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
               env: {
                 PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
                 HARLAN_AGENT_SANDBOX_ARGS: JSON.stringify([...sandbox.args, sandbox.providerBinary]),
+                HARLAN_AGENT_SANDBOX_BINARY: sandbox.binary,
                 HARLAN_AGENT_SANDBOX_ENV: JSON.stringify(sandbox.environment),
               },
             }), ...(review === undefined ? {} : { config: { features: REVIEW_CODEX_FEATURES, agents: { enabled: false, max_depth: 0 } } }) })
@@ -180,7 +183,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         if (request.sessionId !== null && review === undefined) {
           try {
             const resumed = await run(client.resumeThread(request.sessionId, threadOptions))
-            yield* providerEvents(resumed.events)
+            yield* providerEvents(resumed.events, sandbox?.memoryExceeded)
             return
           }
           catch (error) {
@@ -191,7 +194,12 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         }
 
         const started = await run(client.startThread(threadOptions))
-        yield* providerEvents(started.events)
+        yield* providerEvents(started.events, sandbox?.memoryExceeded)
+      }
+      catch (error) {
+        if (!await sandbox?.memoryExceeded())
+          throw error
+        yield { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' }
       }
       finally {
         let released: Awaited<ReturnType<ReviewRuntime['release']>> | undefined

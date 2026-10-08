@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { classifyCheckFailure, classifyFailure, contextBudgetExhaustedReason, isSubjectMovedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
+  it('does not retry a Task that exceeded its memory budget', () => {
+    const reason = 'The Agent Task exceeded its memory budget. The opencode session exited with code 137.'
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'policy' })
+    expect(mayRetryFailure({ message: reason })).toBe(false)
+  })
   it.each([
     ['Resource not accessible by integration - https://docs.github.com/rest/pulls/pulls', 'github_access'],
     ['Bad credentials', 'github_access'],

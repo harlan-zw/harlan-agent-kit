@@ -22,7 +22,10 @@ if (schemaIndex !== -1) {
     throw new Error('The Codex sandbox command separator is missing.')
   value.splice(separator, 0, '--ro-bind', realpathSync(schemaPath), schemaPath)
 }
-const child = spawn('/usr/bin/bwrap', [...value, ...commandArguments], { env: environment, stdio: 'inherit' })
+const binary = process.env.HARLAN_AGENT_SANDBOX_BINARY
+if (binary !== '/usr/bin/bwrap' && binary !== '/usr/bin/systemd-run')
+  throw new Error('The Codex Agent sandbox executable is invalid.')
+const child = spawn(binary, [...value, ...commandArguments], { env: environment, stdio: 'inherit' })
 child.once('error', (error) => {
   process.stderr.write(`${error.message}\n`)
   process.exitCode = 1

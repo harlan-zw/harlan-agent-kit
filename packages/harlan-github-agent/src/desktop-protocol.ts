@@ -26,7 +26,7 @@ function record(value: unknown): value is Record<string, unknown> {
  * 8: exact base revision supplied for immutable Review static evidence.
  * 9: fenced event delivery and host failure attribution across the desktop boundary.
  */
-export const DESKTOP_PROTOCOL = 9
+export const DESKTOP_PROTOCOL = 10
 
 export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 
@@ -156,7 +156,7 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
     if (event._tag === 'Message' && typeof event.text === 'string')
       return { _tag: 'Message', text: event.text }
     if (event._tag === 'Failed' && typeof event.reason === 'string') {
-      if (event.cause !== undefined && event.cause !== 'host-cancelled' && event.cause !== 'sandbox-setup')
+      if (event.cause !== undefined && event.cause !== 'host-cancelled' && event.cause !== 'sandbox-setup' && event.cause !== 'resource-limit')
         throw new Error('The desktop failure cause is invalid.')
       return { _tag: 'Failed', reason: event.reason, ...(event.cause === undefined ? {} : { cause: event.cause }) }
     }
