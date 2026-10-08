@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline'
 import { Codex } from '@openai/codex-sdk'
 import { agentProviderFailureReason, agentTextEvent } from './agent-provider.ts'
 import { codexAgentEvent } from './codex-provider.ts'
+import { SESSION_PROCESS_OWNER } from './desktop-session-process.ts'
 import { opencodeAgentEvent, opencodeAgentUsage } from './opencode-provider.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
@@ -37,7 +38,7 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
       const environment = workspaceEnvironment(options.environment, request.workspace)
       const publicShim = join(options.environment.HOME ?? '', '.local/share/harlan-agent-kit/github-bin')
       // Interactive sessions inherit the desktop's normal GitHub credentials.
-      const sessionEnvironment = { ...environment, PATH: environment.PATH?.split(delimiter).filter(path => path !== publicShim).join(delimiter) }
+      const sessionEnvironment = { ...environment, [SESSION_PROCESS_OWNER]: options.environment[SESSION_PROCESS_OWNER], PATH: environment.PATH?.split(delimiter).filter(path => path !== publicShim).join(delimiter) }
       if (options.provider === 'codex') {
         const env = Object.fromEntries(Object.entries(sessionEnvironment).filter((entry): entry is [string, string] => entry[1] !== undefined))
         const codex = options.createCodex?.(env) ?? new Codex({ env })

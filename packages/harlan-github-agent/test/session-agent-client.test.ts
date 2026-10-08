@@ -2,7 +2,7 @@ import type { SessionAgentTransport } from '../src/desktop-session-client.ts'
 import type { SessionFence, SessionTurn } from '../src/session-protocol.ts'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -148,4 +148,65 @@ it('releases capacity after spawn failure and leaves no dead recovery handler', 
     expect(outcomes).toEqual(['failed', 'stopped'])
   }
   finally { await rm(home, { recursive: true, force: true }) }
+})
+
+it('acknowledges Stop only after a detached writer stops changing files', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'session-detached-client-'))
+  const executable = join(home, 'execute.ts')
+  const writer = join(home, 'writer.ts')
+  const marker = join(home, 'marker')
+  await writeFile(writer, `import { writeFileSync } from 'node:fs'
+import process from 'node:process'
+setInterval(() => writeFileSync(process.argv[2]!, String(Date.now())), 10)
+process.stdout.write('ready')
+`)
+  await writeFile(executable, `import { spawn } from 'node:child_process'
+import process from 'node:process'
+const child = spawn(process.execPath, ['--experimental-strip-types', ${JSON.stringify(writer)}, ${JSON.stringify(marker)}], { env: {}, detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+child.unref()
+child.stdout.once('data', () => process.stdout.write(JSON.stringify({_tag:'CommandStarted',command:String(child.pid)})+'\\n'))
+setInterval(() => {}, 1000)
+`)
+  const abort = new AbortController()
+  let writerPid = 0
+  let complete = false
+  let released = false
+  const client = createDesktopSessionClient({ host: 'hogwild', home, root: join(home, 'runtime'), executable, signal: abort.signal, onStopped: () => {
+    released = true
+  }, transport: transport({
+    events: async (input) => {
+      const event = input.events[0]
+      if (event?._tag === 'CommandStarted') {
+        writerPid = Number(event.command)
+        await delay(40)
+        abort.abort()
+      }
+      return { accepted: true }
+    },
+    complete: async (input) => {
+      expect(input.outcome).toBe('stopped')
+      expect(released).toBe(true)
+      const before = await readFile(marker, 'utf8')
+      await delay(60)
+      expect(await readFile(marker, 'utf8')).toBe(before)
+      complete = true
+      return { accepted: true }
+    },
+  }) })
+  try {
+    await client.run({ host: 'hogwild', sessionId: randomUUID(), turnId: randomUUID(), leaseToken: 'test', project: { id: 'pkg/test', name: 'test', path: home, kind: 'pkg' }, provider: 'codex', model: 'test', reasoningEffort: 'high', prompt: 'test', workspacePath: null, providerSessionId: null })
+    expect(complete).toBe(true)
+  }
+  finally {
+    if (writerPid > 0) {
+      try {
+        process.kill(-writerPid, 'SIGKILL')
+      }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
+          console.error('Process fixture cleanup failed.', error)
+      }
+    }
+    await rm(home, { recursive: true, force: true })
+  }
 })

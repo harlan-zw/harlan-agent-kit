@@ -4,7 +4,7 @@ import type { SessionController } from './session-controller.ts'
 import type { SessionFence, SessionHost, SessionProject, SessionTurn } from './session-protocol.ts'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -13,8 +13,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { DESKTOP_MEMORY_PER_AGENT_GIB } from './desktop-protocol.ts'
 import { acquireDesktopSessionClaim, releaseDesktopSessionClaim } from './desktop-session-claim.ts'
-import { readDesktopSessionGroup, stopDesktopSessionGroup } from './desktop-session-process.ts'
+import { readDesktopSessionGroup, SESSION_PROCESS_OWNER, stopDesktopSessionGroup } from './desktop-session-process.ts'
 import { discoverDesktopSessionProjects } from './desktop-session-projects.ts'
+import { desktopSessionScopeInvocation } from './desktop-session-scope.ts'
 import { SESSION_PROTOCOL } from './session-protocol.ts'
 
 function completionPaths(value: { workspacePath?: string | null, providerSessionId?: string | null }): { workspacePath?: string, providerSessionId?: string } {
@@ -160,9 +161,11 @@ export function createDesktopSessionClient(options: {
       const extension = fileURLToPath(import.meta.url).endsWith('.ts') ? 'ts' : 'mjs'
       const executable = options.executable ?? join(dirname(fileURLToPath(import.meta.url)), `desktop-session-execute.${extension}`)
       const execution = ['--experimental-strip-types', executable, input, home]
+      const owner = randomUUID()
+      const env = { ...process.env, [SESSION_PROCESS_OWNER]: owner }
       const child = options.capacity === undefined
-        ? spawn(process.execPath, execution, { stdio: ['ignore', 'pipe', 'pipe'], detached: true })
-        : spawn(options.capacity, ['run', turn.turnId, String(options.memoryPerAgentGiB ?? DESKTOP_MEMORY_PER_AGENT_GIB), process.execPath, ...execution], { stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+        ? spawn('systemd-run', ['--user', '--scope', '--quiet', '--unit', `harlan-session-${turn.turnId}`, '-p', 'KillMode=control-group', '-p', 'TimeoutStopSec=10s', '-p', `MemoryMax=${options.memoryPerAgentGiB ?? DESKTOP_MEMORY_PER_AGENT_GIB}G`, '-p', 'MemorySwapMax=0', process.execPath, ...execution], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+        : spawn(options.capacity, ['run', turn.turnId, String(options.memoryPerAgentGiB ?? DESKTOP_MEMORY_PER_AGENT_GIB), process.execPath, ...execution], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
       const reader = createInterface({ input: child.stdout })
       const output = reader[Symbol.asyncIterator]()
       let stopped = false
@@ -189,7 +192,7 @@ export function createDesktopSessionClient(options: {
         }
         return
       }
-      let group: DesktopSessionGroup | null = child.pid === undefined ? null : { pid: child.pid, birth: await identity(child.pid) ?? '', members: await readDesktopSessionGroup(child.pid) }
+      let group: DesktopSessionGroup | null = child.pid === undefined ? null : { pid: child.pid, birth: await identity(child.pid) ?? '', owner, unit: options.capacity === undefined ? `harlan-session-${turn.turnId}.scope` : `harlan-desktop-agent-${child.pid}.scope`, members: await readDesktopSessionGroup(child.pid, owner) }
       let stopping: Promise<void> | null = null
       let stopFailure: unknown = null
       const stop = () => {
@@ -202,11 +205,18 @@ export function createDesktopSessionClient(options: {
       const captureGroup = async () => {
         if (group === null || stopping !== null)
           return
-        const members = await readDesktopSessionGroup(group.pid)
-        if (members.length > 0 && !members.some(member => (member.pid === group!.pid && member.birth === group!.birth) || group!.members.some(saved => saved.pid === member.pid && saved.birth === member.birth)))
+        const members = await readDesktopSessionGroup(group.pid, group.owner)
+        if (group.owner === undefined && members.length > 0 && !members.some(member => (member.pid === group!.pid && member.birth === group!.birth) || group!.members.some(saved => saved.pid === member.pid && saved.birth === member.birth)))
           throw new Error('The session process group identity changed.')
         group = { ...group, members: [...group.members, ...members].filter((member, index, all) => all.findIndex(item => item.pid === member.pid && item.birth === member.birth) === index) }
-        await writeFile(livePath(turn.sessionId), JSON.stringify({ ...fence(turn), ...group }), { mode: 0o600 })
+        if (group.invocation === undefined && group.unit !== undefined && group.owner !== undefined) {
+          const invocation = await desktopSessionScopeInvocation(group.unit, group.owner)
+          if (invocation !== undefined)
+            group = { ...group, invocation }
+        }
+        const temporary = `${livePath(turn.sessionId)}.${randomUUID()}.tmp`
+        await writeFile(temporary, JSON.stringify({ ...fence(turn), ...group }), { mode: 0o600 })
+        await rename(temporary, livePath(turn.sessionId))
       }
       options.signal.addEventListener('abort', stop, { once: true })
       active.set(turn.turnId, stop)

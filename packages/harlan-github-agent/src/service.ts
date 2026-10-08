@@ -1568,6 +1568,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       host: 'hogwild',
       home: homedir(),
       root: join(dirname(config.storage.path), 'hogwild-sessions'),
+      memoryPerAgentGiB: config.agent.memoryPerAgentGiB,
       signal: localSessionShutdown.signal,
       onStopped: fence => localSessions?.release(fence.turnId),
       transport: {
