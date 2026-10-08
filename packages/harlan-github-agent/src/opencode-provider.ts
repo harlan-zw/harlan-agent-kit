@@ -6,7 +6,7 @@ import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
 import type { ReviewRuntime } from './review-runtime.ts'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -49,6 +49,7 @@ export interface OpencodeServer {
   password: string
   /** Internal socket directory for this turn's isolated attachment client. */
   transportDirectory?: string
+  memoryExceeded?: () => Promise<boolean>
   createSession: (signal: AbortSignal) => Promise<Result<string, string>>
   /** Adds one user message to a busy session. The session reads it before its next model step. */
   steer: (sessionId: string, text: string) => Promise<Result<void, string>>
@@ -57,7 +58,7 @@ export interface OpencodeServer {
   close: (signal: NodeJS.Signals) => void | Promise<void>
 }
 
-export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv, readOnlyPaths?: readonly string[], taskId?: string) => Promise<Result<OpencodeServer, string | { _tag: 'SandboxSetupFailed', reason: string }>>
+export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv, readOnlyPaths?: readonly string[], taskId?: string) => Promise<Result<OpencodeServer, string | { _tag: 'SandboxSetupFailed' | 'ResourceLimit', reason: string }>>
 
 /** The fixed user name OpenCode expects with a server password. */
 const serverUsername = 'opencode'
@@ -76,7 +77,7 @@ function serverCredentials(password: string): NodeJS.ProcessEnv {
 }
 
 /** Starts `opencode serve` on a free local port in the turn's worktree. */
-export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime): StartOpencodeServer {
+export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime, memoryPerAgentGiB?: number): StartOpencodeServer {
   return async (workspace, environment, readOnlyPaths = [], taskId) => {
     const password = randomBytes(24).toString('hex')
     const transportDirectory = await mkdtemp(join(tmpdir(), 'agent-transport-'))
@@ -85,7 +86,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
       await transport.close()
       await rm(transportDirectory, { recursive: true, force: true })
     }
-    const prepared = await prepareAgentSandbox({ workspace, environment: { ...environment, ...serverCredentials(password) }, provider: 'opencode', readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? [])], networkMode: 'opencode-server', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), ...(readOnly === undefined ? {} : { readOnly }) })
+    const prepared = await prepareAgentSandbox({ workspace, environment: { ...environment, ...serverCredentials(password) }, provider: 'opencode', ...(memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB }), readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? [])], networkMode: 'opencode-server', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), ...(readOnly === undefined ? {} : { readOnly }) })
       .then(ok)
       .catch((error: unknown) => err({ _tag: 'SandboxSetupFailed' as const, reason: `The Agent worker isolation failed: ${error instanceof Error ? error.message : String(error)}` }))
     if (prepared._tag === 'Err') {
@@ -114,7 +115,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
       }
       let output = ''
       let settled = false
-      const settle = (result: Result<OpencodeServer, string>) => {
+      const settle = (result: Result<OpencodeServer, string | { _tag: 'ResourceLimit', reason: string }>) => {
         if (settled)
           return
         settled = true
@@ -133,7 +134,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
           const session = review === undefined
             ? (stateDirectory === undefined ? {} : { stateDirectory })
             : { reviewTools: REVIEW_TOOL_NAMES }
-          settle(ok({ ...opencodeServer(transport.url, password, workspace, child, session), transportDirectory, close: async (signal) => {
+          settle(ok({ ...opencodeServer(transport.url, password, workspace, child, session), transportDirectory, memoryExceeded: sandbox.memoryExceeded, close: async (signal) => {
             child.kill(signal)
             const stop = setTimeout(() => child.kill('SIGKILL'), 5_000)
             stop.unref()
@@ -154,7 +155,10 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
         void release().then(() => settle(err(error.message)), failure => settle(err(`Agent cleanup failed: ${failure.message}`)))
       })
       child.once('exit', (code, signal) => {
-        void release().then(() => settle(err(opencodeFailureReason(output, { code, signal }))), (failure) => {
+        void sandbox.memoryExceeded().then(async (limited) => {
+          await release()
+          settle(err(limited ? { _tag: 'ResourceLimit', reason: 'The Agent Task exceeded its memory budget.' } : opencodeFailureReason(output, { code, signal })))
+        }).catch((failure: Error) => {
           process.stderr.write(`Agent cleanup failed: ${failure.message}\n`)
           settle(err(`Agent cleanup failed: ${failure.message}`))
         })
@@ -183,6 +187,7 @@ function opencodeServer(url: string, password: string, workspace: string, child:
 }
 
 export interface OpencodeProviderOptions {
+  memoryPerAgentGiB?: number
   readOnly?: boolean
   reviewProofAuthority?: ReviewProofAuthorityFactory
   /** Stops a run once its session has read this many cached context tokens. */
@@ -346,11 +351,11 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
   const idleTimeoutMilliseconds = options.idleTimeoutMilliseconds ?? 10 * 60_000
   const cachedContextBudget = options.cachedContextBudget ?? DEFAULT_CACHED_CONTEXT_BUDGET
   const environment = options.environment ?? process.env
-  const startOpencodeServer = options.startOpencodeServer ?? spawnOpencodeServer(options.readOnly)
+  const startOpencodeServer = options.startOpencodeServer ?? spawnOpencodeServer(options.readOnly, undefined, options.memoryPerAgentGiB)
   const spawnOpencode = options.spawnOpencode ?? (async (args: string[], workspace: string, environment: NodeJS.ProcessEnv, mediaPaths: readonly string[], taskId?: string, transportDirectory?: string, review?: ReviewRuntime) => {
     if (transportDirectory === undefined)
       throw new Error('The OpenCode client needs its isolated turn transport.')
-    const sandbox = await prepareAgentSandbox({ workspace, environment, provider: 'opencode', readOnlyPaths: [...opencodeSandboxPaths(environment), ...mediaPaths, ...(review?.readOnlyPaths ?? [])], networkMode: 'opencode-client', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), readOnly: true })
+    const sandbox = await prepareAgentSandbox({ workspace, environment, provider: 'opencode', ...(options.memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB: options.memoryPerAgentGiB }), readOnlyPaths: [...opencodeSandboxPaths(environment), ...mediaPaths, ...(review?.readOnlyPaths ?? [])], networkMode: 'opencode-client', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), readOnly: true })
     const child = spawn(sandbox.binary, [...sandbox.args, sandbox.providerBinary, ...args], {
       cwd: workspace,
       env: sandbox.environment,
@@ -365,6 +370,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
   })
 
   async function* runOnce(request: AgentTurnRequest, prompt: string, mediaPaths: readonly string[] = [], review?: ReviewRuntime): AsyncGenerator<AgentEvent> {
+    const taskId = request.taskId ?? randomUUID()
     if (request.signal.aborted) {
       yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.' }
       return
@@ -379,19 +385,20 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       yield { _tag: 'Failed', reason: turnEnvironment.error }
       return
     }
-    const start = review === undefined || options.startOpencodeServer !== undefined ? startOpencodeServer : spawnOpencodeServer(true, review)
-    const started = await start(request.workspace, turnEnvironment.value, mediaPaths, request.taskId)
+    const start = review === undefined || options.startOpencodeServer !== undefined ? startOpencodeServer : spawnOpencodeServer(true, review, options.memoryPerAgentGiB)
+    const started = await start(request.workspace, turnEnvironment.value, mediaPaths, taskId)
     if (started._tag === 'Err') {
       yield typeof started.error === 'string'
         ? { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error) }
-        : { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error.reason), cause: 'sandbox-setup' }
+        : { _tag: 'Failed', reason: started.error._tag === 'ResourceLimit' ? started.error.reason : agentProviderFailureReason('opencode', started.error.reason), cause: started.error._tag === 'ResourceLimit' ? 'resource-limit' : 'sandbox-setup' }
       return
     }
     const server = started.value
     const created = await server.createSession(request.signal).catch(() => err('The OpenCode session creation failed.'))
     if (created._tag === 'Err' || request.signal.aborted) {
+      const limited = await server.memoryExceeded?.() ?? false
       await server.close('SIGTERM')
-      yield { _tag: 'Failed', reason: created._tag === 'Err' ? created.error : 'The OpenCode turn was cancelled.' }
+      yield limited ? { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' } : { _tag: 'Failed', reason: created._tag === 'Err' ? created.error : 'The OpenCode turn was cancelled.' }
       return
     }
     const launched = await Promise.resolve().then(() => spawnOpencode(
@@ -399,7 +406,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       request.workspace,
       { ...turnEnvironment.value, ...serverCredentials(server.password) },
       mediaPaths,
-      request.taskId,
+      taskId,
       server.transportDirectory,
       review,
     )).then(ok).catch((error: unknown) => err(`The OpenCode client isolation failed: ${error instanceof Error ? error.message : String(error)}`))
@@ -505,7 +512,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
             completed = true
           }
           else {
-            yield event
+            yield event._tag === 'Failed' && await server.memoryExceeded?.() ? { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' } : event
           }
         }
         if (completed)
@@ -533,6 +540,10 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         }
       }
       const exit = await exited
+      if (await server.memoryExceeded?.()) {
+        yield { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' }
+        return
+      }
       if (exit._tag === 'SpawnFailed') {
         yield { _tag: 'Failed', reason: agentProviderFailureReason('opencode', exit.error.message) }
         return

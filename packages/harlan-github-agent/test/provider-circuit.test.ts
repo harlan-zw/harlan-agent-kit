@@ -10,7 +10,7 @@ async function events(iterable: AsyncIterable<AgentEvent>): Promise<AgentEvent[]
 }
 
 describe('agent provider circuit boundary', () => {
-  it.each(['host-cancelled', 'sandbox-setup'] as const)('excludes %s events from model health with a live controller signal', async (cause) => {
+  it.each(['host-cancelled', 'sandbox-setup', 'resource-limit'] as const)('excludes %s events from model health with a live controller signal', async (cause) => {
     const failures: unknown[] = []
     const successes: unknown[] = []
     const released: unknown[] = []

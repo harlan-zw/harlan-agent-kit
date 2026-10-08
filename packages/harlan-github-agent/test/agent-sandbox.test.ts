@@ -218,8 +218,9 @@ if (process.argv[2] === 'serve') {
     const request = { taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z', model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace }
     const originalHome = process.env.HOME
     process.env.HOME = home
+    const memory = process.env.XDG_RUNTIME_DIR === undefined ? {} : { memoryPerAgentGiB: 1 }
     try {
-      for (const provider of [createCodexProvider(), createOpencodeProvider({ environment: { HOME: home, PATH: '/usr/bin:/bin', GH_TOKEN: 'fake-host-token', CONTROLLER_TOKEN: 'fake-host-token' } })]) {
+      for (const provider of [createCodexProvider(memory), createOpencodeProvider({ ...memory, environment: { HOME: home, PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, GH_TOKEN: 'fake-host-token', CONTROLLER_TOKEN: 'fake-host-token' } })]) {
         const events = []
         for await (const event of provider.runTurn(request))
           events.push(event)

@@ -53,7 +53,7 @@ export type AgentEvent
     | { _tag: 'ContextBudgetWarned', cachedTokensRead: number, delivery: ContextBudgetWarningDelivery }
     /** The session read its whole Context budget, so the provider stopped it. */
     | { _tag: 'ContextBudgetExhausted', cachedTokensRead: number }
-    | { _tag: 'Failed', reason: string, cause?: 'host-cancelled' | 'sandbox-setup' }
+    | { _tag: 'Failed', reason: string, cause?: 'host-cancelled' | 'sandbox-setup' | 'resource-limit' }
 
 const agentProgressPrefix = /^[▓░]+[ \t]+(\d{1,3})%[ \t]+/
 

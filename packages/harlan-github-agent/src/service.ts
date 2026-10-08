@@ -482,7 +482,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
   const reviewProofAuthority = createReviewProofAuthority(store, now)
-  const codexProofOptions: CodexProviderOptions & { reviewProofAuthority: ReviewProofAuthorityFactory } = { reviewProofAuthority }
+  const codexProofOptions: CodexProviderOptions & { reviewProofAuthority: ReviewProofAuthorityFactory } = { reviewProofAuthority, memoryPerAgentGiB: config.agent.memoryPerAgentGiB }
   const desktop = createDesktopBroker({ now: () => now().getTime(), settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json'), reviewProofAuthority })
   const sizing = agentSlotSizing(
     configuredProfile.maximumActiveAgents,

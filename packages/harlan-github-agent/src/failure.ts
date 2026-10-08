@@ -77,6 +77,7 @@ export const REVIEW_REPAIR_REFUSALS = {
  * that follows it.
  */
 export const CONTEXT_BUDGET_EXHAUSTED = 'The agent read its whole Context budget without an answer.'
+export const MEMORY_BUDGET_EXHAUSTED = 'The Agent Task exceeded its memory budget.'
 
 export interface ContextBudgetExhaustedInput {
   cachedTokensRead: number
@@ -274,6 +275,8 @@ function matches(patterns: RegExp[], message: string): boolean {
  */
 export function classifyFailure(signal: FailureSignal): FailureClass {
   const message = signal.message
+  if (message.startsWith(MEMORY_BUDGET_EXHAUSTED))
+    return { _tag: 'Permanent', kind: 'policy' }
 
   // Matched first and by prefix. No later pattern can then make a session that
   // already spent its whole budget spend another one.
