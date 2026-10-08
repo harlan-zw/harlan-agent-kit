@@ -41,6 +41,29 @@ it('creates an empty session with the exact workspace and owned-server authoriza
   expect(calls).toEqual([{ url: 'http://127.0.0.1:4097/session?directory=%2Ftmp%2Fworktree', authorization: `Basic ${Buffer.from('opencode:fixture-password').toString('base64')}`, body: { permission: ['question', 'plan_enter', 'plan_exit'].map(permission => ({ permission, pattern: '*', action: 'deny' })) } }])
 })
 
+it('starts a check-in that writes its assigned state directory without asking for permission', async () => {
+  const stateDirectory = '/home/agent/.local/state/daily-checkin/owner/site'
+  const result = await createOpencodeSession({ ...input, stateDirectory, fetch: async (_url, init) => {
+    const { permission } = JSON.parse(init!.body as string)
+    const allowed = permission.some((rule: { permission: string, pattern: string, action: string }) =>
+      rule.permission === 'external_directory' && rule.pattern === `${stateDirectory}/*` && rule.action === 'allow',
+    )
+    return allowed ? Response.json({ id: 'ses_checkin' }) : Response.json({ error: 'Waiting for directory permission.' }, { status: 409 })
+  } })
+  expect(result).toEqual({ _tag: 'Ok', value: 'ses_checkin' })
+})
+
+it('keeps Review tools restricted when a state directory is supplied', async () => {
+  const result = await createOpencodeSession({ ...input, stateDirectory: '/state', reviewTools: ['controller_review_read'], fetch: async (_url, init) => {
+    expect(JSON.parse(init!.body as string)).toEqual({ permission: [
+      { permission: '*', pattern: '*', action: 'deny' },
+      { permission: 'controller_review_read', pattern: '*', action: 'allow' },
+    ] })
+    return Response.json({ id: 'ses_review' })
+  } })
+  expect(result).toEqual({ _tag: 'Ok', value: 'ses_review' })
+})
+
 it.each(['running', 'pending', 'completed', 'error'])('rejects unfinished or malformed %s tool activity', (status) => {
   const message = assistant('msg_final', 1)
   const tool = { id: 'tool_one', messageID: message.info.id, sessionID: 'ses_one', type: 'tool', tool: 'bash', state: { status, input: { command: 'pnpm test' }, time: { start: 1, end: 2 } } }

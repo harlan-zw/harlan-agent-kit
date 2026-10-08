@@ -108,18 +108,24 @@ function isDirectory(path: string): boolean {
   }
 }
 
+/** Routine IDs carry the trusted repository, independent of worktree and run date. */
+export function dailyCheckinDirectory(base: NodeJS.ProcessEnv, taskId?: string): string | undefined {
+  const routine = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][\w.-]*):daily-checkin:/i.exec(taskId ?? '')
+  if (!routine)
+    return undefined
+  const stateHome = base.XDG_STATE_HOME && isAbsolute(base.XDG_STATE_HOME)
+    ? base.XDG_STATE_HOME
+    : base.HOME && isAbsolute(base.HOME) ? join(base.HOME, '.local', 'state') : undefined
+  if (!stateHome)
+    throw new Error('Daily check-in needs an absolute HOME or XDG_STATE_HOME.')
+  return join(stateHome, 'daily-checkin', routine[1]!, routine[2]!)
+}
+
 export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string, taskId?: string): NodeJS.ProcessEnv {
   const values = readEnvironmentValues(join(workspace, '.env'))
-  // Routine IDs carry the trusted repository, independent of worktree and run date.
-  const routine = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][\w.-]*):daily-checkin:/i.exec(taskId ?? '')
-  if (routine) {
-    const stateHome = base.XDG_STATE_HOME && isAbsolute(base.XDG_STATE_HOME)
-      ? base.XDG_STATE_HOME
-      : base.HOME && isAbsolute(base.HOME) ? join(base.HOME, '.local', 'state') : undefined
-    if (!stateHome)
-      throw new Error('Daily check-in needs an absolute HOME or XDG_STATE_HOME.')
-    values.DAILY_CHECKIN_DIR = join(stateHome, 'daily-checkin', routine[1]!, routine[2]!)
-  }
+  const stateDirectory = dailyCheckinDirectory(base, taskId)
+  if (stateDirectory !== undefined)
+    values.DAILY_CHECKIN_DIR = stateDirectory
   // A repository's own binaries come first, the way a shell inside it would
   // find them. The service unit carries a bare PATH, so a check-in script that
   // shelled out to `wrangler` found nothing and reported every probe as failed.
