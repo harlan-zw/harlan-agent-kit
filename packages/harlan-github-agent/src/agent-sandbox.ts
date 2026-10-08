@@ -360,6 +360,8 @@ export async function prepareAgentSandbox(input: {
     const environment = {
       ...(input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment),
       ...checkinValues,
+      // Bind mounts prevent hardlinks to HOME. Keep pnpm's copy fallback outside the repository.
+      PNPM_CONFIG_STORE_DIR: `${workerHome}/.local/share/pnpm/store`,
       // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
       ...(input.provider === 'opencode' ? { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true', OPENCODE_DB: '/run/agent/opencode-database/opencode.db' } : {}),
     }
