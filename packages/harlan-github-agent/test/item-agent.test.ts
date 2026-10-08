@@ -53,11 +53,34 @@ describe('subject Workers', () => {
         configuredProvider: 'codex',
         maximumActiveAgents: 6,
         providers: {
-          codex: stubProvider(turnEvents({
-            premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
-            findings: [],
-            confidence: 96,
-          }), capture),
+          codex: {
+            name: 'codex',
+            async* runTurn(request) {
+              // Match the provider's strict object contract before accepting a Review turn.
+              const pending: unknown[] = [request.outputSchema]
+              while (pending.length > 0) {
+                const schema = pending.pop()
+                if (typeof schema !== 'object' || schema === null)
+                  continue
+                const object = schema as { properties?: Record<string, unknown>, required?: string[], items?: unknown }
+                for (const [key, property] of Object.entries(object.properties ?? {})) {
+                  if (!object.required?.includes(key)) {
+                    yield { _tag: 'Failed', reason: `Invalid response schema: required must include ${key}.` }
+                    return
+                  }
+                  pending.push(property)
+                }
+                if (object.items !== undefined)
+                  pending.push(object.items)
+              }
+              yield* stubProvider(turnEvents({
+                premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
+                findings: [],
+                confidence: 96,
+                mergeRisk: { verdict: 'contained', reason: 'The change affects one internal helper.' },
+              }), capture).runTurn(request)
+            },
+          },
           opencode: stubProvider([], undefined, 'opencode'),
         },
         repositoryReasoningEfforts: new Map([['harlan-zw/example', { codex: { adversarial_review: 'medium' } }]]),

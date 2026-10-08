@@ -68,6 +68,17 @@ describe('codexAgentEvent', () => {
 })
 
 describe('createCodexProvider', () => {
+  it.each([null, 'saved-session'])('uses controller isolation for a mutation turn with session %s', async (sessionId) => {
+    const starts: ThreadOptions[] = []
+    const start = (options: ThreadOptions) => {
+      starts.push(options)
+      return thread(messageEvents)
+    }
+    const provider = createCodexProvider({ createCodex: () => ({ startThread: start, resumeThread: (_id, options) => start(options) }) })
+    await collect(provider.runTurn(request({ sessionId })))
+    expect(starts).toEqual([expect.objectContaining({ sandboxMode: 'danger-full-access', approvalPolicy: 'never' })])
+  })
+
   it.each(['complete', 'cancel', 'fail'])('attaches pixels outside the Worktree and cleans them after %s', async (outcome) => {
     let path = ''
     const image = { mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Before: diagram', source: 'https://github.com/user-attachments/assets/a' }

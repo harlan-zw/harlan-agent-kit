@@ -39,7 +39,7 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   const fakeProvider = join(toolDirectory, 'provider.ts')
   await writeFile(fakeProvider, `#!/run/agent/node --experimental-strip-types
 import { createServer } from 'node:http'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import process from 'node:process'
 if (existsSync(${JSON.stringify(secret)}) || process.env.GH_TOKEN || process.env.CONTROLLER_TOKEN) process.exit(30)
 if (['serve', 'run'].includes(process.argv[2]) && process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER !== 'true') process.exit(34)
@@ -53,6 +53,9 @@ if (process.argv[2] === 'serve') {
   server.listen(4097, '127.0.0.1', () => console.log('opencode server listening on http://127.0.0.1:4097'))
 } else if (process.argv[2] === 'run') {
   async function run() {
+    let prompt = ''
+    for await (const chunk of process.stdin) prompt += chunk.toString()
+    if (!prompt.startsWith('Return protected.'.repeat(16_000))) process.exit(35)
     const target = process.argv[process.argv.indexOf('--attach') + 1]
     const response = await fetch(target + '/fixture', { headers: { authorization: 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64') } })
     if (!response.ok || !(await response.json()).protected) process.exit(31)
@@ -61,6 +64,8 @@ if (process.argv[2] === 'serve') {
   }
   run().catch(error => { console.error(error.message); process.exit(32) })
 } else {
+  if (process.argv[process.argv.indexOf('--sandbox') + 1] !== 'danger-full-access') process.exit(36)
+  writeFileSync(${JSON.stringify(join(workspace, 'codex-mutation.txt'))}, 'isolated mutation')
   const schemaIndex = process.argv.indexOf('--output-schema')
   if (schemaIndex === -1 || !JSON.parse(readFileSync(process.argv[schemaIndex + 1], 'utf8'))) process.exit(33)
   process.stdin.resume()
@@ -118,7 +123,7 @@ if (process.argv[2] === 'serve') {
     expect(await readFile(secret, 'utf8')).toBe('fake-controller-secret')
     expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: prove isolated Git writes')
     expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe('?? .env\n')
-    const request = { model: 'fixture', outputSchema: {}, prompt: 'Return protected.', sessionId: null, signal: new AbortController().signal, workspace }
+    const request = { model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace }
     const originalHome = process.env.HOME
     process.env.HOME = home
     try {
@@ -130,6 +135,7 @@ if (process.argv[2] === 'serve') {
         expect(events).toContainEqual({ _tag: 'TurnCompleted' })
         expect(events.filter(event => event._tag === 'Failed')).toEqual([])
       }
+      expect(await readFile(join(workspace, 'codex-mutation.txt'), 'utf8')).toBe('isolated mutation')
     }
     finally {
       process.env.HOME = originalHome
