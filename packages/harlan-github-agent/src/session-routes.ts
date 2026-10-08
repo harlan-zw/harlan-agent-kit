@@ -53,9 +53,9 @@ export function registerSessionRoutes(app: H3, controller: SessionController): v
     const outcome = input.outcome
     if (outcome !== 'completed' && outcome !== 'stopped' && outcome !== 'failed')
       throw new Error('Set a valid Agent turn outcome.')
-    const workspacePath = input.workspacePath === undefined ? undefined : sessionText(input.workspacePath, 'Worktree path', 4096)
+    const workspacePath = input.workspacePath == null ? undefined : sessionText(input.workspacePath, 'Worktree path', 4096)
     if (workspacePath !== undefined && !workspacePath.startsWith('/'))
       throw new Error('Set an absolute Worktree path.')
-    return controller.complete({ ...parseSessionFence(input), outcome, ...(workspacePath === undefined ? {} : { workspacePath }), ...(input.providerSessionId === undefined ? {} : { providerSessionId: sessionText(input.providerSessionId, 'provider Session ID') }), ...(input.reason === undefined ? {} : { reason: sessionText(input.reason, 'failure reason', 20_000) }) })
+    return controller.complete({ ...parseSessionFence(input), outcome, ...(workspacePath === undefined ? {} : { workspacePath }), ...(input.providerSessionId == null ? {} : { providerSessionId: sessionText(input.providerSessionId, 'provider Session ID') }), ...(input.reason === undefined ? {} : { reason: sessionText(input.reason, 'failure reason', 20_000) }) })
   }))
 }

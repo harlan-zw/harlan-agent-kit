@@ -89,3 +89,11 @@ it('resumes interrupted work only after the desktop confirms the old process sto
   controller.message(session.id, { prompt: 'Resume', requestId: 'resume' })
   expect(controller.claim({ instanceId: 'desktop-2', freeSlots: 1 })).toMatchObject({ workspacePath: '/saved/worktree', providerSessionId: 'native' })
 })
+
+it('deduplicates prototype-named request IDs across restart', () => {
+  const { controller, input, options } = fixture()
+  const session = controller.start({ ...input, requestId: '__proto__' })
+  expect(controller.start({ ...input, requestId: '__proto__' }).id).toBe(session.id)
+  const restarted = createSessionController(options)
+  expect(restarted.start({ ...input, requestId: '__proto__' }).id).toBe(session.id)
+})

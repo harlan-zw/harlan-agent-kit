@@ -38,3 +38,15 @@ it('denies public ingress even when a session route was matched', async () => {
   expect((await app.request('http://localhost/api/sessions', { headers })).status).toBe(403)
   expect((await app.request('http://localhost/api/desktop/sessions/claim', { method: 'POST', headers, body: JSON.stringify({ instanceId: 'desktop', freeSlots: 1 }) })).status).toBe(403)
 })
+
+it('accepts completion before workspace and provider identity exist', async () => {
+  const controller = createSessionController({ path: join(mkdtempSync(join(tmpdir(), 'session-null-')), 'sessions.json'), now: () => new Date() })
+  controller.report({ instanceId: 'desktop', protocol: 1, projects: [{ id: 'pkg/demo', name: 'demo', path: '/home/harlan/pkg/demo', kind: 'pkg' }] })
+  const session = controller.start({ projectId: 'pkg/demo', provider: 'codex', model: 'gpt-5.6-sol', reasoningEffort: 'high', prompt: 'Fix it', requestId: 'request' })
+  const turn = controller.claim({ instanceId: 'desktop', freeSlots: 1 })!
+  const app = new H3()
+  registerSessionRoutes(app, controller)
+  const response = await app.request('http://localhost/api/desktop/sessions/complete', { method: 'POST', body: JSON.stringify({ instanceId: 'desktop', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken, outcome: 'stopped', workspacePath: null, providerSessionId: null }) })
+  expect(response.status).toBe(200)
+  expect(controller.get(session.id)).toMatchObject({ status: 'stopped', workspacePath: null, providerSessionId: null })
+})
