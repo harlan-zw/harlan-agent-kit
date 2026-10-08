@@ -2,7 +2,7 @@ import type { ProviderCapture } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { conflictResolutionPrompt, createConflictWorker } from '../src/conflict-worker.ts'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const resolved = {
@@ -36,7 +36,7 @@ function conflictTask(repository = repositoryMapping(), pullRequest = pullReques
 
 function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>, current: ReturnType<typeof pullRequestItem>) {
   return {
-    github: { getPullRequest: () => Promise.resolve(ok(current)) },
+    github: { getPullRequest: () => Promise.resolve(ok(current)), isBranchProtected: () => Promise.resolve(ok(false)) },
     now: () => new Date('2026-08-13T01:00:00.000Z'),
     store: {
       getWorkerSession: () => 'stale-session',
@@ -53,6 +53,95 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 }
 
 describe('conflict worker', () => {
+  it.each([
+    ['an unapproved prefix', {}, { headRef: 'v4/core-experiment' }],
+    ['the default branch', {}, { headRef: 'main' }],
+    ['an external repository', { ownership: 'external' as const }, {}],
+    ['disabled conflict resolution', { conflictResolution: false }, {}],
+    ['an untrusted same-repository author', {}, { author: 'contributor' }],
+  ])('does not prepare or run conflict work for %s', async (_name, mapping, snapshot) => {
+    const repository = repositoryMapping(mapping)
+    const current = pullRequestItem(snapshot)
+    const capture: ProviderCapture = { requests: [] }
+    const options = conflictWorkerOptions(repository, current)
+    let prepared = false
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
+      worktrees: { ...options.worktrees, prepare: () => {
+        prepared = true
+        return options.worktrees.prepare()
+      } },
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
+      _tag: 'ActionRequired',
+      reason: 'The controller cannot write this pull request branch.',
+      evidence: expect.any(String),
+    }))
+    expect(prepared).toBe(false)
+    expect(capture.requests).toEqual([])
+  })
+
+  it('does not run conflict work for a protected head branch', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const capture: ProviderCapture = { requests: [] }
+    const options = conflictWorkerOptions(repository, current)
+    const worker = createConflictWorker({
+      ...options,
+      github: { ...options.github, isBranchProtected: () => Promise.resolve(ok(true)) },
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
+    })
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
+      _tag: 'ActionRequired',
+      reason: 'The pull request head branch is protected.',
+      evidence: expect.any(String),
+    }))
+    expect(capture.requests).toEqual([])
+  })
+
+  it('propagates a failed protection read before running conflict work', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const capture: ProviderCapture = { requests: [] }
+    const options = conflictWorkerOptions(repository, current)
+    const worker = createConflictWorker({
+      ...options,
+      github: { ...options.github, isBranchProtected: () => Promise.resolve(err({ repository: repository.github, message: 'GitHub unavailable' })) },
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
+    })
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(err('GitHub unavailable'))
+    expect(capture.requests).toEqual([])
+  })
+
+  it('blocks committing when branch authority is revoked during conflict work', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const capture: ProviderCapture = { requests: [] }
+    const options = conflictWorkerOptions(repository, current)
+    let validations = 0
+    let committed = false
+    const worker = createConflictWorker({
+      ...options,
+      validateMapping: () => Promise.resolve(ok(++validations === 1 ? repository : { ...repository, writablePullRequestHeadPrefixes: ['feat/'] })),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(resolved), capture)),
+      worktrees: { ...options.worktrees, commit: () => {
+        committed = true
+        return options.worktrees.commit()
+      } },
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
+      _tag: 'ActionRequired',
+      reason: 'The controller cannot write this pull request branch.',
+      evidence: expect.any(String),
+      usage: expect.anything(),
+    }))
+    expect(capture.requests).toHaveLength(1)
+    expect(committed).toBe(false)
+  })
+
   it('requires base evidence for an unchanged consumer failure and blocks repair outside the merge scope', () => {
     const task = conflictTask()
     const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict-prompt', conflictedFiles: ['src/producer.ts'], writablePaths: ['src/producer.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
@@ -71,7 +160,7 @@ describe('conflict worker', () => {
     const options = conflictWorkerOptions(repository, current)
     const worker = createConflictWorker({
       ...options,
-      github: { getPullRequest: () => {
+      github: { ...options.github, getPullRequest: () => {
         reads += 1
         return Promise.resolve(ok(current))
       } },

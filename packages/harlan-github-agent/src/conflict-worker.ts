@@ -11,6 +11,7 @@ import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryL
 import { agentPhase } from './agent-progress.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
+import { canResolveConflictPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -25,7 +26,7 @@ export interface ConflictWorkerOptions {
    * Absent means no memory reaches the turn, which is how a test runs.
    */
   claudeHome?: string
-  github: Pick<GitHubSource, 'getPullRequest'>
+  github: Pick<GitHubSource, 'getPullRequest' | 'isBranchProtected'>
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
@@ -118,6 +119,19 @@ function parseAgentResponse(text: string): Result<AgentResponse, string> {
 }
 
 export function createConflictWorker(options: ConflictWorkerOptions): ConflictWorker {
+  async function authority(mapping: RepositoryMapping, pullRequest: ClaimedConflictResolutionTask['pullRequest'], signal: AbortSignal): Promise<Result<Extract<MutationWorkerOutcome, { _tag: 'ActionRequired' }> | null, string>> {
+    const evidence = JSON.stringify({ repository: mapping.github, headRef: pullRequest.headRef, headRepository: pullRequest.headRepository })
+    if (!canResolveConflictPullRequestHead(mapping, pullRequest))
+      return ok({ _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.', evidence })
+    if (pullRequest.headRepository.toLowerCase() === mapping.github.toLowerCase()) {
+      const protectedBranch = await options.github.isBranchProtected(mapping, pullRequest.headRef, signal)
+      if (protectedBranch._tag === 'Err')
+        return err(protectedBranch.error.message)
+      if (protectedBranch.value)
+        return ok({ _tag: 'ActionRequired', reason: 'The pull request head branch is protected.', evidence })
+    }
+    return ok(null)
+  }
   return {
     async run(task, signal) {
       const reportProgress = (phase: AgentPhase): Result<void, string> => options.store.updateAgentProgress({
@@ -149,11 +163,16 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       ) {
         return err('The pull request no longer matches the claimed head and base commit SHAs.')
       }
+      const authorized = await authority(validated.value, current.value, signal)
+      if (authorized._tag === 'Err')
+        return authorized
+      if (authorized.value !== null)
+        return ok(authorized.value)
       const loaded = reportProgress(agentPhase('Loaded', 'Pull request loaded'))
       if (loaded._tag === 'Err')
         return loaded
 
-      const currentTask = { ...task, pullRequest: current.value }
+      const currentTask = { ...task, repositoryMapping: validated.value, pullRequest: current.value }
       const prepared = await options.worktrees.prepare(currentTask, signal)
       if (prepared._tag === 'Err')
         return prepared
@@ -221,6 +240,14 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       ) {
         return err('The pull request changed before the fix was committed.')
       }
+      const publishMapping = await options.validateMapping(validated.value)
+      if (publishMapping._tag === 'Err')
+        return publishMapping
+      const publishAuthority = await authority(publishMapping.value, publishSnapshot.value, signal)
+      if (publishAuthority._tag === 'Err')
+        return publishAuthority
+      if (publishAuthority.value !== null)
+        return ok({ ...publishAuthority.value, usage: turn.value.usage })
 
       const committed = await options.worktrees.commit(
         currentTask,

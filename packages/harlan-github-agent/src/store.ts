@@ -135,7 +135,7 @@ import { createPackageReleaseStore } from './package-release-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
 import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
-import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
+import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
@@ -2931,12 +2931,6 @@ function hasIssueApproval(database: DatabaseSync, subjectId: number, revisionId:
   `).get(subjectId, revisionId) !== undefined
 }
 
-function canWritePullRequestHead(mapping: RepositoryMapping, subject: GitHubPullRequestItem): boolean {
-  return canRepairPullRequestHead(mapping, subject)
-    && subject.headRepository.toLowerCase() === mapping.github.toLowerCase()
-    && mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
-}
-
 function pullRequestApprovalState(database: DatabaseSync, input: {
   mapping: RepositoryMapping
   author: string
@@ -3956,6 +3950,8 @@ function planConflictResolution(
     FROM tasks
     WHERE subject_id = ? AND kind = 'resolve_conflict' AND revision_id = ?
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, cancelled: number } | undefined
+  const ready = canResolveConflictPullRequestHead(mapping, subject)
+    && (subject.headRepository.toLowerCase() === mapping.github.toLowerCase() || reviewApproved)
   // Recovery used to match two exact reasons collected from past incidents, so
   // every new transient failure left the conflict dead until someone added its
   // wording. The failure taxonomy decides instead: a transient failure can
@@ -3987,7 +3983,7 @@ function planConflictResolution(
     recordTransition(database, { taskId: existing.id, from: 'Superseded', to: 'ActionRequired', reason, fence: existing.fence, at: observedAt })
     return
   }
-  if ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure) {
+  if (ready && ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure)) {
     database.prepare(`
       UPDATE tasks
       SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
@@ -4010,9 +4006,6 @@ function planConflictResolution(
     return
   }
 
-  const canWriteHead = canWritePullRequestHead(mapping, subject)
-  const canRepairHead = canRepairPullRequestHead(mapping, subject) && reviewApproved
-  const ready = canWriteHead || canRepairHead
   // An exhausted budget waits for a person. A new head commit makes a new task.
   if (existing?.state_tag === 'ActionRequired' && existing.cancelled === 0 && ready
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS) {
@@ -9651,6 +9644,17 @@ export function openJournalStore(
       if (kind !== 'issue_work' && subject.kind !== 'pull_request')
         throw new Error(`Pull request Task ${row.id} does not reference a pull request.`)
       const repositoryMapping = JSON.parse(row.policy_json) as RepositoryMapping
+      // A policy update can revoke branch authority before the next observation.
+      // Decline the lease before any Worktree or Agent starts.
+      if (kind === 'resolve_conflict' && subject.kind === 'pull_request'
+        && !canResolveConflictPullRequestHead(repositoryMapping, subject)) {
+        const reason = 'The controller cannot write this pull request branch.'
+        database.prepare('UPDATE tasks SET state_tag = \'ActionRequired\', reason = ?, updated_at = ? WHERE id = ?')
+          .run(reason, now, row.id)
+        recordTransition(database, { taskId: row.id, from: 'Queued', to: 'ActionRequired', reason, fence: row.fence, at: now })
+        database.exec('COMMIT')
+        return null
+      }
       // The query above cannot return an unapproved repair. This stays as the
       // second half of the boundary that decides who may write a contributor's
       // branch, and it declines the claim rather than throwing, so a broken
