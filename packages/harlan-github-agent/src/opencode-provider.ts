@@ -129,7 +129,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
         output = `${output}${chunk}`.slice(-maximumErrorCharacters)
         const url = opencodeServerUrl(output)
         if (url !== undefined) {
-          const stateDirectory = dailyCheckinDirectory(sandbox.environment, taskId)
+          const stateDirectory = dailyCheckinDirectory({ XDG_STATE_HOME: sandbox.workerStateHome }, taskId)
           const session = review === undefined
             ? (stateDirectory === undefined ? {} : { stateDirectory })
             : { reviewTools: REVIEW_TOOL_NAMES }
