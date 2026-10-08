@@ -200,7 +200,8 @@ export async function applyDesktopFiles(workspace: string, snapshot: DesktopWork
   if (snapshot.patch !== '') {
     const patch = join(temporary, 'changes.patch')
     await writeFile(patch, `${snapshot.patch}\n`)
-    await desktopCommand('git', ['apply', '--binary', patch], workspace, signal)
+    // The patch contains tracked changes. Keep additions tracked across hosts.
+    await desktopCommand('git', ['apply', '--index', '--binary', patch], workspace, signal)
   }
   for (const file of snapshot.files) {
     const path = await regularDesktopFile(workspace, file.path)
@@ -232,7 +233,11 @@ export async function importDesktopWorktree(workspace: string, initial: DesktopW
   await git(['merge-base', '--is-ancestor', initial.head, result.head])
   for (const file of initial.files)
     await rm(await regularDesktopFile(workspace, file.path), { force: true })
-  await git(['reset', '--hard', result.head])
+  // Retain the controller's pending merge parents when the worker holds HEAD.
+  // A hard reset would clear MERGE_HEAD before the controller commits the merge.
+  await git(result.head === initial.head
+    ? ['read-tree', '--reset', '-u', result.head]
+    : ['reset', '--hard', result.head])
   await applyDesktopFiles(workspace, result, temporary, signal)
 }
 
