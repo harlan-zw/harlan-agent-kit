@@ -29,7 +29,7 @@ export function createSessionImeLatch() {
       clearTimeout(timer)
       latched = false
     },
-    claim(event: KeyboardEvent): boolean {
+    claim(event: { isComposing: boolean, keyCode: number, preventDefault: () => void, stopPropagation: () => void }): boolean {
       if (!latched && !event.isComposing && event.keyCode !== 229)
         return true
       if (!event.isComposing && event.keyCode !== 229)

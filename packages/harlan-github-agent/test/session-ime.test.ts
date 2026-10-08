@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSessionImeLatch } from '../dashboard/app/utils/session-ime.ts'
 
-function enter(composing = false): KeyboardEvent {
-  return { isComposing: composing, keyCode: 13, preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as KeyboardEvent
+function enter(composing = false) {
+  return { isComposing: composing, keyCode: 13, preventDefault: vi.fn(), stopPropagation: vi.fn() }
 }
 
 afterEach(() => vi.useRealTimers())
