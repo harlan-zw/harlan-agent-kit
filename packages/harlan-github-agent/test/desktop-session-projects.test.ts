@@ -68,6 +68,7 @@ it('preserves session edits across turns and rejects a substituted Worktree', as
   await expect(prepareDesktopSessionWorkspace(home, 'pkg/app', id, repo, signal)).rejects.toThrow('unavailable')
   const events: unknown[] = []
   const turn: SessionTurn = {
+    host: 'desktop',
     sessionId: id,
     turnId: id,
     leaseToken: 'test',
@@ -95,6 +96,9 @@ it('preserves session edits across turns and rejects a substituted Worktree', as
       expect(request.sessionId).toBe('saved-native-session')
       expect(request.workspace).toBe(workspace)
       expect(request.outputSchema).toBeUndefined()
+      expect(request.prompt).toContain(`Claim owner: ${id}`)
+      expect(request.prompt).toContain(`Workspace: ${workspace}`)
+      expect(request.prompt).toMatch(/User request:\nContinue$/)
       yield { _tag: 'SessionStarted', sessionId: 'saved-native-session' }
       yield { _tag: 'Message', text: 'Done. {This is plain text.}' }
       yield { _tag: 'TurnCompleted' }

@@ -15,9 +15,11 @@ import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
+import type { SessionController } from './session-controller.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAgentTask, DashboardSnapshot, IncidentScope, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as waitForHost } from 'node:timers/promises'
 import { jev } from 'advocaat'
@@ -42,6 +44,7 @@ import { loadConfig, validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
 import { createDesktopBroker } from './desktop-broker.ts'
 import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
+import { createDesktopSessionClient } from './desktop-session-client.ts'
 import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
@@ -58,6 +61,7 @@ import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
+import { createLocalSessionRunner, localSessionSlotMaximum } from './local-session-runner.ts'
 import { publishLoggedFindingPickups } from './logged-finding-sweep.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
@@ -430,10 +434,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ready: () => releaseWebhookReady && userLoginKnown && config.triggers.includes('github'),
   })
   const processId = randomUUID()
+  let sessions: SessionController | undefined
+  let localSessions: ReturnType<typeof createLocalSessionRunner> | undefined
   const restartController = createRestartController({
     store,
     processId,
     now,
+    ready: () => !(sessions?.snapshot().sessions.some(session => session.status === 'running' || session.status === 'stopping' || session.status === 'interrupted') ?? false),
     onActionRequired: (reason) => {
       const at = now().toISOString()
       const failure = classifyFailure({ message: reason })
@@ -499,7 +506,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   options.logger.info(agentSlotLine(agentSlots(), sizing))
   const hosts = createHostAgentPool({
-    localMaximum: () => agentSlots().hogwild,
+    localMaximum: () => localSessionSlotMaximum(agentSlots().hogwild, sessions?.snapshot().sessions ?? [], id => localSessions?.holds(id) ?? false),
     desktopMaximum: () => agentSlots().desktop,
     desktopAvailable: desktop.available,
     wait: signal => waitForHost(500, undefined, { signal }),
@@ -1540,9 +1547,47 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const settled = await Promise.all([...schedulers.map(scheduler => scheduler.settle(taskId)), mutationSchedulers.repairRecovery.settle(taskId)])
     return settled.includes(true)
   }
-  const sessions = config.server.desktopSessions === true
-    ? createSessionController({ path: join(dirname(config.storage.path), 'desktop-sessions.json'), now, availableSlots: () => Math.max(0, agentSlots().desktop - hosts.read().desktopActive) })
+  const localSessionShutdown = new AbortController()
+  const localSessionMaximum = () => agentSlots().hogwild
+  sessions = config.server.agentSessions === true
+    ? createSessionController({
+        path: join(dirname(config.storage.path), 'desktop-sessions.json'),
+        now,
+        availableSlots: (host) => {
+          if (!restartAllowsTaskClaims(store.getRestartRequest()))
+            return 0
+          return host === 'desktop'
+            ? Math.max(0, agentSlots().desktop - hosts.read().desktopActive)
+            : Math.max(0, localSessionMaximum() - hosts.read().localActive + (localSessions?.activeCount() ?? 0))
+        },
+      })
     : undefined
+  if (sessions !== undefined) {
+    const controller = sessions
+    const client = createDesktopSessionClient({
+      host: 'hogwild',
+      home: homedir(),
+      root: join(dirname(config.storage.path), 'hogwild-sessions'),
+      signal: localSessionShutdown.signal,
+      onStopped: fence => localSessions?.release(fence.turnId),
+      transport: {
+        report: async input => controller.report(input),
+        claim: async input => controller.claim(input),
+        heartbeat: async input => controller.heartbeat(input),
+        events: async input => controller.events(input),
+        complete: async input => controller.complete(input),
+        defer: async input => controller.defer(input),
+      },
+    })
+    localSessions = createLocalSessionRunner({
+      pool: hosts,
+      maximum: localSessionMaximum,
+      client,
+      onError: error => options.logger.error(error),
+      abort: () => localSessionShutdown.abort(),
+      mayClaim: () => restartAllowsTaskClaims(store.getRestartRequest()),
+    })
+  }
   const app = createAgentApp({
     ...(sessions === undefined ? {} : { sessions }),
     ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),
@@ -1765,6 +1810,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     repositoryPollers.forEach(repositoryPoller => repositoryPoller.start())
   }
   worktreeSweeper.start()
+  localSessions?.start()
   if (answers('github'))
     mutationSchedulers?.tasks.forEach(scheduler => scheduler.start())
   if (answers('github'))
@@ -1790,7 +1836,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     waitForRestart: restartController.waitForRestart,
     stop: async () => {
       restartController.stop()
+      localSessionShutdown.abort()
       await Promise.all([
+        localSessions?.stop() ?? Promise.resolve(),
         capacity.stop(),
         options.serviceUpdate.stop(),
         reconcileHint.stop(),

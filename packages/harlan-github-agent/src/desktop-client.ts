@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { checkAgentWorker } from './agent-sandbox.ts'
 import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
-import { createDesktopSessionClient } from './desktop-session-client.ts'
+import { createDesktopSessionClient, createSessionHttpTransport } from './desktop-session-client.ts'
 import { desktopCommand } from './desktop-worktree.ts'
 import { parseReviewProofCallback } from './review-proof-duplex.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
@@ -175,7 +175,7 @@ async function main(): Promise<void> {
   // queues that many turns. This loop claims each one and runs them together,
   // so an Agent slot count above one is real work rather than a queue.
   const running = new Set<Promise<void>>()
-  const sessions = createDesktopSessionClient({ api, root, capacity, signal: shutdown.signal })
+  const sessions = createDesktopSessionClient({ transport: createSessionHttpTransport(api), host: 'desktop', root, capacity, signal: shutdown.signal })
   while (!shutdown.signal.aborted) {
     try {
       let interactive = false
