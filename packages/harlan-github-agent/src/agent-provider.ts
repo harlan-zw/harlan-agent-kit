@@ -53,7 +53,7 @@ export type AgentEvent
     | { _tag: 'ContextBudgetWarned', cachedTokensRead: number, delivery: ContextBudgetWarningDelivery }
     /** The session read its whole Context budget, so the provider stopped it. */
     | { _tag: 'ContextBudgetExhausted', cachedTokensRead: number }
-    | { _tag: 'Failed', reason: string }
+    | { _tag: 'Failed', reason: string, cause?: 'host-cancelled' | 'sandbox-setup' }
 
 const agentProgressPrefix = /^[▓░]+[ \t]+(\d{1,3})%[ \t]+/
 
@@ -189,23 +189,67 @@ ${JSON.stringify(schema)}`
 }
 
 /**
- * Extracts the JSON object a provider without schema support returned.
+ * Extracts one JSON container while preserving its type for the role parser.
  * Falls back to the raw text so the caller reports one parse failure.
  */
 export function extractJsonObject(text: string): string {
-  // Code fences can belong to a JSON string, such as a pull request body.
-  // Extract the outer object before interpreting anything inside its strings.
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start === -1 || end <= start)
-    return text
-  const candidate = text.slice(start, end + 1)
+  const trimmed = text.trim()
+  const fence = /^```[^\n]*\n([\s\S]*?)\n```$/.exec(trimmed)
+  const body = fence?.[1] ?? trimmed
   try {
-    JSON.parse(candidate)
-    return candidate
+    JSON.parse(body)
+    // A valid array or scalar is still the complete answer. Do not extract its nested object.
+    return body
   }
   catch {
-    // Braces in prose are not JSON. Keep the full answer for parsing or repair.
-    return text
+    // Wrapped answers need one unambiguous container below.
   }
+  let candidate: string | undefined
+  let start = -1
+  const closers: string[] = []
+  let quoted = false
+  let escaped = false
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index]
+    if (quoted) {
+      if (escaped)
+        escaped = false
+      else if (character === '\\')
+        escaped = true
+      else if (character === '"')
+        quoted = false
+      continue
+    }
+    if (character === '"') {
+      quoted = true
+      continue
+    }
+    if (character === '{' || character === '[') {
+      if (start === -1)
+        start = index
+      closers.push(character === '{' ? '}' : ']')
+      continue
+    }
+    if (character !== '}' && character !== ']')
+      continue
+    if (start === -1)
+      return text
+    if (closers.pop() !== character)
+      return text
+    if (closers.length !== 0)
+      continue
+    const container = text.slice(start, index + 1)
+    start = -1
+    try {
+      JSON.parse(container)
+      // More than one JSON container is ambiguous. Never select the convenient answer.
+      if (candidate !== undefined)
+        return text
+      candidate = container
+    }
+    catch {
+      // Balanced braces in prose are not JSON. Keep scanning for the final object.
+    }
+  }
+  return start === -1 && !quoted ? candidate ?? text : text
 }

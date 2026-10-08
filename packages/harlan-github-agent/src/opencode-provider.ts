@@ -57,7 +57,7 @@ export interface OpencodeServer {
   close: (signal: NodeJS.Signals) => void | Promise<void>
 }
 
-export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv, readOnlyPaths?: readonly string[], taskId?: string) => Promise<Result<OpencodeServer, string>>
+export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv, readOnlyPaths?: readonly string[], taskId?: string) => Promise<Result<OpencodeServer, string | { _tag: 'SandboxSetupFailed', reason: string }>>
 
 /** The fixed user name OpenCode expects with a server password. */
 const serverUsername = 'opencode'
@@ -87,7 +87,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
     }
     const prepared = await prepareAgentSandbox({ workspace, environment: { ...environment, ...serverCredentials(password) }, provider: 'opencode', readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? [])], networkMode: 'opencode-server', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), ...(readOnly === undefined ? {} : { readOnly }) })
       .then(ok)
-      .catch((error: unknown) => err(`The Agent worker isolation failed: ${error instanceof Error ? error.message : String(error)}`))
+      .catch((error: unknown) => err({ _tag: 'SandboxSetupFailed' as const, reason: `The Agent worker isolation failed: ${error instanceof Error ? error.message : String(error)}` }))
     if (prepared._tag === 'Err') {
       await releaseTransport()
       return prepared
@@ -129,7 +129,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
         output = `${output}${chunk}`.slice(-maximumErrorCharacters)
         const url = opencodeServerUrl(output)
         if (url !== undefined) {
-          const stateDirectory = dailyCheckinDirectory(sandbox.environment, taskId)
+          const stateDirectory = dailyCheckinDirectory({ XDG_STATE_HOME: sandbox.workerStateHome }, taskId)
           const session = review === undefined
             ? (stateDirectory === undefined ? {} : { stateDirectory })
             : { reviewTools: REVIEW_TOOL_NAMES }
@@ -382,7 +382,9 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     const start = review === undefined || options.startOpencodeServer !== undefined ? startOpencodeServer : spawnOpencodeServer(true, review)
     const started = await start(request.workspace, turnEnvironment.value, mediaPaths, request.taskId)
     if (started._tag === 'Err') {
-      yield { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error) }
+      yield typeof started.error === 'string'
+        ? { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error) }
+        : { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error.reason), cause: 'sandbox-setup' }
       return
     }
     const server = started.value
@@ -403,7 +405,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     )).then(ok).catch((error: unknown) => err(`The OpenCode client isolation failed: ${error instanceof Error ? error.message : String(error)}`))
     if (launched._tag === 'Err') {
       await server.close('SIGTERM')
-      yield { _tag: 'Failed', reason: launched.error }
+      yield { _tag: 'Failed', reason: launched.error, cause: 'sandbox-setup' }
       return
     }
     const child = launched.value
@@ -544,7 +546,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         return
       }
       if (request.signal.aborted) {
-        yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.' }
+        yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.', cause: 'host-cancelled' }
         return
       }
       if (inputError !== undefined) {

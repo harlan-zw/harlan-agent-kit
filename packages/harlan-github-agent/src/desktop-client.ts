@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { checkAgentWorker } from './agent-sandbox.ts'
 import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
 import { createDesktopSessionClient, createSessionHttpTransport } from './desktop-session-client.ts'
+import { createDesktopTurnLease } from './desktop-turn-client.ts'
 import { desktopCommand } from './desktop-worktree.ts'
 import { parseReviewProofCallback } from './review-proof-duplex.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
@@ -72,7 +73,7 @@ async function main(): Promise<void> {
   async function run(turn: DesktopTurn): Promise<void> {
     if (!/^[a-f0-9-]{36}$/.test(turn.id))
       throw new Error('Desktop turn identity is invalid.')
-    const directory = join(root, createHash('sha256').update(turn.request.taskId ?? turn.id).digest('hex'))
+    const directory = join(root, createHash('sha256').update(turn.id).digest('hex'))
     await mkdir(directory, { recursive: true, mode: 0o700 })
     const input = join(directory, 'turn.json')
     await writeFile(input, JSON.stringify(turn), { mode: 0o600 })
@@ -93,27 +94,16 @@ async function main(): Promise<void> {
     })
     shutdown.signal.addEventListener('abort', stop, { once: true })
     const heartbeat = new AbortController()
+    const lease = createDesktopTurnLease({ signal: shutdown.signal, stop, now: () => performance.now() })
     const watching = (async () => {
-      while (!heartbeat.signal.aborted) {
-        await delay(3000, undefined, { signal: heartbeat.signal }).catch((error: unknown) => {
-          if (!heartbeat.signal.aborted)
+      while (!heartbeat.signal.aborted && !lease.signal.aborted) {
+        await lease.heartbeat(() => api<{ active: boolean }>('/api/desktop/heartbeat', { id: turn.id }))
+        if (lease.signal.aborted)
+          return
+        await delay(3000, undefined, { signal: AbortSignal.any([heartbeat.signal, lease.signal]) }).catch((error: unknown) => {
+          if (!heartbeat.signal.aborted && !lease.signal.aborted)
             throw error
         })
-        if (heartbeat.signal.aborted)
-          return
-        try {
-          await report()
-          const state = await api<{ active: boolean }>('/api/desktop/heartbeat', { id: turn.id })
-          if (!state?.active) {
-            stop()
-            return
-          }
-        }
-        catch (error) {
-          console.error(error)
-          stop()
-          return
-        }
       }
     })()
     const completion = new Promise<number>((resolve, reject) => {
@@ -121,6 +111,7 @@ async function main(): Promise<void> {
       child.once('close', code => resolve(code ?? 1))
     })
     let setup: DesktopFailure | null = null
+    let sequence = 0
     try {
       for await (const line of createInterface({ input: child.stdout })) {
         const event: unknown = JSON.parse(line)
@@ -140,13 +131,14 @@ async function main(): Promise<void> {
           setup = { _tag: 'SetupFailed', reason: event.reason }
           continue
         }
-        const answer = await api<{ accepted: boolean }>('/api/desktop/events', { id: turn.id, events: [event] })
+        const answer = await lease.request(() => api<{ accepted: boolean }>('/api/desktop/events', { id: turn.id, events: [event], sequence }))
         if (!answer?.accepted)
           stop()
+        sequence += 1
       }
       const code = await completion
       if (code === 75) {
-        await api('/api/desktop/defer', { id: turn.id })
+        await lease.request(() => api('/api/desktop/defer', { id: turn.id }))
         return
       }
       const result = await readFile(join(directory, 'result.json'), 'utf8')
@@ -159,13 +151,14 @@ async function main(): Promise<void> {
       const failure: DesktopFailure | null = code === 0
         ? null
         : setup ?? { _tag: 'AgentFailed', reason: `Desktop Agent stopped with status ${code}. ${stderr}` }
-      await api('/api/desktop/complete', { id: turn.id, result, failure })
+      await lease.request(() => api('/api/desktop/complete', { id: turn.id, result, failure }))
     }
     finally {
+      heartbeat.abort()
+      lease.close()
       await rm(input, { force: true })
       stop()
       await completion
-      heartbeat.abort()
       await watching
       shutdown.signal.removeEventListener('abort', stop)
     }

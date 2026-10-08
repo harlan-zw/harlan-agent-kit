@@ -16,7 +16,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { runAgentSandboxCommand } from './agent-sandbox.ts'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
-import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
+import { canPushBranch, canRepairBaseline, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -1516,7 +1516,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           || pullRequest.value.headRef !== command.headRef
           || pullRequest.value.headRepository.toLowerCase() !== headRepository.toLowerCase()
           || !canWriteHead
-          || (command.taskKind === 'resolve_conflict' && ownedHead && !command.repositoryMapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.value.author.toLowerCase()))
+          || (command.taskKind === 'resolve_conflict' && !canResolveConflictPullRequestHead(command.repositoryMapping, pullRequest.value))
         ) {
           return err('The pull request no longer authorizes publication.')
         }

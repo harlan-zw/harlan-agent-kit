@@ -1,16 +1,18 @@
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createAgentEgress } from './agent-egress.ts'
+import { checkinEnvironment } from './checkin-environment.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
 const workerHome = '/home/agent'
+const workerStateHome = `${workerHome}/.local/state`
 
 const mutableGitFiles = ['HEAD', 'index', 'ORIG_HEAD', 'MERGE_HEAD', 'MERGE_MSG', 'MERGE_MODE', 'FETCH_HEAD', 'AUTO_MERGE', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'REBASE_HEAD', 'SQUASH_MSG', 'logs/HEAD'] as const
 
@@ -129,6 +131,8 @@ export interface AgentSandbox {
   binary: string
   args: string[]
   environment: NodeJS.ProcessEnv
+  /** The worker's state root, separate from the host process environment. */
+  workerStateHome: string
   providerBinary: string
   adapterPath: string
   release: () => Promise<void>
@@ -262,23 +266,30 @@ export async function prepareAgentSandbox(input: {
       args.push('--bind', await permittedPath(path, controllerHome), path)
     const workspace = await realpath(input.workspace)
     const repositoryBind = readOnly ? '--ro-bind' : '--bind'
-    args.push(repositoryBind, workspace, workspace)
+    if (input.reviewHome === undefined) {
+      args.push(repositoryBind, workspace, workspace)
+    }
+    else {
+      // A private root omits configuration paths without following their aliases or assuming their file type.
+      // Keep ordinary symlinks intact, so hiding a config alias never masks its repository target.
+      args.push('--tmpfs', workspace)
+      const projectConfiguration = new Set(['.codex', '.opencode', 'opencode.json', 'opencode.jsonc'])
+      for (const entry of await readdir(workspace, { withFileTypes: true })) {
+        if (projectConfiguration.has(entry.name))
+          continue
+        const path = join(workspace, entry.name)
+        if (entry.isSymbolicLink())
+          args.push('--symlink', await readlink(path), path)
+        else
+          args.push('--ro-bind', path, path)
+      }
+      args.push('--remount-ro', workspace)
+    }
     if (input.reviewHome !== undefined) {
       for (const name of ['.codex/config.toml', '.config/opencode/opencode.json']) {
         const path = join(isolatedHome, name)
         if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
           args.push('--ro-bind', path, join(workerHome, name))
-      }
-      // Project configuration can register another tool or plugin. Hide it before either provider starts.
-      for (const name of ['.codex', '.opencode']) {
-        const path = join(workspace, name)
-        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
-          args.push('--tmpfs', path)
-      }
-      for (const name of ['opencode.json', 'opencode.jsonc']) {
-        const path = join(workspace, name)
-        if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
-          args.push('--ro-bind', join(input.reviewHome, '.config/opencode/opencode.json'), path)
       }
     }
     const { stdout } = await execute('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
@@ -311,6 +322,9 @@ export async function prepareAgentSandbox(input: {
     const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(origin)
     if (origin !== '' && match === null)
       throw new Error('The Agent worker origin must use a GitHub URL without credentials.')
+    const checkinValues = input.reviewHome === undefined
+      ? await checkinEnvironment({ controllerHome, repository: match?.[1], taskId: input.taskId })
+      : {}
     await writeFile(gitConfig, `[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = /home/agent/.config/git/hooks\n${match ? `[remote "origin"]\n url = https://github.com/${match[1]}.git\n fetch = +refs/heads/*:refs/remotes/origin/*\n` : ''}`, { mode: 0o600 })
     await writeFile(join(privateCommon, 'config'), '', { mode: 0o600 })
     await writeFile(join(privateGit.directory, 'config.worktree'), '', { mode: 0o600 })
@@ -324,7 +338,7 @@ export async function prepareAgentSandbox(input: {
       ...(input.environment.CI === undefined ? {} : { CI: input.environment.CI }),
       XDG_CONFIG_HOME: `${workerHome}/.config`,
       XDG_DATA_HOME: `${workerHome}/.local/share`,
-      XDG_STATE_HOME: `${workerHome}/.local/state`,
+      XDG_STATE_HOME: workerStateHome,
       CODEX_HOME: `${workerHome}/.codex`,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
@@ -336,6 +350,7 @@ export async function prepareAgentSandbox(input: {
     // Review tools use only controller configuration. Repository loader variables can restore execution.
     const environment = {
       ...(input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment),
+      ...checkinValues,
       // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
       ...(input.provider === 'opencode' ? { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true' } : {}),
     }
@@ -366,7 +381,7 @@ export async function prepareAgentSandbox(input: {
       await execute('/usr/bin/git', [...safeGit.slice(1), 'update-ref', branch, newSha, originalSha], { env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, timeout: 30_000 })
       await privateGit.save()
     }
-    return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, adapterPath, providerBinary: profile[input.provider], release: () => {
+    return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, workerStateHome, adapterPath, providerBinary: profile[input.provider], release: () => {
       released ??= (async () => {
         try {
           if (!readOnly)

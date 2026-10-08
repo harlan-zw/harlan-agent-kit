@@ -9,7 +9,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, desktopErrorCause } from './desktop-protocol.ts'
+import { DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, DESKTOP_TURN_LEASE_MILLISECONDS, desktopErrorCause } from './desktop-protocol.ts'
 import { exportDesktopWorktree, importDesktopWorktree } from './desktop-worktree.ts'
 import { parseReviewProofReceipt, parseReviewProofReservation } from './review-proof-controller.ts'
 
@@ -26,6 +26,9 @@ interface PendingTurn {
   state: 'queued' | 'running' | 'completed' | 'cancelled'
   result: DesktopWorktree | null
   failure: DesktopFailure | null
+  leaseExpiresAt: number
+  nextSequence: number
+  signal: AbortSignal
 }
 
 export interface DesktopReport {
@@ -58,6 +61,7 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
   // down keeps the work on Hogwild, where the old design instead sent the turn
   // and failed the Task on the far side.
   const current = () => report !== null && report.protocol === DESKTOP_PROTOCOL
+  const ownsTurn = (entry: PendingTurn | undefined): entry is PendingTurn => entry?.state === 'running' && !entry.signal.aborted && options.now() < entry.leaseExpiresAt
   return {
     available: () => connected() && current() && report !== null && report.memoryGiB - report.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB,
     read: () => ({ connected: connected(), current: current(), protocol: DESKTOP_PROTOCOL, report, requestedMemoryGiB }),
@@ -76,21 +80,35 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
       if (entry === undefined)
         return null
       entry.state = 'running'
+      entry.leaseExpiresAt = options.now() + DESKTOP_TURN_LEASE_MILLISECONDS
       return entry.turn
     },
     defer: (id: string) => {
       const entry = pending.get(id)
-      if (entry?.state !== 'running')
+      if (!ownsTurn(entry))
         return false
+      // A lost deferral acknowledgement may be replayed after another claim.
+      // Give that claim a new identity before returning the turn to the Queue.
+      pending.delete(id)
+      entry.turn = { ...entry.turn, id: randomUUID() }
+      entry.nextSequence = 0
+      entry.leaseExpiresAt = 0
       entry.state = 'queued'
+      pending.set(entry.turn.id, entry)
       return true
     },
-    active: (id: string) => pending.get(id)?.state === 'running',
+    active: (id: string) => {
+      const entry = pending.get(id)
+      if (!ownsTurn(entry))
+        return false
+      entry.leaseExpiresAt = options.now() + DESKTOP_TURN_LEASE_MILLISECONDS
+      return true
+    },
     proof: async (id: string, action: unknown, input: unknown): Promise<unknown> => {
       const entry = pending.get(id)
       const request = entry?.turn.request as (DesktopTurn['request'] & { toolPolicy?: unknown }) | undefined
       const policy = request?.toolPolicy
-      if (entry?.state !== 'running' || !connected() || !current() || options.reviewProofAuthority === undefined
+      if (!ownsTurn(entry) || !current() || options.reviewProofAuthority === undefined
         || request?.taskId === undefined || typeof policy !== 'object' || policy === null
         || !('_tag' in policy) || policy._tag !== 'Review'
         || !('headSha' in policy) || typeof policy.headSha !== 'string'
@@ -110,16 +128,21 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
       }
       throw new Error('The desktop proof callback is invalid.')
     },
-    events: (id: string, events: AgentEvent[]) => {
+    events: (id: string, events: AgentEvent[], sequence: number) => {
       const entry = pending.get(id)
-      if (entry?.state !== 'running')
+      if (!ownsTurn(entry))
         return false
+      if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > entry.nextSequence)
+        return false
+      if (sequence < entry.nextSequence)
+        return true
+      entry.nextSequence += 1
       entry.events.push(...events)
       return true
     },
     complete: (id: string, result: DesktopWorktree | null, failure: DesktopFailure | null) => {
       const entry = pending.get(id)
-      if (entry?.state !== 'running')
+      if (!ownsTurn(entry))
         return false
       entry.result = result
       entry.failure = failure
@@ -135,11 +158,11 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
         try {
           const worktree = await exportDesktopWorktree(request.workspace, temporary, { signal: request.signal })
           const { signal, ...input } = request
-          entry = { turn: { id, provider: name, request: input, worktree }, events: [], state: 'queued', result: null, failure: null }
+          entry = { turn: { id, provider: name, request: input, worktree }, events: [], state: 'queued', result: null, failure: null, leaseExpiresAt: 0, nextSequence: 0, signal }
           pending.set(id, entry)
           while (entry.state !== 'completed') {
             signal.throwIfAborted()
-            if (!connected())
+            if (entry.state === 'queued' ? !connected() : !ownsTurn(entry))
               throw new Error('Desktop disconnected during the Agent turn.')
             for (const event of entry.events.splice(0))
               yield event
@@ -164,7 +187,7 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
         finally {
           if (entry !== undefined)
             entry.state = 'cancelled'
-          pending.delete(id)
+          pending.delete(entry?.turn.id ?? id)
           await rm(temporary, { recursive: true, force: true })
         }
       })(),

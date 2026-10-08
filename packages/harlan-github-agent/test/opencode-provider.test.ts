@@ -371,7 +371,7 @@ describe('createOpencodeProvider', () => {
     const provider = createOpencodeProvider({ environment: { HOME: '/missing/worker-controller' } })
 
     expect(await collect(provider.runTurn(request({ workspace: process.cwd() }))))
-      .toEqual([{ _tag: 'Failed', reason: expect.stringContaining('The Agent worker isolation failed:') }])
+      .toEqual([{ _tag: 'Failed', reason: expect.stringContaining('The Agent worker isolation failed:'), cause: 'sandbox-setup' }])
   })
 
   it('starts OpenCode with the prepared Agent environment', async () => {

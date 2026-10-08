@@ -135,7 +135,7 @@ import { createPackageReleaseStore } from './package-release-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
 import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
-import { canRepairBaseline, canRepairPullRequestHead, canWorkIssues } from './repository-policy.ts'
+import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
@@ -988,6 +988,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     at: string
     leaseMilliseconds: number
   }) => ProviderStartReservation
+  /** Releases a host-interrupted canary without claiming provider health evidence. */
+  releaseProviderStart: (input: { circuitId: string, workerId: string, fence: number, at: string }) => boolean
   recordProviderFailure: (input: {
     provider: AgentProviderName
     credential: string
@@ -2931,12 +2933,6 @@ function hasIssueApproval(database: DatabaseSync, subjectId: number, revisionId:
   `).get(subjectId, revisionId) !== undefined
 }
 
-function canWritePullRequestHead(mapping: RepositoryMapping, subject: GitHubPullRequestItem): boolean {
-  return canRepairPullRequestHead(mapping, subject)
-    && subject.headRepository.toLowerCase() === mapping.github.toLowerCase()
-    && mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === subject.author.toLowerCase())
-}
-
 function pullRequestApprovalState(database: DatabaseSync, input: {
   mapping: RepositoryMapping
   author: string
@@ -3956,6 +3952,8 @@ function planConflictResolution(
     FROM tasks
     WHERE subject_id = ? AND kind = 'resolve_conflict' AND revision_id = ?
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, cancelled: number } | undefined
+  const ready = canResolveConflictPullRequestHead(mapping, subject)
+    && (subject.headRepository.toLowerCase() === mapping.github.toLowerCase() || reviewApproved)
   // Recovery used to match two exact reasons collected from past incidents, so
   // every new transient failure left the conflict dead until someone added its
   // wording. The failure taxonomy decides instead: a transient failure can
@@ -3987,7 +3985,7 @@ function planConflictResolution(
     recordTransition(database, { taskId: existing.id, from: 'Superseded', to: 'ActionRequired', reason, fence: existing.fence, at: observedAt })
     return
   }
-  if ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure) {
+  if (ready && ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure)) {
     database.prepare(`
       UPDATE tasks
       SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
@@ -4010,9 +4008,6 @@ function planConflictResolution(
     return
   }
 
-  const canWriteHead = canWritePullRequestHead(mapping, subject)
-  const canRepairHead = canRepairPullRequestHead(mapping, subject) && reviewApproved
-  const ready = canWriteHead || canRepairHead
   // An exhausted budget waits for a person. A new head commit makes a new task.
   if (existing?.state_tag === 'ActionRequired' && existing.cancelled === 0 && ready
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS) {
@@ -6941,7 +6936,17 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 83
   }
-  if (version === 83)
+  if (version === 83) {
+    // Review refresh checks cancellation and Repair history for each subject.
+    // These lookups must not scan every historical Task for each Review.
+    applyMigration(database, `
+      CREATE INDEX IF NOT EXISTS worker_tasks_subject_kind ON worker_tasks(subject_id, kind);
+      CREATE INDEX IF NOT EXISTS tasks_subject_kind ON tasks(subject_id, kind);
+      PRAGMA user_version = 84;
+    `)
+    version = 84
+  }
+  if (version === 84)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9604,22 +9609,26 @@ export function openJournalStore(
             )
           )
         ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC,
-          CASE WHEN tasks.kind = 'issue_work' THEN 0 ELSE 1 END DESC,
+          CASE WHEN tasks.kind != 'issue_work' THEN 1 WHEN tasks.updated_at <= ? THEN 2 ELSE 0 END DESC,
           tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, kind, now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests) as ClaimRow | undefined
+      `).get(kind, kind, now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as ClaimRow | undefined
 
-  const deliveryPriority = (kind: AgentTask['kind']): number => kind === 'issue_work' || kind === 'issue_triage' ? 0 : 1
+  const issueWaitMilliseconds = 30 * 60 * 1_000
+  const deliveryPriority = (kind: AgentTask['kind'], queuedAt: string, now: string): number =>
+    kind === 'issue_work' || kind === 'issue_triage'
+      ? 2 * Number(Date.parse(now) - Date.parse(queuedAt) >= issueWaitMilliseconds)
+      : 1
 
-  // A waiting Review must get a free permit before another issue starts.
+  // Fresh issues yield to delivery. Older issues take the next free permit to prevent starvation.
   // Compare only claimable work, so missing Approval never holds the Queue.
-  const hasHigherPriorityTask = (priority: number, now: string, kind: AgentTask['kind'] = 'issue_work'): boolean =>
-    [nextMutationTask(null, now, undefined, true), nextWorkerTask(null)].some((row) => {
+  const hasHigherPriorityTask = (priority: number, now: string, kind: AgentTask['kind'] = 'issue_work', queuedAt = now): boolean =>
+    [nextMutationTask(null, now, undefined, true), nextWorkerTask(null, now)].some((row) => {
       if (row === undefined)
         return false
       const candidatePriority = (JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0
       return candidatePriority > priority
-        || (candidatePriority === priority && deliveryPriority(row.kind) > deliveryPriority(kind))
+        || (candidatePriority === priority && deliveryPriority(row.kind, row.updated_at, now) > deliveryPriority(kind, queuedAt, now))
     })
 
   const claimMutationTask = (
@@ -9640,7 +9649,7 @@ export function openJournalStore(
 
       // A Batch already owns an Agent permit when it claims an exact unit Task.
       // New priority work competes for free permits without interrupting that Batch.
-      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind)) {
+      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind, row.updated_at)) {
         database.exec('COMMIT')
         return null
       }
@@ -9651,6 +9660,17 @@ export function openJournalStore(
       if (kind !== 'issue_work' && subject.kind !== 'pull_request')
         throw new Error(`Pull request Task ${row.id} does not reference a pull request.`)
       const repositoryMapping = JSON.parse(row.policy_json) as RepositoryMapping
+      // A policy update can revoke branch authority before the next observation.
+      // Decline the lease before any Worktree or Agent starts.
+      if (kind === 'resolve_conflict' && subject.kind === 'pull_request'
+        && !canResolveConflictPullRequestHead(repositoryMapping, subject)) {
+        const reason = 'The controller cannot write this pull request branch.'
+        database.prepare('UPDATE tasks SET state_tag = \'ActionRequired\', reason = ?, updated_at = ? WHERE id = ?')
+          .run(reason, now, row.id)
+        recordTransition(database, { taskId: row.id, from: 'Queued', to: 'ActionRequired', reason, fence: row.fence, at: now })
+        database.exec('COMMIT')
+        return null
+      }
       // The query above cannot return an unapproved repair. This stays as the
       // second half of the boundary that decides who may write a contributor's
       // branch, and it declines the claim rather than throwing, so a broken
@@ -9713,7 +9733,7 @@ export function openJournalStore(
   const batchStore = createBatchStore(database, {
     recoverExpiredTasks,
     canClaimIssueWorkTask: (exactTaskId, now) => nextMutationTask('issue_work', now, exactTaskId) !== undefined,
-    hasHigherPriorityTask,
+    hasHigherPriorityTask: (priority, now, queuedAt) => hasHigherPriorityTask(priority, now, 'issue_work', queuedAt),
     claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
       const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)
       if (task === null || task.kind === 'issue_work')
@@ -10076,7 +10096,7 @@ export function openJournalStore(
     })
   }
 
-  const nextWorkerTask = (kind: 'adversarial_review' | 'issue_triage' | null): (ClaimRow & { rerun_requested: number }) | undefined => database.prepare(`
+  const nextWorkerTask = (kind: 'adversarial_review' | 'issue_triage' | null, now: string): (ClaimRow & { rerun_requested: number }) | undefined => database.prepare(`
         SELECT
           worker_tasks.id,
           worker_tasks.kind,
@@ -10161,10 +10181,10 @@ export function openJournalStore(
             )
           )
         ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC,
-          CASE WHEN worker_tasks.kind = 'adversarial_review' THEN 1 ELSE 0 END DESC,
+          CASE WHEN worker_tasks.kind = 'adversarial_review' THEN 1 WHEN worker_tasks.updated_at <= ? THEN 2 ELSE 0 END DESC,
           worker_tasks.updated_at, worker_tasks.id
         LIMIT 1
-      `).get(kind, kind) as (ClaimRow & { rerun_requested: number }) | undefined
+      `).get(kind, kind, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as (ClaimRow & { rerun_requested: number }) | undefined
 
   const claimWorkerTask = (
     kind: 'adversarial_review' | 'issue_triage',
@@ -10175,13 +10195,13 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       recoverExpiredWorkerTasks(now)
-      const row = nextWorkerTask(kind)
+      const row = nextWorkerTask(kind, now)
       if (row === undefined) {
         database.exec('COMMIT')
         return null
       }
 
-      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind)) {
+      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind, row.updated_at)) {
         database.exec('COMMIT')
         return null
       }
@@ -13310,6 +13330,28 @@ export function openJournalStore(
     }
   }
 
+  const releaseProviderStart: JournalStore['releaseProviderStart'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE provider_circuits
+        SET state_tag = 'Open', retry_at = ?, canary_worker_id = NULL,
+          canary_lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'HalfOpen' AND canary_worker_id = ? AND canary_fence = ?
+      `).run(input.at, input.at, input.circuitId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        const released = database.prepare('SELECT * FROM provider_circuits WHERE id = ?').get(input.circuitId) as unknown as ProviderCircuitRow
+        recordProviderCircuitEvent(database, released, 'CanaryReleased', 'HalfOpen', 'Open', input.at, 'The host interrupted the provider canary.')
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recordProviderFailure: JournalStore['recordProviderFailure'] = (input) => {
     const id = input.canaryCircuitId ?? digest(`${input.provider}:${input.credential}:${input.model}:${input.failureClass}`)
     const detail = `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`
@@ -16202,6 +16244,7 @@ export function openJournalStore(
     listWorkflowEvents,
     providerCanStart,
     reserveProviderStart,
+    releaseProviderStart,
     recordProviderFailure,
     recordProviderSuccess,
     listProviderCircuits,

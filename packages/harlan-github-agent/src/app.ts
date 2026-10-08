@@ -471,7 +471,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   })
   app.post('/api/desktop/events', async (event) => {
     const body = await desktopBody(event)
-    return { accepted: typeof body.id === 'string' && options.desktop?.events(body.id, desktopInput(parseDesktopEvents, body.events)) === true }
+    return { accepted: typeof body.id === 'string' && Number.isSafeInteger(body.sequence) && options.desktop?.events(body.id, desktopInput(parseDesktopEvents, body.events), Number(body.sequence)) === true }
   })
   app.post('/api/desktop/proof', async (event) => {
     const body = await desktopBody(event)

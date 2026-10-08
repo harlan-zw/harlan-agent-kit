@@ -51,6 +51,14 @@ export function canRepairPullRequestHead(mapping: RepositoryMapping, pullRequest
     && pullRequest.headRef !== mapping.defaultBranch
 }
 
+/** Conflict planning and publication require the same branch and author authority. */
+export function canResolveConflictPullRequestHead(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
+  return mapping.conflictResolution
+    && canRepairPullRequestHead(mapping, pullRequest)
+    && (pullRequest.headRepository.toLowerCase() !== mapping.github.toLowerCase()
+      || mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.author.toLowerCase()))
+}
+
 /**
  * True when the controller may open a pull request for an issue here.
  *

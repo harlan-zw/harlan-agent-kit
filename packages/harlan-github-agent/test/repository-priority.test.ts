@@ -79,6 +79,20 @@ it('gives Conflict resolution the next claim before older Issue work', () => {
   expect(store.claimNextConflictTask('conflict', later, 60_000)?.pullRequestNumber).toBe(24)
 })
 
+it('lets issue triage and implementation proceed after thirty minutes despite new reviews', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier, [101])
+  store.recordObservation({ externalId: 'next-issue', observedAt: earlier, source: 'poll', subject: issueItem({ repository: priority, number: 102, author: 'harlan-zw' }) })
+  const afterWait = '2026-09-08T00:31:00.000Z'
+  store.recordObservation({ externalId: 'review', observedAt: afterWait, source: 'poll', subject: pullRequestItem({ repository: priority, mergeState: 'clean' }) })
+
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)).toBeNull()
+  expect(store.claimNextIssueTriageTask('triage', afterWait, 60_000)?.issueNumber).toBe(102)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)).toBeNull()
+  expect(store.claimNextIssueWorkTask('implementation', afterWait, 60_000)?.issueNumber).toBe(101)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)?.pullRequestNumber).toBe(24)
+})
+
 it('keeps a new Batch queued until Review takes its claim', () => {
   const store = setup(true)
   readyIssues(store, priority, earlier)
@@ -90,6 +104,17 @@ it('keeps a new Batch queued until Review takes its claim', () => {
   expect(store.claimNextBatch('batch', later, 60_000)?.repository).toBe(priority)
 })
 
+it('preserves overdue Issue age when planning a new Batch', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier)
+  const afterWait = '2026-09-08T00:31:00.000Z'
+  store.planBatches(afterWait)
+  store.recordObservation({ externalId: 'review', observedAt: afterWait, source: 'poll', subject: pullRequestItem({ repository: priority, mergeState: 'clean' }) })
+
+  expect(store.claimNextBatch('batch', afterWait, 60_000)?.repository).toBe(priority)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)?.pullRequestNumber).toBe(24)
+})
+
 it('does not hold Issue work behind a Review that lacks Approval', () => {
   const store = setup(true)
   readyIssues(store, priority, earlier, [101])
@@ -97,6 +122,18 @@ it('does not hold Issue work behind a Review that lacks Approval', () => {
 
   expect(store.claimNextAdversarialReviewTask('review', later, 60_000)).toBeNull()
   expect(store.claimNextIssueWorkTask('implementation', later, 60_000)?.issueNumber).toBe(101)
+})
+
+it('lets an older Batch claim a permit while fresh reviews wait', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier)
+  store.planBatches(earlier)
+  const afterWait = '2026-09-08T00:31:00.000Z'
+  store.recordObservation({ externalId: 'review', observedAt: afterWait, source: 'poll', subject: pullRequestItem({ repository: priority, mergeState: 'clean' }) })
+
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)).toBeNull()
+  expect(store.claimNextBatch('batch', afterWait, 60_000)?.repository).toBe(priority)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)?.pullRequestNumber).toBe(24)
 })
 
 it('keeps ordinary Review outside the repository priority override for Routines', () => {

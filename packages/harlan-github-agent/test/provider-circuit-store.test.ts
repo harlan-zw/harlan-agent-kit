@@ -28,6 +28,22 @@ const circuit = {
 }
 
 describe('persistent Agent provider circuits', () => {
+  it('releases a cancelled canary without changing health and rejects its stale fence', () => {
+    const journal = store()
+    for (const at of ['2026-08-13T01:00:00.000Z', '2026-08-13T01:00:01.000Z', '2026-08-13T01:00:02.000Z'])
+      journal.recordProviderFailure({ ...circuit, detail: 'Network failure.', at })
+    const claim = (workerId: string, at: string) => journal.reserveProviderStart({ ...circuit, workerId, at, leaseMilliseconds: 60_000 })
+    const first = claim('first', '2026-08-13T01:05:02.000Z')
+    if (first._tag !== 'Allowed' || first.canary === null)
+      throw new Error('Expected a canary reservation.')
+    const health = journal.listProviderCircuits()[0]!
+    expect(journal.releaseProviderStart({ ...first.canary, at: '2026-08-13T01:05:03.000Z' })).toBe(true)
+    expect(journal.listProviderCircuits()[0]).toMatchObject({ failures: health.failures, state: { _tag: 'Open' } })
+    const second = claim('second', '2026-08-13T01:05:03.000Z')
+    expect(second._tag).toBe('Allowed')
+    expect(journal.releaseProviderStart({ ...first.canary, at: '2026-08-13T01:05:04.000Z' })).toBe(false)
+    expect(claim('third', '2026-08-13T01:05:04.000Z')._tag).toBe('Paused')
+  })
   it('does not spend a Task attempt while its provider circuit is open', () => {
     const journal = store()
     journal.syncRepositories([repositoryMapping()], '2026-08-13T01:00:00.000Z')

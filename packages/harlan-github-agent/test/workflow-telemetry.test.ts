@@ -164,6 +164,14 @@ describe('workflow telemetry', () => {
       reason: 'The service restarted.',
     })
 
+    // This phase covers Review recovery, without overdue Issue triage competing for its claim.
+    store.recordObservation({
+      externalId: 'telemetry-restart-issue-closed',
+      observedAt: '2026-08-13T00:00:50.000Z',
+      source: 'poll',
+      subject: { ...issue, state: 'closed' },
+    })
+
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const observedPullRequest = store.recordObservation({
       externalId: 'telemetry-restart-review',

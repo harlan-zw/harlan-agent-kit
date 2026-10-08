@@ -40,7 +40,7 @@ export interface BatchStoreDependencies {
   recoverExpiredTasks: (now: string) => void
   canClaimIssueWorkTask: (exactTaskId: string, now: string) => boolean
   claimIssueWorkTask: (workerId: string, now: string, leaseMilliseconds: number, exactTaskId: string) => ClaimedIssueWorkTask | null
-  hasHigherPriorityTask: (priority: number, now: string) => boolean
+  hasHigherPriorityTask: (priority: number, now: string, queuedAt: string) => boolean
 }
 
 interface BatchRow {
@@ -294,18 +294,26 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
         AND json_extract(repositories.policy_json, '$.issueWork') = 1
       ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC, batches.created_at, batches.id
     `).all() as unknown as BatchRow[]
-    const row = candidates.find((candidate) => {
+    const candidate = candidates.flatMap((row) => {
       const tasks = database.prepare(`
-        SELECT batch_tasks.task_id FROM batch_tasks
+        SELECT batch_tasks.task_id, tasks.updated_at FROM batch_tasks
+        JOIN tasks ON tasks.id = batch_tasks.task_id
         LEFT JOIN batch_units ON batch_units.id = batch_tasks.unit_id
         WHERE batch_tasks.batch_id = ?
           AND (batch_units.id IS NULL OR (batch_units.state_tag = 'Waiting' AND batch_units.primary_task_id = batch_tasks.task_id))
-      `).all(candidate.id) as Array<{ task_id: string }>
-      return tasks.some(task => dependencies.canClaimIssueWorkTask(task.task_id, now))
-    })
-    if (row === undefined)
+        ORDER BY tasks.updated_at, tasks.id
+      `).all(row.id) as Array<{ task_id: string, updated_at: string }>
+      const task = tasks.find(task => dependencies.canClaimIssueWorkTask(task.task_id, now))
+      return task === undefined ? [] : [{ row, queuedAt: task.updated_at }]
+    }).sort((left, right) => {
+      const leftPriority = (JSON.parse(left.row.policy_json) as RepositoryMapping).priority ?? 0
+      const rightPriority = (JSON.parse(right.row.policy_json) as RepositoryMapping).priority ?? 0
+      return rightPriority - leftPriority || left.queuedAt.localeCompare(right.queuedAt) || left.row.id.localeCompare(right.row.id)
+    })[0]
+    if (candidate === undefined)
       return null
-    if (dependencies.hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now))
+    const { row, queuedAt } = candidate
+    if (dependencies.hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, queuedAt))
       return null
     const fence = row.fence + 1
     const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()

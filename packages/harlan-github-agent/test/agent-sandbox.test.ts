@@ -26,6 +26,7 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   await mkdir(join(home, '.config/opencode'), { recursive: true })
   await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({ provider: { 'zai-coding-plan': { options: { apiKey: 'fake-provider-key' } } }, mcp: { unsafe: { command: ['cat', secret] } } }))
   await execute('git', ['init', primary])
+  await execute('git', ['-C', primary, 'remote', 'add', 'origin', 'https://github.com/owner/site.git'])
   await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
   await execute('git', ['-C', primary, 'config', 'credential.helper', `!cat ${secret}`])
   const wtConfig = join(root, 'wt.toml')
@@ -39,7 +40,7 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   const fakeProvider = join(toolDirectory, 'provider.ts')
   await writeFile(fakeProvider, `#!/run/agent/node --experimental-strip-types
 import { createServer } from 'node:http'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import process from 'node:process'
 if (existsSync(${JSON.stringify(secret)}) || process.env.GH_TOKEN || process.env.CONTROLLER_TOKEN) process.exit(30)
 if (['serve', 'run'].includes(process.argv[2]) && process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER !== 'true') process.exit(34)
@@ -48,6 +49,19 @@ if (process.argv[2] === 'serve') {
     const expected = 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64')
     if (request.headers.authorization !== expected) { response.writeHead(401); response.end(); return }
     response.setHeader('content-type', 'application/json')
+    if (request.method === 'POST' && request.url.startsWith('/session?')) {
+      let body = ''
+      request.on('data', chunk => body += chunk)
+      request.on('end', () => {
+        const allowed = JSON.parse(body).permission.filter(rule => rule.action === 'allow')
+        const expected = [{ permission: 'external_directory', pattern: process.env.DAILY_CHECKIN_DIR + '/*', action: 'allow' }]
+        if (JSON.stringify(allowed) !== JSON.stringify(expected)) { response.writeHead(400); response.end('{}'); return }
+        mkdirSync(process.env.DAILY_CHECKIN_DIR, { recursive: true })
+        writeFileSync(process.env.DAILY_CHECKIN_DIR + '/session-proof.txt', 'assigned permission')
+        response.end(JSON.stringify({ id: 'ses_fixture' }))
+      })
+      return
+    }
     response.end(JSON.stringify({ id: 'ses_fixture', protected: true }))
   })
   server.listen(4097, '127.0.0.1', () => console.log('opencode server listening on http://127.0.0.1:4097'))
@@ -99,6 +113,7 @@ if (process.argv[2] === 'serve') {
   })
   const hostPort = (host.address() as { port: number }).port
   try {
+    expect(sandbox.workerStateHome).toBe('/home/agent/.local/state')
     const result = await execute(sandbox.binary, [...sandbox.args, '/usr/bin/bash', '-c', `
       test ! -e '${secret}' || exit 10
       test ! -e '/proc/${process.pid}/environ' || exit 11
@@ -123,7 +138,26 @@ if (process.argv[2] === 'serve') {
     expect(await readFile(secret, 'utf8')).toBe('fake-controller-secret')
     expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: prove isolated Git writes')
     expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe('?? .env\n')
-    const request = { model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace }
+    await mkdir(join(home, '.config/harlan-checkin'), { recursive: true, mode: 0o700 })
+    await writeFile(join(home, '.config/harlan-checkin/site.env'), 'CHECKIN_TOKEN=private-site-token\nSENTRY_AUTH_TOKEN=private-sentry-token\nGH_TOKEN=refused\n', { mode: 0o600 })
+    await writeFile(join(home, '.config/harlan-checkin/other.env'), 'OTHER_SITE_TOKEN=private-other-token\n', { mode: 0o600 })
+    const daily = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex', taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z' })
+    try {
+      const proof = await execute(daily.binary, [...daily.args, '/usr/bin/bash', '-c', `
+        test "$CHECKIN_TOKEN" = private-site-token || exit 40
+        test "$SENTRY_AUTH_TOKEN" = private-sentry-token || exit 41
+        test "$CI" = true || exit 42
+        test -z "$GH_TOKEN$OTHER_SITE_TOKEN" || exit 43
+        test ! -e '${join(home, '.config/harlan-checkin/site.env')}' || exit 44
+        echo scoped-checkin
+      `], { env: daily.environment })
+      expect(proof.stdout.trim()).toBe('scoped-checkin')
+    }
+    finally {
+      await daily.release()
+    }
+    await expect(prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex', taskId: 'other/site:daily-checkin:2026-10-08T00:00:00.000Z' })).rejects.toThrow('repository')
+    const request = { taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z', model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace }
     const originalHome = process.env.HOME
     process.env.HOME = home
     try {
@@ -136,6 +170,7 @@ if (process.argv[2] === 'serve') {
         expect(events.filter(event => event._tag === 'Failed')).toEqual([])
       }
       expect(await readFile(join(workspace, 'codex-mutation.txt'), 'utf8')).toBe('isolated mutation')
+      expect(await readFile(join(worker, '.local/state/daily-checkin/owner/site/session-proof.txt'), 'utf8')).toBe('assigned permission')
     }
     finally {
       process.env.HOME = originalHome
@@ -213,6 +248,69 @@ it('keeps Git administrative settings immutable while preserving atomic index wr
     await symlink(join(root, 'aliased-objects'), join(common, 'objects'))
     const aliased = prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex' })
     await expect(aliased).rejects.toThrow('own ordinary directory')
+  }
+  finally {
+    await sandbox?.release()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
+
+it.each(['directory', 'file', 'directory-alias', 'file-alias', 'external-directory-alias', 'external-file-alias', 'dangling-alias'] as const)('hides Review project configuration with %s paths without changing repository files', async (kind) => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-review-config-'))
+  const primary = join(root, 'primary')
+  const controller = join(root, 'controller')
+  const worker = join(root, 'worker')
+  const reviewHome = join(root, 'review')
+  await Promise.all([mkdir(primary), mkdir(controller), mkdir(worker), mkdir(join(reviewHome, '.config/opencode'), { recursive: true })])
+  let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
+  try {
+    await execute('git', ['init', primary])
+    await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+    const wtConfig = join(root, 'wt.toml')
+    await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+    await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'review', '--base', 'HEAD', '--yes'])
+    const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+    const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'review').worktree.path as string
+    await mkdir(join(workspace, 'ordinary'))
+    await writeFile(join(workspace, 'ordinary/fixture'), 'repository data')
+    await symlink('ordinary/fixture', join(workspace, 'ordinary-alias'))
+    await mkdir(join(root, 'outside'))
+    await writeFile(join(root, 'outside/fixture'), 'outside data')
+    await writeFile(join(reviewHome, '.config/opencode/opencode.json'), '{}')
+    for (const name of ['.codex', '.opencode', 'opencode.json', 'opencode.jsonc']) {
+      const path = join(workspace, name)
+      if (kind === 'directory') {
+        await mkdir(path)
+        await writeFile(join(path, 'config.toml'), 'malicious configuration')
+      }
+      else if (kind === 'file') {
+        await writeFile(path, 'malicious configuration')
+      }
+      else {
+        const target = kind === 'directory-alias' ? 'ordinary' : kind === 'file-alias' ? 'ordinary/fixture' : kind === 'external-directory-alias' ? join(root, 'outside') : kind === 'external-file-alias' ? join(root, 'outside/fixture') : 'missing'
+        await symlink(target, path)
+      }
+    }
+    const profile = join(root, 'worker.json')
+    await writeFile(profile, JSON.stringify({ home: worker, tools: ['/usr/bin'], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
+    sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', reviewHome })
+    const result = await execute(sandbox.binary, [...sandbox.args, '/usr/bin/bash', '-c', `
+      for path in .codex .opencode opencode.json opencode.jsonc; do
+        test ! -e "$path" && test ! -L "$path" || exit 10
+      done
+      test "$(cat ordinary/fixture)" = 'repository data' || exit 11
+      test "$(cat ordinary-alias)" = 'repository data' || exit 12
+      if echo forbidden > new-file; then exit 13; fi
+      if echo forbidden > ordinary/fixture; then exit 14; fi
+      git rev-parse --verify HEAD >/dev/null || exit 15
+      echo protected
+    `], { env: sandbox.environment })
+    expect(result.stdout.trim()).toBe('protected')
+    expect(await readFile(join(workspace, 'ordinary/fixture'), 'utf8')).toBe('repository data')
+    expect(await readFile(join(root, 'outside/fixture'), 'utf8')).toBe('outside data')
+    const before = (await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout
+    await sandbox.release()
+    expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe(before)
   }
   finally {
     await sandbox?.release()
