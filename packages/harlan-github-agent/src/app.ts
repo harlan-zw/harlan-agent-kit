@@ -224,9 +224,13 @@ function hasDashboardAccess(request: Request, password: string): boolean {
     && timingSafeEqual(expectedBuffer, suppliedBuffer)
 }
 
-function observableState(options: AgentAppOptions): string {
+function dashboardEvent(options: AgentAppOptions): { observable: string, serialize: () => string } {
   const snapshot = dashboardSnapshot(options)
-  return JSON.stringify({ ...snapshot, generatedAt: '' })
+  let serialized: string | undefined
+  return {
+    observable: JSON.stringify({ ...snapshot, generatedAt: '' }),
+    serialize: () => serialized ??= JSON.stringify(snapshot),
+  }
 }
 
 interface ApprovalRequest {
@@ -877,31 +881,47 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     return stream
   })
 
+  const dashboardSubscribers = new Set<(sample: ReturnType<typeof dashboardEvent>) => void>()
+  let dashboardInterval: ReturnType<typeof setInterval> | undefined
   app.get('/api/events', (event) => {
     const stream = createEventStream(event)
-    let previous = observableState(options)
-    void stream.pushComment('connected')
-    const interval = setInterval(() => {
-      const next = observableState(options)
-      if (next === previous)
+    let previous = dashboardEvent(options).observable
+    const update = (sample: ReturnType<typeof dashboardEvent>): void => {
+      if (sample.observable === previous)
         return
-      previous = next
-      const snapshot = dashboardSnapshot(options)
-      void stream.push({ event: 'state', data: JSON.stringify(snapshot) }).catch(() => {
-        // The browser closed this live update connection.
-        clearInterval(interval)
-      })
-    }, options.eventIntervalMilliseconds ?? 2_000)
-    interval.unref()
-    const stop = (): void => {
-      clearInterval(interval)
-      options.shutdownSignal?.removeEventListener('abort', stop)
+      previous = sample.observable
+      // Each subscriber owns its write. One slow or closed stream cannot block the others.
+      void stream.push({ event: 'state', data: sample.serialize() }).catch(stop)
     }
-    if (options.shutdownSignal?.aborted)
+    const stop = (): void => {
+      dashboardSubscribers.delete(update)
+      if (dashboardSubscribers.size === 0 && dashboardInterval !== undefined) {
+        clearInterval(dashboardInterval)
+        dashboardInterval = undefined
+      }
+      options.shutdownSignal?.removeEventListener('abort', shutdown)
+    }
+    function shutdown(): void {
+      stop()
       void stream.close()
-    else
-      options.shutdownSignal?.addEventListener('abort', stop, { once: true })
+    }
     stream.onClosed(stop)
+    if (options.shutdownSignal?.aborted) {
+      shutdown()
+    }
+    else {
+      dashboardSubscribers.add(update)
+      options.shutdownSignal?.addEventListener('abort', shutdown, { once: true })
+      void stream.pushComment('connected').catch(stop)
+      if (dashboardInterval === undefined) {
+        dashboardInterval = setInterval(() => {
+          const sample = dashboardEvent(options)
+          for (const subscriber of dashboardSubscribers)
+            subscriber(sample)
+        }, options.eventIntervalMilliseconds ?? 2_000)
+        dashboardInterval.unref()
+      }
+    }
     return stream
   })
 
