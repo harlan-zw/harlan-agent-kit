@@ -13,17 +13,17 @@ import { err, ok } from '../result.ts'
 const CANDIDATE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['candidates'],
+  required: ['report', 'verdict', 'candidates'],
   properties: {
     report: {
       type: 'string',
-      description: 'The published Markdown report a check-in Routine wrote. Leave it out for other Routines.',
+      description: 'The published Markdown report. Use an empty string when the Routine needs no report.',
     },
     verdict: {
-      type: 'object',
+      type: ['object', 'null'],
       additionalProperties: false,
       required: ['severity', 'coverage'],
-      description: 'What a check-in run concluded. Required for a check-in Routine. Leave it out for other Routines.',
+      description: 'What a check-in run concluded. Use null when the Routine needs no verdict.',
       properties: {
         severity: {
           type: 'string',
