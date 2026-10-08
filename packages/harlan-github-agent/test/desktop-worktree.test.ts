@@ -111,6 +111,33 @@ it('imports one desktop result and rejects late duplicate completion', async () 
   expect(broker.complete(claimed.id, claimed.worktree, null)).toBe(false)
 })
 
+it('fences the previous desktop identity after a capacity deferral', async () => {
+  const f = await fixture()
+  const broker = createDesktopBroker({ now: () => 1 })
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  const controller = new AbortController()
+  const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: '', sessionId: null, signal: controller.signal, workspace: f.repository })[Symbol.asyncIterator]()
+  const response = iterator.next()
+  const stopped = expect(response).rejects.toThrow()
+  let first: DesktopTurn | null = null
+  await vi.waitFor(() => {
+    first = broker.claim()
+    expect(first).not.toBeNull()
+  })
+  const previous = first as unknown as DesktopTurn
+  expect(broker.defer(previous.id)).toBe(true)
+  const next = broker.claim()!
+  expect(next.id).not.toBe(previous.id)
+  expect(broker.defer(previous.id)).toBe(false)
+  expect(broker.active(previous.id)).toBe(false)
+  expect(broker.events(previous.id, [{ _tag: 'Message', text: 'stale' }], 0)).toBe(false)
+  expect(broker.complete(previous.id, previous.worktree, null)).toBe(false)
+  expect(broker.active(next.id)).toBe(true)
+  controller.abort()
+  await stopped
+  expect(broker.active(next.id)).toBe(false)
+})
+
 it('keeps an active turn through stale inventory and fences duplicated event delivery', async () => {
   const f = await fixture()
   let now = 1

@@ -87,7 +87,14 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
       const entry = pending.get(id)
       if (!ownsTurn(entry))
         return false
+      // A lost deferral acknowledgement may be replayed after another claim.
+      // Give that claim a new identity before returning the turn to the Queue.
+      pending.delete(id)
+      entry.turn = { ...entry.turn, id: randomUUID() }
+      entry.nextSequence = 0
+      entry.leaseExpiresAt = 0
       entry.state = 'queued'
+      pending.set(entry.turn.id, entry)
       return true
     },
     active: (id: string) => {
@@ -180,7 +187,7 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
         finally {
           if (entry !== undefined)
             entry.state = 'cancelled'
-          pending.delete(id)
+          pending.delete(entry?.turn.id ?? id)
           await rm(temporary, { recursive: true, force: true })
         }
       })(),
