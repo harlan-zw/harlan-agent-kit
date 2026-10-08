@@ -268,6 +268,12 @@ inspect_repository() {
     ((age >= stale_days)) || continue
     ((old_count += 1))
 
+    # Interactive sessions retain their exact Worktree between turns.
+    if [[ $branch =~ ^agent/session-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
+      keep "$path" desktop-session
+      continue
+    fi
+
     if ! status=$(git -C "$path" status --porcelain=v1 --untracked-files=all 2>/dev/null); then
       record_error "$path" status-failed
       continue

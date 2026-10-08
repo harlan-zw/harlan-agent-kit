@@ -4,6 +4,7 @@ import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './
 import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
+import type { SessionController } from './session-controller.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
@@ -20,6 +21,7 @@ import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDeskt
 import { parseAgentSlots } from './host-capacity.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
+import { registerSessionRoutes } from './session-routes.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
@@ -29,6 +31,7 @@ export interface AgentAppOptions {
     observe: (target: PullRequestWatchTarget, signal: AbortSignal) => Promise<Result<void, string>>
   }
   reloadExternalWatches?: () => Promise<Result<{ repositories: number, issues: number }, string>>
+  sessions?: SessionController
   desktop?: DesktopBroker
   hostCapacity?: () => HostCapacity
   hostTasks?: HostAgentPool['tasks']
@@ -56,7 +59,7 @@ export interface AgentAppOptions {
 }
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
-const DASHBOARD_PAGES = ['history', 'watching', 'routines', 'flow', 'stats'] as const
+const DASHBOARD_PAGES = ['sessions', 'history', 'watching', 'routines', 'flow', 'stats'] as const
 const EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS = 12_000
 
 const securityHeaders = {
@@ -406,6 +409,18 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       response.headers.set('content-security-policy', `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors ${framing.frameAncestors}; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`)
     },
   })
+
+  if (options.sessions !== undefined) {
+    registerSessionRoutes(app, options.sessions)
+  }
+  else {
+    app.get('/api/sessions', () => {
+      throw createError({ status: 503, message: 'Enable desktop sessions after installing the private ingress.' })
+    })
+    // A disabled interactive feature must leave maintenance offload working.
+    app.post('/api/desktop/sessions/report', () => ({ accepted: false, stops: [] }))
+    app.post('/api/desktop/sessions/claim', () => null)
+  }
 
   app.get('/health', () => {
     const snapshot = options.store.getDashboardSnapshot(options.now().toISOString())

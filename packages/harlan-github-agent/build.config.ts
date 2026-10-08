@@ -9,6 +9,7 @@ export default defineBuildConfig({
         './src/cli.ts',
         './src/desktop-client.ts',
         './src/desktop-execute.ts',
+        './src/desktop-session-execute.ts',
         './src/agent-sandbox-cli.ts',
         './src/agent-sandbox-runtime.ts',
         './src/github-media-render.ts',

@@ -779,6 +779,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   if (port === undefined)
     issues.push({ path: '$.server.port', message: 'Expected an integer from 1 to 65535.' })
   const allowedOrigin = server === undefined ? undefined : requiredString(server, 'allowed_origin', '$.server', issues)
+  const desktopSessions = server?.desktop_sessions === undefined ? false : requiredBoolean(server, 'desktop_sessions', '$.server', issues)
   const frameAncestors = server === undefined
     ? undefined
     : server.frame_ancestors === undefined ? [] : stringArray(server, 'frame_ancestors', '$.server', issues)
@@ -886,6 +887,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || allowedOwners === undefined
     || port === undefined
     || allowedOrigin === undefined
+    || desktopSessions === undefined
     || frameAncestors === undefined
     || storagePath === undefined
     || pollIntervalSeconds === undefined
@@ -903,7 +905,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   return ok({
     agent,
     github: { appId, privateKeyPath, allowedOwners },
-    server: { host, port, allowedOrigin, frameAncestors },
+    server: { host, port, allowedOrigin, frameAncestors, desktopSessions },
     webhook,
     classification,
     triggers,

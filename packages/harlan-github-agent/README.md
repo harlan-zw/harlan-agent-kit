@@ -290,6 +290,22 @@ Use the `Auto` and `Manual` control in the header to set the Selection mode. `Au
 The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers read only Review and separate scoped Repair for that head commit.
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
 The desktop tray has separate Agent and GitHub Actions icons.
+
+The Dashboard's Sessions page starts interactive desktop Agents in Projects under `~/pkg` and `~/sites`.
+Select a Project, Agent provider, model, and Reasoning effort, then send a prompt.
+Follow-up messages resume the same native conversation and persistent Worktree.
+The desktop must be connected and have free Agent capacity.
+Only immediate Git control checkouts appear in the Project list.
+
+Agent sessions use the desktop's local credentials, tools, and Agent instructions.
+Maintenance Workers retain their existing isolation and controller publication rules.
+Session Worktrees stay available after browser disconnects and between turns.
+Stop Agent waits for desktop process termination before another turn can start.
+If a session is interrupted, reconnect the desktop and confirm Stop Agent before resuming.
+
+Agent sessions require explicit `server.desktop_sessions: true` configuration.
+Install the private ingress first, following [Desktop Agent sessions](../../scripts/public-dashboard.md#desktop-agent-sessions).
+The public Dashboard retains monitoring access while Session APIs require the private ingress.
 The Agent menu groups current Agent tasks under Hogwild and Desktop.
 Tasks without a current provider turn stay outside those groups.
 The menu also shows the desktop's shared memory use and limit.

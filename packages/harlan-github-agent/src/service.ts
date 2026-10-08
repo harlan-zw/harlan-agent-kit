@@ -93,6 +93,7 @@ import { createRoutineScanWorker } from './routine-worker.ts'
 import { resolveRecoveredRunnerIncidents } from './runner-lost-recovery.ts'
 import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
+import { createSessionController } from './session-controller.ts'
 import { openJournalStore } from './store.ts'
 import { runCompletionTask } from './take-ownership-completion.ts'
 import { createCompletionSource } from './take-ownership-github.ts'
@@ -1539,7 +1540,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const settled = await Promise.all([...schedulers.map(scheduler => scheduler.settle(taskId)), mutationSchedulers.repairRecovery.settle(taskId)])
     return settled.includes(true)
   }
+  const sessions = config.server.desktopSessions === true
+    ? createSessionController({ path: join(dirname(config.storage.path), 'desktop-sessions.json'), now, availableSlots: () => Math.max(0, agentSlots().desktop - hosts.read().desktopActive) })
+    : undefined
   const app = createAgentApp({
+    ...(sessions === undefined ? {} : { sessions }),
     ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),
     ...(config.triggers.includes('github')
       ? { pullRequestWatch: {

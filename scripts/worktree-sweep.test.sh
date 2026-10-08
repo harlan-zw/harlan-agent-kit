@@ -71,6 +71,7 @@ dirty=$(create_worktree dirty)
 printf '%s\n' dirty > "$dirty/dirty.txt"
 
 claimed=$(create_worktree claimed)
+desktop_session=$(create_worktree agent/session-12345678-1234-1234-1234-123456789abc)
 claim_session=$(bash "$claim" new-session)
 bash "$claim" acquire --path "$claimed" --session "$claim_session" >/dev/null
 
@@ -81,6 +82,7 @@ grep -F -- "ready"$'\t'"$integrated" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$unintegrated"$'\t'"reason=not-integrated" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$dirty"$'\t'"reason=dirty" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$claimed"$'\t'"reason=claimed" <<< "$dry_run" >/dev/null
+grep -F -- "kept"$'\t'"$desktop_session"$'\t'"reason=desktop-session" <<< "$dry_run" >/dev/null
 
 WORKTREE_SWEEP_WT="$test_root/bin/sweep-wt" WORKTREE_SWEEP_JQ="$(command -v jq)" \
   bash "$sweep" --apply --days 0 "$test_root" >/dev/null
@@ -89,6 +91,7 @@ test ! -e "$integrated"
 test -d "$unintegrated"
 test -d "$dirty"
 test -d "$claimed"
+test -d "$desktop_session"
 git -C "$repository" show-ref --verify --quiet refs/heads/unintegrated
 if git -C "$repository" show-ref --verify --quiet refs/remotes/origin/unintegrated; then
   printf '%s\n' 'The sweep pushed an unintegrated branch.' >&2

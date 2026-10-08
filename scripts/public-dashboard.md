@@ -71,6 +71,37 @@ The nonexistent POST route tests Origin handling without changing Service state.
 The Tailscale address retains its existing access.
 The Dashboard's live Hogwild metrics remain available through Tailscale only.
 
+## Desktop Agent sessions
+
+The Sessions page starts Agents in desktop Projects under `~/pkg` and `~/sites`.
+Each Agent session keeps one Worktree and its provider conversation across turns.
+The Agent uses the desktop's local credentials and Agent instructions.
+
+Install the updated `scripts/30-agent.caddy` route before enabling Agent sessions.
+The route denies public `/api/sessions` and `/api/desktop/sessions` requests, including their child paths.
+It also stamps public proxy requests with `X-Harlan-Agent-Ingress: public`.
+The Service refuses that marker on every Agent session route.
+
+After installing and reloading Caddy, set this key in the existing Service configuration:
+
+```yaml
+server:
+  desktop_sessions: true
+```
+
+Keep the other `server` keys. The default is `false`.
+Update both Service checkouts with `pnpm service:hogwild:update`.
+Open `https://hogwild.tailcad325.ts.net/sessions` through Tailscale.
+
+If the desktop sleeps, the Agent session shows an interruption.
+Reconnect the desktop, select Stop Agent, then send the next message after stop confirmation.
+Browser disconnects preserve the Agent session and its Worktree.
+The Worktree sweep preserves `agent/session-<UUID>` branches between turns.
+
+Verify public Session APIs return 403, including authenticated requests with the correct public Origin.
+Then verify Project selection, prompt delivery, follow-up, and Stop through the Tailscale address.
+Disabling `server.desktop_sessions` preserves stored Agent sessions and leaves maintenance offload available.
+
 ## Rollback
 
 Remove the `agent.harlanzw.com` DNS record.

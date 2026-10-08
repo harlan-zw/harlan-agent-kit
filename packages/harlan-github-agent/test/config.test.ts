@@ -43,6 +43,14 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('requires an explicit opt-in before desktop sessions can use local credentials', () => {
+    const disabled = parseConfigText(configText)
+    expect(disabled._tag === 'Ok' && disabled.value.server.desktopSessions === true).toBe(false)
+    const enabled = parseConfigText(configText.replace('server:', 'server:\n  desktop_sessions: true'))
+    expect(enabled._tag === 'Ok' && enabled.value.server.desktopSessions).toBe(true)
+    const invalid = parseConfigText(configText.replace('server:', 'server:\n  desktop_sessions: yes'))
+    expect(invalid._tag === 'Err' && invalid.error.map(issue => issue.path)).toContain('$.server.desktop_sessions')
+  })
   it('scopes release defaults to an allowed owner and trusted checkout root', () => {
     const block = `release_defaults:\n  owner: harlan-zw\n  checkout_root: ${homedir()}/pkg\n  manifest: package.json\n  version_files: [package.json]\n  tag_prefix: v\n  workflow: release.yml\n  checks: all\n`
     const parsed = parseConfigText(`${block}${configText}`)
