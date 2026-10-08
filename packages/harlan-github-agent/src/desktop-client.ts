@@ -178,9 +178,21 @@ async function main(): Promise<void> {
   const sessions = createDesktopSessionClient({ api, root, capacity, signal: shutdown.signal })
   while (!shutdown.signal.aborted) {
     try {
-      await sessions.report()
+      let interactive = false
+      try {
+        await sessions.report()
+        interactive = true
+      }
+      catch (error) {
+        console.error('Interactive session report failed.', error)
+      }
       if (running.size < DESKTOP_AGENT_SLOT_CEILING && await report()) {
-        const session = await sessions.claim(DESKTOP_AGENT_SLOT_CEILING - running.size)
+        const session = interactive
+          ? await sessions.claim(DESKTOP_AGENT_SLOT_CEILING - running.size).catch((error: unknown) => {
+              console.error('Interactive session claim failed.', error)
+              return null
+            })
+          : null
         if (session !== null) {
           const work = sessions.run(session)
             .catch((error: unknown) => { console.error(error) })

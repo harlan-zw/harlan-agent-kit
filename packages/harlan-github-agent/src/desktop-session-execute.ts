@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import type { AgentEvent, AgentProvider } from './agent-provider.ts'
 import type { SessionTurn } from './session-protocol.ts'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
+import { acquireDesktopSessionClaim } from './desktop-session-claim.ts'
 import { prepareDesktopSessionWorkspace } from './desktop-session-projects.ts'
 import { createDesktopSessionProvider } from './desktop-session-provider.ts'
 
@@ -85,6 +86,8 @@ async function main() {
     signal: signal.signal,
     provider: createDesktopSessionProvider({ provider: turn.provider, environment: environment.value }),
     prepared: async (workspacePath) => {
+      await acquireDesktopSessionClaim(workspacePath, turn.sessionId)
+      await writeFile(join(directory, 'claim.json'), JSON.stringify({ workspacePath, sessionId: turn.sessionId }), { mode: 0o600 })
       result.workspacePath = workspacePath
       await capture()
     },
@@ -97,7 +100,6 @@ async function main() {
     },
   }).finally(async () => {
     await capture()
-    await rm(lock)
   })
   await capture()
 }

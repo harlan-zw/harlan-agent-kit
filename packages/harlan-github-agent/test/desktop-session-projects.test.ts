@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, expect, it } from 'vitest'
+import { acquireDesktopSessionClaim, releaseDesktopSessionClaim } from '../src/desktop-session-claim.ts'
 import { executeDesktopSessionTurn } from '../src/desktop-session-execute.ts'
 import { discoverDesktopSessionProjects, prepareDesktopSessionWorkspace, resolveDesktopSessionProject } from '../src/desktop-session-projects.ts'
 
@@ -55,6 +56,11 @@ it('preserves session edits across turns and rejects a substituted Worktree', as
   const id = '12345678-1234-1234-1234-123456789abc'
   const signal = new AbortController().signal
   const workspace = await prepareDesktopSessionWorkspace(home, 'pkg/app', id, null, signal)
+  await acquireDesktopSessionClaim(workspace, id)
+  await expect(acquireDesktopSessionClaim(workspace, 'another-session')).rejects.toThrow()
+  await releaseDesktopSessionClaim(workspace, id)
+  await acquireDesktopSessionClaim(workspace, 'another-session')
+  await releaseDesktopSessionClaim(workspace, 'another-session')
   await writeFile(join(workspace, 'file.txt'), 'session edit')
   expect(await prepareDesktopSessionWorkspace(home, 'pkg/app', id, workspace, signal)).toBe(workspace)
   expect(await readFile(join(workspace, 'file.txt'), 'utf8')).toBe('session edit')

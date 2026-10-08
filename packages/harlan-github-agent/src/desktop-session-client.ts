@@ -1,4 +1,5 @@
 import type { AgentEvent } from './agent-provider.ts'
+import type { DesktopSessionGroup } from './desktop-session-process.ts'
 import type { SessionFence, SessionProject, SessionTurn } from './session-protocol.ts'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -10,6 +11,8 @@ import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { DESKTOP_MEMORY_PER_AGENT_GIB } from './desktop-protocol.ts'
+import { acquireDesktopSessionClaim, releaseDesktopSessionClaim } from './desktop-session-claim.ts'
+import { readDesktopSessionGroup, stopDesktopSessionGroup } from './desktop-session-process.ts'
 import { discoverDesktopSessionProjects } from './desktop-session-projects.ts'
 import { SESSION_PROTOCOL } from './session-protocol.ts'
 
@@ -27,11 +30,28 @@ export function createDesktopSessionClient(options: {
   const api = options.api
   const active = new Map<string, () => void>()
   const livePath = (id: string) => join(options.root, 'sessions', id, 'live.json')
+  const readLock = (id: string) => readFile(join(options.root, 'sessions', id, 'execution.lock'), 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT')
+      return null
+    throw error
+  })
   const identity = (pid: number) => readFile(`/proc/${pid}/stat`, 'utf8').then(text => text.slice(text.lastIndexOf(')') + 2).split(' ')[19]).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT')
       return null
     throw error
   })
+  const readClaim = (directory: string) => readFile(join(directory, 'claim.json'), 'utf8').then(text => JSON.parse(text) as { workspacePath: string, sessionId: string }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT')
+      return null
+    throw error
+  })
+  const releaseClaim = async (directory: string) => {
+    const claim = await readClaim(directory)
+    if (claim === null)
+      return
+    await releaseDesktopSessionClaim(claim.workspacePath, claim.sessionId)
+    await rm(join(directory, 'claim.json'))
+  }
   const reconcile = async (stops: SessionFence[]) => {
     for (const stopped of stops) {
       if (!/^[a-f0-9-]{36}$/.test(stopped.sessionId))
@@ -41,17 +61,18 @@ export function createDesktopSessionClient(options: {
         stop()
         continue
       }
-      const ledger = await readFile(livePath(stopped.sessionId), 'utf8').then(text => JSON.parse(text) as { pid: number, birth: string, turnId: string, leaseToken: string }).catch((error: NodeJS.ErrnoException) => {
+      const ledger = await readFile(livePath(stopped.sessionId), 'utf8').then(text => JSON.parse(text) as DesktopSessionGroup & { turnId: string, leaseToken: string }).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT')
           return null
         throw error
       })
-      if (ledger !== null && ledger.turnId === stopped.turnId && ledger.leaseToken === stopped.leaseToken && await identity(ledger.pid) === ledger.birth) {
-        process.kill(-ledger.pid, 'SIGTERM')
-        await delay(10_000)
-        if (await identity(ledger.pid) === ledger.birth)
-          process.kill(-ledger.pid, 'SIGKILL')
-      }
+      if (ledger === null && await readLock(stopped.sessionId) !== null)
+        throw new Error('The previous session processes cannot be verified.')
+      if (ledger !== null && (ledger.turnId !== stopped.turnId || ledger.leaseToken !== stopped.leaseToken))
+        throw new Error('Another turn owns the session processes.')
+      if (ledger !== null && ledger.turnId === stopped.turnId && ledger.leaseToken === stopped.leaseToken)
+        await stopDesktopSessionGroup(ledger)
+      await releaseClaim(join(options.root, 'sessions', stopped.sessionId, stopped.turnId))
       if (ledger !== null && ledger.turnId === stopped.turnId && ledger.leaseToken === stopped.leaseToken)
         await rm(join(options.root, 'sessions', stopped.sessionId, 'execution.lock'), { force: true })
       const result = await readFile(join(options.root, 'sessions', stopped.sessionId, stopped.turnId, 'result.json'), 'utf8').then(text => JSON.parse(text) as { workspacePath: string | null, providerSessionId: string | null }).catch((error: NodeJS.ErrnoException) => {
@@ -84,7 +105,7 @@ export function createDesktopSessionClient(options: {
           return null
         throw error
       })
-      if (previous !== null) {
+      if (previous !== null || await readLock(turn.sessionId) !== null) {
         await api(path('defer'), fence(turn))
         return
       }
@@ -104,34 +125,32 @@ export function createDesktopSessionClient(options: {
         child.once('error', reject)
         child.once('close', code => resolve(code ?? 1))
       })
-      let kill: ReturnType<typeof setTimeout> | undefined
+      void completion.catch((error: unknown) => {
+        console.error('Session child failed to start.', error)
+      })
+      let group: DesktopSessionGroup | null = child.pid === undefined ? null : { pid: child.pid, birth: await identity(child.pid) ?? '', members: await readDesktopSessionGroup(child.pid) }
+      let stopping: Promise<void> | null = null
+      let stopFailure: unknown = null
       const stop = () => {
         stopped = true
-        if (child.pid !== undefined) {
-          try {
-            process.kill(-child.pid, 'SIGTERM')
-          }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
-              throw error
-          }
-        }
-        kill ??= setTimeout(() => {
-          if (child.pid === undefined)
-            return
-          try {
-            process.kill(-child.pid, 'SIGKILL')
-          }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
-              console.error(error)
-          }
-        }, 10_000)
-        kill.unref()
+        stopping ??= (group === null ? Promise.resolve() : stopDesktopSessionGroup(group)).catch((error: unknown) => {
+          stopFailure = error
+          console.error('Session processes could not stop.', error)
+        })
+      }
+      const captureGroup = async () => {
+        if (group === null || stopping !== null)
+          return
+        const members = await readDesktopSessionGroup(group.pid)
+        if (members.length > 0 && !members.some(member => (member.pid === group!.pid && member.birth === group!.birth) || group!.members.some(saved => saved.pid === member.pid && saved.birth === member.birth)))
+          throw new Error('The session process group identity changed.')
+        group = { ...group, members: [...group.members, ...members].filter((member, index, all) => all.findIndex(item => item.pid === member.pid && item.birth === member.birth) === index) }
+        await writeFile(livePath(turn.sessionId), JSON.stringify({ ...fence(turn), ...group }), { mode: 0o600 })
       }
       options.signal.addEventListener('abort', stop, { once: true })
       active.set(turn.turnId, stop)
       const heartbeat = new AbortController()
+      let renewed = Date.now()
       const watching = (async () => {
         while (!heartbeat.signal.aborted) {
           await delay(3000, undefined, { signal: heartbeat.signal }).catch((error: unknown) => {
@@ -140,6 +159,13 @@ export function createDesktopSessionClient(options: {
           })
           if (heartbeat.signal.aborted)
             return
+          await captureGroup()
+          if (Date.now() - renewed > 5 * 60_000) {
+            const claim = await readClaim(directory)
+            if (claim !== null)
+              await acquireDesktopSessionClaim(claim.workspacePath, claim.sessionId)
+            renewed = Date.now()
+          }
           const state = await api<{ active: boolean, cancelled: boolean }>(path('heartbeat'), fence(turn))
           if (!state?.active || state.cancelled) {
             stop()
@@ -151,10 +177,23 @@ export function createDesktopSessionClient(options: {
         stop()
       })
       let seq = 0
+      const teardown = async () => {
+        heartbeat.abort()
+        await watching
+        stopping ??= group === null ? Promise.resolve() : stopDesktopSessionGroup(group)
+        await stopping
+        if (stopFailure !== null)
+          throw stopFailure
+        await completion
+        await releaseClaim(directory)
+      }
+      let cleaned = false
       try {
-        if (child.pid !== undefined)
-          await writeFile(livePath(turn.sessionId), JSON.stringify({ ...fence(turn), pid: child.pid, birth: await identity(child.pid) }), { mode: 0o600 })
+        await captureGroup()
+        if (options.signal.aborted)
+          stop()
         for await (const line of createInterface({ input: child.stdout })) {
+          await captureGroup()
           const event = JSON.parse(line) as AgentEvent
           if ('_tag' in event && event._tag as string === 'AtCapacity')
             continue
@@ -179,6 +218,8 @@ export function createDesktopSessionClient(options: {
           }
         }
         const code = await completion
+        await teardown()
+        cleaned = true
         if (code === 75) {
           await api(path('defer'), fence(turn))
           return
@@ -191,21 +232,10 @@ export function createDesktopSessionClient(options: {
         await api(path('complete'), { ...fence(turn), ...result, outcome: stopped ? 'stopped' : code === 0 ? 'completed' : 'failed', ...(code !== 0 && !stopped ? { reason: `Desktop Agent stopped with status ${code}. ${stderr}` } : {}) })
       }
       finally {
-        heartbeat.abort()
-        await watching
-        stop()
-        await completion
-        if (child.pid !== undefined) {
-          try {
-            process.kill(-child.pid, 'SIGKILL')
-          }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
-              console.error(error)
-          }
+        if (!cleaned) {
+          stop()
+          await teardown()
         }
-        if (kill !== undefined)
-          clearTimeout(kill)
         options.signal.removeEventListener('abort', stop)
         await rm(input, { force: true })
         active.delete(turn.turnId)
