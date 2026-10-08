@@ -4762,6 +4762,7 @@ describe('journal store', () => {
 
   it.each([
     ['corrected publication staging becomes available', 'The task already has a different publication command.'],
+    ['the desktop reconnects', 'Desktop disconnected during the Agent turn.'],
     ['GitHub App permissions are granted', 'The permissions requested are not granted to this installation.'],
   ])('retries mutation work after %s', (_scenario, reason) => {
     const store = createStore()
