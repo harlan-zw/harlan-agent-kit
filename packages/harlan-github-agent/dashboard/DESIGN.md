@@ -123,15 +123,20 @@ One persistent 176px navigation rail and one 48px header.
 ### Agent sessions
 
 - A 256px project list borders a full-height conversation. The composer stays visible at the bottom.
-- Project names precede their sessions. Session titles truncate; the conversation header shows the full title.
-- Messages use 16px body text and 28px leading. User and Agent labels orient each message.
-- Command output, file changes, and Reasoning stay inside the Activity disclosure.
+- Run on selects Desktop or Hogwild. Each host keeps its own projects, sessions, and connection state.
+- A session pins its host, provider, and model. Its header names the project, host, and observed state.
+- User messages use muted bubbles. Agent messages use semantic Markdown, 16px body text, and 28px leading.
+- Fenced code and message text have working Copy controls. Code and tables scroll within their own regions.
+- Successful commands fold into quiet activity rows in conversation order. Running commands and failures remain visible.
+- Command starts and completions share one row. Opening a row reveals its native command and output.
 - The composer selects project, provider, model, and Reasoning effort before the first message.
-- A session keeps its provider and model for later messages. It shows its Worktree path below the composer.
+- Mobile model selection owns a full row. Host and project controls stay legible.
+- Per-session drafts survive navigation in the browser tab. Request failures preserve the draft.
+- Native provider messages appear when received. The interface never adds simulated typing.
+- The transcript follows new output until the reader scrolls upward. Latest message restores follow explicitly.
+- Stop remains visible until the host confirms termination. Interrupted sessions require Stop before another message.
 - Maintenance Agent selection, Pause, Selection mode, and Restart controls appear only on monitoring routes.
-- Offline desktop state disables Send. Request failures preserve the prompt and display a Retry control.
-- Stop remains visible until the desktop confirms the process stopped.
-- Mobile uses a project drawer within the page. Toggle projects opens and closes it.
+- Mobile uses a project drawer. Toggle projects opens it; Close projects and Escape close it.
 
 ### System slideover
 

@@ -62,6 +62,7 @@
     "@nuxt/ui": "catalog:",
     "@types/node": "catalog:",
     "@vueuse/nuxt": "catalog:",
+    "marked": "catalog:",
     "nuxt": "catalog:",
     "nuxt-skew-protection": "catalog:",
     "obuild": "catalog:",

@@ -13,6 +13,8 @@ The dashboard uses short, direct controls and specific state descriptions.
 | --- | --- | --- |
 | Name | Agent | Navigation and document title |
 | Start control | New session | Navigation and session sidebar |
+| Host control | Run on | Project sidebar and mobile composer |
+| Session setup | Enable Agent sessions after installing the private ingress. | Refused session requests and setup guidance |
 
 ## Register by context
 
@@ -24,6 +26,8 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Empty states | Direct next action | Choose a project to start. |
 | Failures | Resource and action | Could not load sessions. Retry. |
 | Composer | Direct instruction | Ask the Agent to work on this project. |
+| Clipboard | Confirm the result | Copied |
+| Activity | State the observed execution | Running commands |
 
 ## Copy principles
 
@@ -31,6 +35,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 2. Preserve the prompt when a request fails.
 3. Describe observed state without promising completion.
 4. Keep technical evidence inside disclosures.
+5. Keep failed activity visible. Fold successful activity into one quiet line.
 
 ## Banned language
 
