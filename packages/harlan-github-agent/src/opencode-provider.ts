@@ -20,6 +20,7 @@ import { materializeAgentMedia } from './github-media.ts'
 import { createOpencodeSession, readOpencodeMessages, recoverOpencodeResult } from './opencode-result.ts'
 import { err, ok } from './result.ts'
 import { createReviewRuntime, REVIEW_TOOL_NAMES } from './review-runtime.ts'
+import { dailyCheckinDirectory } from './workspace-environment.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
 const fileTools = new Set(['edit', 'write', 'patch', 'multiedit'])
@@ -128,7 +129,11 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
         output = `${output}${chunk}`.slice(-maximumErrorCharacters)
         const url = opencodeServerUrl(output)
         if (url !== undefined) {
-          settle(ok({ ...opencodeServer(transport.url, password, workspace, child, review !== undefined), transportDirectory, close: async (signal) => {
+          const stateDirectory = dailyCheckinDirectory(sandbox.environment, taskId)
+          const session = review === undefined
+            ? (stateDirectory === undefined ? {} : { stateDirectory })
+            : { reviewTools: REVIEW_TOOL_NAMES }
+          settle(ok({ ...opencodeServer(transport.url, password, workspace, child, session), transportDirectory, close: async (signal) => {
             child.kill(signal)
             const stop = setTimeout(() => child.kill('SIGKILL'), 5_000)
             stop.unref()
@@ -158,12 +163,12 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime):
   }
 }
 
-function opencodeServer(url: string, password: string, workspace: string, child: OpencodeProcess, review = false): OpencodeServer {
+function opencodeServer(url: string, password: string, workspace: string, child: OpencodeProcess, session: { reviewTools?: readonly string[], stateDirectory?: string }): OpencodeServer {
   const authorization = `Basic ${Buffer.from(`${serverUsername}:${password}`).toString('base64')}`
   return {
     url,
     password,
-    createSession: signal => createOpencodeSession({ url, password, workspace, signal, ...(review ? { reviewTools: REVIEW_TOOL_NAMES } : {}) }),
+    createSession: signal => createOpencodeSession({ url, password, workspace, signal, ...session }),
     readMessages: (sessionId, signal) => readOpencodeMessages({ url, password, workspace, sessionId, signal }),
     steer: (sessionId, text) => fetch(`${url}/session/${encodeURIComponent(sessionId)}/prompt_async?directory=${encodeURIComponent(workspace)}`, {
       method: 'POST',

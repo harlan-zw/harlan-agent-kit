@@ -66,9 +66,13 @@ export function readOpencodeMessages(input: ServerRead & { sessionId: string }):
 }
 
 /** Start an empty session in the exact workspace, independent of CLI event delivery. */
-export async function createOpencodeSession(input: ServerRead & { reviewTools?: readonly string[] }): Promise<Result<string, string>> {
+export async function createOpencodeSession(input: ServerRead & { reviewTools?: readonly string[], stateDirectory?: string }): Promise<Result<string, string>> {
   const permission = input.reviewTools === undefined
-    ? ['question', 'plan_enter', 'plan_exit'].map(permission => ({ permission, pattern: '*', action: 'deny' }))
+    ? [
+        ...['question', 'plan_enter', 'plan_exit'].map(permission => ({ permission, pattern: '*', action: 'deny' })),
+        // The controller assigns this directory. An unattended session cannot answer a permission prompt.
+        ...(input.stateDirectory === undefined ? [] : [{ permission: 'external_directory', pattern: `${input.stateDirectory}/*`, action: 'allow' }]),
+      ]
     : [{ permission: '*', pattern: '*', action: 'deny' }, ...input.reviewTools.map(permission => ({ permission, pattern: '*', action: 'allow' }))]
   const result = await readOpencodeJson({ ...input, path: '/session', method: 'POST', body: JSON.stringify({ permission }) })
   if (result._tag === 'Err')
