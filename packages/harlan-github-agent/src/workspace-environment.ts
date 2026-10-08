@@ -32,6 +32,8 @@ const REFUSED_NAMES = new Set([
   'NODE_PATH',
   'PATH',
   'PNPM_HOME',
+  'PNPM_CONFIG_STORE_DIR',
+  'NPM_CONFIG_STORE_DIR',
   'REQUESTS_CA_BUNDLE',
   'SHELL',
   'SSL_CERT_DIR',
@@ -67,7 +69,7 @@ export function parseEnvironmentFile(text: string): Record<string, string> {
       value = value.replace(/\s+#.*$/, '').trim()
     }
     const upperName = name.toUpperCase()
-    if (REFUSED_NAMES.has(upperName) || REFUSED_PREFIXES.some(prefix => upperName.startsWith(prefix)))
+    if (REFUSED_NAMES.has(upperName.replaceAll('-', '_')) || REFUSED_PREFIXES.some(prefix => upperName.startsWith(prefix)))
       continue
     values[name] = value
   }
