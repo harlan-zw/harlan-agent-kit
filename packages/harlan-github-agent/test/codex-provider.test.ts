@@ -3,7 +3,7 @@ import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { codexAgentEvent, createCodexProvider } from '../src/codex-provider.ts'
 
 function request(overrides: Partial<AgentTurnRequest> = {}): AgentTurnRequest {
@@ -35,6 +35,17 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
     items.push(event)
   return items
 }
+
+it('attributes missing worker configuration to sandbox setup before the model starts', async () => {
+  vi.stubEnv('HOME', '/missing/codex-worker-test')
+  try {
+    expect(await collect(createCodexProvider().runTurn(request())))
+      .toEqual([{ _tag: 'Failed', reason: expect.stringContaining('The Codex Agent worker isolation failed:'), cause: 'sandbox-setup' }])
+  }
+  finally {
+    vi.unstubAllEnvs()
+  }
+})
 
 const messageEvents = [
   { type: 'thread.started', thread_id: 'session-1' },

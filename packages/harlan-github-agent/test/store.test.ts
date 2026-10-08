@@ -952,6 +952,33 @@ describe('journal store', () => {
     })
   })
 
+  it('does not requeue conflict work after branch authority is revoked', () => {
+    const store = createStore()
+    const mapping = repositoryMapping()
+    store.syncRepositories([mapping], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem()
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
+    store.recordObservation({ externalId: 'clean', observedAt: '2026-08-13T01:01:00.000Z', source: 'poll', subject: { ...subject, mergeState: 'clean' } })
+    store.syncRepositories([{ ...mapping, writablePullRequestHeadPrefixes: ['feat/'] }], '2026-08-13T01:02:00.000Z')
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:03:00.000Z', source: 'poll', subject })
+
+    expect(store.claimNextConflictTask('worker', '2026-08-13T01:03:01.000Z', 60_000)).toBeNull()
+  })
+
+  it('does not claim queued conflict work after branch authority is revoked', () => {
+    const store = createStore()
+    const mapping = repositoryMapping()
+    store.syncRepositories([mapping], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestItem() })
+    store.syncRepositories([{ ...mapping, writablePullRequestHeadPrefixes: ['feat/'] }], '2026-08-13T01:01:00.000Z')
+
+    expect(store.claimNextConflictTask('worker', '2026-08-13T01:01:01.000Z', 60_000)).toBeNull()
+    expect(store.getDashboardSnapshot('2026-08-13T01:01:02.000Z').tasks[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'The controller cannot write this pull request branch.',
+    })
+  })
+
   it('stops requeueing a conflict whose publication keeps losing the base branch race', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

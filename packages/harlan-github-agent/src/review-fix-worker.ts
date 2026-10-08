@@ -41,13 +41,6 @@ interface DisputedResponse {
 
 type AgentResponse = RepairedResponse | BlockedResponse | DisputedResponse
 
-interface AgentResponsePayload {
-  outcome?: 'repaired' | 'blocked' | 'disputed'
-  summary?: string
-  checks?: unknown[]
-  commitMessage?: string
-}
-
 export interface ReviewFixWorkerOptions {
   mediaSource?: GitHubMediaSource
   activityLog?: Pick<AgentActivityLog, 'record'>
@@ -85,8 +78,11 @@ const outputSchema = {
 
 function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
   return Promise.resolve(text)
-    .then(value => JSON.parse(value) as AgentResponsePayload)
-    .then((value): Result<AgentResponse, string> => {
+    .then(value => JSON.parse(value) as unknown)
+    .then((payload): Result<AgentResponse, string> => {
+      if (typeof payload !== 'object' || payload === null || Array.isArray(payload))
+        return err('The Agent returned an invalid Repair result.')
+      const value = payload as Record<string, unknown>
       if (
         (value.outcome !== 'repaired' && value.outcome !== 'blocked' && value.outcome !== 'disputed')
         || typeof value.summary !== 'string'
@@ -95,6 +91,7 @@ function parseResponse(text: string): Promise<Result<AgentResponse, string>> {
         || !value.checks.every(check => typeof check === 'string')
         || typeof value.commitMessage !== 'string'
         || (value.outcome === 'repaired' && cleanLine(value.commitMessage).length === 0)
+        || Object.keys(value).some(key => !['outcome', 'summary', 'checks', 'commitMessage'].includes(key))
       ) {
         return err('The Agent returned an invalid Repair result.')
       }

@@ -83,6 +83,44 @@ function stagedIssueStore() {
 }
 
 describe('publication scheduler', () => {
+  it('blocks a prepared conflict fix when publication authority is revoked', async () => {
+    const store = stagedStore()
+    const calls: string[] = []
+    const scheduler = createPublicationScheduler({
+      intervalMilliseconds: 60_000,
+      leaseMilliseconds: 10_000,
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
+      onError: (error) => { throw error },
+      store,
+      publisher: {
+        finalize: () => {
+          calls.push('finalize')
+          return Promise.resolve(ok({ evidence: 'Published.' }))
+        },
+        getHeadSha: () => Promise.resolve(ok('abc123')),
+        push: () => {
+          calls.push('push')
+          return Promise.resolve(ok(undefined))
+        },
+        validateAuthority: () => {
+          calls.push('authority')
+          return Promise.resolve(err('Repository policy does not authorize this pull request branch.'))
+        },
+      },
+      workerId: 'publisher',
+    })
+
+    await scheduler.runNow()
+
+    expect(calls).toEqual(['authority'])
+    expect(store.getDashboardSnapshot('2026-08-13T02:00:00.000Z').tasks[0]?.state).toEqual({
+      _tag: 'Superseded',
+      reason: 'Repository policy does not authorize this pull request branch.',
+    })
+    await scheduler.stop()
+    store.close()
+  })
+
   it('pushes a new branch before creating one pull request', async () => {
     const store = stagedIssueStore()
     let head: string | null = null

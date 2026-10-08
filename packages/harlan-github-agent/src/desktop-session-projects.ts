@@ -4,6 +4,8 @@ import { desktopCommand } from './desktop-worktree.ts'
 import { parseWtWorktrees } from './worktree.ts'
 
 export interface DesktopSessionProject { id: string, name: string, path: string, kind: 'pkg' | 'sites' }
+type ProjectResult = { _tag: 'Ok', project: DesktopSessionProject } | { _tag: 'Err', reason: string }
+const checkoutReason = 'The project must be a Git control checkout inside pkg or sites.'
 async function present(path: string) {
   return lstat(path).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT')
@@ -11,22 +13,36 @@ async function present(path: string) {
     throw error
   })
 }
-/** Only immediate, ordinary Git control checkouts may start sessions. */
-export async function resolveDesktopSessionProject(home: string, id: string): Promise<DesktopSessionProject> {
+async function inspectProject(home: string, id: string): Promise<ProjectResult> {
   const match = /^(pkg|sites)\/([^/]+)$/.exec(id)
   if (match === null || match[2] === '.' || match[2] === '..')
-    throw new Error('Choose a project in pkg or sites.')
+    return { _tag: 'Err', reason: 'Choose a project in pkg or sites.' }
   const kind = match[1] as 'pkg' | 'sites'
   const name = match[2]!
   const root = join(resolve(home), kind)
   const path = join(root, name)
   if ((await present(root))?.isDirectory() !== true || await realpath(root) !== root
     || (await present(path))?.isDirectory() !== true || await realpath(path) !== path
-    || (await present(join(path, '.git')))?.isDirectory() !== true
-    || await desktopCommand('git', ['rev-parse', '--show-toplevel'], path) !== path) {
-    throw new Error('The project must be a Git control checkout inside pkg or sites.')
+    || (await present(join(path, '.git')))?.isDirectory() !== true) {
+    return { _tag: 'Err', reason: checkoutReason }
   }
-  return { id, name, path, kind }
+  const top = await desktopCommand('git', ['rev-parse', '--show-toplevel'], path).catch((error: unknown) => {
+    // Git identifies malformed repository metadata. Spawn, permission, and I/O failures still propagate.
+    if (error !== null && typeof error === 'object' && 'code' in error && error.code === 128
+      && 'stderr' in error && typeof error.stderr === 'string'
+      && /fatal: (?:not a git repository|bad config line \d+ in file)/.test(error.stderr)) {
+      return null
+    }
+    throw error
+  })
+  return top === path ? { _tag: 'Ok', project: { id, name, path, kind } } : { _tag: 'Err', reason: checkoutReason }
+}
+/** Only immediate, ordinary Git control checkouts may start sessions. */
+export async function resolveDesktopSessionProject(home: string, id: string): Promise<DesktopSessionProject> {
+  const result = await inspectProject(home, id)
+  if (result._tag === 'Err')
+    throw new Error(result.reason)
+  return result.project
 }
 export async function discoverDesktopSessionProjects(home: string): Promise<DesktopSessionProject[]> {
   const projects: DesktopSessionProject[] = []
@@ -37,7 +53,13 @@ export async function discoverDesktopSessionProjects(home: string): Promise<Desk
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || (await present(join(root, entry.name, '.git')))?.isDirectory() !== true)
         continue
-      projects.push(await resolveDesktopSessionProject(home, `${kind}/${entry.name}`))
+      const id = `${kind}/${entry.name}`
+      const result = await inspectProject(home, id)
+      if (result._tag === 'Err') {
+        console.warn(`Skipping project ${id}: ${result.reason}`)
+        continue
+      }
+      projects.push(result.project)
     }
   }
   return projects.sort((a, b) => a.id.localeCompare(b.id))
