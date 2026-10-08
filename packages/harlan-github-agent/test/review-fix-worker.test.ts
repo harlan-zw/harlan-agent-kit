@@ -315,7 +315,20 @@ describe('review fix Worker', () => {
     expect(reports).toEqual([{ summary: 'Buffered the partial sequence across chunks.', checks: ['pnpm vitest run test/parser.test.ts'] }])
   })
 
-  it('queues one fresh Review when Repair disproves a finding', async () => {
+  it.each([
+    { label: 'bare JSON', response: null, rejection: null },
+    { label: 'brace-bearing prose and fenced JSON', response: 'The cast to { fonts?: ... } is safe.\n```json\n{"outcome":"disputed","summary":"The false branch already adds LIMIT 100.","checks":["pnpm vitest run test/dashboard-history-limit.test.ts"],"commitMessage":""}\n```', rejection: null },
+    { label: 'repeated checks strings', response: 'The cast to { fonts?: ... } is safe.\n{"outcome":"disputed","summary":"Verified.","checks":"first command","checks":"second command","commitMessage":""}', rejection: 'duplicate object keys' },
+    { label: 'escaped repeated keys', response: '{"outcome":"disputed","summary":"Verified.","checks":[],"\\u0063hecks":[],"commitMessage":""}', rejection: 'duplicate object keys' },
+    { label: 'checks string', response: '{"outcome":"disputed","summary":"Verified.","checks":"command","commitMessage":""}', rejection: 'invalid Repair result' },
+    { label: 'missing outcome', response: '{"summary":"Verified.","checks":[],"commitMessage":""}', rejection: 'invalid Repair result' },
+    { label: 'missing summary', response: '{"outcome":"disputed","checks":[],"commitMessage":""}', rejection: 'invalid Repair result' },
+    { label: 'missing checks', response: '{"outcome":"disputed","summary":"Verified.","commitMessage":""}', rejection: 'invalid Repair result' },
+    { label: 'missing commitMessage', response: '{"outcome":"disputed","summary":"Verified.","checks":[]}', rejection: 'invalid Repair result' },
+    { label: 'unknown field', response: '{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":"","unexpected":true}', rejection: 'invalid Repair result' },
+    { label: 'null result', response: 'null', rejection: 'invalid Repair result' },
+    { label: 'array result', response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]', rejection: 'invalid Repair result' },
+  ])('queues one fresh Review after parsing or correcting $label', async ({ response, rejection }) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const mapping = repositoryMapping({ ownership: 'maintained' })
     const task: ClaimedReviewFixTask = {
@@ -342,6 +355,13 @@ describe('review fix Worker', () => {
       },
     }]
     const reruns: unknown[] = []
+    const requests: ProviderCapture = { requests: [] }
+    const valid = JSON.stringify({
+      outcome: 'disputed',
+      summary: 'The false branch already adds LIMIT 100.',
+      checks: ['pnpm vitest run test/dashboard-history-limit.test.ts'],
+      commitMessage: '',
+    })
 
     const result = await createReviewFixWorker({
       github: {
@@ -359,12 +379,17 @@ describe('review fix Worker', () => {
         })),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
-      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-        outcome: 'disputed',
-        summary: 'The false branch already adds LIMIT 100.',
-        checks: ['pnpm vitest run test/dashboard-history-limit.test.ts'],
-        commitMessage: '',
-      }))),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, {
+        name: 'opencode',
+        runTurn: (request) => {
+          requests.requests.push(request)
+          return (async function* () {
+            yield { _tag: 'SessionStarted' as const, sessionId: 'repair-session' }
+            yield { _tag: 'Message' as const, text: requests.requests.length === 1 ? response ?? valid : valid }
+            yield { _tag: 'TurnCompleted' as const }
+          })()
+        },
+      }),
       status: { publishRepair: () => Promise.resolve(ok(undefined)) },
       store: {
         getReviewFixFindings: () => findings,
@@ -400,6 +425,14 @@ describe('review fix Worker', () => {
       requestedBy: 'review_fix',
       at: '2026-08-13T01:00:00.000Z',
     }])
+    expect(requests.requests).toHaveLength(rejection === null ? 1 : 2)
+    expect(requests.requests[0]?.sessionId).toBeNull()
+    if (rejection !== null) {
+      expect(requests.requests[1]?.sessionId).toBe('repair-session')
+      expect(requests.requests[1]?.prompt).toContain(rejection)
+      expect(requests.requests[1]?.prompt).toContain('Use no tool.')
+      expect(requests.requests[1]?.prompt).not.toContain('Repair the exact material Review findings')
+    }
   })
 
   it('gives each distinct dispute set its own rerun request', async () => {

@@ -8,9 +8,10 @@ import type { JournalStore } from './store.ts'
 import type { AgentRole } from './types.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { agentActivityFromEvent } from './agent-activity.ts'
+import { parseAgentJson } from './agent-json.ts'
 import { roleProfile } from './agent-profile.ts'
 import { advancedPhase, agentEventPhase } from './agent-progress.ts'
-import { addAgentTokenUsage } from './agent-provider.ts'
+import { addAgentTokenUsage, extractJsonObject } from './agent-provider.ts'
 import { contextBudgetExhaustedReason, repeatedAgentResultReason } from './failure.ts'
 import { err, ok } from './result.ts'
 
@@ -120,38 +121,11 @@ function sameAnswer(first: string, second: string): boolean {
 /**
  * The JSON object inside an answer, without the Markdown a model adds around it.
  *
- * A model that was told to return bare JSON still fences it or opens with a
- * sentence. The work behind such an answer is complete, so paying a repair
- * turn for the wrapper is waste. Prose before the object is accepted only when
- * the remainder parses, so a garbled answer still reaches the parser unchanged
- * and fails with its own tagged error.
+ * Accept one complete object inside prose or Markdown fences.
+ * Keep malformed or ambiguous answers intact for the role parser.
  */
-function stripCodeFence(text: string): string {
-  if (!text.startsWith('```') || !text.endsWith('```'))
-    return text
-  const open = text.indexOf('\n')
-  if (open === -1)
-    return text
-  return text.slice(open + 1, text.length - 3).trim()
-}
-
 export function unwrapJsonResponse(response: string): string {
-  const body = stripCodeFence(response.trim())
-  if (body.startsWith('{'))
-    return body
-  const start = body.indexOf('{')
-  if (start === -1)
-    return response
-  const remainder = body.slice(start)
-  try {
-    JSON.parse(remainder)
-    return remainder
-  }
-  catch {
-    // The remainder is not JSON either, so the original answer goes to the
-    // parser and its own error names the failure.
-    return response
-  }
+  return extractJsonObject(response.trim())
 }
 
 /**
@@ -252,6 +226,15 @@ export interface ParsedAgentTurnOptions<Value> extends AgentTurnOptions {
   repairContext?: (reason: string) => string | null
 }
 
+function parseTurnResponse<Value>(options: ParsedAgentTurnOptions<Value>, response: string): Promise<Result<Value, string>> | Result<Value, string> {
+  const unwrapped = unwrapJsonResponse(response)
+  const parsed = parseAgentJson(unwrapped)
+  if (parsed._tag === 'Err' && parsed.error === 'duplicate-key')
+    return err('The Agent returned JSON with duplicate object keys.')
+  // Keep the role parser's own explanation for malformed JSON or invalid fields.
+  return options.parse(unwrapped)
+}
+
 /** A completed turn whose answer either fit the parser or, after one repair, still did not. */
 export type RepairedAgentTurn<Value>
   = | { _tag: 'Parsed', value: Value, sessionId: string, usage: AgentTokenUsage }
@@ -277,19 +260,27 @@ export async function runRepairedAgentTurn<Value>(
   const turn = await runAgentTurn(frozen, input, signal)
   if (turn._tag === 'Err')
     return turn
-  const parsed = await options.parse(unwrapJsonResponse(turn.value.response))
+  const parsed = await parseTurnResponse(options, turn.value.response)
   if (parsed._tag === 'Ok')
     return ok({ _tag: 'Parsed', value: parsed.value, sessionId: turn.value.sessionId, usage: turn.value.usage })
 
   // The work is done, so this turn reports no progress of its own.
   const { progress: _reported, ...withoutProgress } = input
-  const repaired = await runAgentTurn(frozen, {
+  const correctionOptions = {
+    ...frozen,
+    store: {
+      getWorkerSession: () => turn.value.sessionId,
+      saveWorkerSession: frozen.store.saveWorkerSession.bind(frozen.store),
+    },
+  }
+  const repaired = await runAgentTurn(correctionOptions, {
     ...withoutProgress,
+    freshSession: false,
     prompt: repairPrompt(input.schema, turn.value.response, parsed.error, options.repairContext?.(parsed.error) ?? null),
   }, signal)
   if (repaired._tag === 'Err')
     return ok({ _tag: 'Unparsed', reason: parsed.error, response: turn.value.response, sessionId: turn.value.sessionId, usage: turn.value.usage })
-  const reparsed = await options.parse(unwrapJsonResponse(repaired.value.response))
+  const reparsed = await parseTurnResponse(options, repaired.value.response)
   const usage = addAgentTokenUsage(turn.value.usage, repaired.value.usage)
   if (reparsed._tag === 'Ok')
     return ok({ _tag: 'Parsed', value: reparsed.value, sessionId: repaired.value.sessionId, usage })

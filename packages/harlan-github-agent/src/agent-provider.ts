@@ -193,19 +193,57 @@ ${JSON.stringify(schema)}`
  * Falls back to the raw text so the caller reports one parse failure.
  */
 export function extractJsonObject(text: string): string {
-  // Code fences can belong to a JSON string, such as a pull request body.
-  // Extract the outer object before interpreting anything inside its strings.
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start === -1 || end <= start)
-    return text
-  const candidate = text.slice(start, end + 1)
   try {
-    JSON.parse(candidate)
-    return candidate
+    JSON.parse(text)
+    // A valid array or scalar is still the complete answer. Do not extract its nested object.
+    return text
   }
   catch {
-    // Braces in prose are not JSON. Keep the full answer for parsing or repair.
-    return text
+    // Wrapped answers need one unambiguous object below.
   }
+  let candidate: string | undefined
+  let start = -1
+  let depth = 0
+  let quoted = false
+  let escaped = false
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index]
+    if (start === -1) {
+      if (character === '{') {
+        start = index
+        depth = 1
+      }
+      continue
+    }
+    if (quoted) {
+      if (escaped)
+        escaped = false
+      else if (character === '\\')
+        escaped = true
+      else if (character === '"')
+        quoted = false
+      continue
+    }
+    if (character === '"')
+      quoted = true
+    else if (character === '{')
+      depth++
+    else if (character === '}')
+      depth--
+    if (depth !== 0)
+      continue
+    const object = text.slice(start, index + 1)
+    start = -1
+    try {
+      JSON.parse(object)
+      // More than one object is ambiguous. Never select the convenient answer.
+      if (candidate !== undefined)
+        return text
+      candidate = object
+    }
+    catch {
+      // Balanced braces in prose are not JSON. Keep scanning for the final object.
+    }
+  }
+  return start === -1 ? candidate ?? text : text
 }
