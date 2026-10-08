@@ -227,7 +227,7 @@ usePageTitle('Sessions')
           <div class="mt-3 flex flex-wrap items-center gap-2">
             <template v-if="!selected">
               <USelect v-model="provider" :items="[{ label: 'Codex', value: 'codex' }, { label: 'OpenCode', value: 'opencode' }]" aria-label="Agent provider" class="w-28" />
-              <USelect v-model="model" :items="models" aria-label="Agent model" placeholder="Model" class="min-w-0 max-w-56 flex-1" />
+              <USelect v-model="model" :items="models" aria-label="Agent model" placeholder="Model" class="order-last min-w-0 basis-full sm:order-none sm:max-w-56 sm:flex-1 sm:basis-auto" />
               <USelect v-if="provider === 'codex'" v-model="reasoningEffort" :items="['low', 'medium', 'high', 'xhigh']" aria-label="Reasoning effort" class="w-24" />
             </template>
             <span v-else class="text-sm text-muted">{{ selected.provider }} <span class="mx-1">/</span> {{ selected.model }}</span>
