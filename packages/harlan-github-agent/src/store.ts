@@ -912,6 +912,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   recordRoutineReportReceipt: (input: { commandId: string, workerId: string, fence: number, at: string, sink: 'tracking_issue' | 'run_comment' }) => boolean
   failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
+  hasOverdueRoutineRun: (now: string) => boolean
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
   completeRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, evidence: string, usage?: AgentTokenUsage }) => boolean
@@ -16162,6 +16163,18 @@ export function openJournalStore(
     recordRoutineReportReceipt,
     failRoutineReport,
     claimNextRoutineRun,
+    hasOverdueRoutineRun: now => database.prepare(`
+      SELECT 1 FROM routine_runs
+      JOIN routines ON routines.id = routine_runs.routine_id
+      JOIN repositories ON repositories.github = routines.repository
+      WHERE routine_runs.state_tag = 'Queued'
+        AND routine_runs.created_at <= ?
+        AND routine_runs.scheduled_for <= ?
+        AND routines.enabled = 1
+        AND routines.retired_at IS NULL
+        AND repositories.enabled = 1
+      LIMIT 1
+    `).get(new Date(Date.parse(now) - 30 * 60 * 1_000).toISOString(), now) !== undefined,
     heartbeatRoutineRun,
     updateRoutineRunProgress,
     completeRoutineRun,

@@ -26,7 +26,7 @@ import { jev } from 'advocaat'
 import { createAgentActivityLog } from './agent-activity.ts'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
 import { agentLabelItem } from './agent-label.ts'
-import { createAgentPermitPool } from './agent-permit-pool.ts'
+import { createAgentPermitPool, createRoutinePermitPools } from './agent-permit-pool.ts'
 import { AGENT_PROVIDER_NAMES, agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
 import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
@@ -314,8 +314,8 @@ export async function resolveUserLogin(
 }
 
 /** Whether a Routine run may take a free Agent permit. */
-export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask'>, now: string): boolean {
-  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask(now))
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>, now: string): boolean {
+  return canClaim && (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
 }
 
 export interface ExternalWatchReloadOptions {
@@ -672,7 +672,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const fixWorktrees = createReviewFixWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const baselineWorktrees = createBaselineRepairWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
     const issueWorktrees = createIssueWorktreeManager({ gitIdentity: options.gitIdentity, root: controllerRoot, tokens })
-    const permits = createAgentPermitPool(() => {
+    const sharedPermits = createAgentPermitPool(() => {
       const capacity = hosts.read()
       const desktopUsable = desktop.available() || capacity.desktopActive > 0
       return capacity.localMaximum + (desktopUsable ? capacity.desktopMaximum : 0)
@@ -841,6 +841,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
       workspaces,
     }
+    const { items: permits, routines: routinePermits } = createRoutinePermitPools(sharedPermits, () =>
+      config.triggers.includes('routine') && canClaim() && store.hasOverdueRoutineRun(now().toISOString()))
     return {
       repairRecovery: createRepairRecoveryController({
         store,
@@ -933,7 +935,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onError: error => options.logger.error(error),
         onTaskStarted: stampRunningLabel,
         onTaskSettled: settleTask,
-        permits,
+        permits: routinePermits,
         // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
           activityLog,
