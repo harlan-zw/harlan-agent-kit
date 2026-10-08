@@ -12,6 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { checkAgentWorker } from './agent-sandbox.ts'
 import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, readDesktopResponse } from './desktop-protocol.ts'
+import { createDesktopSessionClient } from './desktop-session-client.ts'
 import { desktopCommand } from './desktop-worktree.ts'
 import { parseReviewProofCallback } from './review-proof-duplex.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
@@ -174,9 +175,19 @@ async function main(): Promise<void> {
   // queues that many turns. This loop claims each one and runs them together,
   // so an Agent slot count above one is real work rather than a queue.
   const running = new Set<Promise<void>>()
+  const sessions = createDesktopSessionClient({ api, root, capacity, signal: shutdown.signal })
   while (!shutdown.signal.aborted) {
     try {
+      await sessions.report()
       if (running.size < DESKTOP_AGENT_SLOT_CEILING && await report()) {
+        const session = await sessions.claim(DESKTOP_AGENT_SLOT_CEILING - running.size)
+        if (session !== null) {
+          const work = sessions.run(session)
+            .catch((error: unknown) => { console.error(error) })
+            .finally(() => { running.delete(work) })
+          running.add(work)
+          continue
+        }
         const turn = await api<DesktopTurn | null>('/api/desktop/claim', {})
         if (turn !== null) {
           // `harlan-desktop-capacity` refuses a turn memory cannot hold, and
