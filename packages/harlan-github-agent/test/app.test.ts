@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { readDesktopResponse } from '../src/desktop-protocol.ts'
+import { opencodeTaskKey } from '../src/opencode-storage.ts'
 import { dashboardSnapshot } from './fixtures.ts'
 
 const allowedOrigin = 'https://harlan-github-agent.localhost'
@@ -1088,15 +1089,19 @@ describe('dashboard HTTP app', () => {
     expect(cancellations).toEqual([{ taskId, at: now().toISOString() }])
   })
 
-  it('ejects a running agent into its interactive Codex session', async () => {
+  it.each([
+    ['codex', '018f3c70-7b79-7be9-9c26-1c94e3a33430'],
+    ['opencode', 'ses_current123'],
+    ['opencode', 'desktop:ses_current123'],
+    ['codex', 'desktop:018f3c70-7b79-7be9-9c26-1c94e3a33430'],
+  ] as const)('ejects a running agent into its saved %s session %s', async (provider, sessionId) => {
     const taskId = 'a'.repeat(64)
-    const sessionId = '018f3c70-7b79-7be9-9c26-1c94e3a33430'
     const cancellations: unknown[] = []
     const snapshot = dashboardSnapshot({
       agents: [{
         _tag: 'ActiveAgent',
         id: taskId,
-        provider: 'codex',
+        provider,
         role: 'adversarial_review',
         author: 'harlan-zw',
         session: { _tag: 'Connected', id: sessionId },
@@ -1144,8 +1149,9 @@ describe('dashboard HTTP app', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({
       _tag: 'Ejected',
-      provider: 'codex',
+      provider,
       sessionId,
+      ...(provider === 'opencode' ? { opencodeTaskKey: opencodeTaskKey(taskId) } : {}),
       repository: 'harlan-zw/example',
       itemNumber: 24,
     })
@@ -1344,6 +1350,7 @@ describe('dashboard HTTP app', () => {
           _tag: 'EjectDelayed',
           provider: 'opencode',
           sessionId,
+          opencodeTaskKey: opencodeTaskKey(taskId),
           nextAction: 'Stop Harlan GitHub Agent. Then resume this saved session.',
         },
       }))

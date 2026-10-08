@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import type { ControlClient } from './control-client.ts'
 import type { Result } from './result.ts'
+import { spawn } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { jev } from 'advocaat'
@@ -13,6 +14,7 @@ import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadClassificationToken, loadConfig } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
+import { resolveOpencodeResume } from './opencode-resume.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { err } from './result.ts'
@@ -553,7 +555,29 @@ const checkConfig = defineCommand({
   },
 })
 
-const rootSubCommandNames = ['check-config', 'combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage', 'evaluate-issue-triage']
+const resumeSession = defineCommand({
+  meta: { name: 'resume-session', description: 'Resume a saved OpenCode Agent session.' },
+  args: {
+    'task-key': { type: 'string', required: true },
+    'session': { type: 'string', required: true },
+    'worker-profile': { type: 'string', default: join(process.env.HOME ?? '/home/harlan', '.config/harlan-github-agent/worker.json') },
+  },
+  async run({ args }) {
+    const result = await resolveOpencodeResume({ profilePath: args['worker-profile'], taskKey: args['task-key'], sessionId: args.session, environment: process.env })
+    if (result._tag === 'Err') {
+      consola.error(result.error)
+      process.exitCode = 1
+      return
+    }
+    const child = spawn(result.value.binary, result.value.args, { env: result.value.environment, stdio: 'inherit' })
+    process.exitCode = await new Promise<number>((resolveExit, reject) => {
+      child.once('error', reject)
+      child.once('exit', code => resolveExit(code ?? 1))
+    })
+  },
+})
+
+const rootSubCommandNames = ['resume-session', 'check-config', 'combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage', 'evaluate-issue-triage']
 
 const command = defineCommand({
   meta: {
@@ -563,6 +587,7 @@ const command = defineCommand({
   },
   args: rootArguments,
   subCommands: {
+    'resume-session': resumeSession,
     'check-config': checkConfig,
     'combine-service-state': combineState,
     'sweep-worktrees': sweepWorktrees,

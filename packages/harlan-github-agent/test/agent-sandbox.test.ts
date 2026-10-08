@@ -138,6 +138,64 @@ if (process.argv[2] === 'serve') {
     expect(await readFile(secret, 'utf8')).toBe('fake-controller-secret')
     expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: prove isolated Git writes')
     expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe('?? .env\n')
+    // One native provider writer cannot block another Task's persisted conversation.
+    const taskA = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'opencode', taskId: 'task-a' })
+    const taskB = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'opencode', taskId: 'routine:b:2026-10-08T00:00:00.000Z' })
+    const databaseScript = `
+      import { DatabaseSync } from 'node:sqlite'
+      import { mkdirSync } from 'node:fs'
+      import { dirname } from 'node:path'
+      const path = process.env.OPENCODE_DB ?? process.env.XDG_DATA_HOME + '/opencode/opencode.db'
+      mkdirSync(dirname(path), { recursive: true })
+      const database = new DatabaseSync(path)
+      database.exec('PRAGMA busy_timeout=100; CREATE TABLE IF NOT EXISTS session(id TEXT PRIMARY KEY);')
+    `
+    const locked = execute(taskA.binary, [...taskA.args, '/run/agent/node', '--input-type=module', '-e', `${databaseScript}\n database.exec('BEGIN IMMEDIATE'); console.log('locked'); setInterval(() => {}, 1000)`], { env: taskA.environment, timeout: 15000 })
+    // Register a handler before cleanup can terminate the lock holder.
+    const stopped = locked.catch((error) => {
+      if (error.signal !== 'SIGTERM')
+        throw error
+    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('The SQLite lock holder did not start.')), 5000)
+        locked.child.stdout!.once('data', () => {
+          clearTimeout(timer)
+          resolve()
+        })
+        locked.child.once('error', reject)
+        locked.child.once('exit', () => {
+          clearTimeout(timer)
+          reject(new Error('The SQLite lock holder exited before readiness.'))
+        })
+      })
+      const independent = await execute(taskB.binary, [...taskB.args, '/run/agent/node', '--input-type=module', '-e', `${databaseScript}\n database.prepare('INSERT INTO session(id) VALUES(?)').run('ses_task_b'); console.log(database.prepare('SELECT id FROM session').get().id)`], { env: taskB.environment, timeout: 15000 })
+      expect(independent.stdout.trim()).toBe('ses_task_b')
+      const client = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'opencode', taskId: 'task-a', networkMode: 'opencode-client' })
+      try {
+        const proof = await execute(client.binary, [...client.args, '/run/agent/node', '--input-type=module', '-e', `${databaseScript}\n database.prepare('INSERT INTO session(id) VALUES(?)').run('ses_client'); console.log(database.prepare('SELECT id FROM session').get().id)`, '--', '--attach', 'http://fixture'], { env: client.environment, timeout: 15000 })
+        expect(proof.stdout.trim()).toBe('ses_client')
+      }
+      finally {
+        await client.release()
+      }
+    }
+    finally {
+      locked.child.kill('SIGTERM')
+      await stopped
+      await Promise.all([taskA.release(), taskB.release()])
+    }
+    const reviewHome = await mkdtemp(join(root, 'review-home-'))
+    const sameTask = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'opencode', taskId: 'routine:b:2026-10-08T00:00:00.000Z', reviewHome })
+    try {
+      const proof = await execute(sameTask.binary, [...sameTask.args, '/run/agent/node', '--input-type=module', '-e', `${databaseScript}\n console.log(database.prepare('SELECT id FROM session').get().id)`], { env: sameTask.environment, timeout: 15000 })
+      expect(proof.stdout.trim()).toBe('ses_task_b')
+      const boundary = await execute(sameTask.binary, [...sameTask.args, '/usr/bin/bash', '-c', `test ! -e "$HOME/.codex/auth.json" && test ! -e '${home}/.local/share/harlan-github-agent/opencode-tasks' && echo isolated`], { env: sameTask.environment, timeout: 15000 })
+      expect(boundary.stdout.trim()).toBe('isolated')
+    }
+    finally {
+      await sameTask.release()
+    }
     await mkdir(join(home, '.config/harlan-checkin'), { recursive: true, mode: 0o700 })
     await writeFile(join(home, '.config/harlan-checkin/site.env'), 'CHECKIN_TOKEN=private-site-token\nSENTRY_AUTH_TOKEN=private-sentry-token\nGH_TOKEN=refused\n', { mode: 0o600 })
     await writeFile(join(home, '.config/harlan-checkin/other.env'), 'OTHER_SITE_TOKEN=private-other-token\n', { mode: 0o600 })
