@@ -82,8 +82,12 @@ it('keeps a replacement bounded while the old systemd stop waits', async () => {
   const configured: string[] = []
   let unblock: () => void = () => {}
   let stopping: () => void = () => {}
-  const stopStarted = new Promise<void>((resolve) => { stopping = resolve })
-  const stopWait = new Promise<void>((resolve) => { unblock = resolve })
+  const stopStarted = new Promise<void>((resolve) => {
+    stopping = resolve
+  })
+  const stopWait = new Promise<void>((resolve) => {
+    unblock = resolve
+  })
   const command = createWorkerMemoryLimiter({
     newId: randomUUID,
     readEvents: async () => 'oom_kill 0\n',
