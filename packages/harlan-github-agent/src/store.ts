@@ -6946,7 +6946,14 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 84
   }
-  if (version === 84)
+  if (version === 84) {
+    applyMigration(database, `
+      CREATE INDEX IF NOT EXISTS review_status_commands_revision_state ON review_status_commands(revision_id, state_tag);
+      PRAGMA user_version = 85;
+    `)
+    version = 85
+  }
+  if (version === 85)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8289,9 +8296,12 @@ export function openJournalStore(
         )
         AND (
           EXISTS (
-            SELECT 1 FROM review_status_commands AS status
-            JOIN revisions AS status_revision ON status_revision.id = status.revision_id
-            WHERE status_revision.subject_id = subjects.id AND status.state_tag = 'Published'
+            SELECT 1 FROM revisions AS status_revision
+            WHERE status_revision.subject_id = subjects.id
+              AND EXISTS (
+                SELECT 1 FROM review_status_commands AS status
+                WHERE status.revision_id = status_revision.id AND status.state_tag = 'Published'
+              )
           )
           OR EXISTS (
             SELECT 1 FROM review_publications AS publication
