@@ -1540,9 +1540,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const settled = await Promise.all([...schedulers.map(scheduler => scheduler.settle(taskId)), mutationSchedulers.repairRecovery.settle(taskId)])
     return settled.includes(true)
   }
-  const sessions = createSessionController({ path: join(dirname(config.storage.path), 'desktop-sessions.json'), now, availableSlots: () => Math.max(0, agentSlots().desktop - hosts.read().desktopActive) })
+  const sessions = config.server.desktopSessions === true
+    ? createSessionController({ path: join(dirname(config.storage.path), 'desktop-sessions.json'), now, availableSlots: () => Math.max(0, agentSlots().desktop - hosts.read().desktopActive) })
+    : undefined
   const app = createAgentApp({
-    sessions,
+    ...(sessions === undefined ? {} : { sessions }),
     ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),
     ...(config.triggers.includes('github')
       ? { pullRequestWatch: {

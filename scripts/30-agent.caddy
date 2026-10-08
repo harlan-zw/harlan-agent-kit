@@ -4,6 +4,12 @@ handle @agent {
 	@agentHttp header X-Forwarded-Proto http
 	redir @agentHttp https://agent.harlanzw.com{uri} 308
 
+	# Interactive desktop sessions are reachable only through Tailscale.
+	@desktopSessions path /api/sessions /api/sessions/* /api/desktop/sessions /api/desktop/sessions/*
+	handle @desktopSessions {
+		respond "Connect through Tailscale to use desktop sessions." 403
+	}
+
 	handle /webhook {
 		request_body {
 			max_size 25MB
@@ -20,6 +26,8 @@ handle @agent {
 
 		reverse_proxy 127.0.0.1:3210 {
 			header_up Host hogwild.tailcad325.ts.net
+			# The Service also refuses public requests to desktop session routes.
+			header_up X-Harlan-Agent-Ingress public
 			# Translate only the exact public origin. Preserve every other value.
 			header_up Origin "^https://agent[.]harlanzw[.]com$" "https://hogwild.tailcad325.ts.net"
 		}

@@ -59,7 +59,7 @@ export interface AgentAppOptions {
 }
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
-const DASHBOARD_PAGES = ['history', 'watching', 'routines', 'flow', 'stats'] as const
+const DASHBOARD_PAGES = ['sessions', 'history', 'watching', 'routines', 'flow', 'stats'] as const
 const EJECT_SETTLEMENT_TIMEOUT_MILLISECONDS = 12_000
 
 const securityHeaders = {
@@ -410,8 +410,17 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     },
   })
 
-  if (options.sessions !== undefined)
+  if (options.sessions !== undefined) {
     registerSessionRoutes(app, options.sessions)
+  }
+  else {
+    app.get('/api/sessions', () => {
+      throw createError({ status: 503, message: 'Enable desktop sessions after installing the private ingress.' })
+    })
+    // A disabled interactive feature must leave maintenance offload working.
+    app.post('/api/desktop/sessions/report', () => ({ accepted: false, stops: [] }))
+    app.post('/api/desktop/sessions/claim', () => null)
+  }
 
   app.get('/health', () => {
     const snapshot = options.store.getDashboardSnapshot(options.now().toISOString())

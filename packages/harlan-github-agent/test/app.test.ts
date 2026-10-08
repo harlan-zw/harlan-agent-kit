@@ -78,6 +78,36 @@ function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof c
 }
 
 describe('dashboard HTTP app', () => {
+  it('serves a direct Session page and its hydration payload through the Service', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agent-session-page-'))
+    mkdirSync(join(root, 'sessions'))
+    writeFileSync(join(root, 'index.html'), 'Board')
+    writeFileSync(join(root, 'sessions', 'index.html'), '<main>Agent conversation</main>')
+    writeFileSync(join(root, 'sessions', '_payload.json'), '{"page":"sessions"}')
+    const app = createApp(undefined, undefined, undefined, root)
+    const headers = { authorization, host: allowedHost }
+    try {
+      const page = await app.request(`${allowedOrigin}/sessions?session=saved-session`, { headers })
+      expect(page.status).toBe(200)
+      expect(await page.text()).toContain('Agent conversation')
+      const payload = await app.request(`${allowedOrigin}/sessions/_payload.json`, { headers })
+      expect(await payload.json()).toEqual({ page: 'sessions' })
+    }
+    finally {
+      rmSync(root, { recursive: true })
+    }
+  })
+  it('keeps maintenance desktop calls working while interactive sessions are disabled', async () => {
+    const app = createApp()
+    const headers = { authorization, host: allowedHost, origin: allowedOrigin }
+    const report = await app.request(`${allowedOrigin}/api/desktop/sessions/report`, { method: 'POST', headers, body: '{}' })
+    expect(await report.json()).toEqual({ accepted: false, stops: [] })
+    const claim = await app.request(`${allowedOrigin}/api/desktop/sessions/claim`, { method: 'POST', headers, body: '{}' })
+    expect(await readDesktopResponse(claim)).toBeNull()
+    const browser = await app.request(`${allowedOrigin}/api/sessions`, { headers })
+    expect(browser.status).toBe(503)
+    expect(await browser.text()).toContain('Enable desktop sessions after installing the private ingress.')
+  })
   it('keeps its dashboard generation while an update replaces files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agent-dashboard-'))
     const headers = { authorization, host: allowedHost }
