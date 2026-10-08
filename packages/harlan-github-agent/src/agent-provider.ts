@@ -189,32 +189,28 @@ ${JSON.stringify(schema)}`
 }
 
 /**
- * Extracts the JSON object a provider without schema support returned.
+ * Extracts one JSON container while preserving its type for the role parser.
  * Falls back to the raw text so the caller reports one parse failure.
  */
 export function extractJsonObject(text: string): string {
+  const trimmed = text.trim()
+  const fence = /^```[^\n]*\n([\s\S]*?)\n```$/.exec(trimmed)
+  const body = fence?.[1] ?? trimmed
   try {
-    JSON.parse(text)
+    JSON.parse(body)
     // A valid array or scalar is still the complete answer. Do not extract its nested object.
-    return text
+    return body
   }
   catch {
-    // Wrapped answers need one unambiguous object below.
+    // Wrapped answers need one unambiguous container below.
   }
   let candidate: string | undefined
   let start = -1
-  let depth = 0
+  const closers: string[] = []
   let quoted = false
   let escaped = false
   for (let index = 0; index < text.length; index++) {
     const character = text[index]
-    if (start === -1) {
-      if (character === '{') {
-        start = index
-        depth = 1
-      }
-      continue
-    }
     if (quoted) {
       if (escaped)
         escaped = false
@@ -224,26 +220,34 @@ export function extractJsonObject(text: string): string {
         quoted = false
       continue
     }
-    if (character === '"')
+    if (character === '"') {
       quoted = true
-    else if (character === '{')
-      depth++
-    else if (character === '}')
-      depth--
-    if (depth !== 0)
       continue
-    const object = text.slice(start, index + 1)
+    }
+    if (character === '{' || character === '[') {
+      if (start === -1)
+        start = index
+      closers.push(character === '{' ? '}' : ']')
+      continue
+    }
+    if (start === -1 || (character !== '}' && character !== ']'))
+      continue
+    if (closers.pop() !== character)
+      return text
+    if (closers.length !== 0)
+      continue
+    const container = text.slice(start, index + 1)
     start = -1
     try {
-      JSON.parse(object)
-      // More than one object is ambiguous. Never select the convenient answer.
+      JSON.parse(container)
+      // More than one JSON container is ambiguous. Never select the convenient answer.
       if (candidate !== undefined)
         return text
-      candidate = object
+      candidate = container
     }
     catch {
       // Balanced braces in prose are not JSON. Keep scanning for the final object.
     }
   }
-  return start === -1 ? candidate ?? text : text
+  return start === -1 && !quoted ? candidate ?? text : text
 }

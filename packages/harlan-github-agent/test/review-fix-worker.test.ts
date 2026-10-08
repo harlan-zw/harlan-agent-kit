@@ -328,6 +328,12 @@ describe('review fix Worker', () => {
     { label: 'unknown field', response: '{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":"","unexpected":true}', rejection: 'invalid Repair result' },
     { label: 'null result', response: 'null', rejection: 'invalid Repair result' },
     { label: 'array result', response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]', rejection: 'invalid Repair result' },
+    { label: 'fenced array result', response: '```json\n[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]\n```', rejection: 'invalid Repair result' },
+    { label: 'prose and fenced array result', response: 'The cast to { fonts?: ... } is safe.\n```json\n[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]\n```', rejection: 'invalid Repair result' },
+    { label: 'prose and array result', response: 'Here is the result:\n[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]', rejection: 'invalid Repair result' },
+    { label: 'fenced string result', response: '```json\n"{\\"outcome\\":\\"disputed\\",\\"summary\\":\\"Verified.\\",\\"checks\\":[],\\"commitMessage\\":\\"\\"}"\n```', rejection: 'invalid Repair result' },
+    { label: 'unclosed array wrapper', response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}', rejection: 'malformed Repair JSON' },
+    { label: 'mismatched array wrapper', response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}}', rejection: 'malformed Repair JSON' },
   ])('queues one fresh Review after parsing or correcting $label', async ({ response, rejection }) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const mapping = repositoryMapping({ ownership: 'maintained' })
