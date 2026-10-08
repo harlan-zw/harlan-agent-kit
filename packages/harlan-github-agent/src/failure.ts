@@ -198,6 +198,7 @@ const networkPatterns: RegExp[] = [
   /\bEHOSTUNREACH\b/,
   /\bENETUNREACH\b/,
   /\bsocket hang up\b/i,
+  /\bdesktop(?: client)? disconnected\b/i,
   /\bfetch failed\b/i,
   /\bnetwork\b.+\berror\b/i,
   /\brequest\b.+\btimed out\b/i,

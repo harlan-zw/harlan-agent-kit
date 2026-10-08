@@ -11,6 +11,8 @@ describe('classifyFailure', () => {
     ['Request quota exhausted for request GET https://api.github.com/repos', 'rate_limit'],
     ['request to https://api.github.com failed, reason: ECONNRESET', 'network'],
     ['fetch failed', 'network'],
+    ['Desktop disconnected during the Agent turn.', 'network'],
+    ['The desktop client disconnected while reporting its result.', 'network'],
     ['The opencode session stopped sending output.', 'agent_provider'],
     ['The opencode session exited with code 1.', 'agent_provider'],
     ['The opencode session failed: Unexpected server error. Check server logs for details.', 'agent_provider'],
