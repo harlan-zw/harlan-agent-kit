@@ -1,7 +1,7 @@
 import type { AgentEvent } from './agent-provider.ts'
 import type { DesktopSession, SessionFence, SessionProject, SessionTurn, StartSessionRequest } from './session-protocol.ts'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { SESSION_PROTOCOL } from './session-protocol.ts'
 
@@ -10,16 +10,41 @@ interface StoredSession { session: DesktopSession, turn: ActiveTurn | null }
 interface State { version: 1, sessions: StoredSession[], requests: Record<string, { sessionId: string, fingerprint: string }> }
 export interface SessionSnapshot { desktop: { connected: boolean, current: boolean }, projects: SessionProject[], sessions: DesktopSession[] }
 export function createSessionController(options: { path: string, now: () => Date, availableSlots?: () => number }) {
-  const state: State = existsSync(options.path) ? JSON.parse(readFileSync(options.path, 'utf8')) : { version: 1, sessions: [], requests: {} }
+  let state: State = existsSync(options.path) ? JSON.parse(readFileSync(options.path, 'utf8')) : { version: 1, sessions: [], requests: {} }
   if (state.version !== 1 || !Array.isArray(state.sessions) || typeof state.requests !== 'object')
     throw new Error('Stored Agent sessions are invalid.')
   let desktop: { instanceId: string, protocol: number, reportedAt: number, projects: SessionProject[] } | null = null
   const timestamp = () => options.now().toISOString()
+  let committed = structuredClone(state)
   function save(): void {
-    mkdirSync(dirname(options.path), { recursive: true })
     const temporary = `${options.path}.${randomUUID()}.tmp`
-    writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 })
-    renameSync(temporary, options.path)
+    let file: number | undefined
+    let temporaryHeld = false
+    try {
+      mkdirSync(dirname(options.path), { recursive: true })
+      file = openSync(temporary, 'wx', 0o600)
+      temporaryHeld = true
+      writeFileSync(file, JSON.stringify(state))
+      fsyncSync(file)
+      closeSync(file)
+      file = undefined
+      renameSync(temporary, options.path)
+      temporaryHeld = false
+      // Rename commits the new state. A later directory sync failure cannot undo it.
+      committed = structuredClone(state)
+      file = openSync(dirname(options.path), 'r')
+      fsyncSync(file)
+    }
+    catch (error) {
+      state = structuredClone(committed)
+      throw error
+    }
+    finally {
+      if (file !== undefined)
+        closeSync(file)
+      if (temporaryHeld)
+        rmSync(temporary, { force: true })
+    }
   }
   function interrupt(stored: StoredSession): void {
     if (stored.session.status !== 'stopping')

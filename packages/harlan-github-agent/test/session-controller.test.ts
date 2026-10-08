@@ -1,6 +1,6 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createSessionController } from '../src/session-controller.ts'
 import { parseStartSession } from '../src/session-protocol.ts'
@@ -96,4 +96,17 @@ it('deduplicates prototype-named request IDs across restart', () => {
   expect(controller.start({ ...input, requestId: '__proto__' }).id).toBe(session.id)
   const restarted = createSessionController(options)
   expect(restarted.start({ ...input, requestId: '__proto__' }).id).toBe(session.id)
+})
+
+it('rejects a failed save without acknowledging an unpersisted Session on retry', () => {
+  const { controller, input, options } = fixture()
+  const directory = dirname(options.path)
+  renameSync(directory, `${directory}.saved`)
+  writeFileSync(directory, 'This path cannot be a directory.')
+  expect(() => controller.start(input)).toThrow()
+  expect(controller.snapshot().sessions).toEqual([])
+  rmSync(directory)
+  renameSync(`${directory}.saved`, directory)
+  const session = controller.start(input)
+  expect(createSessionController(options).get(session.id).messages[0]?.text).toBe(input.prompt)
 })
