@@ -84,6 +84,10 @@ Merge risk routes the merge and never the Review. Every tracked pull request is 
 
 No new issue work starts above `max_open_pull_requests` open pull requests. Review, repair, and conflict fixes continue, because they shorten that queue.
 
+Fresh Routine runs yield to priority GitHub work. After 30 minutes in the Queue, one Routine gets the next free Agent permit. Active Agents continue. While that Routine runs, other permits remain available for GitHub work.
+
+Paused services and disabled Routines keep their existing controls. The wait limit gives priority at the next free permit. If every permit is occupied, starts still wait.
+
 Owned repositories selected in the GitHub App enable Issue triage by default. A maintained repository needs an explicit mapping with `issue_work: true`. Without an installation, the controller uses Harlan's authenticated GitHub account. Harlan's issues, and the issues the service files for Routines, go through Issue triage and into Issue work on their own. An outside contributor's issue waits for `harlan-agent-review` or `Approve` before any agent reads it. One Approval names that exact issue state and covers Issue triage and the Issue work that follows when triage says ready. The service removes the label before saving the Approval. Edited issue text is a new state and waits again.
 
 The triage agent resumes its own session, selects the matching installed skills, implements the change, and runs focused checks. The agent chooses the commit message and pull request metadata. The controller commits and pushes the verified result before it opens one pull request ready for review. Conflict fixes also run by default on owned repositories. They remain disabled on maintained repositories.
