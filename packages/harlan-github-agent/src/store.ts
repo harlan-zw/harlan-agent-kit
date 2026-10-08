@@ -9604,22 +9604,26 @@ export function openJournalStore(
             )
           )
         ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC,
-          CASE WHEN tasks.kind = 'issue_work' THEN 0 ELSE 1 END DESC,
+          CASE WHEN tasks.kind != 'issue_work' THEN 1 WHEN tasks.updated_at <= ? THEN 2 ELSE 0 END DESC,
           tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, kind, now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests) as ClaimRow | undefined
+      `).get(kind, kind, now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as ClaimRow | undefined
 
-  const deliveryPriority = (kind: AgentTask['kind']): number => kind === 'issue_work' || kind === 'issue_triage' ? 0 : 1
+  const issueWaitMilliseconds = 30 * 60 * 1_000
+  const deliveryPriority = (kind: AgentTask['kind'], queuedAt: string, now: string): number =>
+    kind === 'issue_work' || kind === 'issue_triage'
+      ? 2 * Number(Date.parse(now) - Date.parse(queuedAt) >= issueWaitMilliseconds)
+      : 1
 
-  // A waiting Review must get a free permit before another issue starts.
+  // Fresh issues yield to delivery. Older issues take the next free permit to prevent starvation.
   // Compare only claimable work, so missing Approval never holds the Queue.
-  const hasHigherPriorityTask = (priority: number, now: string, kind: AgentTask['kind'] = 'issue_work'): boolean =>
-    [nextMutationTask(null, now, undefined, true), nextWorkerTask(null)].some((row) => {
+  const hasHigherPriorityTask = (priority: number, now: string, kind: AgentTask['kind'] = 'issue_work', queuedAt = now): boolean =>
+    [nextMutationTask(null, now, undefined, true), nextWorkerTask(null, now)].some((row) => {
       if (row === undefined)
         return false
       const candidatePriority = (JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0
       return candidatePriority > priority
-        || (candidatePriority === priority && deliveryPriority(row.kind) > deliveryPriority(kind))
+        || (candidatePriority === priority && deliveryPriority(row.kind, row.updated_at, now) > deliveryPriority(kind, queuedAt, now))
     })
 
   const claimMutationTask = (
@@ -9640,7 +9644,7 @@ export function openJournalStore(
 
       // A Batch already owns an Agent permit when it claims an exact unit Task.
       // New priority work competes for free permits without interrupting that Batch.
-      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind)) {
+      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind, row.updated_at)) {
         database.exec('COMMIT')
         return null
       }
@@ -9713,7 +9717,7 @@ export function openJournalStore(
   const batchStore = createBatchStore(database, {
     recoverExpiredTasks,
     canClaimIssueWorkTask: (exactTaskId, now) => nextMutationTask('issue_work', now, exactTaskId) !== undefined,
-    hasHigherPriorityTask,
+    hasHigherPriorityTask: (priority, now, queuedAt) => hasHigherPriorityTask(priority, now, 'issue_work', queuedAt),
     claimIssueWorkTask: (workerId, now, leaseMilliseconds, exactTaskId) => {
       const task = claimMutationTask('issue_work', workerId, now, leaseMilliseconds, exactTaskId)
       if (task === null || task.kind === 'issue_work')
@@ -10076,7 +10080,7 @@ export function openJournalStore(
     })
   }
 
-  const nextWorkerTask = (kind: 'adversarial_review' | 'issue_triage' | null): (ClaimRow & { rerun_requested: number }) | undefined => database.prepare(`
+  const nextWorkerTask = (kind: 'adversarial_review' | 'issue_triage' | null, now: string): (ClaimRow & { rerun_requested: number }) | undefined => database.prepare(`
         SELECT
           worker_tasks.id,
           worker_tasks.kind,
@@ -10161,10 +10165,10 @@ export function openJournalStore(
             )
           )
         ORDER BY COALESCE(json_extract(repositories.policy_json, '$.priority'), 0) DESC,
-          CASE WHEN worker_tasks.kind = 'adversarial_review' THEN 1 ELSE 0 END DESC,
+          CASE WHEN worker_tasks.kind = 'adversarial_review' THEN 1 WHEN worker_tasks.updated_at <= ? THEN 2 ELSE 0 END DESC,
           worker_tasks.updated_at, worker_tasks.id
         LIMIT 1
-      `).get(kind, kind) as (ClaimRow & { rerun_requested: number }) | undefined
+      `).get(kind, kind, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as (ClaimRow & { rerun_requested: number }) | undefined
 
   const claimWorkerTask = (
     kind: 'adversarial_review' | 'issue_triage',
@@ -10175,13 +10179,13 @@ export function openJournalStore(
     database.exec('BEGIN IMMEDIATE')
     try {
       recoverExpiredWorkerTasks(now)
-      const row = nextWorkerTask(kind)
+      const row = nextWorkerTask(kind, now)
       if (row === undefined) {
         database.exec('COMMIT')
         return null
       }
 
-      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind)) {
+      if (hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind, row.updated_at)) {
         database.exec('COMMIT')
         return null
       }

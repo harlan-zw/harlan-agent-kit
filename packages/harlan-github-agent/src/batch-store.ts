@@ -40,7 +40,7 @@ export interface BatchStoreDependencies {
   recoverExpiredTasks: (now: string) => void
   canClaimIssueWorkTask: (exactTaskId: string, now: string) => boolean
   claimIssueWorkTask: (workerId: string, now: string, leaseMilliseconds: number, exactTaskId: string) => ClaimedIssueWorkTask | null
-  hasHigherPriorityTask: (priority: number, now: string) => boolean
+  hasHigherPriorityTask: (priority: number, now: string, queuedAt: string) => boolean
 }
 
 interface BatchRow {
@@ -305,7 +305,7 @@ export function createBatchStore(database: DatabaseSync, dependencies: BatchStor
     })
     if (row === undefined)
       return null
-    if (dependencies.hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now))
+    if (dependencies.hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, row.created_at))
       return null
     const fence = row.fence + 1
     const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()

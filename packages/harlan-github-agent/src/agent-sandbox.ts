@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createAgentEgress } from './agent-egress.ts'
+import { checkinEnvironment } from './checkin-environment.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -314,6 +315,9 @@ export async function prepareAgentSandbox(input: {
     const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(origin)
     if (origin !== '' && match === null)
       throw new Error('The Agent worker origin must use a GitHub URL without credentials.')
+    const checkinValues = input.reviewHome === undefined
+      ? await checkinEnvironment({ controllerHome, repository: match?.[1], taskId: input.taskId })
+      : {}
     await writeFile(gitConfig, `[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = /home/agent/.config/git/hooks\n${match ? `[remote "origin"]\n url = https://github.com/${match[1]}.git\n fetch = +refs/heads/*:refs/remotes/origin/*\n` : ''}`, { mode: 0o600 })
     await writeFile(join(privateCommon, 'config'), '', { mode: 0o600 })
     await writeFile(join(privateGit.directory, 'config.worktree'), '', { mode: 0o600 })
@@ -339,6 +343,7 @@ export async function prepareAgentSandbox(input: {
     // Review tools use only controller configuration. Repository loader variables can restore execution.
     const environment = {
       ...(input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment),
+      ...checkinValues,
       // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
       ...(input.provider === 'opencode' ? { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true' } : {}),
     }
