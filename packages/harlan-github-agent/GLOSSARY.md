@@ -10,8 +10,8 @@ did not cover it.
 
 | Term | Storage | Owner | Relationship | Customer word |
 | --- | --- | --- | --- | --- |
-| Agent session | `desktop-sessions.json` | Desktop and Controller | N to 1 Project, one persistent Worktree | Agent session |
-| Project | desktop inventory | Desktop | 1 to N Agent sessions | Project |
+| Agent session | `desktop-sessions.json` | Selected host and Controller | N to 1 Project, one persistent Worktree | Agent session |
+| Project | host inventories | Selected host | 1 to N Agent sessions | Project |
 | Agent provider | `agent.provider` | Configuration | 1 to N Agents | agent provider |
 | Agent selection | `agent_selection` | Controller | One per service | Agent selection |
 | Follow configuration | `agent_selection.tag` | Configuration | One Agent selection state | Follow configuration |
@@ -122,18 +122,20 @@ Collisions
 
 ### Agent session
 
-One saved conversation with an Agent provider in one desktop Worktree.
+One saved conversation with an Agent provider in one Worktree on Desktop or Hogwild.
+
+An Agent session keeps the host selected when it starts. It never moves between hosts.
 
 An Agent session keeps its messages, Agent events, and native provider session ID.
-Stop requires desktop confirmation before another turn starts.
+Stop requires confirmation from the selected host before another turn starts.
 
 Never: chat, thread. Use Agent session.
 
 ### Project
 
-One desktop repository checkout within `~/pkg` or `~/sites`.
+One repository checkout on Desktop or Hogwild within `~/pkg` or `~/sites`.
 
-A Project has many Agent sessions. Each Agent session keeps its own Worktree.
+Each host reports its own Projects. A Project has many Agent sessions. Each Agent session keeps its own Worktree.
 
 Never: workspace, folder. Use Project.
 
