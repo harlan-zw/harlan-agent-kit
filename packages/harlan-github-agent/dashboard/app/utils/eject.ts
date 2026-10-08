@@ -21,21 +21,24 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function validSession(provider: AgentProvider, sessionId: string): boolean {
+  const id = sessionId.startsWith('desktop:') ? sessionId.slice('desktop:'.length) : sessionId
   return provider === 'codex'
-    ? /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(sessionId)
-    : /^ses_[a-z\d]{8,}$/i.test(sessionId)
+    ? /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id)
+    : /^ses_[a-z\d]{8,}$/i.test(id)
 }
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll('\'', `'\\''`)}'`
 }
 
-export function ejectSessionCommand(provider: AgentProvider, sessionId: string, host: string): string {
+export function ejectSessionCommand(provider: AgentProvider, sessionId: string, host: string, opencodeTaskKey?: string): string {
   const desktop = sessionId.startsWith('desktop:')
   const actualSessionId = desktop ? sessionId.slice('desktop:'.length) : sessionId
   const agent = provider === 'codex'
     ? ['/home/harlan/.local/bin/codex', 'resume', actualSessionId, '-c', 'tui.resume_cwd="session"']
-    : ['/home/harlan/.local/bin/opencode', '--session', actualSessionId]
+    : opencodeTaskKey === undefined
+      ? ['/home/harlan/.local/bin/opencode', '--session', actualSessionId]
+      : ['/home/harlan/.local/lib/harlan-github-agent/node', '--experimental-strip-types', '/home/harlan/.local/share/harlan-github-agent/service/packages/harlan-github-agent/src/cli.ts', 'resume-session', '--task-key', opencodeTaskKey, '--session', actualSessionId]
   const remoteCommand = agent.map(shellQuote).join(' ')
   return desktop ? `# Run on Desktop\n${remoteCommand}` : `ssh -t ${shellQuote(host)} ${shellQuote(remoteCommand)}`
 }
@@ -53,9 +56,11 @@ export function ejectRecoveryFromError(error: unknown, host: string): EjectedSes
     return undefined
   if (typeof payload.nextAction !== 'string' || payload.nextAction.trim().length === 0)
     return undefined
+  if (payload.opencodeTaskKey !== undefined && (typeof payload.opencodeTaskKey !== 'string' || !/^[a-f0-9]{64}$/.test(payload.opencodeTaskKey)))
+    return undefined
   return {
     _tag: 'EjectDelayed',
-    command: ejectSessionCommand(payload.provider, payload.sessionId, host),
+    command: ejectSessionCommand(payload.provider, payload.sessionId, host, payload.opencodeTaskKey as string | undefined),
     sessionId: payload.sessionId,
     nextAction: payload.nextAction.trim(),
   }

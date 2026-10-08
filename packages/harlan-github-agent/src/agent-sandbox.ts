@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createAgentEgress } from './agent-egress.ts'
 import { checkinEnvironment } from './checkin-environment.ts'
+import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -248,6 +250,13 @@ export async function prepareAgentSandbox(input: {
         args.push('--ro-bind', path, path)
     }
     args.push('--bind', isolatedHome, workerHome)
+    if (input.provider === 'opencode') {
+      // Attached clients use no local conversation data. Their incidental writes stay disposable.
+      const databaseDirectory = input.networkMode === 'opencode-client'
+        ? await mkdir(join(scratch, 'opencode-client'), { mode: 0o700 }).then(() => join(scratch, 'opencode-client'))
+        : await prepareOpencodeTaskDirectory(controllerHome, opencodeTaskKey(input.taskId ?? randomUUID()))
+      args.push('--bind', databaseDirectory, '/run/agent/opencode-database')
+    }
     for (const path of [...profile.tools, ...profile.readOnlyPaths]) {
       const canonical = await permittedPath(path, controllerHome)
       args.push('--ro-bind', canonical, path)
@@ -352,7 +361,7 @@ export async function prepareAgentSandbox(input: {
       ...(input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment),
       ...checkinValues,
       // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
-      ...(input.provider === 'opencode' ? { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true' } : {}),
+      ...(input.provider === 'opencode' ? { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true', OPENCODE_DB: '/run/agent/opencode-database/opencode.db' } : {}),
     }
     // Repository variables belong inside the boundary. Loader variables must
     // never affect host Bubblewrap before namespace creation.

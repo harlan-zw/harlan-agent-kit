@@ -261,6 +261,7 @@ function createDashboard() {
       _tag: 'Ejected'
       provider: 'codex' | 'opencode'
       sessionId: string
+      opencodeTaskKey?: string
       repository: string
       itemNumber: number
     }>('/api/agents/eject', { method: 'POST', body: { taskId } })
@@ -268,7 +269,7 @@ function createDashboard() {
         const host = browserLocation.value.hostname ?? 'hogwild'
         ejectedSession.value = {
           _tag: 'Ejected',
-          command: ejectSessionCommand(ejected.provider, ejected.sessionId, host),
+          command: ejectSessionCommand(ejected.provider, ejected.sessionId, host, ejected.opencodeTaskKey),
           itemNumber: ejected.itemNumber,
           repository: ejected.repository,
         }

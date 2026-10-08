@@ -19,6 +19,7 @@ import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseAgentSlots } from './host-capacity.ts'
+import { opencodeTaskKey } from './opencode-storage.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
 import { registerSessionRoutes } from './session-routes.ts'
@@ -255,9 +256,10 @@ type ParsedAgentSession
     | { _tag: 'Opencode', id: string, provider: 'opencode' }
 
 function parseAgentSession(provider: 'codex' | 'opencode', id: string): ParsedAgentSession | undefined {
+  const nativeId = id.startsWith('desktop:') ? id.slice('desktop:'.length) : id
   if (provider === 'codex')
-    return /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id) ? { _tag: 'Codex', id, provider } : undefined
-  return /^ses_[a-z\d]{8,}$/i.test(id) ? { _tag: 'Opencode', id, provider } : undefined
+    return /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(nativeId) ? { _tag: 'Codex', id, provider } : undefined
+  return /^ses_[a-z\d]{8,}$/i.test(nativeId) ? { _tag: 'Opencode', id, provider } : undefined
 }
 
 interface ReviewRerunRequest {
@@ -631,6 +633,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
           _tag: 'EjectDelayed',
           provider: session.provider,
           sessionId: session.id,
+          ...(session.provider === 'opencode' ? { opencodeTaskKey: opencodeTaskKey(body.taskId) } : {}),
           nextAction: 'Stop Harlan GitHub Agent. Then resume this saved session.',
         },
       })
@@ -639,6 +642,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       _tag: 'Ejected',
       provider: session.provider,
       sessionId: session.id,
+      ...(session.provider === 'opencode' ? { opencodeTaskKey: opencodeTaskKey(body.taskId) } : {}),
       repository: agent.repository,
       itemNumber: agent.itemNumber,
     }
@@ -767,7 +771,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   })
 
   app.post('/api/tasks/recover-repair', async (event) => {
-    const parsed = parseRepairRecoveryRequest(await event.req.json().catch(() => undefined))
+    const parsed = parseRepairRecoveryRequest(await event.req.json().catch(() => {
+      // The parser reports malformed JSON as a bad request.
+      return undefined
+    }))
     if (parsed._tag === 'Err')
       throw createError({ status: 400, message: parsed.error })
     if (options.repairRecovery === undefined)
@@ -781,7 +788,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   })
 
   app.post('/api/reviews/stop', async (event) => {
-    const body = stopReviewRequest(await event.req.json().catch(() => undefined))
+    const body = stopReviewRequest(await event.req.json().catch(() => {
+      // Validation below reports malformed JSON as a bad request.
+      return undefined
+    }))
     if (body === undefined)
       throw createError({ status: 400, statusText: 'Bad Request', message: 'Set a valid repository, pull request number, and head commit.' })
     const result = options.store.stopReviewForHead({ ...body, at: options.now().toISOString() })
