@@ -45,6 +45,23 @@ skilld example: the dot is the atom. Stone dots are noise. One rose dot is the S
 
 ## 4. Choose five brand pieces
 
+Before drawing logo variants, read the installed `skilld` Skill and load
+[kaankiziltug's logo-design Skill](https://skilld.dev/gh/kaankiziltug/logo-design-skill/logo-design):
+
+```bash
+skilld run kaankiziltug/logo-design-skill/logo-design --json
+```
+
+Check the exit code and `_tag` before reading the returned instructions.
+Follow the `skilld` Skill's source checks and supporting-file workflow.
+Use `run` for this task; do not install it unless the user asks to keep it.
+If loading fails, report the error instead of claiming the Skill was used.
+
+Apply its concept exploration, geometric construction, typography, and optical refinement guidance.
+Consider a custom wordmark or ligature alongside standalone marks.
+Check each logo in one colour, reversed, and at actual 32 and 16 px sizes.
+Keep this lab's product filters, scratchpad scope, and variant contract.
+
 Piece 1 is the logo: the mark, the lockup, and favicon cuts at 32 and 16 px. Pieces 2 to 5 are small UI motifs. Tie each motif to one line of the product's pitch.
 
 skilld example: Mark, Texture (hero, OG image, loading), Run chip (primary action), Heat (trending indicator), Change mark (update status).
@@ -68,6 +85,7 @@ Read `references/variant-contract.md` and paste its brief into each subagent pro
 
 - Give each subagent one distinct direction, so parallel subagents do not collide.
 - List every existing variant in the brief, so new ones differ.
+- Include the loaded `logo-design` guidance and source revision in logo subagent briefs.
 - If the user names a model for a column, launch that column's subagents on that model.
 
 When the snippets exist, run `scripts/splice.ts` as the reference shows. It inserts each snippet and tags its author.
